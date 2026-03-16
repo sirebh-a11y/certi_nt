@@ -2,6 +2,20 @@
 
 CERTI_nt è un software aziendale interno.
 
+Stack tecnologico
+
+Frontend
+React + Tailwind
+
+Backend
+FastAPI (Python)
+
+Database
+PostgreSQL
+
+Container
+Docker
+
 Architettura
 
 browser
@@ -19,34 +33,4 @@ modules
 
 Core contiene la piattaforma del sistema.
 
-Core comprende:
-
-auth
-users
-roles
-departments
-email
-logs
-
-UI comprende:
-
-header
-sidebar
-content
-footer
-
 Modules contiene le funzionalità applicative.
-
-Stack tecnologico
-
-Frontend
-React + Tailwind
-
-Backend
-FastAPI (Python)
-
-Database
-PostgreSQL
-
-Container
-Docker
