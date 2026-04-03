@@ -21,7 +21,7 @@ email → string (unique)
 password_hash → string (nullable)  
 department_id → integer (foreign key → departments.id)  
 role → string  
-api_key → string (nullable)  
+openai_api_key_encrypted → string (nullable)  
 active → boolean  
 force_password_change → boolean  
 created_at → datetime  
@@ -40,6 +40,9 @@ last_login → datetime (nullable)
   - manager  
   - admin  
 - ogni utente deve appartenere a un department  
+- openai_api_key_encrypted contiene la OpenAI API key cifrata dell'utente  
+- la OpenAI API key non deve essere salvata in chiaro  
+- la OpenAI API key non deve essere restituita in chiaro dalle API  
 
 ---
 

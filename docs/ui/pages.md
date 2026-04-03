@@ -59,6 +59,13 @@ Dopo il salvataggio:
 
 - dettaglio utente  
 - mostra dati utente  
+- mostra stato OpenAI API key: configurata / non configurata  
+
+Comportamento:
+
+- l'utente proprietario può inserire, aggiornare o rimuovere la propria OpenAI API key  
+- admin può vedere solo lo stato della chiave  
+- il valore della chiave NON deve essere mostrato in chiaro  
 
 ---
 
@@ -70,6 +77,10 @@ Dopo il salvataggio:
   - email  
   - department  
   - role  
+
+Regola:
+
+- la OpenAI API key NON viene inserita in fase di creazione utente  
 
 ---
 

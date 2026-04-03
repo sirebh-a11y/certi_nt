@@ -20,7 +20,7 @@ name
 email  
 department  
 role  
-api_key  
+openai_api_key  
 active  
 
 ---
@@ -52,6 +52,24 @@ Quando un admin crea un utente:
 - la password NON viene impostata  
 - password = NULL  
 - force_password_change = true  
+- openai_api_key NON viene impostata in creazione utente  
+
+---
+
+## OpenAI API Key utente
+
+Ogni utente può avere una OpenAI API key personale opzionale.
+
+Regole:
+
+- il campo è opzionale  
+- la chiave appartiene al singolo utente  
+- NON deve essere mostrata in chiaro dopo il salvataggio  
+- il sistema deve mostrare solo stato configurata / non configurata  
+- l'utente può inserire, aggiornare o rimuovere la propria chiave  
+- admin può vedere solo lo stato della chiave, NON il valore  
+- la chiave deve essere salvata in modo sicuro nel database  
+- l'utilizzo applicativo della chiave è demandato ai moduli futuri, NON al core  
 
 ---
 
@@ -108,3 +126,5 @@ Al successivo accesso:
 - solo admin può resettare password  
 - ogni utente deve avere un ruolo valido  
 - ogni utente deve appartenere a un department  
+- la OpenAI API key è opzionale e personale  
+- la OpenAI API key non deve mai essere restituita in chiaro dalle API  

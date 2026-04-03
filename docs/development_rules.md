@@ -73,6 +73,15 @@ Queste regole sono obbligatorie.
 
 ---
 
+## Credenziali utente
+
+- eventuali chiavi esterne utente devono essere salvate in modo sicuro  
+- NON salvare OpenAI API key in chiaro nel database  
+- NON restituire OpenAI API key in chiaro nelle API  
+- NON scrivere OpenAI API key in log o errori  
+
+---
+
 ## Generazione codice
 
 - modificare SOLO i file necessari  

@@ -47,12 +47,20 @@ Implementare:
 - creazione utente  
 - disattivazione utente  
 - reset password (admin)  
+- gestione OpenAI API key personale utente  
 
 Gestione password:
 
 - password NON impostata alla creazione  
 - password = NULL  
 - force_password_change = true  
+
+Gestione OpenAI API key:
+
+- campo opzionale per utente  
+- inserimento / aggiornamento / rimozione da parte dell'utente proprietario  
+- admin vede solo stato configurata / non configurata  
+- salvataggio sicuro nel database  
 
 ---
 
@@ -96,6 +104,7 @@ Implementare:
 - gestione login  
 - gestione set password  
 - gestione utenti  
+- gestione stato OpenAI API key nella scheda utente  
 
 ---
 
