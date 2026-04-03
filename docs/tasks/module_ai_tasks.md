@@ -20,4 +20,4 @@ Lo sviluppo è limitato al core platform.
 
 ## Futuro
 
-I task dei moduli saranno definiti successivamente.________________________________________
+I task dei moduli saranno definiti successivamente.

@@ -1,11 +1,23 @@
 # Modules Database Schema
 
-Tabelle future
+Le tabelle dei moduli NON sono definite in questa fase.
 
-auth_logs
-user_activity_logs
-ai_usage_logs
+---
 
-ai_jobs
-documents
-certificates
+## Stato
+
+Il database attuale include solo il core platform.
+
+---
+
+## Regole
+
+- NON creare tabelle per moduli  
+- NON definire schema applicativo  
+- le tabelle dei moduli saranno progettate successivamente  
+
+---
+
+## Obiettivo
+
+Mantenere il database limitato al core platform nella fase iniziale.
