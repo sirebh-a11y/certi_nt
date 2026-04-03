@@ -1,5 +1,23 @@
-# AI Module Tasks
+# Modules Tasks
 
-Future implementation.
+I task dei moduli NON sono definiti in questa fase.
 
-AI document analysis.
+---
+
+## Stato
+
+Lo sviluppo è limitato al core platform.
+
+---
+
+## Regole
+
+- NON implementare moduli  
+- NON creare funzionalità applicative  
+- NON sviluppare logica oltre il core  
+
+---
+
+## Futuro
+
+I task dei moduli saranno definiti successivamente.________________________________________
