@@ -16,7 +16,7 @@ Il campo `cdq` NON è un identificativo tecnico generato dal sistema.
 
 Il campo `cdq` rappresenta:
 
-→ il VECCHIO NUMERO CERTIFICATO DI QUALITÀ (identificativo legacy)
+→ il numero del CERTIFICATO DI QUALITÀ del FORNITORE (identificativo legacy)
 
 Regole:
 
@@ -37,8 +37,8 @@ Il sistema può avere ID tecnici interni, ma `cdq` rimane il riferimento princip
 
 Gestire l’acquisizione dei dati da:
 
-* certificati di qualità (CDQ)
-* DDT
+* certificati di qualità (CDQ) del fornitore materiale
+* DDT del fornitore materiale
 
 Obiettivi:
 
@@ -57,7 +57,7 @@ Obiettivi:
 
 Chiave logica principale:
 
-* `cdq` = vecchio numero certificato di qualità
+* `cdq` = CERTIFICATO DI QUALITÀ del FORNITORE
 
 ---
 
@@ -80,10 +80,13 @@ Campi:
 * ddt
 * peso
 * ordine
-* numero_analisi
-* ritardo
-* tempo_controllo
-* tempo_medio
+*	data richiesta
+*	ritardo (= data ricezione – data richiesta)
+*	tempo_controllo (= data accettazione – data ricezione in giorni lavorativi, eliminati quindi feriali e ferie italiane)
+*	tempo_medio 
+*	Valutazione (che può essere A di Accettato o AR di Accettato con Riserva o R di Respinto)
+*	Note che è campo libero testuale
+
 
 ---
 
