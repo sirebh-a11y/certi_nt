@@ -11,7 +11,6 @@ Caratteristiche:
 Menu:
 
 Dashboard  
-Prima applicazione  
 ---------  
 Utenti  
 Reparti  
@@ -22,7 +21,7 @@ Log
 ## Pagine core
 
 Login  
-Reset Password  
+Set Password  
 Dashboard  
 Users List  
 User Detail  
@@ -39,17 +38,3 @@ Deve essere semplice e contenere:
 
 - informazioni utente
 - contenuto placeholder
-
----
-
-## Prima applicazione
-
-Voce di menu placeholder.
-
-Rappresenta la prima applicazione che verrà sviluppata in fase successiva.
-
-IMPORTANTE:
-
-- NON implementare logica applicativa
-- creare solo una pagina placeholder
-- servirà per sviluppi futuri
