@@ -1,0 +1,127 @@
+import { Navigate, Outlet, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+
+import { apiRequest } from "./api";
+import { useAuth } from "./auth";
+import ProtectedRoute from "../components/common/ProtectedRoute";
+import RoleGuard from "../components/common/RoleGuard";
+import AppShell from "../components/layout/AppShell";
+import ChangePasswordPage from "../pages/auth/ChangePasswordPage";
+import LoginPage from "../pages/auth/LoginPage";
+import SetPasswordPage from "../pages/auth/SetPasswordPage";
+import DashboardPage from "../pages/core/DashboardPage";
+import DepartmentsPage from "../pages/departments/DepartmentsPage";
+import LogsPage from "../pages/logs/LogsPage";
+import NewUserPage from "../pages/users/NewUserPage";
+import UserDetailPage from "../pages/users/UserDetailPage";
+import UsersListPage from "../pages/users/UsersListPage";
+
+function AppShellRoute() {
+  return <AppShell />;
+}
+
+function UserDetailRoute() {
+  const { token, user } = useAuth();
+  const { userId } = useParams();
+  const navigate = useNavigate();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    apiRequest(`/users/${userId}`, {}, token)
+      .then((response) => {
+        if (!ignore) {
+          setData(response);
+        }
+      })
+      .catch((requestError) => {
+        if (!ignore) {
+          setError(requestError.message);
+        }
+      })
+      .finally(() => {
+        if (!ignore) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [token, userId]);
+
+  return (
+    <UserDetailPage
+      currentUser={user}
+      error={error}
+      loading={loading}
+      onBack={() => navigate(user?.role === "user" ? "/dashboard" : "/users")}
+      userData={data}
+    />
+  );
+}
+
+function DepartmentsRoute() {
+  return (
+    <RoleGuard allowedRoles={["admin"]}>
+      <DepartmentsPage />
+    </RoleGuard>
+  );
+}
+
+function UsersRoute() {
+  return (
+    <RoleGuard allowedRoles={["manager", "admin"]}>
+      <Outlet />
+    </RoleGuard>
+  );
+}
+
+function LogsRoute() {
+  return (
+    <RoleGuard allowedRoles={["manager", "admin"]}>
+      <LogsPage />
+    </RoleGuard>
+  );
+}
+
+export function AppRouter() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/set-password" element={<SetPasswordPage />} />
+
+      <Route element={<ProtectedRoute allowForcePasswordChange />}>
+        <Route element={<AppShellRoute />}>
+          <Route path="/change-password" element={<ChangePasswordPage />} />
+        </Route>
+      </Route>
+
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppShellRoute />}>
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/users/me" element={<UserDetailRoute />} />
+          <Route path="/departments" element={<DepartmentsRoute />} />
+          <Route path="/logs" element={<LogsRoute />} />
+          <Route path="/users" element={<UsersRoute />}>
+            <Route index element={<UsersListPage />} />
+            <Route
+              path="new"
+              element={
+                <RoleGuard allowedRoles={["admin"]}>
+                  <NewUserPage />
+                </RoleGuard>
+              }
+            />
+            <Route path=":userId" element={<UserDetailRoute />} />
+          </Route>
+        </Route>
+      </Route>
+
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
+  );
+}
