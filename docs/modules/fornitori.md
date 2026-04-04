@@ -134,6 +134,7 @@ Durante l’acquisizione:
 
 * ogni variante di nome deve essere salvata come alias
 * un alias appartiene a un solo fornitore
+* nome_alias deve essere univoco per evitare ambiguità nel mapping
 * evitare duplicati tra alias
 
 ---
@@ -150,7 +151,8 @@ Durante l’acquisizione:
 
 * un fornitore è univoco (no duplicati logici)
 * alias non devono creare ambiguità
-* `fornitore_id` è obbligatorio nelle relazioni
+* `fornitore_id` è obbligatorio SOLO dopo il processo di mapping
+* durante l’acquisizione può essere temporaneamente NULL
 
 ---
 
