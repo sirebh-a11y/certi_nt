@@ -1,0 +1,197 @@
+# Fornitori Module
+
+## ⚠️ IMPORTANTE — POSIZIONAMENTO NEL PROGETTO
+
+Questo modulo NON fa parte del core del sistema.
+
+Deve essere implementato dopo la stabilizzazione del core, tramite prompt Codex dedicato.
+
+Questo modulo definisce l’anagrafica fornitori utilizzata dal sistema di acquisizione dati (DDT e certificati).
+
+---
+
+## 1. Scopo
+
+Gestire i fornitori del materiale che:
+
+* emettono DDT
+* emettono certificati di qualità (CDQ)
+
+Obiettivi:
+
+* normalizzare i fornitori
+* evitare duplicati
+* gestire varianti di nome (OCR, abbreviazioni)
+* mantenere storico modifiche
+
+---
+
+## 2. Entità principali
+
+* Fornitore (anagrafica)
+* Alias fornitore
+* Storico modifiche
+
+---
+
+## 3. Modello dati
+
+### 3.1 fornitori
+
+Rappresenta l’anagrafica principale del fornitore.
+
+Struttura:
+
+* id (PK)
+* ragione_sociale
+* partita_iva (nullable)
+* codice_fiscale (nullable)
+* indirizzo (nullable)
+* citta (nullable)
+* nazione (nullable)
+* email (nullable)
+* telefono (nullable)
+* attivo
+* note (campo libero)
+
+---
+
+### 3.2 fornitori_alias
+
+Gestione dei nomi alternativi del fornitore.
+
+Serve per intercettare varianti provenienti da:
+
+* OCR
+* DDT
+* certificati
+* abbreviazioni
+
+Struttura:
+
+* id (PK)
+* fornitore_id (FK → fornitori.id)
+* nome_alias
+* fonte (es: OCR, manuale)
+* attivo
+
+---
+
+### 3.3 fornitori_storico
+
+Storico modifiche dell’anagrafica fornitori.
+
+Ogni modifica rilevante NON deve sovrascrivere direttamente il dato,
+ma essere registrata nello storico.
+
+Struttura:
+
+* id (PK)
+* fornitore_id (FK → fornitori.id)
+* campo_modificato
+* valore_precedente
+* valore_nuovo
+* data_modifica
+* utente (nullable)
+
+---
+
+## 4. Regole di gestione
+
+### 4.1 Regola generale
+
+Il sistema deve utilizzare sempre:
+
+```plaintext
+fornitore_id
+```
+
+come riferimento principale.
+
+---
+
+### 4.2 Acquisizione da documenti
+
+Durante l’acquisizione:
+
+1. il nome fornitore viene letto dal documento
+2. salvato in:
+
+   ```plaintext
+   fornitore_raw
+   ```
+3. il sistema tenta il match con:
+
+   ```plaintext
+   fornitori_alias
+   ```
+4. se trovato → assegna `fornitore_id`
+5. se non trovato → gestione manuale o creazione nuovo fornitore
+
+---
+
+### 4.3 Alias
+
+* ogni variante di nome deve essere salvata come alias
+* un alias appartiene a un solo fornitore
+* evitare duplicati tra alias
+
+---
+
+### 4.4 Storico
+
+* NON sovrascrivere dati critici senza traccia
+* ogni modifica deve essere registrata
+* lo storico è solo append (non modifica)
+
+---
+
+## 5. Vincoli
+
+* un fornitore è univoco (no duplicati logici)
+* alias non devono creare ambiguità
+* `fornitore_id` è obbligatorio nelle relazioni
+
+---
+
+## 6. Collegamento con altri moduli
+
+### Certificates Data Acquisition Module
+
+Il collegamento avviene tramite:
+
+```plaintext
+datimaterialeincoming.fornitore_id
+```
+
+e
+
+```plaintext
+datimaterialeincoming.fornitore_raw
+```
+
+---
+
+## 7. Obiettivo
+
+Separare:
+
+* dato reale (nome letto)
+* entità normalizzata (fornitore)
+
+Garantire:
+
+* qualità dei dati
+* robustezza OCR
+* scalabilità futura (GUI)
+
+---
+
+## 8. Estensione futura
+
+Il modulo sarà gestito tramite GUI per:
+
+* creazione fornitori
+* gestione alias
+* revisione mapping
+* aggiornamento dati anagrafici

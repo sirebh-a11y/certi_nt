@@ -73,20 +73,20 @@ Campi:
 * numero
 * data_ricezione
 * data_accettazione
-* fornitore
+* fornitore_id (FK → fornitori.id)
+* fornitore_raw (testo originale letto da OCR/DDT/certificato)
 * lega
 * diametro
 * colata
 * ddt
 * peso
 * ordine
-*	data richiesta
-*	ritardo (= data ricezione – data richiesta)
-*	tempo_controllo (= data accettazione – data ricezione in giorni lavorativi, eliminati quindi feriali e ferie italiane)
-*	tempo_medio 
-*	Valutazione (che può essere A di Accettato o AR di Accettato con Riserva o R di Respinto)
-*	Note che è campo libero testuale
-
+* data richiesta
+* ritardo (= data ricezione – data richiesta)
+* tempo_controllo (= data accettazione – data ricezione in giorni lavorativi, eliminati quindi feriali e ferie italiane)
+* tempo_medio
+* Valutazione (A = Accettato, AR = Accettato con Riserva, R = Respinto)
+* Note (campo libero testuale)
 
 ---
 
@@ -164,6 +164,27 @@ Valori meccanici letti dal certificato.
 
 ---
 
+### 3.6 fornitori (riferimento modulo esterno)
+
+La gestione dei fornitori è definita in un modulo dedicato:
+
+→ docs/modules/fornitori.md
+
+Ogni certificato (cdq) è associato a un fornitore tramite:
+
+* fornitore_id (FK)
+
+Il campo:
+
+* fornitore_raw
+
+mantiene il valore originale letto dai documenti (OCR / DDT / certificato)
+per garantire tracciabilità e supportare il mapping verso fornitori normalizzati.
+
+La logica completa di gestione fornitori (anagrafica, alias, storico) NON è definita in questo modulo.
+
+---
+
 ## 4. Regole di acquisizione dati
 
 ### 4.1 Regola generale
@@ -212,6 +233,22 @@ Regola:
 
 * salvare se presenti
 * altrimenti calcolare runtime
+
+---
+
+### 4.6 Fornitori
+
+Il nome del fornitore viene acquisito dai documenti e gestito secondo la seguente logica:
+
+* il valore letto viene salvato in `fornitore_raw`
+* il sistema associa un `fornitore_id` tramite mapping (automatico o manuale)
+* il database utilizza sempre `fornitore_id` come riferimento principale
+
+Questo garantisce:
+
+* normalizzazione dei fornitori
+* gestione di varianti (alias)
+* tracciabilità del dato originale
 
 ---
 
