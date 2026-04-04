@@ -18,8 +18,30 @@ export async function apiRequest(path, options = {}, token = null) {
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const detail = data?.detail || "Request failed";
+    const detail = formatErrorDetail(data?.detail);
     throw new Error(detail);
   }
   return data;
+}
+
+function formatErrorDetail(detail) {
+  if (!detail) {
+    return "Request failed";
+  }
+
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .join(" | ");
+  }
+
+  if (typeof detail === "object") {
+    return detail.message || JSON.stringify(detail);
+  }
+
+  return "Request failed";
 }

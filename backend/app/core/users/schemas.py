@@ -1,11 +1,19 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UserBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    email: EmailStr
+    email: str
     department: str
     role: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+            raise ValueError("Invalid email")
+        return normalized
 
 
 class UserCreateRequest(UserBase):
@@ -17,7 +25,7 @@ class UserResponse(BaseModel):
 
     id: int
     name: str
-    email: EmailStr
+    email: str
     department: str
     role: str
     active: bool

@@ -30,7 +30,8 @@ function UserDetailRoute() {
 
   useEffect(() => {
     let ignore = false;
-    apiRequest(`/users/${userId}`, {}, token)
+    const path = userId ? `/users/${userId}` : "/users/me";
+    apiRequest(path, {}, token)
       .then((response) => {
         if (!ignore) {
           setData(response);
@@ -103,7 +104,7 @@ export function AppRouter() {
         <Route element={<AppShellRoute />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/users/me" element={<UserDetailRoute />} />
+          <Route path="/profile" element={<UserDetailRoute />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>

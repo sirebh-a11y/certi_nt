@@ -28,7 +28,7 @@ export default function DashboardPage() {
           </article>
         </div>
         <div className="mt-6">
-          <Link className="text-sm font-semibold text-accent hover:underline" to="/users/me">
+          <Link className="text-sm font-semibold text-accent hover:underline" to="/profile">
             Apri User Detail
           </Link>
         </div>
