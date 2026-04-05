@@ -22,6 +22,7 @@ laboratory
 - ogni utente deve appartenere a un solo reparto  
 - il reparto è assegnato in fase di creazione utente  
 - il reparto può essere modificato solo da admin  
+- manager può solo visualizzare il reparto assegnato agli utenti  
 
 ---
 

@@ -56,6 +56,26 @@ Quando un admin crea un utente:
 
 ---
 
+## Modifica utente
+
+Admin può modificare un utente esistente.
+
+Campi modificabili:
+
+- name  
+- department  
+- role  
+- active  
+
+Regole:
+
+- email NON viene modificata nella fase iniziale  
+- department può essere modificato solo da admin  
+- role può essere modificato solo da admin  
+- active può essere modificato solo da admin  
+
+---
+
 ## OpenAI API Key utente
 
 Ogni utente può avere una OpenAI API key personale opzionale.
@@ -66,8 +86,8 @@ Regole:
 - la chiave appartiene al singolo utente  
 - NON deve essere mostrata in chiaro dopo il salvataggio  
 - il sistema deve mostrare solo stato configurata / non configurata  
-- l'utente può inserire, aggiornare o rimuovere la propria chiave  
-- admin può vedere solo lo stato della chiave, NON il valore  
+- admin può inserire, aggiornare o rimuovere la chiave nella scheda utente  
+- l'utente proprietario può vedere solo lo stato della chiave, NON il valore  
 - la chiave deve essere salvata in modo sicuro nel database  
 - l'utilizzo applicativo della chiave è demandato ai moduli futuri, NON al core  
 
@@ -123,7 +143,9 @@ Al successivo accesso:
 ## Regole
 
 - solo admin può creare utenti  
+- solo admin può modificare utenti  
 - solo admin può resettare password  
+- solo admin può disattivare utenti  
 - ogni utente deve avere un ruolo valido  
 - ogni utente deve appartenere a un department  
 - la OpenAI API key è opzionale e personale  

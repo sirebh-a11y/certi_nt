@@ -45,6 +45,7 @@ Implementare:
 
 - lista utenti  
 - creazione utente  
+- modifica utente (admin)  
 - disattivazione utente  
 - reset password (admin)  
 - gestione OpenAI API key personale utente  
@@ -58,8 +59,8 @@ Gestione password:
 Gestione OpenAI API key:
 
 - campo opzionale per utente  
-- inserimento / aggiornamento / rimozione da parte dell'utente proprietario  
-- admin vede solo stato configurata / non configurata  
+- inserimento / aggiornamento / rimozione da parte di admin  
+- l'utente proprietario vede solo stato configurata / non configurata  
 - salvataggio sicuro nel database  
 
 ---
@@ -105,6 +106,8 @@ Implementare:
 - gestione set password  
 - gestione utenti  
 - gestione stato OpenAI API key nella scheda utente  
+- User Detail admin con azioni amministrative  
+- User Detail manager in sola lettura  
 
 ---
 

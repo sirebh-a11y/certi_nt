@@ -28,6 +28,7 @@ admin
 - accesso dashboard  
 - accesso applicazione  
 - visualizzazione utenti  
+- visualizzazione dettaglio utente  
 - visualizzazione log  
 
 ---
@@ -57,7 +58,7 @@ admin
 ### Users Management
 
 - admin → accesso completo  
-- manager → sola visualizzazione  
+- manager → sola visualizzazione (lista + dettaglio)  
 - user → nessun accesso  
 
 ---

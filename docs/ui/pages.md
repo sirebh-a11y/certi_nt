@@ -53,6 +53,12 @@ Dopo il salvataggio:
 - lista utenti  
 - visibile in base ai permessi  
 
+Comportamento:
+
+- admin → accesso completo alla lista  
+- manager → accesso in sola lettura  
+- user → nessun accesso  
+
 ---
 
 ## User Detail
@@ -63,8 +69,16 @@ Dopo il salvataggio:
 
 Comportamento:
 
-- l'utente proprietario può inserire, aggiornare o rimuovere la propria OpenAI API key  
-- admin può vedere solo lo stato della chiave  
+- admin può:
+  - modificare name  
+  - modificare department  
+  - modificare role  
+  - modificare active  
+  - eseguire reset password  
+  - disattivare utente  
+  - inserire, aggiornare o rimuovere la OpenAI API key  
+- manager può visualizzare il dettaglio in sola lettura  
+- l'utente proprietario può vedere solo lo stato della propria OpenAI API key  
 - il valore della chiave NON deve essere mostrato in chiaro  
 
 ---
@@ -81,6 +95,7 @@ Comportamento:
 Regola:
 
 - la OpenAI API key NON viene inserita in fase di creazione utente  
+- la password NON viene inserita in fase di creazione utente  
 
 ---
 

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
 from app.core.deps import CurrentUser, DbSession, require_roles
 from app.core.departments.service import get_department_by_name
@@ -12,6 +12,7 @@ from app.core.users.schemas import (
     UserCreateRequest,
     UserListResponse,
     UserResponse,
+    UserUpdateRequest,
 )
 from app.core.users.service import (
     create_user,
@@ -20,6 +21,7 @@ from app.core.users.service import (
     list_users,
     reset_user_password,
     serialize_user,
+    update_user,
     update_openai_key,
 )
 
@@ -40,23 +42,33 @@ def create_user_route(payload: UserCreateRequest, current_user: AdminUser, db: D
     return create_user(db=db, payload=payload, department_id=department.id, actor_email=current_user.email)
 
 
-@router.get("/me", response_model=UserResponse)
-def get_me_route(current_user: CurrentUser) -> UserResponse:
-    return serialize_user(current_user)
-
-
-@router.put("/me/openai-key", response_model=OpenAIKeyStatusResponse)
-def update_openai_key_route(payload: OpenAIKeyUpdateRequest, current_user: CurrentUser, db: DbSession) -> OpenAIKeyStatusResponse:
-    configured = update_openai_key(db=db, user=current_user, openai_api_key=payload.openai_api_key)
-    return OpenAIKeyStatusResponse(configured=configured)
-
-
 @router.get("/{user_id}", response_model=UserResponse)
-def get_user_route(user_id: int, current_user: CurrentUser, db: DbSession) -> UserResponse:
+def get_user_route(user_id: int, _: AdminOrManagerUser, db: DbSession) -> UserResponse:
+    return serialize_user(get_user(db, user_id))
+
+
+@router.patch("/{user_id}", response_model=UserResponse)
+def update_user_route(user_id: int, payload: UserUpdateRequest, current_user: AdminUser, db: DbSession) -> UserResponse:
     user = get_user(db, user_id)
-    if current_user.role not in {ROLE_ADMIN, ROLE_MANAGER} and current_user.id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-    return serialize_user(user)
+    department = get_department_by_name(db, payload.department)
+    return update_user(db=db, user=user, payload=payload, department_id=department.id, actor_email=current_user.email)
+
+
+@router.put("/{user_id}/openai-key", response_model=OpenAIKeyStatusResponse)
+def update_openai_key_route(
+    user_id: int,
+    payload: OpenAIKeyUpdateRequest,
+    current_user: AdminUser,
+    db: DbSession,
+) -> OpenAIKeyStatusResponse:
+    user = get_user(db, user_id)
+    configured = update_openai_key(
+        db=db,
+        user=user,
+        openai_api_key=payload.openai_api_key,
+        actor_email=current_user.email,
+    )
+    return OpenAIKeyStatusResponse(configured=configured)
 
 
 @router.patch("/{user_id}/disable", response_model=UserActionResponse)

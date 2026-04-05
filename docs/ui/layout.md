@@ -41,7 +41,6 @@ Caratteristiche:
 ## Menu
 
 Dashboard  
-Prima applicazione  
 ---------  
 Utenti  
 Reparti  
@@ -72,6 +71,7 @@ Contiene:
 - le pagine vengono renderizzate nella Content area  
 - la sidebar cambia contenuto in base al ruolo utente  
 - il menu deve essere coerente con i permessi  
+- NON inserire voci relative a moduli in questa fase  
 
 ---
 

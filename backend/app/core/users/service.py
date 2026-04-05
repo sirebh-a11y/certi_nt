@@ -5,7 +5,7 @@ from app.core.logs.service import log_service
 from app.core.roles.service import ensure_valid_role
 from app.core.security.crypto import encrypt_secret
 from app.core.users.models import User
-from app.core.users.schemas import UserCreateRequest, UserResponse
+from app.core.users.schemas import UserCreateRequest, UserResponse, UserUpdateRequest
 
 
 def serialize_user(user: User) -> UserResponse:
@@ -57,6 +57,28 @@ def create_user(db: Session, payload: UserCreateRequest, department_id: int, act
     return serialize_user(created_user)
 
 
+def update_user(
+    db: Session,
+    user: User,
+    payload: UserUpdateRequest,
+    department_id: int,
+    actor_email: str,
+) -> UserResponse:
+    ensure_valid_role(payload.role)
+
+    user.name = payload.name
+    user.department_id = department_id
+    user.role = payload.role
+    user.active = payload.active
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    updated_user = get_user(db, user.id)
+    log_service.record("users", f"User updated: {updated_user.email}", actor_email)
+    return serialize_user(updated_user)
+
+
 def disable_user(db: Session, user: User, actor_email: str) -> None:
     user.active = False
     db.add(user)
@@ -72,9 +94,9 @@ def reset_user_password(db: Session, user: User, actor_email: str) -> None:
     log_service.record("users", f"Password reset requested: {user.email}", actor_email)
 
 
-def update_openai_key(db: Session, user: User, openai_api_key: str | None) -> bool:
+def update_openai_key(db: Session, user: User, openai_api_key: str | None, actor_email: str) -> bool:
     user.openai_api_key_encrypted = encrypt_secret(openai_api_key) if openai_api_key else None
     db.add(user)
     db.commit()
-    log_service.record("users", "OpenAI API key updated", user.email)
+    log_service.record("users", f"OpenAI API key updated for {user.email}", actor_email)
     return bool(user.openai_api_key_encrypted)
