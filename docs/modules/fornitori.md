@@ -216,6 +216,28 @@ Regola importante:
 
 ---
 
+### 4.7 Placeholder futuro: vincoli per reparto
+
+Nella prima implementazione del modulo, il controllo accessi deve restare basato sul `role` utente:
+
+* `admin` -> accesso completo
+* `manager` -> sola visualizzazione
+* `user` -> nessun accesso
+
+Placeholder futuro:
+
+* in una fase successiva il `department` potra' introdurre vincoli aggiuntivi di visibilita' o modifica
+* questi vincoli non sostituiscono il `role`, ma si aggiungono come secondo livello
+* il secondo livello non deve essere implementato finche' non verra' definito in modo esplicito
+
+Esempi futuri possibili:
+
+* limitare la modifica di alcuni campi a reparti specifici
+* limitare la visibilita' di alcune sezioni del modulo
+* differenziare i permessi tra dati anagrafici e dati documentali/mapping
+
+---
+
 ## 5. Vincoli
 
 * un fornitore è univoco (no duplicati logici)
