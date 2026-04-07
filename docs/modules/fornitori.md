@@ -23,6 +23,8 @@ Obiettivi:
 * evitare duplicati
 * gestire varianti di nome (OCR, abbreviazioni)
 * mantenere storico modifiche
+* supportare una prima importazione iniziale da dataset/staging costruiti sui PDF reali
+* gestire poi l'anagrafica in modo manuale da interfaccia utente
 
 ---
 
@@ -144,6 +146,12 @@ Durante l’acquisizione:
 4. se trovato → assegna `fornitore_id`
 5. se non trovato → gestione manuale o creazione nuovo fornitore
 
+Regola importante:
+
+* i PDF servono per costruire il mapping e per la prima popolazione iniziale dell'anagrafica
+* dopo la prima popolazione, i documenti NON devono aggiornare automaticamente i dati anagrafici del fornitore
+* l'anagrafica `fornitori` viene modificata solo manualmente da interfaccia utente
+
 ---
 
 ### 4.3 Alias
@@ -164,12 +172,58 @@ Durante l’acquisizione:
 
 ---
 
+### 4.5 Prima popolazione iniziale
+
+La prima popolazione del modulo può essere fatta tramite import guidato da file staging costruiti a partire da:
+
+* `esempi_locali/3-certificati`
+* `esempi_locali/4-ddt`
+
+Materiale di lavoro attuale:
+
+* `fornitori_import_work_excel.csv`
+* `fornitori_alias_import_work.csv`
+
+Regole:
+
+* questi file sono strumenti di preparazione e verifica dati
+* i campi di robustezza, evidenza o note operative restano fuori dal DB finale
+* nel DB finale entrano solo i campi previsti dal modello `fornitori` e `fornitori_alias`
+
+---
+
+### 4.6 Gestione manuale in applicazione
+
+Dopo la prima importazione, il modulo deve essere amministrato manualmente.
+
+La GUI prevista e' una sezione sotto dashboard:
+
+* `Anagrafica Fornitori`
+
+Funzioni minime:
+
+* lista fornitori
+* dettaglio fornitore
+* creazione fornitore
+* modifica anagrafica fornitore
+* attiva/disattiva fornitore
+* gestione alias
+
+Regola importante:
+
+* il modulo documentale puo' suggerire il mapping verso il fornitore
+* ma non deve aggiornare automaticamente l'anagrafica
+
+---
+
 ## 5. Vincoli
 
 * un fornitore è univoco (no duplicati logici)
 * alias non devono creare ambiguità
 * `fornitore_id` è obbligatorio SOLO dopo il processo di mapping
 * durante l’acquisizione può essere temporaneamente NULL
+* i campi di staging (`fonte`, `evidenza`, `robustezza`, `da_verificare`) non fanno parte del DB finale del modulo
+* l'anagrafica fornitore non viene aggiornata automaticamente dai PDF dopo la fase iniziale di popolamento
 
 ---
 
@@ -224,3 +278,11 @@ Il modulo sarà gestito tramite GUI per:
 * gestione alias
 * revisione mapping
 * aggiornamento dati anagrafici
+
+Per la prima implementazione software, la priorita' e':
+
+* tabella `fornitori`
+* tabella `fornitori_alias`
+* GUI `Anagrafica Fornitori`
+
+Lo `storico` puo' essere introdotto subito oppure in un secondo step, ma non deve bloccare l'avvio del modulo.

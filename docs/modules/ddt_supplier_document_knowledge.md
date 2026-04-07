@@ -123,6 +123,12 @@ Output atteso:
 * `fornitore_raw`
 * `fornitore_id` (se riconosciuto)
 
+Vincolo:
+
+* questo modulo può aiutare il mapping del fornitore
+* ma NON deve aggiornare automaticamente l'anagrafica del fornitore
+* ogni modifica dell'anagrafica appartiene al modulo `fornitori`
+
 Il nome del dataset o del foglio storico può essere un indizio utile di contesto, ma NON sostituisce il mapping strutturato verso `fornitore_id`.
 
 Se il fornitore non è riconosciuto:

@@ -207,6 +207,12 @@ Output atteso:
 * `fornitore_raw`
 * `fornitore_id` (se riconosciuto)
 
+Vincolo:
+
+* questo modulo può aiutare il mapping del fornitore
+* ma NON deve aggiornare automaticamente l'anagrafica del fornitore
+* ogni modifica dell'anagrafica appartiene al modulo `fornitori`
+
 Se il fornitore non è riconosciuto:
 
 * NON deve essere inventato

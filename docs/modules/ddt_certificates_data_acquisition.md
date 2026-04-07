@@ -307,6 +307,12 @@ Il nome del fornitore viene acquisito dai documenti e gestito secondo la seguent
 * il sistema associa un `fornitore_id` tramite mapping (automatico o manuale)
 * il database utilizza sempre `fornitore_id` come riferimento principale
 
+Nota:
+
+* `automatico o manuale` si riferisce solo al mapping verso un fornitore già censito
+* il processo documentale NON deve aggiornare automaticamente l'anagrafica del fornitore
+* l'anagrafica fornitori viene gestita nel modulo `fornitori` tramite import iniziale e poi tramite modifica manuale da GUI
+
 Questo garantisce:
 
 * normalizzazione dei fornitori
