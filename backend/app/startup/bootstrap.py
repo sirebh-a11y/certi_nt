@@ -7,6 +7,8 @@ from app.core.logs.service import log_service
 from app.core.roles.constants import ROLE_ADMIN
 from app.core.security.passwords import hash_password
 from app.core.users.models import User
+from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
+from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
 
 def initialize_application() -> None:
@@ -15,6 +17,8 @@ def initialize_application() -> None:
     try:
         seed_departments(db)
         bootstrap_admin_user(db)
+        seed_suppliers_from_csv(db)
+        seed_supplier_aliases_from_csv(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()

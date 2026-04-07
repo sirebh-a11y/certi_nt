@@ -95,6 +95,8 @@ Struttura:
 
 Storico modifiche dell’anagrafica fornitori.
 
+⚠️ Placeholder futuro: questa entità è prevista ma non deve bloccare la prima implementazione del modulo.
+
 Ogni modifica rilevante deve:
 
 * aggiornare il dato corrente in `fornitori`
@@ -196,7 +198,7 @@ Regole:
 
 Dopo la prima importazione, il modulo deve essere amministrato manualmente.
 
-La GUI prevista e' una sezione sotto dashboard:
+La GUI prevista e' una voce dedicata in sidebar:
 
 * `Anagrafica Fornitori`
 
@@ -218,14 +220,17 @@ Regola importante:
 
 ### 4.7 Placeholder futuro: vincoli per reparto
 
-Nella prima implementazione del modulo, il controllo accessi deve restare basato sul `role` utente:
+Nella prima implementazione del modulo, per scelta progettuale temporanea, tutti i ruoli applicativi hanno accesso completo al modulo:
 
-* `admin` -> accesso completo
-* `manager` -> sola visualizzazione
-* `user` -> nessun accesso
+* `admin` -> visualizzazione e modifica
+* `manager` -> visualizzazione e modifica
+* `user` -> visualizzazione e modifica
+
+Questa scelta è da considerare transitoria e serve ad avviare più rapidamente il modulo nella prima fase.
 
 Placeholder futuro:
 
+* in una fase successiva il controllo accessi tornera' ad essere più restrittivo e coerente con il ruolo
 * in una fase successiva il `department` potra' introdurre vincoli aggiuntivi di visibilita' o modifica
 * questi vincoli non sostituiscono il `role`, ma si aggiungono come secondo livello
 * il secondo livello non deve essere implementato finche' non verra' definito in modo esplicito
@@ -307,4 +312,4 @@ Per la prima implementazione software, la priorita' e':
 * tabella `fornitori_alias`
 * GUI `Anagrafica Fornitori`
 
-Lo `storico` puo' essere introdotto subito oppure in un secondo step, ma non deve bloccare l'avvio del modulo.
+Lo `storico` resta un placeholder futuro e non deve bloccare l'avvio del modulo.

@@ -76,3 +76,19 @@ admin
 - user → accesso  
 - manager → accesso  
 - admin → accesso   
+
+---
+
+### Suppliers Management
+
+Scelta temporanea per la prima implementazione del modulo `fornitori`:
+
+- admin → accesso completo  
+- manager → accesso completo  
+- user → accesso completo  
+
+Nota:
+
+- questa apertura totale è transitoria e serve a velocizzare l'avvio del modulo
+- in una fase successiva il modulo dovrà essere riallineato a regole più restrittive
+- in futuro potranno esistere anche vincoli aggiuntivi basati su `department`

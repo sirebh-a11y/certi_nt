@@ -12,6 +12,9 @@ import SetPasswordPage from "../pages/auth/SetPasswordPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import LogsPage from "../pages/logs/LogsPage";
+import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
+import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
+import SuppliersListPage from "../pages/suppliers/SuppliersListPage";
 import NewUserPage from "../pages/users/NewUserPage";
 import UserDetailPage from "../pages/users/UserDetailPage";
 import UsersListPage from "../pages/users/UsersListPage";
@@ -103,6 +106,9 @@ export function AppRouter() {
         <Route element={<AppShellRoute />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/suppliers" element={<SuppliersListPage />} />
+          <Route path="/suppliers/new" element={<NewSupplierPage />} />
+          <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>
