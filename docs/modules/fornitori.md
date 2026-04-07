@@ -49,12 +49,22 @@ Struttura:
 * partita_iva (nullable)
 * codice_fiscale (nullable)
 * indirizzo (nullable)
+* cap (nullable)
 * citta (nullable)
+* provincia (nullable)
 * nazione (nullable)
 * email (nullable)
 * telefono (nullable)
 * attivo
 * note (campo libero)
+
+Regola:
+
+* `indirizzo` contiene solo via/piazza e numero civico
+* `cap` contiene solo il CAP / postal code
+* `citta` contiene solo la città
+* `provincia` contiene solo sigla o denominazione provincia/stato locale quando utile
+* `nazione` resta separata
 
 ---
 
