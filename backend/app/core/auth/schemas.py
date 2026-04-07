@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.validation import normalize_and_validate_email
 
 class LoginRequest(BaseModel):
     email: str
@@ -8,10 +9,7 @@ class LoginRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
-            raise ValueError("Invalid email")
-        return normalized
+        return normalize_and_validate_email(value)
 
 
 class SetPasswordRequest(BaseModel):

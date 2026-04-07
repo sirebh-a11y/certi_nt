@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { EMAIL_ERROR_MESSAGE, isValidEmail } from "../../app/validation";
 
 const initialForm = {
   name: "",
@@ -27,8 +28,13 @@ export default function NewUserPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    setSubmitting(true);
     setError("");
+    if (!isValidEmail(form.email)) {
+      setError(EMAIL_ERROR_MESSAGE);
+      return;
+    }
+
+    setSubmitting(true);
     try {
       const user = await apiRequest(
         "/users",
@@ -50,7 +56,7 @@ export default function NewUserPage() {
     <section className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
       <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Utenti</p>
       <h2 className="mt-2 text-2xl font-semibold">New User</h2>
-      <form className="mt-8 grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
+      <form className="mt-8 grid gap-4 md:grid-cols-2" noValidate onSubmit={handleSubmit}>
         <div className="md:col-span-2">
           <label className="mb-2 block text-sm font-medium">Nome</label>
           <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
@@ -58,7 +64,8 @@ export default function NewUserPage() {
         <div className="md:col-span-2">
           <label className="mb-2 block text-sm font-medium">Email</label>
           <input
-            type="email"
+            type="text"
+            inputMode="email"
             value={form.email}
             onChange={(event) => setForm({ ...form, email: event.target.value })}
             required

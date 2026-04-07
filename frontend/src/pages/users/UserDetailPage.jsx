@@ -148,31 +148,6 @@ export default function UserDetailPage({ currentUser, error, loading, onBack, us
     }
   }
 
-  async function handleDisableUser() {
-    if (!viewUser) {
-      return;
-    }
-
-    setRunningAction("disable-user");
-    setStatusMessage("");
-    try {
-      await apiRequest(
-        `/users/${viewUser.id}/disable`,
-        {
-          method: "PATCH",
-        },
-        token,
-      );
-      setViewUser({ ...viewUser, active: false });
-      setForm((currentForm) => ({ ...currentForm, active: false }));
-      setStatusMessage("Utente disattivato");
-    } catch (requestError) {
-      setStatusMessage(requestError.message);
-    } finally {
-      setRunningAction("");
-    }
-  }
-
   return (
     <section className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
       <button className="text-sm font-medium text-accent hover:underline" onClick={onBack}>
@@ -313,14 +288,6 @@ export default function UserDetailPage({ currentUser, error, loading, onBack, us
                     type="button"
                   >
                     {runningAction === "reset-password" ? "Reset in corso..." : "Reset password"}
-                  </button>
-                  <button
-                    className="rounded-xl border border-rose-200 px-4 py-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
-                    disabled={runningAction === "disable-user" || !viewUser.active}
-                    onClick={handleDisableUser}
-                    type="button"
-                  >
-                    {runningAction === "disable-user" ? "Disattivazione..." : "Disattiva utente"}
                   </button>
                 </div>
               </div>

@@ -35,7 +35,7 @@ function formatErrorDetail(detail) {
 
   if (Array.isArray(detail)) {
     return detail
-      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .map((item) => cleanValidationMessage(item?.msg || item?.message || JSON.stringify(item)))
       .join(" | ");
   }
 
@@ -44,4 +44,12 @@ function formatErrorDetail(detail) {
   }
 
   return "Request failed";
+}
+
+function cleanValidationMessage(message) {
+  if (typeof message !== "string") {
+    return message;
+  }
+
+  return message.replace(/^Value error,\s*/i, "");
 }

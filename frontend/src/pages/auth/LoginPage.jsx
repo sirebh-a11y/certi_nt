@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../app/auth";
+import { EMAIL_ERROR_MESSAGE, isValidEmail } from "../../app/validation";
 
 export default function LoginPage() {
   const { isAuthenticated, login, user } = useAuth();
@@ -17,8 +18,13 @@ export default function LoginPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    setSubmitting(true);
     setError("");
+    if (!isValidEmail(email)) {
+      setError(EMAIL_ERROR_MESSAGE);
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const response = await login(email, password);
@@ -41,10 +47,16 @@ export default function LoginPage() {
         <h1 className="mt-2 text-3xl font-semibold text-ink">Login</h1>
         <p className="mt-2 text-sm text-slate-500">Accedi al core platform con email e password.</p>
 
-        <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
+        <form className="mt-8 space-y-4" noValidate onSubmit={handleSubmit}>
           <div>
             <label className="mb-2 block text-sm font-medium text-ink">Email</label>
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+            <input
+              type="text"
+              inputMode="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
           </div>
           <div>
             <label className="mb-2 block text-sm font-medium text-ink">Password</label>
