@@ -1,0 +1,21 @@
+﻿ragione_sociale_canonica;nome_alias;fonte;tipo_alias;attivo;note;da_verificare
+Aluminium Bozen S.r.l.;Aluminium Bz;nome cartella;abbreviazione cartella;true;Alias operativo della cartella certificati/DDT.;false
+Aluminium Bozen S.r.l.;Sapa Bz;nome cartella;legacy commerciale;true;Naming storico/commerciale visto nella cartella `Aluminium Bz - Sapa Bz`.;false
+Arconic Extrusions Hannover GmbH;Arconic Hannover;nome cartella;abbreviazione cartella;true;Forma corta usata nel dataset locale.;false
+Arconic Extrusions Hannover GmbH;Alcoa Extrusions Hannover;certificati;denominazione storica;true;Nome storico letto in alcuni certificati più vecchi.;false
+Aluminium-Werke Wutöschingen AG & Co. KG;AWW;nome cartella;abbreviazione;true;Abbreviazione ricorrente nel dataset locale e nei DDT.;false
+Leichtmetall Aluminium Giesserei Hannover GmbH;Leichtmetall A;nome cartella;abbreviazione cartella;true;Forma breve usata nella cartella locale.;false
+Leichtmetall Aluminium Giesserei Hannover GmbH;Leichtmetall;documenti/cartella;abbreviazione;true;Nome ridotto ricorrente in uso interno.;false
+Zeeland Aluminium Company;Zalco;ddt/cartella;brand operativo;true;Brand commerciale usato nei DDT e nel nome cartella.;false
+EURAL GNUTTI S.p.A.;EURAL;certificati;brand;true;Brand commerciale letto nei certificati.;false
+Hydro Extrusion Italy S.R.L.;Hydro Extrusion Italy - Sapa Feltre;nome cartella;legacy commerciale;true;Nome cartella che accorpa Hydro e storico Sapa Feltre.;false
+Hydro Aluminium AS, Hydro Husnes;Hydro Husnes;certificati/web;abbreviazione sito;true;Forma breve del producer/sito industriale.;false
+Impol d.o.o.;Ralcom-Impol;nome cartella;cartella commerciale composita;true;La cartella accoppia supplier Impol e customer/commerciale Ralcom.;true
+RALCOM srl;RALCOM;certificati;abbreviazione;true;Forma semplificata del nome legale.;false
+Constellium Extrusions Děčín s.r.o.;Alcan Decin;nome cartella/web legacy;denominazione storica sito;true;Naming storico del sito di Děčín poi confluito in Constellium.;true
+Constellium Extrusions Děčín s.r.o.;Campagnolo;nome cartella;cartella cliente/progetto;true;La cartella Campagnolo contiene certificati con supplier reale Constellium Děčín.;true
+Arconic Extrusions Hannover GmbH;Eppendorf;nome cartella;cartella cliente/progetto;true;La cartella Eppendorf contiene certificati con supplier reale Arconic Hannover.;true
+ELVAL / Hellenic Aluminium Industry S.A.;Metalluminio SP;nome cartella;cartella cliente/progetto;true;I certificati mostrano ELVAL come supplier reale e Metalluminio SP come contesto cartella.;true
+ALCOA SMZ;Lukas;nome cartella;cartella cliente/progetto;true;La cartella Lukas contiene certificati con supplier reale ALCOA SMZ.;true
+AVIATUBE;Alcan Aviatube;certificati/web legacy;denominazione storica;true;Naming storico letto nei certificati; la società attuale è AVIATUBE.;true
+BARATE' S.p.A.;BARATÈ SANTINO S.r.l.;web ufficiale;denominazione societaria aggiornata;true;Sul web ufficiale compare la denominazione aggiornata rispetto ai certificati storici.;true
