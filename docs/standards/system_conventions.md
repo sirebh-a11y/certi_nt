@@ -144,6 +144,35 @@ Le proprietà certificate possono appartenere a categorie diverse, per esempio:
 
 ---
 
+### 2.3 Peso
+
+Unità standard:
+
+| Campo | Unità |
+| ----- | ----- |
+| peso  | kg    |
+
+Esempio input:
+
+```plaintext
+2120 Kg
+```
+
+Valore salvato:
+
+```plaintext
+2120
+```
+
+### Regole
+
+* NON salvare l'unità nel database
+* accettare varianti come `kg`, `Kg`, `KG`
+* salvare solo il valore numerico
+* applicare le convenzioni numeriche globali del sistema
+
+---
+
 ## 3. Range e valori
 
 ### 3.1 Range
