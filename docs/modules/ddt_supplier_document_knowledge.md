@@ -41,6 +41,14 @@ Utilizzare i PDF DDT presenti nella cartella:
 esempi_locali/4-ddt
 ```
 
+e in tutte le sue sottocartelle fornitore/template.
+
+Regola operativa obbligatoria:
+
+* l'analisi deve essere eseguita sulla cartella specifica del dominio documentale
+* l'analisi NON deve fermarsi ai file presenti nella root della cartella
+* le sottocartelle fornitore fanno parte del dataset reale da analizzare
+
 per:
 
 * comprendere la struttura reale dei DDT dei fornitori
