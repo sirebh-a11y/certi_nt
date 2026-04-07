@@ -40,6 +40,8 @@ Obiettivi:
 
 Rappresenta l’anagrafica principale del fornitore.
 
+Questa tabella contiene lo **stato corrente** del fornitore.
+
 Struttura:
 
 * id (PK)
@@ -81,8 +83,12 @@ Struttura:
 
 Storico modifiche dell’anagrafica fornitori.
 
-Ogni modifica rilevante NON deve sovrascrivere direttamente il dato,
-ma essere registrata nello storico.
+Ogni modifica rilevante deve:
+
+* aggiornare il dato corrente in `fornitori`
+* registrare la modifica nello storico
+
+Lo storico è append-only e rappresenta l’audit trail delle modifiche.
 
 Struttura:
 
@@ -141,9 +147,10 @@ Durante l’acquisizione:
 
 ### 4.4 Storico
 
-* NON sovrascrivere dati critici senza traccia
+* il record corrente del fornitore viene aggiornato quando necessario
 * ogni modifica deve essere registrata
 * lo storico è solo append (non modifica)
+* lo storico non sostituisce l’anagrafica corrente, la accompagna
 
 ---
 
@@ -171,6 +178,16 @@ e
 ```plaintext
 datimaterialeincoming.fornitore_raw
 ```
+
+### Dataset / fogli storici
+
+Dataset o fogli storici possono essere organizzati per fornitore e il nome del foglio può rappresentare un indizio utile nel contesto di analisi.
+
+Tuttavia il sistema deve sempre atterrare su:
+
+* `fornitore_raw`
+* `fornitore_id`
+* eventuali `fornitori_alias`
 
 ---
 

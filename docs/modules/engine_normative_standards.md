@@ -5,10 +5,13 @@ Questo file definisce il motore normativo e il contenuto iniziale delle regole e
 
 ## Obiettivo
 Costruire un database di standard normativi da usare per confrontare i dati acquisiti da DDT e certificati fornitore.
-Ogni foglio Excel corrisponde a **una singola lega** e contiene **solo le regole di quella lega**.
+Ogni foglio Excel corrisponde a **una singola lega_designazione** e contiene le regole di quella designazione.
+
+La `lega_designazione` può coincidere con la lega standard oppure rappresentare una variante specifica della lega base.
 
 ## Logica del motore normativo
-- Primo filtro obbligatorio: **lega**.
+- Primo filtro obbligatorio: **lega_base**.
+- Se presente, la `variante_lega` raffina la selezione e ha precedenza sulla regola generale della lega base.
 - Dentro la lega, la regola corretta si seleziona in base a una o più dimensioni: `norma`, `trattamento_termico`, `tipo_prodotto`, `misura_tipo` (`diametro` o `spessore`) e relativo range.
 - Se una dimensione non compare per una regola, quella dimensione è **ininfluente** per quella regola.
 - Le formule Excel usano il diametro o lo spessore per scegliere il blocco meccanico corretto. Questa logica deve essere ricostruita in database.
@@ -17,7 +20,10 @@ Ogni foglio Excel corrisponde a **una singola lega** e contiene **solo le regole
 ## Modello dati proposto
 ### 1. `normative_standards`
 - `id`
-- `lega` (obbligatorio)
+- `lega_base` (obbligatorio)
+- `lega_designazione` (obbligatorio)
+- `variante_lega` (nullable)
+- `regola_tipo` (`generale` / `variante`)
 - `norma` (nullable)
 - `trattamento_termico` (nullable)
 - `tipo_prodotto` (nullable)
@@ -34,16 +40,40 @@ Ogni foglio Excel corrisponde a **una singola lega** e contiene **solo le regole
 - `min_value` (nullable)
 - `max_value` (nullable)
 
-### 3. `normative_standard_mechanics`
+### 3. `normative_standard_properties`
 - `id`
 - `standard_id`
+- `categoria` (esempio: `meccanica`, `elettrica`)
 - `proprieta`
-- `min_value`
+- `min_value` (nullable)
+- `max_value` (nullable)
 
 ### Nota futura
 Il modello deve restare modificabile da GUI in futuro. Non hardcodare enum o regole nel codice: il database dovrà poter essere esteso con nuove leghe, nuove norme e nuove varianti.
 
+## Regole generali vs regole speciali di variante
+
+Una regola normativa può essere:
+
+* **generale**: valida per la `lega_base`, senza variante specifica
+* **speciale di variante**: valida solo per una `variante_lega` o `lega_designazione` specifica
+
+Esempi:
+
+* `2024` → regola generale della lega base
+* `2024 Sigma` → regola speciale di variante della lega base `2024`
+* `7075 Eppendorf` → regola speciale di variante della lega base `7075`
+
+Quando una regola speciale di variante matcha, prevale sulla regola generale della stessa lega base.
+
 ## Regole iniziali estratte da `_Prova Analisi_.xlsx`
+
+Nota di lettura:
+
+* il titolo del foglio Excel corrisponde alla `lega_designazione`
+* da quel titolo si ricavano `lega_base` e, se presente, `variante_lega`
+* i fogli che coincidono con la sola lega standard rappresentano regole generali
+* i fogli con suffissi o nomi aggiuntivi rappresentano regole speciali di variante
 
 ### Lega `2014`
 
@@ -748,12 +778,14 @@ Il modello deve restare modificabile da GUI in futuro. Non hardcodare enum o reg
 
 ## Regola di selezione (CRITICA)
 
-Quando più standard matchano per una stessa lega:
+Quando più standard matchano:
 
-1. considerare solo quelli della lega
-2. applicare i filtri (norma, trattamento, tipo_prodotto se presenti)
-3. verificare il range (diametro/spessore)
-4. tra le regole valide, selezionare quella più specifica:
+1. considerare solo quelli della `lega_base`
+2. se il caso ha una `variante_lega`, cercare prima le regole speciali compatibili
+3. se nessuna regola speciale matcha, usare le regole generali della `lega_base`
+4. applicare i filtri (`norma`, `trattamento_termico`, `tipo_prodotto` se presenti)
+5. verificare il range (`diametro` / `spessore`)
+6. tra le regole valide, selezionare quella più specifica:
 
 - più campi valorizzati (norma, trattamento, tipo)
 - range più stretto

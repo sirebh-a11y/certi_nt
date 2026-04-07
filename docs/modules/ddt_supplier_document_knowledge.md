@@ -10,6 +10,8 @@ Questo modulo NON implementa parsing runtime dei PDF.
 
 Questo modulo serve a costruire una base di conoscenza dei documenti DDT dei fornitori, utilizzando i PDF esempio come materiale di analisi.
 
+L’output attuale del modulo è conoscenza documentale strutturata, NON codice di estrazione.
+
 ---
 
 ## ⚠️ IMPORTANTE — COERENZA CON IL SISTEMA
@@ -46,7 +48,7 @@ per:
 * distinguere dati stampati e dati aggiunti manualmente
 * capire dove si trovano i dati chiave
 * definire regole documentali di riconoscimento
-* costruire una base di conoscenza persistente per usi futuri
+* costruire una base di conoscenza documentale strutturata
 
 ---
 
@@ -84,7 +86,7 @@ Per ogni PDF deve:
 5. identificare campi stampati e campi aggiunti manualmente
 6. riconoscere pattern ricorrenti
 7. formalizzare la conoscenza in regole strutturate
-8. preparare una base dati riutilizzabile in futuro
+8. preparare una base di conoscenza riutilizzabile in futuro
 
 Codex NON deve:
 
@@ -94,6 +96,7 @@ Codex NON deve:
 * calcolare valori
 * implementare ora teach operatore
 * implementare ora machine learning
+* produrre ora codice finale di parsing
 
 ---
 
@@ -111,6 +114,8 @@ Output atteso:
 
 * `fornitore_raw`
 * `fornitore_id` (se riconosciuto)
+
+Il nome del dataset o del foglio storico può essere un indizio utile di contesto, ma NON sostituisce il mapping strutturato verso `fornitore_id`.
 
 Se il fornitore non è riconosciuto:
 
@@ -391,6 +396,8 @@ Codex NON deve produrre codice di estrazione.
 
 Deve produrre conoscenza strutturata.
 
+Il primo deliverable del modulo è una knowledge base documentale, non un parser runtime.
+
 Esempio concettuale:
 
 ```plaintext
@@ -436,8 +443,9 @@ Queste strutture devono essere pensate per:
 
 * estensione futura
 * revisione umana
-* teach operatore
-* dataset per machine learning
+* utilizzo operativo come base di conoscenza
+
+Teach operatore e machine learning sono estensioni future, NON obiettivi del rilascio iniziale di questo modulo.
 
 ---
 
@@ -506,6 +514,8 @@ Per questo motivo:
 * i documenti devono essere collegati alle regole
 * le relazioni tra campi devono essere esplicite
 * deve essere distinguibile ciò che è stampato da ciò che è scritto a mano
+
+Queste estensioni NON fanno parte dello scope attuale del modulo.
 
 ---
 

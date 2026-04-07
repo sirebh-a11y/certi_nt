@@ -51,27 +51,26 @@ Tracciare eccezioni e anomalie nei dati normativi estratti da Excel (`_Prova Ana
 
 **Problema**
 
-* Presenza proprietà non standard:
+* Presenza proprietà certificata non meccanica:
 
   * IACS%
 
 **Interpretazione**
 
-* Proprietà elettrica (conducibilità)
+* Proprietà elettrica / conducibilità
+* il modello normativo deve supportare proprietà certificate categorizzate, non solo meccaniche
 
 **Azione**
 
-* Decidere se:
-
-  * mantenerla nel modello attuale
-  * oppure separarla in categoria dedicata
+* classificare `IACS%` nella categoria corretta
+* verificare se esistono altre proprietà certificate non meccaniche da supportare allo stesso modo
 
 ---
 
 ## 📌 Nota generale
 
 * Queste eccezioni NON bloccano il sistema
-* Il modello attuale le supporta senza modifiche
+* Il modello aggiornato deve supportarle senza forzature concettuali
 * Correzioni da fare in fase di:
 
   * validazione dati

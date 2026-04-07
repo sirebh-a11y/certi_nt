@@ -116,7 +116,7 @@ Valore salvato:
 
 ---
 
-### 2.2 Proprietà meccaniche
+### 2.2 Proprietà certificate
 
 Unità standard:
 
@@ -127,6 +127,12 @@ Unità standard:
 | HB         | HB                     |
 | A%         | %                      |
 | Rp0.2 / Rm | rapporto (senza unità) |
+| IACS%      | % IACS                 |
+
+Le proprietà certificate possono appartenere a categorie diverse, per esempio:
+
+* meccanica
+* elettrica
 
 ---
 
@@ -170,6 +176,7 @@ Formato accettato:
 
 ```plaintext id="h3g8rp"
 DD/MM/YYYY
+DD/MM/YY
 ```
 
 Esempi:
@@ -238,9 +245,13 @@ Regole:
 
 ## 8. Derivati
 
+Nel livello documentale / `acquisition`:
+
 * NON salvare valori derivati
-* calcolare solo runtime
+* calcolare solo runtime o in livelli separati
 * salvare solo dati presenti nei documenti
+
+Livelli futuri del sistema, come KPI o processi interni, possono invece gestire valori derivati in modo esplicito e separato.
 
 ---
 

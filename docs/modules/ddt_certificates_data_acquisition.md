@@ -43,17 +43,60 @@ Gestire l’acquisizione dei dati da:
 Obiettivi:
 
 * estrarre dati dai documenti
-* salvare SOLO valori presenti nei certificati
-* strutturare i dati in database
+* salvare i dati sorgente realmente presenti nei documenti
+* strutturare i dati in database in modo tracciabile
+
+Questo modulo definisce il livello:
+
+* `acquisition`
+
+Questo modulo NON definisce in dettaglio:
+
+* `incoming review`
+* `kpi / derived data`
 
 ---
 
-## 2. Entità principali
+## 2. Livelli logici del sistema
+
+Per evitare ambiguità, il sistema distingue tre livelli:
+
+### 2.1 Acquisition
+
+Contiene i dati sorgente/documentali realmente letti da certificati e DDT.
+
+Questo è l’unico livello definito in dettaglio in questo file.
+
+### 2.2 Incoming review
+
+Contiene eventi e decisioni interne del processo qualità/incoming, per esempio:
+
+* data_ricezione
+* data_accettazione
+* n_analisi
+* valutazione
+* note operative interne
+
+Questo livello NON fa parte del modello `acquisition`.
+
+### 2.3 KPI / derived data
+
+Contiene valori calcolati, per esempio:
+
+* ritardo
+* tempo_controllo
+* tempo_medio_controllo
+
+Questo livello NON fa parte del modello `acquisition`.
+
+---
+
+## 3. Entità principali
 
 * Certificato (CDQ)
-* Dati materiale incoming
+* Dati materiale acquisition
 * Proprietà chimiche
-* Proprietà meccaniche
+* Proprietà certificate
 
 Chiave logica principale:
 
@@ -61,41 +104,53 @@ Chiave logica principale:
 
 ---
 
-## 3. Modello dati
+## 4. Modello dati (`acquisition`)
 
-### 3.1 datimaterialeincoming
+### 4.1 datimaterialeincoming
 
-Una riga per certificato.
+Una riga logica per `cdq`.
+
+Rappresenta solo dati sorgente/documentali.
 
 Campi:
 
-* cdq (PK, identificativo legacy)
-* numero
-* data_ricezione
-* data_accettazione
-* fornitore_id (FK → fornitori.id)
-* fornitore_raw (testo originale letto da OCR/DDT/certificato)
-* lega
-* diametro
-* colata
-* ddt
-* peso
-* ordine
-* data richiesta
-* ritardo (= data ricezione – data richiesta)
-* tempo_controllo (= data accettazione – data ricezione in giorni lavorativi, eliminati quindi feriali e ferie italiane)
-* tempo_medio
-* Valutazione (A = Accettato, AR = Accettato con Riserva, R = Respinto)
-* Note (campo libero testuale)
+* `cdq` (PK, identificativo legacy)
+* `fornitore_id` (FK → fornitori.id, nullable finché il mapping non è completato)
+* `fornitore_raw` (testo originale letto da OCR / DDT / certificato)
+* `lega_base`
+* `lega_designazione`
+* `variante_lega` (nullable)
+* `diametro`
+* `colata`
+* `ddt`
+* `peso`
+* `ordine` (solo se realmente presente nella fonte documentale)
+* `data_documento` (nullable, solo se presente nella fonte documentale)
+* `note_documento` (nullable, solo se la nota appartiene al documento sorgente)
+
+Campi ESCLUSI da questa entità:
+
+* `data_ricezione`
+* `data_accettazione`
+* `data_richiesta_consegna` se dato interno/ERP
+* `n_analisi`
+* `valutazione`
+* `ritardo`
+* `tempo_controllo`
+* `tempo_medio`
+* note operative interne
 
 ---
 
-### 3.2 elementi_chimici
+### 4.2 elementi_chimici
 
-Lista controllata e CHIUSA.
+Lista controllata iniziale.
 
-Elenco ufficiale:
+La lista è ufficiale per l’avvio del sistema, ma deve poter essere estesa in futuro se emergono nuovi elementi reali o nuovi standard.
 
+Elenco ufficiale iniziale:
+
+* Si
 * Fe
 * Cu
 * Mn
@@ -116,127 +171,135 @@ Elenco ufficiale:
 
 Struttura:
 
-* id (PK)
-* nome (unico)
-* attivo
+* `id` (PK)
+* `nome` (unico)
+* `attivo`
 
 ---
 
-### 3.3 proprieta_meccaniche_def
+### 4.3 proprieta_certificato_def
 
-Lista controllata e CHIUSA.
+Lista controllata iniziale delle proprietà certificate.
 
-Elenco ufficiale:
+Questa lista non deve essere limitata alle sole proprietà meccaniche.
+Il sistema deve poter distinguere la categoria della proprietà.
+
+Elenco ufficiale iniziale:
 
 * HB
 * Rp0.2
 * Rm
 * A%
 * Rp0.2 / Rm
+* IACS%
 
 Struttura:
 
-* id (PK)
-* nome (unico)
-* attivo
+* `id` (PK)
+* `nome` (unico)
+* `categoria` (esempio: `meccanica`, `elettrica`)
+* `attivo`
 
 ---
 
-### 3.4 proprietachimiche
+### 4.4 proprietachimiche
 
 Valori chimici letti dal certificato.
 
-* id (PK)
-* cdq (FK)
-* elemento_id (FK)
-* valore
+* `id` (PK)
+* `cdq` (FK)
+* `elemento_id` (FK)
+* `valore`
 
 ---
 
-### 3.5 proprietameccaniche
+### 4.5 proprietacertificato
 
-Valori meccanici letti dal certificato.
+Valori di proprietà certificate letti dal certificato.
 
-* id (PK)
-* cdq (FK)
-* proprieta_id (FK)
-* valore
+* `id` (PK)
+* `cdq` (FK)
+* `proprieta_id` (FK)
+* `valore`
 
 ---
 
-### 3.6 fornitori (riferimento modulo esterno)
+### 4.6 fornitori (riferimento modulo esterno)
 
 La gestione dei fornitori è definita in un modulo dedicato:
 
-→ docs/modules/fornitori.md
+→ `docs/modules/fornitori.md`
 
-Ogni certificato (cdq) è associato a un fornitore tramite:
+Ogni certificato (`cdq`) è associato a un fornitore tramite:
 
-* fornitore_id (FK)
+* `fornitore_id` (FK)
 
 Il campo:
 
-* fornitore_raw
+* `fornitore_raw`
 
-mantiene il valore originale letto dai documenti (OCR / DDT / certificato)
-per garantire tracciabilità e supportare il mapping verso fornitori normalizzati.
+mantiene il valore originale letto dai documenti per garantire:
 
-La logica completa di gestione fornitori (anagrafica, alias, storico) NON è definita in questo modulo.
+* tracciabilità
+* supporto al mapping verso fornitori normalizzati
+* possibilità di revisione umana
 
 ---
 
-## 4. Regole di acquisizione dati
+## 5. Regole di acquisizione dati
 
-### 4.1 Regola generale
+### 5.1 Regola generale
 
-Il database deve contenere SOLO dati letti dal certificato.
+Il livello `acquisition` deve contenere SOLO dati sorgente/documentali.
 
-NON devono essere salvati:
+NON devono essere salvati nel livello `acquisition`:
 
 * valori calcolati
 * valori derivati non presenti nel certificato
 * stime
+* decisioni interne di processo
+
+Questa regola vale per:
+
+* chimica
+* proprietà certificate
+* anagrafica documentale del record
 
 ---
 
-### 4.2 Regola unificata per derivati
+### 5.2 Regola unificata per derivati
 
 Vale per:
 
 * chimica
-* meccanica
+* proprietà certificate
 * processo
 
 Regola:
 
 * se presente nel certificato → SALVARE
-* se NON presente → NON salvare
-* calcolo SOLO runtime
+* se NON presente → NON salvare nel livello `acquisition`
+* eventuale calcolo SOLO runtime o in livelli separati
 
 ---
 
-### 4.3 Chimica
+### 5.3 Chimica
 
 * salvare elementi singoli se presenti
 * salvare composti SOLO se presenti
+* non inventare elementi non presenti
 
 ---
 
-### 4.4 Meccanica
+### 5.4 Proprietà certificate
 
 * salvare solo valori presenti
 * salvare rapporti SOLO se presenti
+* la categoria della proprietà non cambia la regola di acquisizione
 
 ---
 
-### 4.5 Processo
-
-* salvare se presenti
-* altrimenti calcolare runtime
-
----
-
-### 4.6 Fornitori
+### 5.5 Fornitori
 
 Il nome del fornitore viene acquisito dai documenti e gestito secondo la seguente logica:
 
@@ -252,7 +315,9 @@ Questo garantisce:
 
 ---
 
-## 5. Logica runtime
+## 6. Logica runtime
+
+Il sistema può avere logiche runtime sui derivati, ma i derivati non entrano nel livello `acquisition` se non compaiono esplicitamente nel certificato.
 
 ### Chimica
 
@@ -260,74 +325,87 @@ Zr+Ti:
 
 * se presente → usare valore salvato
 * altrimenti:
-
   * se Zr e Ti presenti → Zr + Ti
   * altrimenti → NULL
 
----
-
-### Meccanica
+### Proprietà certificate
 
 Rp0.2 / Rm:
 
 * se presente → usare valore salvato
 * altrimenti:
-
   * se Rp0.2 e Rm presenti e Rm ≠ 0 → calcolare
   * altrimenti → NULL
-
----
 
 ### Regola generale
 
 Un valore derivato è calcolabile SOLO se:
 
-* tutti i valori sono presenti
-* operazione valida
+* tutti i valori necessari sono presenti
+* l’operazione è valida
 
 Altrimenti:
+
 → NULL
 
 ---
 
-## 6. Pipeline
+## 7. Pipeline
 
-Documenti → OCR → mapping → validazione → DB
+Documenti → OCR → mapping → validazione → DB (`acquisition`)
 
 ---
 
-## 7. OCR / AI
+## 8. OCR / AI
 
 * NO calcoli
 * NO dati inventati
-* SOLO mapping su vocabolario controllato
+* SOLO mapping su vocabolario controllato iniziale
+* vocabolario estendibile quando emergono nuovi casi reali
 
 ---
 
-## 8. Vincoli
+## 9. Rapporto con i fogli Excel operativi
 
-* cdq obbligatorio
-* cdq univoco
+I fogli Excel storici possono rappresentare una vista operativa arricchita che mescola:
+
+* dati acquisiti
+* dati di processo interno
+* KPI
+
+Questa vista è utile come riferimento di business, ma NON coincide con il modello `acquisition`.
+
+Il modello `acquisition` deve isolare solo la componente sorgente/documentale.
+
+---
+
+## 10. Vincoli
+
+* `cdq` obbligatorio
+* `cdq` univoco
 * tracciabilità completa
+* separazione netta tra dato sorgente e dato operativo/calcolato
 
 ---
 
-## 9. Obiettivo
+## 11. Obiettivo
 
 Separare:
 
-* dati reali
+* dati reali/documentali
 * logica applicativa
+* decisioni di processo
+* KPI
 
 Sistema robusto e tracciabile.
 
 ---
 
-## 10. Estensione futura
+## 12. Estensione futura
 
-Altri file saranno creati per:
+Altri file o moduli potranno definire in seguito:
 
-* OCR
-* mapping
+* workflow incoming review
+* KPI e calcoli di processo
 * UI
-* workflow
+* logiche di validazione operativa
