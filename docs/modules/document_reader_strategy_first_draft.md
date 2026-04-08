@@ -23,6 +23,8 @@ Questo draft deve restare coerente con:
 * `docs/modules/certificates_supplier_document_knowledge.md`
 * `docs/modules/ddt_certificates_data_acquisition.md`
 * `docs/modules/engine_normative_standards.md`
+* `docs/modules/fornitori.md`
+* `docs/modules/overview.md`
 
 In particolare deve rispettare queste scelte gia' fissate:
 
@@ -102,6 +104,12 @@ Gia' presenti o in corso:
 * knowledge certificati
 
 Questo livello definisce il contesto.
+
+Nota importante:
+
+* il modulo `fornitori` non e' piu' solo in analisi
+* e' gia' entrato in implementazione con DB, backend e frontend dedicati
+* il reader documentale deve quindi riusare questo modulo come anagrafica master, senza aggiornarlo automaticamente dai PDF
 
 #### Livello B — Reader documentale runtime
 
@@ -392,6 +400,12 @@ Quindi:
 * il documento e' sorgente
 * la riga incoming e' l'oggetto operativo
 
+Placeholder di allineamento futuro:
+
+* il workflow reader e la UI sono fortemente centrati sulla `riga incoming`
+* il modello `acquisition` documentato oggi usa ancora una formulazione semplificata "una riga logica per `cdq`"
+* questo punto dovra' essere riallineato in un passaggio successivo, senza forzarlo in questo draft
+
 ### 8.3 Field evidence
 
 Rappresenta la prova osservata nel documento.
@@ -445,7 +459,7 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
 2. Se ci sono piu' certificati candidati per la stessa riga, il sistema deve proporre piu' match.
 3. Il semaforico deve riflettere sia la qualita' della lettura sia la qualita' del match.
 4. La standardizzazione avviene dopo il salvataggio del grezzo con evidenza.
-5. Il primo pilota deve partire con DDT e certificati insieme, ma su pochi fornitori selezionati.
+5. Il primo pilota deve partire con DDT e certificati insieme, con perimetro aperto a tutti i fornitori ma focus principale sui fornitori meglio strutturati presenti in `esempi_locali/3-certificati` fuori da `Vari`.
 6. OpenAI GPT-5.2 e' un supporto forte ma non il motore unico della prima versione.
 7. Prima di qualunque invio a OpenAI i dati aziendali di `Forgialluminio 3` e dell'emittente del documento devono essere mascherati obbligatoriamente.
 8. La validazione deve esistere per sezione e anche come validazione finale di riga.
@@ -507,6 +521,24 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
 34. Un blocco confermato puo' essere riaperto se arriva nuova evidenza o cambia un dato correlato.
 35. Quando un blocco viene riaperto, il sistema deve mostrare chiaramente il motivo della riapertura.
 36. I messaggi in UI devono essere brevi, concreti e operativi.
+37. Il pilota deve restare aperto a tutti i fornitori, con focus principale sui fornitori meglio strutturati presenti in `esempi_locali/3-certificati` fuori da `Vari`.
+38. I casi difficili non devono essere esclusi dal pilota: devono entrare per far emergere le debolezze del sistema.
+39. Il focus iniziale del pilota deve restare sui dati piu' importanti:
+   * `cdq`
+   * `colata`
+   * dimensione
+   * peso
+   * match certificato
+   * chimica
+   * proprieta'
+   * note
+40. I dati operativi esterni possono esistere nel pilota, ma non devono definire il successo del reader.
+41. Il successo del pilota deve essere misurato soprattutto su quanto bene supporta il lavoro del reparto `quality`, non sull'automazione pura.
+42. Nel tempo il sistema dovra' rendere leggibili anche le debolezze ricorrenti, distinguendo almeno tra:
+   * debolezze di lettura documentale
+   * debolezze di standardizzazione
+   * debolezze di mapping fornitore
+   * debolezze di modello acquisition
 
 ---
 
@@ -1168,6 +1200,13 @@ Ordine consigliato:
 7. salvare storico strutturato
 8. solo dopo ragionare su machine learning vero e proprio
 
+Regole operative aggiuntive del pilota:
+
+* il pilota deve accettare anche casi deboli o poco coperti, senza fingere di gestirli bene
+* i casi dentro `Vari` devono essere inclusi, ma non sono il focus principale iniziale
+* i casi difficili devono essere usati per capire dove il sistema e' debole
+* il giudizio sul pilota deve concentrarsi sul supporto reale al lavoro `quality`
+
 ---
 
 ## 17. Domande aperte da chiarire con l'utente
@@ -1186,8 +1225,7 @@ Dubbi aperti da chiarire insieme:
    * solo contenuto consultabile
    * oppure anche oggetto strutturato da usare nelle decisioni di acquisizione?
 
-3. Il primo set di fornitori pilota va deciso in modo esplicito:
-   * quali sono i 2-3 fornitori migliori da usare per il primo reader?
+3. Il pilota deve restare aperto a tutti i fornitori, ma va chiarito e mantenuto esplicito quali sono i fornitori principali da usare come focus iniziale di verifica e miglioramento, in particolare quelli presenti in `esempi_locali/3-certificati` fuori da `Vari`.
 
 4. Il livello di crop/evidenza che vuoi conservare fin da subito deve essere chiarito meglio:
    * solo bounding box e testo
@@ -1196,6 +1234,12 @@ Dubbi aperti da chiarire insieme:
 5. Va deciso quando una riga puo' considerarsi "utilizzabile" per il processo successivo:
    * solo dopo validazione completa
    * oppure anche in stato parziale per alcuni flussi interni
+
+6. Va chiarito con quale forma rendere visibili nel tempo le debolezze ricorrenti del sistema, senza appesantire il primo rilascio:
+   * per fornitore
+   * per template
+   * per blocco (`Match`, `Chimica`, `Proprieta'`, `Note`)
+   * per tipo di problema (lettura, standardizzazione, mapping, acquisition)
 
 ---
 
@@ -1221,9 +1265,10 @@ Questa scelta e':
 Dopo questo primo draft consolidato, il passo successivo consigliato e':
 
 * chiarire le risposte alle domande aperte del punto 17
-* decidere il primo gruppo di fornitori pilota
+* esplicitare nel tempo i fornitori focus del pilota, senza chiudere il perimetro agli altri fornitori
 * definire meglio il semaforico per blocchi e per riga
 * definire la UI di validazione obbligatoria in modo semplice e chiaro
+* definire una forma leggera per osservare le debolezze ricorrenti del sistema durante il pilota
 
 Solo dopo conviene disegnare in dettaglio:
 
