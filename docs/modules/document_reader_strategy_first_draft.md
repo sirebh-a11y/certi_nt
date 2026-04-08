@@ -461,6 +461,52 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
 12. Per i campi operativi e calcolati deve essere salvata anche la provenienza del dato.
 13. La prima versione deve essere assistita, non full-auto.
 14. La conferma utente dei blocchi e' mandatory, ma la UI deve restare semplice e chiara.
+15. Il workflow DDT/certificati appartiene al reparto `quality`.
+16. Gli altri reparti non devono svolgere il lavoro tecnico di caricamento, lettura, correzione e validazione documentale.
+17. In futuro potra' esistere un passaggio successivo separato per `administration` sul certificato finale/prodotto.
+18. Lo stato tecnico della riga e lo stato di workflow umano devono restare distinti.
+19. Nello storico devono essere tracciati almeno:
+   * utente di caricamento
+   * utente di scelta/match
+   * utente di modifica
+   * utente di chiusura
+20. Ogni evento storico deve avere almeno:
+   * utente
+   * timestamp
+   * azione
+   * blocco coinvolto
+   * prima/dopo se c'e' modifica
+21. Lo storico deve distinguere tra:
+   * storico eventi
+   * storico valori
+22. Il motivo di modifica deve restare semplice, leggero e non bloccante.
+23. Il principio guida della UX deve essere:
+   * chiaro
+   * semplice
+   * robusto
+   * veloce
+   * non bloccante
+24. L'analisi deve essere progressiva per blocchi, non monolitica.
+25. La riga deve comparire subito in lista anche se ancora parziale.
+26. La lista righe e' il cruscotto operativo principale del reparto `quality`.
+27. I filtri minimi del cruscotto devono includere:
+   * stato tecnico
+   * stato workflow
+   * priorita'
+   * fornitore
+   * presenza/mancanza certificato
+   * presenza di rossi/gialli
+28. Dal cruscotto l'utente deve poter entrare direttamente nel blocco critico.
+29. Nel blocco si mostra prima l'evidenza e poi il dato proposto.
+30. Per chimica e proprieta' va prevista una doppia vista:
+   * crop/tabella
+   * vista strutturata dei campi letti
+31. La UI deve evidenziare soprattutto le anomalie; cio' che e' ok deve restare visivamente leggero.
+32. La correzione manuale deve essere puntuale sul singolo campo/elemento.
+33. La conferma deve poter essere sia puntuale sia a livello di blocco.
+34. Un blocco confermato puo' essere riaperto se arriva nuova evidenza o cambia un dato correlato.
+35. Quando un blocco viene riaperto, il sistema deve mostrare chiaramente il motivo della riapertura.
+36. I messaggi in UI devono essere brevi, concreti e operativi.
 
 ---
 
@@ -478,6 +524,13 @@ Ogni sezione deve poter mostrare almeno:
 * giallo -> lettura debole, dubbia o mismatch parziale
 * rosso -> dato mancante, non leggibile o mismatch grave
 
+Il semaforico deve sintetizzare due dimensioni interne:
+
+* qualita' di lettura
+* qualita' di coerenza / match
+
+Verso l'utente il risultato deve restare semplice e non ambiguo.
+
 ### 10.2 Semaforico per riga
 
 Ogni riga deve avere uno stato macroscopico che permetta all'utente di:
@@ -485,6 +538,28 @@ Ogni riga deve avere uno stato macroscopico che permetta all'utente di:
 * capire cosa e' gia' valido
 * capire cosa manca
 * entrare nel dettaglio del blocco da correggere
+
+### 10.3 Colore + etichetta + azione
+
+Il solo colore non basta.
+
+Il sistema dovrebbe mostrare sempre:
+
+* colore semaforico
+* etichetta breve
+* azione chiara
+
+Esempi:
+
+* `OK`
+* `Da verificare`
+* `Mancante`
+
+Con azioni del tipo:
+
+* `Apri`
+* `Correggi`
+* `Conferma`
 
 ### 10.3 Correzione semplice
 
@@ -496,6 +571,32 @@ La UX dovra' permettere in futuro:
 * validazione esplicita del blocco
 
 La semplicita' operativa e' parte integrante della strategia, non una rifinitura successiva.
+
+### 10.4 Blocchi macro nella lista righe
+
+Nel riepilogo riga i blocchi macro da mostrare sempre devono essere:
+
+* `DDT`
+* `Match Certificato`
+* `Chimica`
+* `Proprieta'`
+* `Note`
+* `Validazione finale`
+
+Le `Note` sono un blocco obbligatorio nel workflow, ma il loro contenuto puo' essere vuoto o `null`.
+
+Strategia e standardizzazione delle note restano un placeholder futuro da trattare in file dedicato.
+
+### 10.5 Struttura costante del dettaglio blocco
+
+Ogni blocco nel dettaglio riga dovrebbe seguire sempre lo stesso schema:
+
+1. stato
+2. motivo
+3. evidenza
+4. valore proposto
+5. correzione manuale
+6. conferma
 
 ---
 
@@ -541,7 +642,172 @@ Per dati operativi e calcolati deve essere tracciata anche la provenienza:
 
 ---
 
-## 12. Strategia implementativa consigliata
+## 12. Workflow `quality` e storico
+
+Tutta l'attivita' di:
+
+* inserimento DDT
+* caricamento certificati
+* lettura
+* correzione
+* validazione blocchi
+* validazione finale di riga
+
+deve appartenere al reparto `quality`.
+
+Gli altri reparti non devono svolgere questo lavoro tecnico.
+
+### 12.1 Due stati distinti
+
+Il sistema deve distinguere tra:
+
+* stato tecnico della riga
+* stato di workflow del reparto `quality`
+
+Esempio di workflow umano:
+
+* `Nuova`
+* `In lavorazione`
+* `Validata quality`
+* `Riaperta`
+
+### 12.2 Storico utenti
+
+Lo storico deve tracciare almeno:
+
+* chi ha caricato
+* chi ha scelto il match
+* chi ha modificato
+* chi ha chiuso
+
+### 12.3 Storico eventi e valori
+
+Servono due livelli distinti:
+
+* storico eventi
+* storico valori
+
+Per ogni evento minimo:
+
+* utente
+* timestamp
+* azione
+* blocco coinvolto
+* prima/dopo se presente
+
+### 12.4 Motivo di modifica
+
+Il motivo di modifica deve esistere, ma in forma leggera:
+
+* pochi motivi standard
+* opzionale
+* non deve rallentare l'utente
+
+---
+
+## 13. Cruscotto operativo
+
+La lista righe deve essere il vero cruscotto operativo del reparto `quality`.
+
+### 13.1 Presenza immediata della riga
+
+La riga deve comparire subito in lista anche se ancora parziale.
+
+### 13.2 Filtri minimi
+
+Il cruscotto deve permettere almeno:
+
+* filtro per stato tecnico
+* filtro per stato workflow
+* filtro per priorita'
+* filtro per fornitore
+* filtro per presenza/mancanza certificato
+* filtro per presenza di rossi/gialli
+
+### 13.3 Priorita' operativa
+
+La lista righe deve avere anche una priorita' operativa semplice:
+
+* Alta
+* Media
+* Bassa
+
+### 13.4 Ingresso diretto nel blocco critico
+
+Dal cruscotto l'utente deve poter entrare:
+
+* nella riga completa
+* oppure direttamente nel blocco critico
+
+---
+
+## 14. UX di correzione e conferma
+
+La UX deve essere:
+
+* chiara
+* semplice
+* robusta
+* veloce
+* non bloccante
+
+### 14.1 Analisi progressiva
+
+L'analisi deve essere progressiva per blocchi, non monolitica e bloccante.
+
+### 14.2 Doppia vista per i blocchi tabellari
+
+Per `Chimica` e `Proprieta'` deve esistere:
+
+* vista immagine/crop della tabella
+* vista strutturata dei campi letti
+
+### 14.3 Evidenza prima del dato
+
+Quando l'utente entra in un blocco, il sistema deve mostrare prima:
+
+1. evidenza
+2. proposta automatica
+3. eventuale mismatch o dubbio
+4. correzione
+5. conferma
+
+### 14.4 Correzione granulare
+
+La correzione deve poter avvenire sul singolo campo/elemento.
+
+### 14.5 Conferma granulare e aggregata
+
+La conferma deve poter avvenire:
+
+* sul singolo campo
+* oppure sull'intero blocco
+
+### 14.6 Riapertura controllata
+
+Un blocco confermato puo' essere riaperto se:
+
+* arriva nuova evidenza
+* cambia il match
+* cambia un dato correlato
+
+Quando questo avviene, il sistema deve mostrare chiaramente il motivo della riapertura.
+
+### 14.7 Messaggi brevi
+
+I messaggi in UI devono essere brevi, concreti e operativi.
+
+Esempi:
+
+* `Manca certificato`
+* `Chimica incompleta`
+* `Possibile mismatch su Si`
+* `Due certificati candidati`
+* `Riaperto: modificato CDQ`
+
+---
+
+## 15. Strategia implementativa consigliata
 
 Ordine consigliato:
 
@@ -556,7 +822,7 @@ Ordine consigliato:
 
 ---
 
-## 13. Domande aperte da chiarire con l'utente
+## 16. Domande aperte da chiarire con l'utente
 
 Questo e' il punto in cui servono chiarimenti sulle intenzioni finali del progetto.
 
@@ -585,7 +851,7 @@ Dubbi aperti da chiarire insieme:
 
 ---
 
-## 14. Raccomandazione attuale
+## 17. Raccomandazione attuale
 
 La raccomandazione attuale di questo draft e':
 
@@ -602,11 +868,11 @@ Questa scelta e':
 
 ---
 
-## 15. Prossimo passo consigliato
+## 18. Prossimo passo consigliato
 
 Dopo questo primo draft consolidato, il passo successivo consigliato e':
 
-* chiarire le risposte alle domande aperte del punto 13
+* chiarire le risposte alle domande aperte del punto 16
 * decidere il primo gruppo di fornitori pilota
 * definire meglio il semaforico per blocchi e per riga
 * definire la UI di validazione obbligatoria in modo semplice e chiaro
