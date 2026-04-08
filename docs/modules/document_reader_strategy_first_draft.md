@@ -581,6 +581,12 @@ Nota:
 * `Giallo` -> esistono candidati da verificare o scegliere
 * `Rosso` -> non esiste ancora un match affidabile
 
+Regola importante:
+
+* il blocco `Match` diventa davvero verde solo quando il certificato e':
+  * selezionato
+  * confermato da `quality`
+
 #### Chimica
 
 * `Verde` -> chimica pronta
@@ -660,6 +666,70 @@ Ogni blocco nel dettaglio riga dovrebbe seguire sempre lo stesso schema:
 4. valore proposto
 5. correzione manuale
 6. conferma
+
+### 10.9 Dettaglio del blocco `Match Certificato`
+
+Il blocco `Match Certificato` deve mostrare in modo semplice:
+
+* certificato selezionato o proposto
+* altri candidati, se esistono
+* motivo breve del match
+* azione disponibile
+
+Regole:
+
+* quando esiste un candidato plausibile, il sistema deve proporre un candidato principale
+* gli altri candidati devono restare pochi, ordinati e non dispersi
+* per ogni candidato alternativo mostrare solo:
+  * riferimento certificato
+  * `cdq`
+  * `colata`
+  * fornitore
+  * motivo breve
+
+Azioni minime del blocco:
+
+* conferma il match proposto
+* scegli un altro candidato
+* nessun certificato corretto
+
+Regole operative aggiuntive:
+
+* se l'utente sceglie `nessun certificato corretto`, il blocco resta aperto e la riga non e' chiudibile
+* il blocco `Match` puo' essere confermato anche se `Chimica`, `Proprieta'` e `Note` non sono ancora chiuse
+* la lettura/import preliminare di `Chimica`, `Proprieta'` e `Note` puo' avvenire anche prima della conferma del match
+* la validazione di questi blocchi dipende pero' dal match confermato
+* se il match cambia, i blocchi tecnici derivati dal certificato devono essere riaperti
+* la lettura del certificato precedente non si perde, ma resta nello storico come candidato non piu' attivo
+
+Provenienza candidati:
+
+* il blocco deve mostrare anche la provenienza dei candidati
+* nella prima versione basta una etichetta breve, per esempio:
+  * `Upload utente`
+  * `Archivio`
+  * `Suggerito`
+  * `AI`
+
+Regola di cautela:
+
+* un candidato suggerito da `AI` o da una proposta automatica debole deve essere presentato con maggiore cautela rispetto a un match documentale forte
+
+Regola di spiegazione:
+
+* il motivo del match deve essere breve e basato sui campi chiave che l'utente gia' conosce:
+  * `cdq`
+  * `colata`
+  * dimensione
+  * peso
+  * fornitore
+
+Esempi:
+
+* `CDQ coincidente`
+* `CDQ e colata coerenti`
+* `Colata coerente, CDQ dubbio`
+* `Fornitore coerente, piu candidati`
 
 ---
 
