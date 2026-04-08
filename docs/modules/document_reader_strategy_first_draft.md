@@ -520,9 +520,9 @@ Deve essere una vista operativa della robustezza.
 
 Ogni sezione deve poter mostrare almeno:
 
-* verde -> lettura robusta e coerente
-* giallo -> lettura debole, dubbia o mismatch parziale
-* rosso -> dato mancante, non leggibile o mismatch grave
+* verde -> pronto
+* giallo -> da verificare
+* rosso -> non pronto
 
 Il semaforico deve sintetizzare due dimensioni interne:
 
@@ -561,7 +561,70 @@ Con azioni del tipo:
 * `Correggi`
 * `Conferma`
 
-### 10.3 Correzione semplice
+### 10.4 Regole semaforiche dei blocchi
+
+#### DDT
+
+* `Verde` -> la base DDT della riga e' pronta
+* `Giallo` -> la base DDT esiste ma richiede verifica
+* `Rosso` -> mancano i dati minimi per considerare pronta la base DDT
+
+Nota:
+
+* alcuni dati DDT possono arrivare da database esterno
+* se sono robusti e bloccati, possono contribuire a portare il blocco verso il verde
+* la provenienza deve comunque restare visibile
+
+#### Match Certificato
+
+* `Verde` -> esiste un match chiaro tra riga DDT e certificato corretto
+* `Giallo` -> esistono candidati da verificare o scegliere
+* `Rosso` -> non esiste ancora un match affidabile
+
+#### Chimica
+
+* `Verde` -> chimica pronta
+* `Giallo` -> chimica letta ma da verificare
+* `Rosso` -> chimica non pronta
+
+Regole pratiche:
+
+* giallo se c'e' dubbio su uno o piu' elementi
+* rosso se mancano elementi chiave o la lettura non e' utile
+
+#### Proprieta'
+
+* `Verde` -> proprieta' pronte
+* `Giallo` -> proprieta' lette ma da verificare
+* `Rosso` -> proprieta' non pronte
+
+#### Note
+
+* `Verde` -> blocco note preso in carico e validato
+* `Giallo` -> note presenti o possibili, ma da verificare
+* `Rosso` -> blocco note non ancora esaminato
+
+Regola importante:
+
+* il blocco `Note` e' obbligatorio nel workflow
+* il contenuto puo' essere valorizzato, vuoto o `null`
+* strategia e standardizzazione note restano un placeholder futuro in file dedicato
+
+#### Validazione finale
+
+La `Validazione finale` non e' un blocco semaforico normale come gli altri.
+
+E' il passaggio finale di chiusura della riga e si puo' eseguire solo quando tutti i blocchi obbligatori sono verdi.
+
+### 10.5 Semaforico globale della riga
+
+Il semaforo globale della riga segue queste regole:
+
+* `Verde` -> tutti i blocchi obbligatori sono verdi
+* `Giallo` -> nessun rosso, ma almeno un blocco obbligatorio e' giallo
+* `Rosso` -> almeno un blocco obbligatorio e' rosso
+
+### 10.6 Correzione semplice
 
 La UX dovra' permettere in futuro:
 
@@ -572,7 +635,7 @@ La UX dovra' permettere in futuro:
 
 La semplicita' operativa e' parte integrante della strategia, non una rifinitura successiva.
 
-### 10.4 Blocchi macro nella lista righe
+### 10.7 Blocchi macro nella lista righe
 
 Nel riepilogo riga i blocchi macro da mostrare sempre devono essere:
 
@@ -587,7 +650,7 @@ Le `Note` sono un blocco obbligatorio nel workflow, ma il loro contenuto puo' es
 
 Strategia e standardizzazione delle note restano un placeholder futuro da trattare in file dedicato.
 
-### 10.5 Struttura costante del dettaglio blocco
+### 10.8 Struttura costante del dettaglio blocco
 
 Ogni blocco nel dettaglio riga dovrebbe seguire sempre lo stesso schema:
 
@@ -600,7 +663,321 @@ Ogni blocco nel dettaglio riga dovrebbe seguire sempre lo stesso schema:
 
 ---
 
-## 11. Campi documentali, operativi e calcolati
+## 11. Card compatta della lista righe
+
+La lista principale deve essere una vista alto livello:
+
+* chiara
+* semplice
+* corta
+* centrata sui `cdq`
+* con dati mostrati in blocchi essenziali
+
+La riga va pensata piu' come una **card compatta** che come una tabella classica densa.
+
+### 11.1 Ordine di lettura della card
+
+Ordine consigliato:
+
+1. priorita'
+2. stato tecnico riga
+3. stato workflow quality
+4. blocchi principali
+5. azione
+
+### 11.2 Dati minimi da mostrare
+
+Nella card mostrare solo gli identificativi utili:
+
+* fornitore
+* id / riferimento riga
+* `cdq`
+* `colata`
+* dimensione
+* peso
+* priorita'
+* stato
+* blocchi
+
+### 11.3 Campi visivamente forti
+
+`cdq` e `colata` devono avere evidenza visiva piu' forte degli altri campi, perche' sono il cuore del join DDT <-> certificato.
+
+### 11.4 Fasce semplici della card
+
+La card compatta deve includere:
+
+#### Fascia 1
+
+* `cdq`
+* `colata`
+* fornitore
+
+#### Fascia 2
+
+* dimensione
+* peso
+* id/riferimento riga
+
+#### Fascia 3
+
+* blocchi:
+  * `DDT`
+  * `Match`
+  * `Chim.`
+  * `Prop.`
+  * `Note`
+* priorita'
+* stato tecnico
+* stato workflow quality
+
+### 11.5 Blocchi compatti
+
+I blocchi nella card devono essere:
+
+* compatti
+* brevi
+* cliccabili
+
+Forma consigliata:
+
+* piccoli badge / pill operative
+* non pannelli grandi
+* non testo lungo
+
+Etichette sintetiche consigliate:
+
+* `DDT`
+* `Match`
+* `Chim.`
+* `Prop.`
+* `Note`
+
+### 11.6 Conferma utente nella card
+
+Nella card il blocco deve far capire anche se e' stato confermato dall'utente.
+
+Regola:
+
+* il colore indica lo stato del blocco
+* la conferma utente si mostra con un marker secondario semplice
+
+La conferma non deve usare un altro colore, per non mescolare i significati.
+
+### 11.7 Comportamento del click
+
+Se un blocco nella card e' rosso o giallo:
+
+* il click deve portare direttamente alla vista di correzione
+
+Se un blocco e' verde e confermato:
+
+* il click puo' aprire una vista piu' leggera di sola revisione
+
+---
+
+## 12. Cruscotto operativo
+
+La lista righe deve essere il vero cruscotto operativo del reparto `quality`.
+
+### 12.1 Presenza immediata della riga
+
+La riga deve comparire subito in lista anche se ancora parziale.
+
+### 12.2 Filtri minimi
+
+Il cruscotto deve permettere almeno:
+
+* filtro per stato tecnico
+* filtro per stato workflow
+* filtro per priorita'
+* filtro per fornitore
+* filtro per presenza/mancanza certificato
+* filtro per presenza di rossi/gialli
+
+### 12.3 Priorita' operativa
+
+La lista righe deve avere anche una priorita' operativa semplice:
+
+* Alta
+* Media
+* Bassa
+
+Il colore dice lo stato.
+
+La priorita' dice da cosa conviene partire.
+
+La priorita' deve essere calcolata in modo semplice e prevedibile, non opaco.
+
+Regole indicative iniziali:
+
+* `Alta`
+  * riga rossa
+  * oppure match certificato mancante
+  * oppure un solo ultimo blocco critico impedisce la chiusura
+* `Media`
+  * riga gialla con piu' verifiche aperte
+* `Bassa`
+  * riga verde
+  * oppure riga quasi completata senza criticita' reali
+
+### 12.4 Ingresso diretto nel blocco critico
+
+Dal cruscotto l'utente deve poter entrare:
+
+* nella riga completa
+* oppure direttamente nel blocco critico
+
+---
+
+## 13. Workflow `quality` e storico
+
+Tutta l'attivita' di:
+
+* inserimento DDT
+* caricamento certificati
+* lettura
+* correzione
+* validazione blocchi
+* validazione finale di riga
+
+deve appartenere al reparto `quality`.
+
+Gli altri reparti non devono svolgere questo lavoro tecnico.
+
+### 13.1 Due stati distinti
+
+Il sistema deve distinguere tra:
+
+* stato tecnico della riga
+* stato di workflow del reparto `quality`
+
+Esempio di workflow umano:
+
+* `Nuova`
+* `In lavorazione`
+* `Validata quality`
+* `Riaperta`
+
+### 13.2 Storico utenti
+
+Lo storico deve tracciare almeno:
+
+* chi ha caricato
+* chi ha scelto il match
+* chi ha modificato
+* chi ha chiuso
+
+### 13.3 Storico eventi e valori
+
+Servono due livelli distinti:
+
+* storico eventi
+* storico valori
+
+Per ogni evento minimo:
+
+* utente
+* timestamp
+* azione
+* blocco coinvolto
+* prima/dopo se presente
+
+### 13.4 Motivo di modifica
+
+Il motivo di modifica deve esistere, ma in forma leggera:
+
+* pochi motivi standard
+* opzionale
+* non deve rallentare l'utente
+
+---
+
+## 14. UX di correzione e conferma
+
+La UX deve essere:
+
+* chiara
+* semplice
+* robusta
+* veloce
+* non bloccante
+
+### 14.1 Analisi progressiva
+
+L'analisi deve essere progressiva per blocchi, non monolitica e bloccante.
+
+### 14.2 Doppia vista per i blocchi tabellari
+
+Per `Chimica` e `Proprieta'` deve esistere:
+
+* vista immagine/crop della tabella
+* vista strutturata dei campi letti
+
+### 14.3 Evidenza prima del dato
+
+Quando l'utente entra in un blocco, il sistema deve mostrare prima:
+
+1. evidenza
+2. proposta automatica
+3. eventuale mismatch o dubbio
+4. correzione
+5. conferma
+
+### 14.4 Evidenziare le anomalie
+
+Nella vista strutturata dei blocchi tabellari:
+
+* i campi ok devono restare visivamente leggeri
+* i campi dubbi, mancanti o incoerenti devono emergere subito
+
+### 14.5 Correzione granulare
+
+La correzione deve poter avvenire sul singolo campo/elemento.
+
+### 14.6 Conferma granulare e aggregata
+
+La conferma deve poter avvenire:
+
+* sul singolo campo
+* oppure sull'intero blocco
+
+Il sistema deve distinguere tra:
+
+* conferma senza modifiche
+* conferma con correzione
+
+E deve mantenere traccia di:
+
+* proposta automatica
+* correzione utente
+* valore finale confermato
+
+### 14.7 Riapertura controllata
+
+Un blocco confermato puo' essere riaperto se:
+
+* arriva nuova evidenza
+* cambia il match
+* cambia un dato correlato
+
+Quando questo avviene, il sistema deve mostrare chiaramente il motivo della riapertura.
+
+### 14.8 Messaggi brevi
+
+I messaggi in UI devono essere brevi, concreti e operativi.
+
+Esempi:
+
+* `Manca certificato`
+* `Chimica incompleta`
+* `Possibile mismatch su Si`
+* `Due certificati candidati`
+* `Riaperto: modificato CDQ`
+
+---
+
+## 15. Campi documentali, operativi e calcolati
 
 Questo punto deve restare coerente con `ddt_certificates_data_acquisition.md`.
 
@@ -642,172 +1019,7 @@ Per dati operativi e calcolati deve essere tracciata anche la provenienza:
 
 ---
 
-## 12. Workflow `quality` e storico
-
-Tutta l'attivita' di:
-
-* inserimento DDT
-* caricamento certificati
-* lettura
-* correzione
-* validazione blocchi
-* validazione finale di riga
-
-deve appartenere al reparto `quality`.
-
-Gli altri reparti non devono svolgere questo lavoro tecnico.
-
-### 12.1 Due stati distinti
-
-Il sistema deve distinguere tra:
-
-* stato tecnico della riga
-* stato di workflow del reparto `quality`
-
-Esempio di workflow umano:
-
-* `Nuova`
-* `In lavorazione`
-* `Validata quality`
-* `Riaperta`
-
-### 12.2 Storico utenti
-
-Lo storico deve tracciare almeno:
-
-* chi ha caricato
-* chi ha scelto il match
-* chi ha modificato
-* chi ha chiuso
-
-### 12.3 Storico eventi e valori
-
-Servono due livelli distinti:
-
-* storico eventi
-* storico valori
-
-Per ogni evento minimo:
-
-* utente
-* timestamp
-* azione
-* blocco coinvolto
-* prima/dopo se presente
-
-### 12.4 Motivo di modifica
-
-Il motivo di modifica deve esistere, ma in forma leggera:
-
-* pochi motivi standard
-* opzionale
-* non deve rallentare l'utente
-
----
-
-## 13. Cruscotto operativo
-
-La lista righe deve essere il vero cruscotto operativo del reparto `quality`.
-
-### 13.1 Presenza immediata della riga
-
-La riga deve comparire subito in lista anche se ancora parziale.
-
-### 13.2 Filtri minimi
-
-Il cruscotto deve permettere almeno:
-
-* filtro per stato tecnico
-* filtro per stato workflow
-* filtro per priorita'
-* filtro per fornitore
-* filtro per presenza/mancanza certificato
-* filtro per presenza di rossi/gialli
-
-### 13.3 Priorita' operativa
-
-La lista righe deve avere anche una priorita' operativa semplice:
-
-* Alta
-* Media
-* Bassa
-
-### 13.4 Ingresso diretto nel blocco critico
-
-Dal cruscotto l'utente deve poter entrare:
-
-* nella riga completa
-* oppure direttamente nel blocco critico
-
----
-
-## 14. UX di correzione e conferma
-
-La UX deve essere:
-
-* chiara
-* semplice
-* robusta
-* veloce
-* non bloccante
-
-### 14.1 Analisi progressiva
-
-L'analisi deve essere progressiva per blocchi, non monolitica e bloccante.
-
-### 14.2 Doppia vista per i blocchi tabellari
-
-Per `Chimica` e `Proprieta'` deve esistere:
-
-* vista immagine/crop della tabella
-* vista strutturata dei campi letti
-
-### 14.3 Evidenza prima del dato
-
-Quando l'utente entra in un blocco, il sistema deve mostrare prima:
-
-1. evidenza
-2. proposta automatica
-3. eventuale mismatch o dubbio
-4. correzione
-5. conferma
-
-### 14.4 Correzione granulare
-
-La correzione deve poter avvenire sul singolo campo/elemento.
-
-### 14.5 Conferma granulare e aggregata
-
-La conferma deve poter avvenire:
-
-* sul singolo campo
-* oppure sull'intero blocco
-
-### 14.6 Riapertura controllata
-
-Un blocco confermato puo' essere riaperto se:
-
-* arriva nuova evidenza
-* cambia il match
-* cambia un dato correlato
-
-Quando questo avviene, il sistema deve mostrare chiaramente il motivo della riapertura.
-
-### 14.7 Messaggi brevi
-
-I messaggi in UI devono essere brevi, concreti e operativi.
-
-Esempi:
-
-* `Manca certificato`
-* `Chimica incompleta`
-* `Possibile mismatch su Si`
-* `Due certificati candidati`
-* `Riaperto: modificato CDQ`
-
----
-
-## 15. Strategia implementativa consigliata
+## 16. Strategia implementativa consigliata
 
 Ordine consigliato:
 
@@ -822,7 +1034,7 @@ Ordine consigliato:
 
 ---
 
-## 16. Domande aperte da chiarire con l'utente
+## 17. Domande aperte da chiarire con l'utente
 
 Questo e' il punto in cui servono chiarimenti sulle intenzioni finali del progetto.
 
@@ -851,7 +1063,7 @@ Dubbi aperti da chiarire insieme:
 
 ---
 
-## 17. Raccomandazione attuale
+## 18. Raccomandazione attuale
 
 La raccomandazione attuale di questo draft e':
 
@@ -868,11 +1080,11 @@ Questa scelta e':
 
 ---
 
-## 18. Prossimo passo consigliato
+## 19. Prossimo passo consigliato
 
 Dopo questo primo draft consolidato, il passo successivo consigliato e':
 
-* chiarire le risposte alle domande aperte del punto 16
+* chiarire le risposte alle domande aperte del punto 17
 * decidere il primo gruppo di fornitori pilota
 * definire meglio il semaforico per blocchi e per riga
 * definire la UI di validazione obbligatoria in modo semplice e chiaro
