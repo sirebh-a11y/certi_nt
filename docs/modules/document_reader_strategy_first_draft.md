@@ -961,6 +961,72 @@ Il motivo di modifica deve esistere, ma in forma leggera:
 * opzionale
 * non deve rallentare l'utente
 
+### 13.5 Storico minimo del primo rilascio
+
+Nel primo rilascio lo storico deve restare leggero.
+
+Eventi minimi da salvare:
+
+* caricamento DDT
+* caricamento certificato
+* selezione/cambio match certificato
+* modifica blocco
+* conferma blocco
+* chiusura finale riga
+* riapertura riga o blocco
+
+Campi minimi per evento:
+
+* `riga_id`
+* `blocco`
+* `azione`
+* `utente`
+* `timestamp`
+* `nota breve` opzionale
+
+### 13.6 Storico valori minimo
+
+Nel primo rilascio lo storico valori deve salvare solo i cambi manuali rilevanti fatti dall'utente.
+
+Casi principali:
+
+* cambio match certificato
+* modifica di un valore chimico
+* modifica di una proprieta'
+* modifica di una nota
+* modifica di un dato chiave DDT, se permessa nel workflow
+* cambio di stato finale / chiusura
+
+Campi minimi:
+
+* `campo`
+* `valore prima`
+* `valore dopo`
+* `utente`
+* `timestamp`
+
+Regola di leggerezza:
+
+* non salvare tutto il rumore interno
+* non duplicare crop o immagini
+* lo storico rimanda all'evidenza gia' presente nel sistema
+
+### 13.7 UI minima dello storico
+
+Nel dettaglio riga lo storico deve essere:
+
+* semplice
+* consultabile
+* cronologico inverso
+* breve e leggibile
+
+Nel primo rilascio non servono filtri avanzati.
+
+Al massimo:
+
+* mostra tutto
+* mostra solo modifiche
+
 ---
 
 ## 14. UX di correzione e conferma
