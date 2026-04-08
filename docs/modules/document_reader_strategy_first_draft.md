@@ -539,6 +539,10 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
    * debolezze di standardizzazione
    * debolezze di mapping fornitore
    * debolezze di modello acquisition
+43. Le debolezze ricorrenti e le forze ricorrenti osservate durante il pilota devono retroalimentare soprattutto i file knowledge:
+   * `docs/modules/ddt_supplier_document_knowledge.md`
+   * `docs/modules/certificates_supplier_document_knowledge.md`
+44. Nei file knowledge queste osservazioni devono restare semplici, ricorrenti e utili, non diventare un catalogo di singoli casi isolati.
 
 ---
 
@@ -1206,6 +1210,7 @@ Regole operative aggiuntive del pilota:
 * i casi dentro `Vari` devono essere inclusi, ma non sono il focus principale iniziale
 * i casi difficili devono essere usati per capire dove il sistema e' debole
 * il giudizio sul pilota deve concentrarsi sul supporto reale al lavoro `quality`
+* punti forti e punti deboli ricorrenti devono essere riportati progressivamente nei file knowledge DDT e certificati
 
 ---
 
@@ -1241,6 +1246,11 @@ Dubbi aperti da chiarire insieme:
    * per blocco (`Match`, `Chimica`, `Proprieta'`, `Note`)
    * per tipo di problema (lettura, standardizzazione, mapping, acquisition)
 
+7. Va chiarito quando iniziare ad aggiornare in modo sistematico i file knowledge con sezioni semplici del tipo:
+   * `Punti forti osservati`
+   * `Punti deboli osservati`
+   * `Note per il reader`
+
 ---
 
 ## 18. Raccomandazione attuale
@@ -1269,6 +1279,7 @@ Dopo questo primo draft consolidato, il passo successivo consigliato e':
 * definire meglio il semaforico per blocchi e per riga
 * definire la UI di validazione obbligatoria in modo semplice e chiaro
 * definire una forma leggera per osservare le debolezze ricorrenti del sistema durante il pilota
+* riportare progressivamente nei file knowledge solo osservazioni ricorrenti e davvero utili al reader
 
 Solo dopo conviene disegnare in dettaglio:
 
