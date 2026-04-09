@@ -79,9 +79,12 @@ export default function AcquisitionDetailPage() {
   const [processing, setProcessing] = useState(false);
   const [processingVision, setProcessingVision] = useState(false);
   const [processingNotes, setProcessingNotes] = useState(false);
+  const [processingMatch, setProcessingMatch] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
   const [draftValues, setDraftValues] = useState({});
   const [savingFieldKey, setSavingFieldKey] = useState("");
+  const [availableCertificates, setAvailableCertificates] = useState([]);
+  const [matchDraft, setMatchDraft] = useState({ documentId: "", motivo: "" });
 
   useEffect(() => {
     let ignore = false;
@@ -104,6 +107,15 @@ export default function AcquisitionDetailPage() {
         if (!ignore) {
           setDdtDocument(ddtData);
           setCertificateDocument(certificateData || null);
+        }
+
+        const certificatesData = await apiRequest("/acquisition/documents?tipo_documento=certificato", {}, token);
+        if (!ignore) {
+          setAvailableCertificates(certificatesData.items || []);
+          setMatchDraft({
+            documentId: String(rowData.certificate_match?.document_certificato_id || rowData.certificate_document?.id || ""),
+            motivo: rowData.certificate_match?.motivo_breve || "",
+          });
         }
       } catch (requestError) {
         if (!ignore) {
@@ -137,6 +149,10 @@ export default function AcquisitionDetailPage() {
   async function refreshRow(includeDocuments = false) {
     const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
     setRow(rowData);
+    setMatchDraft({
+      documentId: String(rowData.certificate_match?.document_certificato_id || rowData.certificate_document?.id || ""),
+      motivo: rowData.certificate_match?.motivo_breve || "",
+    });
 
     if (includeDocuments) {
       const requests = [apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token)];
@@ -146,6 +162,38 @@ export default function AcquisitionDetailPage() {
       const [ddtData, certificateData] = await Promise.all(requests);
       setDdtDocument(ddtData);
       setCertificateDocument(certificateData || null);
+    }
+  }
+
+  async function handleUpsertMatch(targetState) {
+    const selectedDocumentId = Number(matchDraft.documentId);
+    if (!selectedDocumentId) {
+      setError("Seleziona un certificato per il match.");
+      return;
+    }
+
+    setProcessingMatch(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/match`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            document_certificato_id: selectedDocumentId,
+            stato: targetState,
+            motivo_breve: matchDraft.motivo || null,
+            fonte_proposta: "utente",
+            candidates: [],
+          }),
+        },
+        token,
+      );
+      await refreshRow(true);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingMatch(false);
     }
   }
 
@@ -421,6 +469,17 @@ export default function AcquisitionDetailPage() {
               />
             </div>
 
+            <MatchPanel
+              availableCertificates={availableCertificates}
+              certificateDocument={certificateDocument}
+              match={row.certificate_match}
+              matchDraft={matchDraft}
+              onConfirmMatch={() => handleUpsertMatch("confermato")}
+              onDraftChange={setMatchDraft}
+              onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
+              processingMatch={processingMatch}
+            />
+
             <div className="grid gap-6 xl:grid-cols-2">
               {Object.entries(valuesByBlock).map(([block, values]) => (
                 <BlockPanel
@@ -551,6 +610,125 @@ function BlockPanel({
         })}
         {!renderedValues.length ? <p className="text-sm text-slate-500">Nessun valore presente.</p> : null}
       </div>
+    </div>
+  );
+}
+
+function MatchPanel({
+  availableCertificates,
+  certificateDocument,
+  match,
+  matchDraft,
+  onConfirmMatch,
+  onDraftChange,
+  onSaveMatch,
+  processingMatch,
+}) {
+  const certificateOptions = useMemo(() => {
+    const items = [...availableCertificates];
+    if (certificateDocument && !items.some((item) => item.id === certificateDocument.id)) {
+      items.unshift(certificateDocument);
+    }
+    return items;
+  }, [availableCertificates, certificateDocument]);
+
+  return (
+    <div className="rounded-2xl border border-border p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">Match Certificato</h3>
+          <p className="mt-2 text-sm text-slate-500">
+            Seleziona il certificato corretto e conferma il match dal blocco quality.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
+            disabled={processingMatch}
+            onClick={onSaveMatch}
+            type="button"
+          >
+            {processingMatch ? "Salvataggio..." : "Salva match"}
+          </button>
+          <button
+            className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+            disabled={processingMatch}
+            onClick={onConfirmMatch}
+            type="button"
+          >
+            {processingMatch ? "Confermo..." : "Conferma match"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-2xl bg-slate-50 p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Certificato attuale</p>
+          <p className="mt-2 text-sm font-medium text-slate-800">
+            {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(match?.stato === "confermato" ? "verde" : certificateDocument ? "giallo" : "rosso")}`}>
+              {match?.stato || (certificateDocument ? "proposto" : "nessun match")}
+            </span>
+            {match?.fonte_proposta ? (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                Fonte {match.fonte_proposta}
+              </span>
+            ) : null}
+          </div>
+          {match?.motivo_breve ? <p className="mt-3 text-xs text-slate-500">{match.motivo_breve}</p> : null}
+        </div>
+
+        <div className="space-y-3 rounded-2xl bg-slate-50 p-4">
+          <div>
+            <label className="text-xs uppercase tracking-[0.2em] text-slate-500" htmlFor="match-document">
+              Certificato da collegare
+            </label>
+            <select
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
+              id="match-document"
+              onChange={(event) => onDraftChange((current) => ({ ...current, documentId: event.target.value }))}
+              value={matchDraft.documentId}
+            >
+              <option value="">Seleziona certificato</option>
+              {certificateOptions.map((document) => (
+                <option key={document.id} value={document.id}>
+                  #{document.id} · {document.nome_file_originale}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-[0.2em] text-slate-500" htmlFor="match-motivo">
+              Motivo breve
+            </label>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
+              id="match-motivo"
+              onChange={(event) => onDraftChange((current) => ({ ...current, motivo: event.target.value }))}
+              placeholder="CDQ e colata coerenti"
+              value={matchDraft.motivo}
+            />
+          </div>
+        </div>
+      </div>
+
+      {match?.candidates?.length ? (
+        <div className="mt-4 space-y-3">
+          <p className="text-sm font-medium text-slate-700">Candidati registrati</p>
+          {match.candidates.map((candidate) => (
+            <div className="rounded-2xl bg-slate-50 p-4" key={candidate.id}>
+              <p className="text-sm font-medium text-slate-800">
+                Certificato #{candidate.document_certificato_id} · rank {candidate.rank}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                {candidate.stato} · {candidate.fonte_proposta} {candidate.motivo_breve ? `· ${candidate.motivo_breve}` : ""}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
