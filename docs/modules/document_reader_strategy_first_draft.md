@@ -472,11 +472,11 @@ Quindi:
 * il documento e' sorgente
 * la riga incoming e' l'oggetto operativo
 
-Placeholder di allineamento futuro:
+Allineamento gia' fissato:
 
 * il workflow reader e la UI sono fortemente centrati sulla `riga incoming`
 * il modello `acquisition` deve restare centrato sulla riga materiale / acquisition row
-* questo punto dovra' essere riallineato in un passaggio successivo, senza forzarlo in questo draft
+* il riallineamento concettuale tra reader e acquisition su questo punto e' gia' da considerarsi fissato
 
 ### 8.3 Repository documentale minimo
 
@@ -1382,11 +1382,11 @@ Dubbi aperti da chiarire insieme:
    * migliorare interpretazione di tabelle e note
    * tutte e tre le cose, ma con priorita' da definire
 
-2. Le note documento devono diventare nel tempo:
-   * solo contenuto consultabile
-   * oppure anche oggetto strutturato da usare nelle decisioni di acquisizione?
+2. Le note documento hanno ora un file dedicato:
+   * `docs/modules/notes_document_knowledge.md`
+   * restano aperte soprattutto le evoluzioni future del motore note, non piu' il bisogno del file o del blocco base
 
-3. Il pilota deve restare aperto a tutti i fornitori, ma va chiarito e mantenuto esplicito quali sono i fornitori principali da usare come focus iniziale di verifica e miglioramento, in particolare quelli presenti in `esempi_locali/3-certificati` fuori da `Vari`.
+3. Il pilota resta aperto a tutti i fornitori, con focus principale sui fornitori meglio strutturati presenti in `esempi_locali/3-certificati` fuori da `Vari`.
 
 4. Il livello di crop/evidenza che vuoi conservare fin da subito deve essere chiarito meglio:
    * solo bounding box e testo
@@ -1402,7 +1402,7 @@ Dubbi aperti da chiarire insieme:
    * per blocco (`Match`, `Chimica`, `Proprieta'`, `Note`)
    * per tipo di problema (lettura, standardizzazione, mapping, acquisition)
 
-7. Va chiarito quando iniziare ad aggiornare in modo sistematico i file knowledge con sezioni semplici del tipo:
+7. Resta da decidere solo quando rendere sistematico e operativo l'aggiornamento ricorrente dei file knowledge con sezioni semplici del tipo:
    * `Punti forti osservati`
    * `Punti deboli osservati`
    * `Note per il reader`
