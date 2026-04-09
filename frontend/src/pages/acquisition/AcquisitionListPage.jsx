@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -13,32 +13,12 @@ const BLOCK_LABELS = {
 
 function activityLabelFromState(state) {
   if (state === "verde") {
-    return "verifica";
+    return "pronto";
   }
   if (state === "giallo") {
     return "quasi";
   }
   return "da fare";
-}
-
-function finalActivityLabel(row) {
-  if (row.validata_finale) {
-    return "confermata";
-  }
-  if (row.stato_tecnico === "verde") {
-    return "verifica";
-  }
-  if (row.stato_tecnico === "giallo") {
-    return "quasi";
-  }
-  return "da fare";
-}
-
-function finalActivityClasses(row) {
-  if (row.validata_finale) {
-    return "border-slate-300 bg-slate-100 text-slate-700";
-  }
-  return stateBadgeClasses(row.stato_tecnico);
 }
 
 function compactMatchReference(row) {
@@ -53,6 +33,9 @@ function compactMatchReference(row) {
 }
 
 function stateTone(state) {
+  if (state === "accettato") {
+    return "bg-slate-400";
+  }
   if (state === "verde") {
     return "bg-emerald-500";
   }
@@ -62,44 +45,28 @@ function stateTone(state) {
   return "bg-rose-500";
 }
 
-function stateBadgeClasses(state) {
-  if (state === "verde") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  }
-  if (state === "giallo") {
-    return "border-amber-200 bg-amber-50 text-amber-700";
-  }
-  return "border-rose-200 bg-rose-50 text-rose-700";
-}
-
-function workflowLabel(value) {
-  if (value === "in_lavorazione") {
-    return "In lavorazione";
-  }
-  if (value === "validata_quality") {
-    return "Validata";
-  }
-  if (value === "riaperta") {
-    return "Riaperta";
-  }
-  if (value === "nuova") {
-    return "Nuova";
-  }
-  return value || "-";
-}
-
 function composeLega(row) {
   return row.lega_designazione || row.lega_base || row.variante_lega || "-";
 }
 
-function matchLabel(row) {
-  if (row.match_state === "confermato") {
-    return "Pronto";
+function parseSortableNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
   }
-  if (row.match_state === "proposto" || row.match_state === "cambiato") {
-    return "Da verificare";
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
   }
-  return "Non pronto";
+
+  const raw = String(value).trim();
+  const match = raw.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) {
+    return null;
+  }
+
+  const normalized = match[0].replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function ddtFieldState(row, field) {
@@ -112,8 +79,119 @@ function ddtFieldState(row, field) {
   return "giallo";
 }
 
-function hasAttention(row) {
-  return Object.values(row.block_states || {}).some((state) => state !== "verde");
+function ddtCoreState(row) {
+  const hasMissingCore =
+    !row.diametro ||
+    !row.cdq ||
+    !row.colata ||
+    !row.peso ||
+    (!row.ddt && !row.document_ddt_id);
+
+  if (hasMissingCore) {
+    return "rosso";
+  }
+
+  const hasPendingCore =
+    ddtFieldState(row, "diametro") === "giallo" ||
+    ddtFieldState(row, "cdq") === "giallo" ||
+    ddtFieldState(row, "colata") === "giallo" ||
+    ddtFieldState(row, "peso") === "giallo" ||
+    ddtFieldState(row, "ordine") === "giallo";
+
+  return hasPendingCore ? "giallo" : "verde";
+}
+
+function rowActivityState(row) {
+  if (row.validata_finale) {
+    return { tone: "accettato", label: "confermata" };
+  }
+
+  const ddtState = ddtCoreState(row);
+  const matchState = row.block_states?.match || "rosso";
+  const chemistryState = row.block_states?.chimica || "rosso";
+  const propertiesState = row.block_states?.proprieta || "rosso";
+  const notesState = row.block_states?.note || "rosso";
+
+  if (ddtState === "rosso" || matchState === "rosso") {
+    return { tone: "rosso", label: "da fare" };
+  }
+
+  if ([ddtState, matchState, chemistryState, propertiesState, notesState].some((state) => state !== "verde")) {
+    return { tone: "giallo", label: "quasi" };
+  }
+
+  return { tone: "verde", label: "pronto" };
+}
+
+function activityRank(label) {
+  if (label === "confermata") {
+    return 3;
+  }
+  if (label === "pronto") {
+    return 2;
+  }
+  if (label === "quasi") {
+    return 1;
+  }
+  return 0;
+}
+
+function compareValues(left, right, direction) {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  const leftEmpty = left === null || left === undefined || left === "";
+  const rightEmpty = right === null || right === undefined || right === "";
+
+  if (leftEmpty && rightEmpty) {
+    return 0;
+  }
+  if (leftEmpty) {
+    return 1;
+  }
+  if (rightEmpty) {
+    return -1;
+  }
+
+  if (typeof left === "number" && typeof right === "number") {
+    return (left - right) * multiplier;
+  }
+
+  return String(left).localeCompare(String(right), "it", { numeric: true, sensitivity: "base" }) * multiplier;
+}
+
+function rowFieldSortValue(row, field) {
+  switch (field) {
+    case "id":
+      return row.id;
+    case "fornitore":
+      return row.fornitore_raw || "";
+    case "lega":
+      return composeLega(row);
+    case "diametro":
+      return parseSortableNumber(row.diametro);
+    case "cdq":
+      return row.cdq || "";
+    case "colata":
+      return row.colata || "";
+    case "ddt":
+      return row.ddt || row.document_ddt_id || "";
+    case "peso":
+      return parseSortableNumber(row.peso);
+    case "ordine":
+      return row.ordine || "";
+    case "match":
+      return compactMatchReference(row);
+    case "chimica":
+      return activityRank(activityLabelFromState(row.block_states?.chimica || "rosso"));
+    case "proprieta":
+      return activityRank(activityLabelFromState(row.block_states?.proprieta || "rosso"));
+    case "note":
+      return row.note_documento || activityLabelFromState(row.block_states?.note || "rosso");
+    case "stato":
+      return activityRank(rowActivityState(row).label);
+    default:
+      return null;
+  }
 }
 
 function rowSortScore(row) {
@@ -125,15 +203,13 @@ function rowSortScore(row) {
 }
 
 function RowStateCell({ row }) {
+  const activity = rowActivityState(row);
+
   return (
-    <div className="space-y-1">
+    <div className="min-w-[84px]">
       <div className="flex items-center gap-2">
-        <StateDot state={row.stato_tecnico} />
-        <span className="text-xs font-semibold text-slate-700">{activityLabelFromState(row.stato_tecnico)}</span>
-      </div>
-      <div className="text-[11px] text-slate-500">{workflowLabel(row.stato_workflow)}</div>
-      <div className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${finalActivityClasses(row)}`}>
-        {finalActivityLabel(row)}
+        <StateDot state={activity.tone} />
+        <span className="text-xs font-semibold text-slate-700">{activity.label}</span>
       </div>
     </div>
   );
@@ -169,10 +245,12 @@ function BlockCell({ label, state, secondary }) {
 
 export default function AcquisitionListPage() {
   const { token } = useAuth();
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
   const tableViewportRef = useRef(null);
@@ -235,6 +313,17 @@ export default function AcquisitionListPage() {
     }
 
     return [...nextRows].sort((left, right) => {
+      if (sortConfig.field) {
+        const sorted = compareValues(
+          rowFieldSortValue(left, sortConfig.field),
+          rowFieldSortValue(right, sortConfig.field),
+          sortConfig.direction,
+        );
+        if (sorted !== 0) {
+          return sorted;
+        }
+      }
+
       const leftScore = rowSortScore(left);
       const rightScore = rowSortScore(right);
       for (let index = 0; index < leftScore.length; index += 1) {
@@ -244,7 +333,7 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [query, rows]);
+  }, [query, rows, sortConfig]);
 
   const summary = useMemo(() => {
     const total = rows.length;
@@ -300,6 +389,30 @@ export default function AcquisitionListPage() {
     });
   }
 
+  function openRow(rowId) {
+    navigate(`/acquisition/${rowId}`);
+  }
+
+  function handleRowKeyDown(event, rowId) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openRow(rowId);
+    }
+  }
+
+  function toggleSort(field) {
+    setSortConfig((current) => {
+      if (current.field === field) {
+        return {
+          field,
+          direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return { field, direction: "asc" };
+    });
+  }
+
   return (
     <section className="space-y-2">
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
@@ -337,49 +450,55 @@ export default function AcquisitionListPage() {
       {loading ? <p className="text-sm text-slate-500">Caricamento righe...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-white">
-        <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-          <div
-            className="incoming-top-scroll overflow-x-auto overflow-y-hidden"
-            onScroll={(event) => syncScroll(tableViewportRef.current, event.currentTarget)}
-            ref={topScrollRef}
-          >
-            <div
-              className="h-4 min-w-full"
-              style={{
-                width: Math.max(scrollMetrics.contentWidth, scrollMetrics.viewportWidth),
-              }}
-            />
-          </div>
-        </div>
+      <div className="sticky top-0 z-20 rounded-xl border border-border bg-slate-50 px-3 py-2 shadow-sm">
         <div
-          className="incoming-grid-scroll h-[calc(100vh-250px)] min-h-[520px] overflow-y-auto overflow-x-hidden"
+          className="incoming-top-scroll overflow-x-auto overflow-y-hidden"
+          onScroll={(event) => syncScroll(tableViewportRef.current, event.currentTarget)}
+          ref={topScrollRef}
+        >
+          <div
+            className="h-4 min-w-full"
+            style={{
+              width: Math.max(scrollMetrics.contentWidth, scrollMetrics.viewportWidth),
+            }}
+          />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-white">
+        <div
+          className="incoming-grid-scroll overflow-x-hidden overflow-y-visible"
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
           <table className="min-w-[1480px] divide-y divide-slate-200 text-sm" ref={tableRef}>
-              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+              <thead className="bg-slate-50">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  <th className="px-3 py-3">N°</th>
-                  <th className="px-3 py-3">Fornitore</th>
-                  <th className="px-3 py-3">Lega</th>
-                  <th className="px-3 py-3">Ø</th>
-                  <th className="px-3 py-3">Cdq</th>
-                  <th className="px-3 py-3">Colata</th>
-                  <th className="px-3 py-3">Ddt</th>
-                  <th className="px-3 py-3">Peso Kg</th>
-                  <th className="px-3 py-3">Ordine</th>
-                  <th className="px-3 py-3">Match</th>
-                  <th className="px-3 py-3">Chim.</th>
-                  <th className="px-3 py-3">Prop.</th>
-                  <th className="px-3 py-3">Note</th>
-                  <th className="px-3 py-3">Stato</th>
-                  <th className="px-3 py-3 text-right">Apri</th>
+                  <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="fornitore" label="Fornitore" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="lega" label="Lega" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="diametro" label="Ø" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="cdq" label="Cdq" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="ddt" label="Ddt" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="peso" label="Peso Kg" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="ordine" label="Ordine" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="match" label="Match" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="chimica" label="Chim." onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="proprieta" label="Prop." onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="stato" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleRows.map((row) => (
-                  <tr className="align-top hover:bg-slate-50/70" key={row.id}>
+                  <tr
+                    className="cursor-pointer align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70"
+                    key={row.id}
+                    onClick={() => openRow(row.id)}
+                    onKeyDown={(event) => handleRowKeyDown(event, row.id)}
+                    tabIndex={0}
+                  >
                     <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-700">{row.id}</td>
                     <td className="min-w-[220px] max-w-[220px] px-3 py-3">
                       <div className="truncate font-medium text-slate-900" title={row.fornitore_raw || "-"}>
@@ -444,11 +563,6 @@ export default function AcquisitionListPage() {
                     <td className="px-3 py-3">
                       <RowStateCell row={row} />
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-right">
-                      <Link className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white" to={`/acquisition/${row.id}`}>
-                        Apri
-                      </Link>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -469,5 +583,25 @@ function SummaryCell({ label, value }) {
       <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-0.5 text-base font-semibold text-slate-900">{value}</div>
     </div>
+  );
+}
+
+function SortableHeader({ field, label, onSort, sortConfig }) {
+  const isActive = sortConfig.field === field;
+  const indicator = !isActive ? "" : sortConfig.direction === "asc" ? "↑" : "↓";
+
+  return (
+    <th className="px-3 py-3">
+      <button
+        className={`inline-flex items-center gap-1 text-left transition hover:text-slate-700 ${
+          isActive ? "text-slate-700" : "text-slate-500"
+        }`}
+        onClick={() => onSort(field)}
+        type="button"
+      >
+        <span>{label}</span>
+        <span className="min-w-[10px] text-[10px]">{indicator}</span>
+      </button>
+    </th>
   );
 }

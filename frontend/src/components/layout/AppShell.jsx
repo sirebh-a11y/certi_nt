@@ -9,12 +9,14 @@ export default function AppShell() {
   const isAcquisitionRoute = location.pathname.startsWith("/acquisition");
 
   return (
-    <div className="min-h-screen bg-shell text-ink">
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <Sidebar />
-        <div className="flex min-h-screen flex-col">
+    <div className="h-screen overflow-hidden bg-shell text-ink">
+      <div className="grid h-screen grid-cols-1 overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="h-screen overflow-y-auto overflow-x-hidden">
+          <Sidebar />
+        </div>
+        <div className="flex h-screen min-h-0 flex-col overflow-hidden">
           <Header />
-          <main className="flex-1 bg-gradient-to-b from-shell to-slate-100 p-6">
+          <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-shell to-slate-100 p-6">
             <div className={`mx-auto w-full ${isAcquisitionRoute ? "max-w-none" : "max-w-6xl"}`}>
               <Outlet />
             </div>
