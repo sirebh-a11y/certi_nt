@@ -698,7 +698,7 @@ Utilizzare:
 
 Questo modulo deve essere coerente con il fatto che:
 
-* `cdq` è la chiave primaria
+* `cdq` è campo documentale critico di tracciabilità e collegamento
 * `colata` è campo critico
 * `lega_base`, `lega_designazione` e `variante_lega` devono restare coerenti
 * chimica e proprietà certificate devono essere riconosciute secondo i vocabolari del sistema

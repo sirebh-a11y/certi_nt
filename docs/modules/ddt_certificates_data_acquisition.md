@@ -98,9 +98,20 @@ Questo livello NON fa parte del modello `acquisition`.
 * Proprietà chimiche
 * Proprietà certificate
 
-Chiave logica principale:
+Campi documentali critici di collegamento:
 
 * `cdq` = CERTIFICATO DI QUALITÀ del FORNITORE
+* `colata`
+
+Unità logica principale del modulo:
+
+* la riga materiale / riga acquisition
+
+Nota importante:
+
+* il `cdq` resta un campo documentale critico di tracciabilità e collegamento
+* ma NON deve più essere interpretato come unico centro logico del record
+* il record principale del modulo è la riga materiale generata dal DDT e completata dal certificato corretto
 
 ---
 
@@ -108,13 +119,20 @@ Chiave logica principale:
 
 ### 4.1 datimaterialeincoming
 
-Una riga logica per `cdq`.
+Una riga logica per materiale / riga acquisition.
+
+Questa riga nasce dal DDT e viene completata con i dati documentali del certificato corretto.
+
+Non rappresenta il documento certificato in astratto.
+
+Rappresenta la singola unità materiale su cui poi si lavora.
 
 Rappresenta solo dati sorgente/documentali.
 
 Campi:
 
-* `cdq` (PK, identificativo legacy)
+* `id` (PK tecnico interno)
+* `cdq` (identificativo legacy del certificato qualità, campo documentale critico)
 * `fornitore_id` (FK → fornitori.id, nullable finché il mapping non è completato)
 * `fornitore_raw` (testo originale letto da OCR / DDT / certificato)
 * `lega_base`
@@ -127,6 +145,17 @@ Campi:
 * `ordine` (solo se realmente presente nella fonte documentale)
 * `data_documento` (nullable, solo se presente nella fonte documentale)
 * `note_documento` (nullable, solo se la nota appartiene al documento sorgente)
+
+Cardinalità concettuale minima:
+
+* un DDT può generare più righe `datimaterialeincoming`
+* una riga `datimaterialeincoming` può nascere anche prima del caricamento/conferma del certificato
+* uno stesso `cdq` può essere riutilizzato su più righe se il certificato corretto copre più unità materiali
+
+Conseguenza:
+
+* `cdq` NON deve essere usato come vincolo di unicità assoluta della tabella
+* la tracciabilità documentale resta forte, ma il record resta centrato sulla riga materiale
 
 Campi ESCLUSI da questa entità:
 
@@ -204,10 +233,10 @@ Struttura:
 
 ### 4.4 proprietachimiche
 
-Valori chimici letti dal certificato.
+Valori chimici letti dal certificato e associati alla riga acquisition.
 
 * `id` (PK)
-* `cdq` (FK)
+* `datimaterialeincoming_id` (FK)
 * `elemento_id` (FK)
 * `valore`
 
@@ -215,10 +244,10 @@ Valori chimici letti dal certificato.
 
 ### 4.5 proprietacertificato
 
-Valori di proprietà certificate letti dal certificato.
+Valori di proprietà certificate letti dal certificato e associati alla riga acquisition.
 
 * `id` (PK)
-* `cdq` (FK)
+* `datimaterialeincoming_id` (FK)
 * `proprieta_id` (FK)
 * `valore`
 
@@ -230,7 +259,7 @@ La gestione dei fornitori è definita in un modulo dedicato:
 
 → `docs/modules/fornitori.md`
 
-Ogni certificato (`cdq`) è associato a un fornitore tramite:
+Ogni riga acquisition è associata a un fornitore tramite:
 
 * `fornitore_id` (FK)
 
@@ -358,7 +387,12 @@ Altrimenti:
 
 ## 7. Pipeline
 
-Documenti → OCR → mapping → validazione → DB (`acquisition`)
+DDT → creazione riga acquisition → ricerca/match certificato → validazione documentale → DB (`acquisition`)
+
+Nota:
+
+* la gestione dei certificati candidati, dello storico di match e della validazione di workflow appartiene ai moduli/documenti reader e knowledge
+* questo file descrive il dato documentale finale raccolto nella riga acquisition
 
 ---
 
@@ -387,8 +421,10 @@ Il modello `acquisition` deve isolare solo la componente sorgente/documentale.
 
 ## 10. Vincoli
 
-* `cdq` obbligatorio
-* `cdq` univoco
+* `id` obbligatorio come PK tecnico
+* `cdq` resta campo documentale critico
+* `cdq` non deve essere modificato
+* `cdq` non deve essere assunto come univoco assoluto della tabella
 * tracciabilità completa
 * separazione netta tra dato sorgente e dato operativo/calcolato
 

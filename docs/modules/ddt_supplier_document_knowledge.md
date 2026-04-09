@@ -309,7 +309,7 @@ Codex deve capire che:
 
 Questa conoscenza serve per alimentare correttamente il modulo di acquisition, dove:
 
-* `cdq` è chiave primaria
+* `cdq` è campo documentale critico di tracciabilità e collegamento
 * una riga logica di acquisizione corrisponde al materiale corretto
 * il collegamento DDT ↔ certificato dipende da questa associazione
 
@@ -610,7 +610,7 @@ Utilizzare:
 
 Questo modulo deve essere coerente con il fatto che:
 
-* `cdq` è chiave primaria
+* `cdq` è campo documentale critico di tracciabilità e collegamento
 * `colata` è campo critico
 * `datimaterialeincoming` rappresenta i dati reali da documento
 
