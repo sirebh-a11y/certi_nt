@@ -860,12 +860,28 @@ def extract_ddt_fields_with_vision(
     if not crop_definitions:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to prepare DDT image crops for vision")
 
-    extracted = _extract_ddt_fields_from_openai(crop_definitions, openai_api_key=openai_api_key)
+    extracted = _sanitize_vision_ddt_fields(_extract_ddt_fields_from_openai(crop_definitions, openai_api_key=openai_api_key))
     extracted_count = 0
 
     for field_name, payload in extracted.items():
         field_value = _string_or_none(payload.get("value"))
         if field_value is None:
+            if _is_revisable_chatgpt_ddt_value(row, field_name):
+                _upsert_read_value_model(
+                    db=db,
+                    acquisition_row_id=row.id,
+                    blocco="ddt",
+                    campo=field_name,
+                    valore_grezzo=None,
+                    valore_standardizzato=None,
+                    valore_finale=None,
+                    stato="proposto",
+                    document_evidence_id=None,
+                    metodo_lettura="chatgpt",
+                    fonte_documentale="ddt",
+                    confidenza=None,
+                    actor_id=actor_id,
+                )
             continue
         source_crop = payload.get("source_crop")
         evidence_text = _string_or_none(payload.get("evidence")) or field_value
@@ -905,18 +921,7 @@ def extract_ddt_fields_with_vision(
         )
         extracted_count += 1
 
-    if row.cdq is None:
-        row.cdq = _string_or_none(extracted.get("cdq", {}).get("value")) or _string_or_none(
-            extracted.get("numero_certificato_ddt", {}).get("value")
-        )
-    if row.colata is None:
-        row.colata = _string_or_none(extracted.get("colata", {}).get("value"))
-    if row.peso is None:
-        row.peso = _string_or_none(extracted.get("peso", {}).get("value"))
-    if row.diametro is None:
-        row.diametro = _string_or_none(extracted.get("diametro", {}).get("value"))
-    if row.ordine is None:
-        row.ordine = _string_or_none(extracted.get("ordine", {}).get("value"))
+    _sync_row_from_ddt_values(db, row)
 
     db.add(row)
     _record_history_event(
@@ -1187,8 +1192,13 @@ def _extract_ddt_fields_from_openai(
                 "Non inferire dati assenti. Restituisci JSON puro con queste chiavi: "
                 "numero_certificato_ddt, cdq, colata, peso, diametro, ordine. "
                 "Ogni chiave deve essere un oggetto con campi value, evidence, source_crop. "
-                "Usa null se il dato non e' leggibile. "
+                "Usa null se il dato non e' leggibile o se sei incerto. "
                 "Se trovi 'Cert.' o 'Certificato' sul DDT, popolalo in numero_certificato_ddt. "
+                "Popola cdq solo se trovi una sigla o valore esplicitamente etichettato come CdQ/C.d.Q.; "
+                "non usare stringhe normative come EN 10204 3.1, Inspection Certificate o riferimenti ASTM/AMS. "
+                "Per il peso, usa solo il peso netto della singola riga materiale; "
+                "non usare totali o riepiloghi di packing list. "
+                "Per il diametro, usa il valore associato alla riga materiale, ad esempio BARRA TONDA 75 -> 75. "
                 "Usa source_crop esattamente come il label del ritaglio fornito."
             ),
         }
@@ -1199,18 +1209,18 @@ def _extract_ddt_fields_from_openai(
         mime_type = "image/png"
         encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
         content.append({"type": "input_text", "text": f"Crop label: {crop_label}"})
-        content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}"})
+        content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
 
     try:
         response = client.responses.create(
             model=settings.document_vision_model,
             input=[
                 {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-        )
+                "role": "user",
+                "content": content,
+            }
+        ],
+    )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Vision extraction request failed") from exc
 
@@ -1247,6 +1257,147 @@ def _parse_openai_json_payload(payload: str) -> dict[str, dict[str, str | None]]
             "source_crop": _string_or_none(raw_field.get("source_crop")),
         }
     return normalized
+
+
+def _sanitize_vision_ddt_fields(
+    extracted: dict[str, dict[str, str | None]],
+) -> dict[str, dict[str, str | None]]:
+    normalized = {field: value.copy() for field, value in extracted.items()}
+
+    cdq_value = _string_or_none(normalized.get("cdq", {}).get("value"))
+    cdq_evidence = _string_or_none(normalized.get("cdq", {}).get("evidence"))
+    if cdq_value is not None and _looks_like_invalid_cdq(cdq_value, cdq_evidence):
+        normalized["cdq"] = {
+            "value": None,
+            "evidence": cdq_evidence,
+            "source_crop": _string_or_none(normalized.get("cdq", {}).get("source_crop")),
+        }
+
+    peso_value = _string_or_none(normalized.get("peso", {}).get("value"))
+    peso_evidence = _string_or_none(normalized.get("peso", {}).get("evidence"))
+    peso_source_crop = _string_or_none(normalized.get("peso", {}).get("source_crop"))
+    if peso_value is not None and _looks_like_unreliable_weight(peso_value, peso_evidence, peso_source_crop):
+        normalized["peso"] = {
+            "value": None,
+            "evidence": peso_evidence,
+            "source_crop": peso_source_crop,
+        }
+
+    ordine_value = _string_or_none(normalized.get("ordine", {}).get("value"))
+    ordine_evidence = _string_or_none(normalized.get("ordine", {}).get("evidence"))
+    if ordine_value is not None:
+        ordine_value = _normalize_order_from_evidence(ordine_value, ordine_evidence)
+        normalized["ordine"]["value"] = ordine_value
+    if ordine_value is not None and _looks_like_unreliable_order(ordine_value, ordine_evidence):
+        normalized["ordine"] = {
+            "value": None,
+            "evidence": ordine_evidence,
+            "source_crop": _string_or_none(normalized.get("ordine", {}).get("source_crop")),
+        }
+
+    return normalized
+
+
+def _looks_like_invalid_cdq(value: str, evidence: str | None) -> bool:
+    haystack = f"{value} {evidence or ''}".lower()
+    invalid_markers = (
+        "en 10204",
+        "inspection certificate",
+        "astm",
+        "ams",
+        "class a",
+        "class b",
+        "classe a",
+        "classe b",
+    )
+    return any(marker in haystack for marker in invalid_markers)
+
+
+def _looks_like_unreliable_weight(value: str, evidence: str | None, source_crop: str | None) -> bool:
+    haystack = f"{value} {evidence or ''}".lower()
+    if any(marker in haystack for marker in ("totale", "total", "packing list", "colli", "imballi")):
+        return True
+    if source_crop and source_crop.endswith("_lower") and evidence and "peso netto" in haystack and "barra" not in haystack:
+        return True
+    return False
+
+
+def _looks_like_unreliable_order(value: str, evidence: str | None) -> bool:
+    normalized_value = value.strip().upper()
+    if len(normalized_value) < 6:
+        return True
+    if not re.search(r"\d{4,}", normalized_value):
+        return True
+    if evidence:
+        normalized_evidence = evidence.lower()
+        if not any(marker in normalized_evidence for marker in ("ord", "odv", "ordine", "order", "rif")):
+            return True
+    return False
+
+
+def _normalize_order_from_evidence(value: str, evidence: str | None) -> str:
+    if not evidence:
+        return value
+
+    candidates = []
+    for raw_candidate in re.findall(r"\d[\d./-]{5,}", evidence):
+        candidate = raw_candidate.strip(" .,-")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+            continue
+        if re.fullmatch(r"20\d{2}\.\d{6,}(?:\.\d+)+", candidate):
+            candidate = candidate.split(".", 1)[1]
+        candidates.append(candidate)
+
+    if not candidates:
+        return value
+
+    candidates.sort(key=lambda item: (sum(char.isdigit() for char in item), len(item)))
+    return candidates[-1]
+
+
+def _can_replace_row_field(row: AcquisitionRow, field_name: str) -> bool:
+    current_value = getattr(row, field_name)
+    if current_value is None:
+        return True
+
+    for value in row.values:
+        if value.blocco != "ddt" or value.campo != field_name:
+            continue
+        if value.metodo_lettura == "chatgpt" and value.stato != "confermato":
+            return True
+    return False
+
+
+def _is_revisable_chatgpt_ddt_value(row: AcquisitionRow, field_name: str) -> bool:
+    for value in row.values:
+        if value.blocco != "ddt" or value.campo != field_name:
+            continue
+        if value.metodo_lettura == "chatgpt" and value.stato != "confermato":
+            return True
+    return False
+
+
+def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
+    value_map = {
+        value.campo: value
+        for value in (
+            db.query(ReadValue)
+            .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+            .all()
+        )
+    }
+
+    row.cdq = _final_value_for_row(value_map.get("cdq")) or _final_value_for_row(value_map.get("numero_certificato_ddt"))
+    row.colata = _final_value_for_row(value_map.get("colata"))
+    row.peso = _final_value_for_row(value_map.get("peso"))
+    row.diametro = _final_value_for_row(value_map.get("diametro"))
+    row.ordine = _final_value_for_row(value_map.get("ordine"))
+
+
+def _final_value_for_row(value: ReadValue | None) -> str | None:
+    if value is None:
+        return None
+    return _string_or_none(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
 
 
 def _upsert_read_value_model(
