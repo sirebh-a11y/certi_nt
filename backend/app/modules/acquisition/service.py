@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+from uuid import uuid4
 from datetime import UTC, datetime
 
+from fastapi import UploadFile
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.config import settings
 from app.core.logs.service import log_service
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
@@ -271,6 +276,56 @@ def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, 
     db.commit()
     db.refresh(document)
     log_service.record("acquisition", f"Document created: {document.nome_file_originale}", actor_email)
+    return serialize_document(document)
+
+
+def upload_document(
+    db: Session,
+    *,
+    tipo_documento: str,
+    uploaded_file: UploadFile,
+    actor_id: int,
+    actor_email: str,
+    fornitore_id: int | None = None,
+    documento_padre_id: int | None = None,
+    origine_upload: str = "utente",
+) -> DocumentResponse:
+    if uploaded_file.filename is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file must have a filename")
+    if fornitore_id is not None:
+        _get_supplier(db, fornitore_id)
+    if documento_padre_id is not None:
+        get_document(db, documento_padre_id)
+
+    file_bytes = uploaded_file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+
+    original_name = Path(uploaded_file.filename).name or f"{tipo_documento}.bin"
+    extension = Path(original_name).suffix.lower()
+    now = datetime.now(UTC)
+    relative_storage_key = f"{tipo_documento}/{now:%Y/%m/%d}/{uuid4().hex}{extension}"
+    storage_path = _document_storage_root() / relative_storage_key
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_path.write_bytes(file_bytes)
+
+    document = Document(
+        tipo_documento=tipo_documento,
+        fornitore_id=fornitore_id,
+        nome_file_originale=original_name,
+        storage_key=relative_storage_key.replace("\\", "/"),
+        hash_file=hashlib.sha256(file_bytes).hexdigest(),
+        mime_type=uploaded_file.content_type,
+        numero_pagine=None,
+        utente_upload_id=actor_id,
+        stato_elaborazione="caricato",
+        origine_upload=origine_upload,
+        documento_padre_id=documento_padre_id,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    log_service.record("acquisition", f"Document uploaded: {document.nome_file_originale}", actor_email)
     return serialize_document(document)
 
 
@@ -673,3 +728,7 @@ def _record_history_event(
             nota_breve=nota_breve,
         )
     )
+
+
+def _document_storage_root() -> Path:
+    return Path(settings.document_storage_root)

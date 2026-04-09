@@ -3,6 +3,7 @@ esempi_locali/
 backend/__pycache__/
 backend/.pytest_cache/
 backend/app/**/__pycache__/
+backend/storage/
 *.pyc
 frontend/node_modules/
 frontend/dist/

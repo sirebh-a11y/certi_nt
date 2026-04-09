@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     smtp_tls: bool = Field(default=False, alias="SMTP_TLS")
     mail_from_email: str = Field(default="noreply@certi.local", alias="MAIL_FROM_EMAIL")
     mail_from_name: str = Field(default="CERTI_nt System", alias="MAIL_FROM_NAME")
+    document_storage_root: str = Field(default="storage/documents", alias="DOCUMENT_STORAGE_ROOT")
 
     @property
     def cors_origins(self) -> list[str]:

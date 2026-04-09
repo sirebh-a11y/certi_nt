@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from app.core.deps import CurrentUser, DbSession
 from app.modules.acquisition.schemas import (
@@ -30,6 +30,7 @@ from app.modules.acquisition.service import (
     list_documents,
     serialize_acquisition_row_detail,
     serialize_document_detail,
+    upload_document,
     upsert_match,
     upsert_read_value,
     update_acquisition_row,
@@ -51,6 +52,28 @@ def list_documents_route(
 @router.post("/documents", response_model=DocumentResponse)
 def create_document_route(payload: DocumentCreateRequest, current_user: CurrentUser, db: DbSession) -> DocumentResponse:
     return create_document(db=db, payload=payload, actor_id=current_user.id, actor_email=current_user.email)
+
+
+@router.post("/documents/upload", response_model=DocumentResponse)
+def upload_document_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    tipo_documento: str = Form(...),
+    file: UploadFile = File(...),
+    fornitore_id: int | None = Form(default=None),
+    documento_padre_id: int | None = Form(default=None),
+    origine_upload: str = Form(default="utente"),
+) -> DocumentResponse:
+    return upload_document(
+        db=db,
+        tipo_documento=tipo_documento,
+        uploaded_file=file,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        fornitore_id=fornitore_id,
+        documento_padre_id=documento_padre_id,
+        origine_upload=origine_upload,
+    )
 
 
 @router.get("/documents/{document_id}", response_model=DocumentDetailResponse)
