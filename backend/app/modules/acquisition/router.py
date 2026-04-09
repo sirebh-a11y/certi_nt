@@ -28,6 +28,7 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_evidence,
     detect_chemistry,
+    detect_properties,
     detect_standard_notes,
     extract_ddt_fields_with_vision,
     extract_core_fields,
@@ -224,6 +225,16 @@ def detect_chemistry_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return detect_chemistry(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/detect-properties", response_model=AcquisitionRowDetailResponse)
+def detect_properties_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return detect_properties(db=db, row=row, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/extract-core-fields", response_model=AcquisitionRowDetailResponse)

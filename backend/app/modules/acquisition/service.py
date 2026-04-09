@@ -804,6 +804,66 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+
+    matches = _detect_property_matches(certificate_document.pages)
+    if not matches:
+        _record_history_event(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="proprieta",
+            azione="proprieta_non_rilevate",
+            user_id=actor_id,
+        )
+        db.commit()
+        return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+    for field_name, match in matches.items():
+        evidence = _create_text_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=certificate_document.id,
+            document_page_id=match["page_id"],
+            blocco="proprieta",
+            snippet=match["snippet"],
+            actor_id=actor_id,
+            confidence=0.86,
+        )
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="proprieta",
+            campo=field_name,
+            valore_grezzo=match["raw"],
+            valore_standardizzato=match["standardized"],
+            valore_finale=match["final"],
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="pdf_text",
+            fonte_documentale="certificato",
+            confidenza=0.86,
+            actor_id=actor_id,
+        )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="proprieta",
+        azione="proprieta_rilevate",
+        user_id=actor_id,
+        nota_breve=", ".join(sorted(matches.keys())),
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
@@ -899,6 +959,10 @@ def process_row_minimal(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
     extract_core_fields(db=db, row=row, actor_id=actor_id)
     refreshed_row = get_acquisition_row(db, row.id)
     if refreshed_row.document_certificato_id is not None:
+        detect_chemistry(db=db, row=refreshed_row, actor_id=actor_id)
+        refreshed_row = get_acquisition_row(db, row.id)
+        detect_properties(db=db, row=refreshed_row, actor_id=actor_id)
+        refreshed_row = get_acquisition_row(db, row.id)
         detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id)
         refreshed_row = get_acquisition_row(db, row.id)
     return serialize_acquisition_row_detail(refreshed_row)
@@ -1727,6 +1791,9 @@ CHEMISTRY_FIELD_SET = {
 }
 
 
+PROPERTY_FIELD_SET = {"HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "IACS%"}
+
+
 def _detect_chemistry_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -1737,6 +1804,113 @@ def _detect_chemistry_matches(pages: list[DocumentPage]) -> dict[str, dict[str, 
         page_matches = _parse_chemistry_from_lines(lines, page.id)
         for field_name, payload in page_matches.items():
             matches.setdefault(field_name, payload)
+    return matches
+
+
+def _detect_property_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        page_text = page.testo_estratto or page.ocr_text or ""
+        if not page_text:
+            continue
+        lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+
+        spec_matches = _parse_properties_from_spec_lines(lines, page.id)
+        compact_matches = _parse_properties_from_compact_lines(lines, page.id)
+
+        for field_name, payload in {**compact_matches, **spec_matches}.items():
+            matches.setdefault(field_name, payload)
+
+    return matches
+
+
+def _parse_properties_from_spec_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for line in lines:
+        lowered = line.lower()
+        if not lowered.startswith("spec."):
+            continue
+
+        tokens = re.findall(r"\d+(?:[.,]\d+)?", line)
+        if len(tokens) < 8:
+            continue
+
+        # Spec. N HB Ø S Rp0.2 Rm A% Rp/Rm [date] [time]
+        mapping = {
+            "HB": tokens[1],
+            "Rp0.2": tokens[4],
+            "Rm": tokens[5],
+            "A%": tokens[6],
+            "Rp0.2 / Rm": tokens[7],
+        }
+        for field_name, raw_value in mapping.items():
+            standardized = raw_value.replace(",", ".")
+            matches.setdefault(
+                field_name,
+                {
+                    "page_id": page_id,
+                    "snippet": line,
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+        break
+    return matches
+
+
+def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    mechanical_anchor = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if "mechanical properties" in lowered or "caratteristiche" in lowered or "meccan" in lowered:
+            mechanical_anchor = index
+            break
+
+    if mechanical_anchor is None:
+        return matches
+
+    window = lines[mechanical_anchor : min(mechanical_anchor + 12, len(lines))]
+    candidate_line = None
+    for line in window:
+        lowered = line.lower()
+        if lowered.startswith("spec."):
+            continue
+        numbers = re.findall(r"\d+(?:[.,]\d+)?", line)
+        if len(numbers) >= 4:
+            candidate_line = line
+            break
+
+    if candidate_line is None:
+        return matches
+
+    numbers = re.findall(r"\d+(?:[.,]\d+)?", candidate_line)
+    if len(numbers) < 4:
+        return matches
+
+    mapping = {
+        "Rm": numbers[0],
+        "Rp0.2": numbers[1],
+        "A%": numbers[2],
+        "HB": numbers[3],
+    }
+    if len(numbers) >= 5:
+        mapping["IACS%"] = numbers[4]
+
+    for field_name, raw_value in mapping.items():
+        standardized = raw_value.replace(",", ".")
+        matches.setdefault(
+            field_name,
+            {
+                "page_id": page_id,
+                "snippet": candidate_line,
+                "raw": raw_value,
+                "standardized": standardized,
+                "final": standardized,
+            },
+        )
+
     return matches
 
 
