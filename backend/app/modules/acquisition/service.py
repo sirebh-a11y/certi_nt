@@ -194,6 +194,7 @@ def serialize_value_history(entry: AcquisitionValueHistory) -> AcquisitionValueH
 
 
 def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowListItemResponse:
+    ddt_summary = _compute_ddt_field_summary(row)
     return AcquisitionRowListItemResponse(
         id=row.id,
         document_ddt_id=row.document_ddt_id,
@@ -218,6 +219,9 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         block_states=_compute_block_states(row),
         match_state=row.certificate_match.stato if row.certificate_match is not None else ("proposto" if row.document_certificato_id is not None else "mancante"),
         certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
+        ddt_confirmed_fields=ddt_summary["confirmed"],
+        ddt_pending_fields=ddt_summary["pending"],
+        ddt_missing_fields=ddt_summary["missing"],
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -1229,7 +1233,7 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
         values_by_block.setdefault(value.blocco, []).append(value)
 
     return {
-        "ddt": _compute_value_block_state(values_by_block.get("ddt", []), fallback="giallo" if row.document_ddt_id else "rosso"),
+        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
         "match": _compute_match_block_state(row),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
@@ -1250,7 +1254,7 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     )
 
     return {
-        "ddt": _compute_value_block_state(values_by_block.get("ddt", []), fallback="giallo" if row.document_ddt_id else "rosso"),
+        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
@@ -1281,6 +1285,59 @@ def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso")
     if all(value.stato == "confermato" for value in values):
         return "verde"
     return "giallo"
+
+
+def _compute_ddt_block_state(row: AcquisitionRow, values: list[ReadValue]) -> str:
+    if not row.document_ddt_id:
+        return "rosso"
+    summary = _compute_ddt_field_summary_from_values(values)
+    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields()]
+    if required_missing:
+        return "rosso"
+    if not summary["pending"]:
+        return "verde"
+    return "giallo"
+
+
+def _compute_ddt_field_summary(row: AcquisitionRow) -> dict[str, list[str]]:
+    values = [value for value in row.values if value.blocco == "ddt"]
+    return _compute_ddt_field_summary_from_values(values)
+
+
+def _compute_ddt_field_summary_from_values(values: list[ReadValue]) -> dict[str, list[str]]:
+    by_field = {value.campo: value for value in values}
+    confirmed: list[str] = []
+    pending: list[str] = []
+    missing: list[str] = []
+
+    for field in _ddt_required_fields() + _ddt_optional_fields():
+        value = by_field.get(field)
+        has_payload = False
+        if value is not None:
+            has_payload = any(
+                _string_or_none(candidate) is not None
+                for candidate in (value.valore_finale, value.valore_standardizzato, value.valore_grezzo)
+            )
+        if not has_payload:
+            missing.append(field)
+        elif value is not None and value.stato == "confermato":
+            confirmed.append(field)
+        else:
+            pending.append(field)
+
+    return {
+        "confirmed": confirmed,
+        "pending": pending,
+        "missing": missing,
+    }
+
+
+def _ddt_required_fields() -> tuple[str, ...]:
+    return ("cdq", "colata", "diametro", "peso")
+
+
+def _ddt_optional_fields() -> tuple[str, ...]:
+    return ("numero_certificato_ddt", "ordine")
 
 
 def _document_file_url(document: Document) -> str:

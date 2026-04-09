@@ -66,6 +66,15 @@ const ATTENTION_FILTERS = [
   { value: "validated", label: "Solo validate" },
 ];
 
+const DDT_FIELD_LABELS = {
+  numero_certificato_ddt: "Cert.",
+  cdq: "CDQ",
+  colata: "Colata",
+  diametro: "Diametro",
+  peso: "Peso",
+  ordine: "Ordine",
+};
+
 function workflowLabel(value) {
   if (value === "in_lavorazione") {
     return "In lavorazione";
@@ -100,6 +109,24 @@ function matchSecondaryLabel(row) {
     return `Certificato ${row.document_certificato_id}`;
   }
   return "Nessun certificato";
+}
+
+function ddtFieldLabel(field) {
+  return DDT_FIELD_LABELS[field] || field;
+}
+
+function ddtSummaryLabel(row) {
+  const state = row.block_states?.ddt || "rosso";
+  if (state === "verde") {
+    return "DDT pronto";
+  }
+  if (row.ddt_pending_fields?.length) {
+    return "DDT da confermare";
+  }
+  if (row.ddt_missing_fields?.length) {
+    return "DDT incompleto";
+  }
+  return "DDT da verificare";
 }
 
 function hasAttention(row) {
@@ -369,16 +396,47 @@ export default function AcquisitionListPage() {
                 ))}
               </div>
 
-              <div className="mt-5 grid gap-3 lg:grid-cols-[1.5fr_auto] lg:items-center">
-                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.match || "rosso")}`}>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em]">Match Certificato</p>
-                  <p className="mt-2 text-sm font-semibold">{matchLabel(row)}</p>
-                  <p className="mt-1 text-xs opacity-80">{matchSecondaryLabel(row)}</p>
+              <div className="mt-5 grid gap-3 xl:grid-cols-2">
+                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.ddt || "rosso")}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">DDT Core</p>
+                      <p className="mt-2 text-sm font-semibold">{ddtSummaryLabel(row)}</p>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.ddt || "rosso")}`}>
+                      {row.block_states?.ddt || "rosso"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    <MiniValueTile label="CDQ" value={row.cdq || "-"} />
+                    <MiniValueTile label="Colata" value={row.colata || "-"} />
+                    <MiniValueTile label="Peso" value={row.peso || "-"} />
+                  </div>
+
+                  {row.ddt_pending_fields?.length ? (
+                    <p className="mt-3 text-xs font-medium text-amber-800">
+                      Da confermare: {row.ddt_pending_fields.map(ddtFieldLabel).join(", ")}
+                    </p>
+                  ) : null}
+                  {row.ddt_missing_fields?.length ? (
+                    <p className="mt-2 text-xs font-medium text-rose-800">
+                      Mancanti: {row.ddt_missing_fields.map(ddtFieldLabel).join(", ")}
+                    </p>
+                  ) : null}
                 </div>
-                <div className="flex justify-start lg:justify-end">
-                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.match || "rosso")}`}>
-                    {row.block_states?.match || "rosso"}
-                  </span>
+
+                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.match || "rosso")}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">Match Certificato</p>
+                      <p className="mt-2 text-sm font-semibold">{matchLabel(row)}</p>
+                      <p className="mt-1 text-xs opacity-80">{matchSecondaryLabel(row)}</p>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.match || "rosso")}`}>
+                      {row.block_states?.match || "rosso"}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -427,6 +485,15 @@ function SummaryTile({ label, value, tone }) {
     <div className={`rounded-2xl p-4 ${toneClasses}`}>
       <p className="text-xs uppercase tracking-[0.2em] opacity-80">{label}</p>
       <p className="mt-2 text-2xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function MiniValueTile({ label, value }) {
+  return (
+    <div className="rounded-xl bg-white/70 px-3 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] opacity-70">{label}</p>
+      <p className="mt-1 text-sm font-semibold">{value}</p>
     </div>
   );
 }

@@ -373,6 +373,9 @@ class AcquisitionRowListItemResponse(BaseModel):
     block_states: dict[str, str]
     match_state: str
     certificate_file_name: str | None
+    ddt_confirmed_fields: list[str]
+    ddt_pending_fields: list[str]
+    ddt_missing_fields: list[str]
     created_at: datetime
     updated_at: datetime
 
