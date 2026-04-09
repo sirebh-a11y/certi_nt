@@ -121,17 +121,27 @@ function workflowStepAction(row, step) {
   const state = workflowStepState(row, step);
   if (step === "validazione_finale") {
     if (row?.validata_finale) {
-      return "Riga chiusa";
+      return "Validata";
     }
-    return state === "giallo" ? "Pronta da validare" : "Completa prima i blocchi";
+    return state === "giallo" ? "Pronta da validare" : "Non pronta";
   }
   if (state === "verde") {
     return "Pronto";
   }
   if (state === "giallo") {
-    return "Verifica e conferma";
+    return "Da verificare";
   }
-  return "Da completare";
+  return "Non pronto";
+}
+
+function readValueStateLabel(value) {
+  if (value?.__missing) {
+    return "non pronto";
+  }
+  if (value?.stato === "confermato") {
+    return "pronto";
+  }
+  return "da verificare";
 }
 
 export default function AcquisitionDetailPage() {
@@ -638,7 +648,7 @@ export default function AcquisitionDetailPage() {
                 Workflow · {row.stato_workflow}
               </span>
               <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
-                Validazione finale · {row.validata_finale ? "confermata" : canValidateFinal ? "disponibile" : "non disponibile"}
+                Validazione finale · {row.validata_finale ? "validata" : canValidateFinal ? "pronta da validare" : "non pronta"}
               </span>
               {Object.entries(row.block_states || {}).map(([key, state]) => (
                 <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(state)}`} key={key}>
@@ -810,7 +820,7 @@ function BlockPanel({
                   {value.campo}
                 </span>
                 <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${readValueStateClasses(value)}`}>
-                  {isMissing ? "mancante" : value.stato}
+                  {readValueStateLabel(value)}
                 </span>
               </div>
 

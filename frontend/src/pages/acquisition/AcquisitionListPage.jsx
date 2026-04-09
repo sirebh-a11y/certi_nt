@@ -44,7 +44,7 @@ const WORKFLOW_FILTERS = [
   { value: "nuova", label: "Nuova" },
   { value: "in_lavorazione", label: "In lavorazione" },
   { value: "riaperta", label: "Riaperta" },
-  { value: "validata_quality", label: "Validata quality" },
+  { value: "validata_quality", label: "Validata" },
 ];
 
 const PRIORITY_FILTERS = [
@@ -82,7 +82,7 @@ function workflowLabel(value) {
     return "In lavorazione";
   }
   if (value === "validata_quality") {
-    return "Validata quality";
+    return "Validata";
   }
   if (value === "riaperta") {
     return "Riaperta";
@@ -95,12 +95,12 @@ function workflowLabel(value) {
 
 function matchLabel(row) {
   if (row.match_state === "confermato") {
-    return "Match confermato";
+    return "Pronto";
   }
   if (row.match_state === "proposto" || row.match_state === "cambiato") {
-    return "Match da verificare";
+    return "Da verificare";
   }
-  return "Match mancante";
+  return "Non pronto";
 }
 
 function matchSecondaryLabel(row) {
@@ -120,15 +120,15 @@ function ddtFieldLabel(field) {
 function ddtSummaryLabel(row) {
   const state = row.block_states?.ddt || "rosso";
   if (state === "verde") {
-    return "DDT pronto";
+    return "Pronto";
   }
   if (row.ddt_pending_fields?.length) {
-    return "DDT da confermare";
+    return "Da verificare";
   }
   if (row.ddt_missing_fields?.length) {
-    return "DDT incompleto";
+    return "Non pronto";
   }
-  return "DDT da verificare";
+  return "Da verificare";
 }
 
 function technicalOpenBlocks(row) {
@@ -143,12 +143,12 @@ function technicalSummaryLabel(row) {
   const critical = technicalCriticalBlocks(row);
   const open = technicalOpenBlocks(row);
   if (!open.length) {
-    return "Blocchi tecnici pronti";
+    return "Pronti";
   }
   if (critical.length) {
-    return "Criticità tecniche";
+    return "Non pronti";
   }
-  return "Blocchi tecnici da confermare";
+  return "Da verificare";
 }
 
 function technicalSummaryTone(row) {
@@ -415,7 +415,7 @@ export default function AcquisitionListPage() {
                     {workflowLabel(row.stato_workflow)}
                   </span>
                   <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(hasAttention(row) ? "giallo" : "rosso")}`}>
-                    {row.validata_finale ? "Validata" : "Da chiudere"}
+                    {row.validata_finale ? "Validata" : "Da validare"}
                   </span>
                 </div>
               </div>
