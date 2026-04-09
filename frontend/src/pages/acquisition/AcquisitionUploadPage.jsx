@@ -50,12 +50,16 @@ function runStateClasses(run) {
 
 export default function AcquisitionUploadPage() {
   const { token } = useAuth();
+  const [suppliers, setSuppliers] = useState([]);
   const [ddtFiles, setDdtFiles] = useState([]);
   const [certificateFiles, setCertificateFiles] = useState([]);
+  const [ddtSupplierId, setDdtSupplierId] = useState("");
+  const [certificateSupplierId, setCertificateSupplierId] = useState("");
   const [processingDdt, setProcessingDdt] = useState(false);
   const [processingCertificates, setProcessingCertificates] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [ddtResult, setDdtResult] = useState(null);
   const [certificateResult, setCertificateResult] = useState(null);
   const [sessionDdtDocuments, setSessionDdtDocuments] = useState([]);
@@ -73,11 +77,30 @@ export default function AcquisitionUploadPage() {
     return `${ddtIds}|${certificateIds}`;
   }, [sessionCertificateDocuments, sessionDdtDocuments]);
 
+  useEffect(() => {
+    let ignore = false;
+    apiRequest("/suppliers", {}, token)
+      .then((data) => {
+        if (!ignore) {
+          setSuppliers(data.items || []);
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setSuppliers([]);
+        }
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [token]);
+
   async function handleBatchUpload(tipoDocumento) {
     const files = tipoDocumento === "ddt" ? ddtFiles : certificateFiles;
     const setProcessing = tipoDocumento === "ddt" ? setProcessingDdt : setProcessingCertificates;
     const setResult = tipoDocumento === "ddt" ? setDdtResult : setCertificateResult;
     const resetFiles = tipoDocumento === "ddt" ? setDdtFiles : setCertificateFiles;
+    const supplierId = tipoDocumento === "ddt" ? ddtSupplierId : certificateSupplierId;
 
     if (!files.length) {
       setError(`Seleziona almeno un file ${tipoDocumento === "ddt" ? "DDT" : "certificato"}.`);
@@ -86,10 +109,14 @@ export default function AcquisitionUploadPage() {
 
     const formData = new FormData();
     formData.append("tipo_documento", tipoDocumento);
+    if (supplierId) {
+      formData.append("fornitore_id", supplierId);
+    }
     files.forEach((file) => formData.append("files", file));
 
     setProcessing(true);
     setError("");
+    setNotice("");
     try {
       const response = await apiRequest(
         "/acquisition/documents/upload-batch",
@@ -101,10 +128,19 @@ export default function AcquisitionUploadPage() {
       );
       setResult(response);
       resetFiles([]);
-      if (tipoDocumento === "ddt") {
-        setSessionDdtDocuments((current) => mergeUploadedDocuments(current, response.uploaded || []));
-      } else {
-        setSessionCertificateDocuments((current) => mergeUploadedDocuments(current, response.uploaded || []));
+      const uploadedDocuments = response.uploaded || [];
+      const detectedDdt = uploadedDocuments.filter((item) => item.tipo_documento === "ddt");
+      const detectedCertificates = uploadedDocuments.filter((item) => item.tipo_documento === "certificato");
+
+      setSessionDdtDocuments((current) => mergeUploadedDocuments(current, detectedDdt));
+      setSessionCertificateDocuments((current) => mergeUploadedDocuments(current, detectedCertificates));
+
+      const movedCount =
+        tipoDocumento === "ddt"
+          ? detectedCertificates.length
+          : detectedDdt.length;
+      if (movedCount) {
+        setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riconosciuto" : "sono stati riconosciuti"} come ${tipoDocumento === "ddt" ? "certificato" : "DDT"} e spostato automaticamente nel gruppo corretto.`);
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -202,14 +238,58 @@ export default function AcquisitionUploadPage() {
         </div>
 
         {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
+        {notice ? <p className="mt-3 text-sm text-amber-700">{notice}</p> : null}
 
-        <div className="mt-6 grid gap-4 xl:grid-cols-[1.4fr,1fr]">
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <UploadCard
+            suppliers={suppliers}
+            selectedSupplierId={ddtSupplierId}
+            onSupplierChange={setDdtSupplierId}
+            buttonLabel={processingDdt ? "Carico DDT..." : "Carica DDT"}
+            count={ddtCount}
+            files={ddtFiles}
+            helperText="Carica uno o più DDT. Se un file assomiglia a un certificato, il sistema prova a correggere il tipo."
+            onChange={(event) => setDdtFiles(Array.from(event.target.files || []))}
+            onSubmit={() => handleBatchUpload("ddt")}
+            processing={processingDdt}
+            result={ddtResult}
+            title="1. Carica DDT"
+          />
+
+          <UploadCard
+            suppliers={suppliers}
+            selectedSupplierId={certificateSupplierId}
+            onSupplierChange={setCertificateSupplierId}
+            buttonLabel={processingCertificates ? "Carico certificati..." : "Carica certificati"}
+            count={certificateCount}
+            files={certificateFiles}
+            helperText="Carica uno o più certificati. Se un file assomiglia a un DDT, il sistema prova a correggere il tipo."
+            onChange={(event) => setCertificateFiles(Array.from(event.target.files || []))}
+            onSubmit={() => handleBatchUpload("certificato")}
+            processing={processingCertificates}
+            result={certificateResult}
+            title="2. Carica certificati"
+          />
+        </div>
+
+        <div className="mt-6 grid gap-4 xl:grid-cols-[1fr,1.3fr]">
+          <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Documenti pronti</p>
+            <p className="mt-2 text-sm text-slate-600">
+              Qui vedi cosa il sistema ha riconosciuto davvero prima di far partire la lavorazione.
+            </p>
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+              <UploadedList title="DDT pronti" items={sessionDdtDocuments} emptyLabel="Nessun DDT pronto." />
+              <UploadedList title="Certificati pronti" items={sessionCertificateDocuments} emptyLabel="Nessun certificato pronto." />
+            </div>
+          </div>
+
           <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Presa in carico automatica</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">3. Avvia lavorazione automatica</p>
                 <p className="mt-2 text-sm text-slate-600">
-                  Lavora con i documenti già caricati in questa sessione. Se carichi prima i DDT e poi i certificati, il sistema si arricchisce nel secondo passaggio.
+                  Il sistema usa i DDT caricati e tutti i certificati disponibili: quelli della sessione e quelli già presenti nel repository.
                 </p>
               </div>
               <label className="flex items-center gap-3 rounded-2xl border border-border bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
@@ -236,7 +316,7 @@ export default function AcquisitionUploadPage() {
                 onClick={() => startAutomationRun(automationSignature)}
                 type="button"
               >
-                {startingRun ? "Avvio in corso..." : "Avvia presa in carico automatica"}
+                {startingRun ? "Avvio in corso..." : "Avvia lavorazione"}
               </button>
               <p className="self-center text-sm text-slate-500">
                 Vision DDT viene usata quando serve e quando e disponibile una chiave OpenAI utente o di sistema.
@@ -245,51 +325,46 @@ export default function AcquisitionUploadPage() {
 
             {currentRun ? <AutomationRunCard run={currentRun} /> : null}
           </div>
-
-          <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Documenti della sessione</p>
-            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-              <UploadedList title="DDT caricati" items={sessionDdtDocuments} emptyLabel="Nessun DDT ancora disponibile." />
-              <UploadedList title="Certificati caricati" items={sessionCertificateDocuments} emptyLabel="Nessun certificato ancora disponibile." />
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-6 xl:grid-cols-2">
-          <UploadCard
-            buttonLabel={processingDdt ? "Carico DDT..." : "Carica DDT"}
-            count={ddtCount}
-            files={ddtFiles}
-            helperText="Puoi selezionare molti DDT insieme."
-            onChange={(event) => setDdtFiles(Array.from(event.target.files || []))}
-            onSubmit={() => handleBatchUpload("ddt")}
-            processing={processingDdt}
-            result={ddtResult}
-            title="Batch DDT"
-          />
-
-          <UploadCard
-            buttonLabel={processingCertificates ? "Carico certificati..." : "Carica certificati"}
-            count={certificateCount}
-            files={certificateFiles}
-            helperText="Puoi selezionare molti certificati insieme."
-            onChange={(event) => setCertificateFiles(Array.from(event.target.files || []))}
-            onSubmit={() => handleBatchUpload("certificato")}
-            processing={processingCertificates}
-            result={certificateResult}
-            title="Batch certificati"
-          />
         </div>
       </div>
     </section>
   );
 }
 
-function UploadCard({ title, helperText, files, count, processing, buttonLabel, onChange, onSubmit, result }) {
+function UploadCard({
+  title,
+  helperText,
+  files,
+  count,
+  processing,
+  buttonLabel,
+  onChange,
+  onSubmit,
+  result,
+  suppliers,
+  selectedSupplierId,
+  onSupplierChange,
+}) {
   return (
     <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
       <h3 className="text-lg font-semibold">{title}</h3>
       <p className="mt-2 text-sm text-slate-500">{helperText}</p>
+
+      <label className="mt-4 block text-sm font-medium text-slate-700">
+        Fornitore del batch
+        <select
+          className="mt-2 w-full rounded-2xl border border-border bg-slate-50 px-4 py-3 text-sm text-slate-700"
+          onChange={(event) => onSupplierChange(event.target.value)}
+          value={selectedSupplierId}
+        >
+          <option value="">Rilevamento automatico</option>
+          {suppliers.map((supplier) => (
+            <option key={supplier.id} value={String(supplier.id)}>
+              {supplier.ragione_sociale}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
         <input accept=".pdf,application/pdf" className="w-full text-sm text-slate-700" multiple onChange={onChange} type="file" />
@@ -328,7 +403,7 @@ function UploadCard({ title, helperText, files, count, processing, buttonLabel, 
               <ul className="mt-2 space-y-2 text-sm text-slate-700">
                 {result.uploaded.slice(0, 8).map((item) => (
                   <li key={item.id}>
-                    #{item.id} · {item.nome_file_originale}
+                    #{item.id} · {item.nome_file_originale} · {item.tipo_documento.toUpperCase()} {item.fornitore_nome ? `· ${item.fornitore_nome}` : ""}
                   </li>
                 ))}
                 {result.uploaded.length > 8 ? <li>… e altri {result.uploaded.length - 8}</li> : null}
@@ -429,6 +504,9 @@ function UploadedList({ title, items, emptyLabel }) {
           {items.slice(0, 8).map((item) => (
             <li key={item.id}>
               #{item.id} · {item.nome_file_originale}
+              <div className="mt-1 text-xs text-slate-500">
+                {item.tipo_documento.toUpperCase()} {item.fornitore_nome ? `· ${item.fornitore_nome}` : "· fornitore non riconosciuto"}
+              </div>
             </li>
           ))}
           {items.length > 8 ? <li>… e altri {items.length - 8}</li> : null}

@@ -88,6 +88,7 @@ class DocumentResponse(BaseModel):
     id: int
     tipo_documento: str
     fornitore_id: int | None
+    fornitore_nome: str | None
     nome_file_originale: str
     storage_key: str
     file_url: str

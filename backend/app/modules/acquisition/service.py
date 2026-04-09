@@ -56,7 +56,7 @@ from app.modules.acquisition.schemas import (
     ReadValueResponse,
     ReadValueUpsertRequest,
 )
-from app.modules.suppliers.models import Supplier
+from app.modules.suppliers.models import Supplier, SupplierAlias
 
 
 def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
@@ -81,6 +81,7 @@ def serialize_document(document: Document) -> DocumentResponse:
         id=document.id,
         tipo_documento=document.tipo_documento,
         fornitore_id=document.fornitore_id,
+        fornitore_nome=document.supplier.ragione_sociale if document.supplier is not None else None,
         nome_file_originale=document.nome_file_originale,
         storage_key=document.storage_key,
         file_url=_document_file_url(document),
@@ -280,7 +281,7 @@ def list_documents(
     tipo_documento: str | None = None,
     fornitore_id: int | None = None,
 ) -> list[DocumentResponse]:
-    query = db.query(Document).order_by(Document.data_upload.desc(), Document.id.desc())
+    query = db.query(Document).options(joinedload(Document.supplier)).order_by(Document.data_upload.desc(), Document.id.desc())
     if tipo_documento is not None:
         query = query.filter(Document.tipo_documento == tipo_documento)
     if fornitore_id is not None:
@@ -395,6 +396,7 @@ def upload_document(
     db.refresh(document)
     if _is_pdf_document(document, uploaded_file.content_type):
         document = _index_document_from_path(db, document)
+    document = _apply_document_identity_detection(db, document)
     log_service.record("acquisition", f"Document uploaded: {document.nome_file_originale}", actor_email)
     return serialize_document(document)
 
@@ -442,6 +444,134 @@ def upload_documents_batch(
         uploaded=uploaded,
         failed=failed,
     )
+
+
+def _apply_document_identity_detection(db: Session, document: Document) -> Document:
+    probable_type = _detect_document_type(document)
+    probable_supplier_id = _detect_document_supplier_id(db, document)
+
+    changed = False
+    if probable_type and probable_type != document.tipo_documento:
+        document.tipo_documento = probable_type
+        changed = True
+
+    if document.fornitore_id is None and probable_supplier_id is not None:
+        document.fornitore_id = probable_supplier_id
+        changed = True
+
+    if changed:
+        db.add(document)
+        db.commit()
+        return get_document(db, document.id)
+    return document
+
+
+def _detect_document_type(document: Document) -> str | None:
+    search_text = _document_identity_text(document)
+    if not search_text:
+        return None
+
+    certificate_score = 0
+    ddt_score = 0
+
+    certificate_markers = {
+        "inspection certificate": 5,
+        "certificato di collaudo": 5,
+        "abnahmepruefzeugnis": 5,
+        "certificat de reception": 5,
+        "en 10204": 4,
+        "chemical composition": 4,
+        "composizione chimica": 4,
+        "mechanical properties": 4,
+        "caratteristiche meccaniche": 4,
+        "cert.no": 3,
+        "cqf": 4,
+        "cdq_": 4,
+        "inspection": 2,
+    }
+    ddt_markers = {
+        "documento di trasporto": 6,
+        " ddt ": 5,
+        "d.d.t": 5,
+        "delivery note": 5,
+        "packing list": 4,
+        "document no": 2,
+        "spedizione": 2,
+        "destinatario": 2,
+        "colli": 2,
+        "peso netto": 1,
+    }
+
+    file_name = document.nome_file_originale.lower()
+    if re.fullmatch(r"\d[\d_-]{1,}\.pdf", file_name):
+        ddt_score += 3
+    if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
+        certificate_score += 5
+
+    for marker, weight in certificate_markers.items():
+        if marker in search_text:
+            certificate_score += weight
+    for marker, weight in ddt_markers.items():
+        if marker in search_text:
+            ddt_score += weight
+
+    if certificate_score >= ddt_score + 3:
+        return "certificato"
+    if ddt_score >= certificate_score + 3:
+        return "ddt"
+    return None
+
+
+def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
+    search_text = _normalize_identity_text(_document_identity_text(document))
+    if not search_text:
+        return None
+
+    suppliers = db.query(Supplier).options(joinedload(Supplier.aliases)).filter(Supplier.attivo.is_(True)).all()
+    best_supplier_id = None
+    best_score = 0
+    second_score = 0
+
+    for supplier in suppliers:
+        aliases = [supplier.ragione_sociale] + [alias.nome_alias for alias in supplier.aliases if alias.attivo]
+        score = 0
+        for alias in aliases:
+            normalized_alias = _normalize_identity_text(alias)
+            if not normalized_alias or len(normalized_alias) < 4:
+                continue
+            if normalized_alias in search_text:
+                score = max(score, min(80, 12 + len(normalized_alias)))
+        if score > best_score:
+            second_score = best_score
+            best_score = score
+            best_supplier_id = supplier.id
+        elif score > second_score:
+            second_score = score
+
+    if best_supplier_id is None:
+        return None
+    if best_score < 16:
+        return None
+    if second_score and best_score - second_score < 4:
+        return None
+    return best_supplier_id
+
+
+def _document_identity_text(document: Document) -> str:
+    chunks = [document.nome_file_originale]
+    for page in document.pages[:2]:
+        page_text = page.testo_estratto or page.ocr_text or ""
+        if page_text:
+            chunks.append(page_text[:4000])
+    return "\n".join(chunk for chunk in chunks if chunk)
+
+
+def _normalize_identity_text(value: str) -> str:
+    normalized = value.lower()
+    normalized = normalized.replace("_", " ").replace("-", " ").replace("/", " ")
+    normalized = re.sub(r"[^a-z0-9àèéìòóùüöäßç.\s]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return f" {normalized} "
 
 
 def index_document(db: Session, document: Document, actor_email: str | None = None) -> DocumentDetailResponse:
@@ -953,6 +1083,10 @@ def upsert_match(
     match.timestamp = datetime.now(UTC)
     match.utente_conferma_id = actor_id if payload.stato in {"confermato", "cambiato"} else None
     row.document_certificato_id = certificate_document.id
+    if row.fornitore_id is None and certificate_document.fornitore_id is not None:
+        row.fornitore_id = certificate_document.fornitore_id
+    if not row.fornitore_raw and certificate_document.supplier is not None:
+        row.fornitore_raw = certificate_document.supplier.ragione_sociale
 
     if previous_document_id != certificate_document.id:
         action = "match_cambiato" if previous_document_id is not None else action
