@@ -47,6 +47,7 @@ from app.modules.acquisition.service import (
     upsert_match,
     upsert_read_value,
     update_acquisition_row,
+    validate_final_row,
 )
 
 router = APIRouter()
@@ -268,3 +269,13 @@ def process_row_minimal_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return process_row_minimal(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/validate-final", response_model=AcquisitionRowDetailResponse)
+def validate_final_row_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return validate_final_row(db=db, row=row, actor_id=current_user.id)

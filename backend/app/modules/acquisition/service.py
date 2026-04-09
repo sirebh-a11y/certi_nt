@@ -478,6 +478,7 @@ def create_acquisition_row(
         user_id=actor_id,
         nota_breve=f"DDT document {ddt_document.id}",
     )
+    _sync_row_statuses(db, row)
     db.commit()
     created_row = get_acquisition_row(db, row.id)
     log_service.record("acquisition", f"Acquisition row created: {created_row.id}", actor_email)
@@ -501,6 +502,8 @@ def update_acquisition_row(
     for field, value in updates.items():
         setattr(row, field, value)
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="riga_aggiornata")
+    _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
         db=db,
@@ -570,6 +573,7 @@ def upsert_read_value(
         if evidence is None or evidence.acquisition_row_id != row.id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Evidence not available for row")
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason=f"{payload.blocco}:{payload.campo}")
     read_value = _upsert_read_value_model(
         db=db,
         acquisition_row_id=row.id,
@@ -588,6 +592,7 @@ def upsert_read_value(
     if payload.blocco == "ddt":
         _sync_row_from_ddt_values(db, row)
         db.add(row)
+    _sync_row_statuses(db, row)
     db.commit()
     db.refresh(read_value)
     return serialize_read_value(read_value)
@@ -604,6 +609,7 @@ def upsert_match(
         if row.fornitore_id != certificate_document.fornitore_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificate supplier mismatch for row")
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="match")
     match = (
         db.query(CertificateMatch)
         .options(selectinload(CertificateMatch.candidates))
@@ -670,6 +676,7 @@ def upsert_match(
         user_id=actor_id,
         nota_breve=payload.motivo_breve,
     )
+    _sync_row_statuses(db, row)
     db.commit()
     updated_row = get_acquisition_row(db, row.id)
     if updated_row.certificate_match is None:
@@ -686,6 +693,7 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="note")
     matches = _detect_note_matches(certificate_document.pages)
     if not matches:
         _record_history_event(
@@ -695,6 +703,7 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
             azione="note_non_rilevate",
             user_id=actor_id,
         )
+        _sync_row_statuses(db, row)
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -740,6 +749,7 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
         user_id=actor_id,
         nota_breve=", ".join(sorted(matches.keys())),
     )
+    _sync_row_statuses(db, row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -753,6 +763,7 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="chimica")
     matches = _detect_chemistry_matches(certificate_document.pages)
     if not matches:
         _record_history_event(
@@ -762,6 +773,7 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
             azione="chimica_non_rilevata",
             user_id=actor_id,
         )
+        _sync_row_statuses(db, row)
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -800,6 +812,7 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
         user_id=actor_id,
         nota_breve=", ".join(sorted(matches.keys())),
     )
+    _sync_row_statuses(db, row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -813,6 +826,7 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
 
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="proprieta")
     matches = _detect_property_matches(certificate_document.pages)
     if not matches:
         _record_history_event(
@@ -822,6 +836,7 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
             azione="proprieta_non_rilevate",
             user_id=actor_id,
         )
+        _sync_row_statuses(db, row)
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -860,11 +875,39 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
         user_id=actor_id,
         nota_breve=", ".join(sorted(matches.keys())),
     )
+    _sync_row_statuses(db, row)
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def validate_final_row(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    block_states = _compute_block_states_from_db(db, row)
+    required_blocks = ("ddt", "match", "chimica", "proprieta", "note")
+    not_ready = [block for block in required_blocks if block_states.get(block) != "verde"]
+    if not_ready:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Final validation requires all blocks green. Missing: {', '.join(not_ready)}",
+        )
+
+    row.validata_finale = True
+    row.stato_workflow = "validata_quality"
+    row.stato_tecnico = "verde"
+    row.priorita_operativa = "bassa"
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="workflow",
+        azione="validazione_finale_confermata",
+        user_id=actor_id,
+    )
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="campi_core")
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
         ddt_document = _index_document_from_path(db, ddt_document)
@@ -942,6 +985,7 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
             )
             extracted_count += 1
 
+    _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
         db=db,
@@ -975,6 +1019,7 @@ def extract_ddt_fields_with_vision(
     actor_id: int,
     openai_api_key: str,
 ) -> AcquisitionRowDetailResponse:
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="ddt_vision")
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
         ddt_document = _index_document_from_path(db, ddt_document)
@@ -1050,6 +1095,7 @@ def extract_ddt_fields_with_vision(
 
     _sync_row_from_ddt_values(db, row)
 
+    _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
         db=db,
@@ -1117,6 +1163,56 @@ def _record_history_event(
     )
 
 
+def _reopen_row_if_validated(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    reason: str,
+) -> None:
+    if not row.validata_finale:
+        return
+    row.validata_finale = False
+    row.stato_workflow = "riaperta"
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="workflow",
+        azione="riga_riaperta",
+        user_id=actor_id,
+        nota_breve=reason,
+    )
+
+
+def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
+    block_states = _compute_block_states_from_db(db, row)
+    required_blocks = ("ddt", "match", "chimica", "proprieta", "note")
+    required_states = [block_states.get(block, "rosso") for block in required_blocks]
+
+    if all(state == "verde" for state in required_states):
+        row.stato_tecnico = "verde"
+    elif any(state == "rosso" for state in required_states):
+        row.stato_tecnico = "rosso"
+    else:
+        row.stato_tecnico = "giallo"
+
+    if row.validata_finale:
+        row.stato_workflow = "validata_quality"
+    elif row.stato_workflow not in {"riaperta", "validata_quality"}:
+        has_activity = any(block_states.get(block) != "rosso" for block in required_blocks)
+        row.stato_workflow = "in_lavorazione" if has_activity else "nuova"
+
+    if row.stato_tecnico == "rosso":
+        row.priorita_operativa = "alta"
+    elif row.stato_tecnico == "giallo":
+        row.priorita_operativa = "media"
+    else:
+        row.priorita_operativa = "bassa"
+
+    db.add(row)
+
+
 def _document_storage_root() -> Path:
     return Path(settings.document_storage_root)
 
@@ -1135,12 +1231,40 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
     }
 
 
+def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str, str]:
+    values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id).all()
+    values_by_block: dict[str, list[ReadValue]] = {}
+    for value in values:
+        values_by_block.setdefault(value.blocco, []).append(value)
+
+    match = (
+        db.query(CertificateMatch)
+        .filter(CertificateMatch.acquisition_row_id == row.id)
+        .one_or_none()
+    )
+
+    return {
+        "ddt": _compute_value_block_state(values_by_block.get("ddt", []), fallback="giallo" if row.document_ddt_id else "rosso"),
+        "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
+        "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
+        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
+        "note": _compute_value_block_state(values_by_block.get("note", [])),
+    }
+
+
 def _compute_match_block_state(row: AcquisitionRow) -> str:
-    if row.certificate_match is not None:
-        if row.certificate_match.stato == "confermato":
+    return _compute_match_block_state_from_match(row.document_certificato_id, row.certificate_match)
+
+
+def _compute_match_block_state_from_match(
+    document_certificato_id: int | None,
+    match: CertificateMatch | None,
+) -> str:
+    if match is not None:
+        if match.stato == "confermato":
             return "verde"
         return "giallo"
-    if row.document_certificato_id is not None:
+    if document_certificato_id is not None:
         return "giallo"
     return "rosso"
 

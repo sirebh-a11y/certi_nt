@@ -66,6 +66,8 @@ const BLOCK_DEFAULT_SOURCE = {
   note: "certificato",
 };
 
+const FINAL_REQUIRED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
+
 function stateClasses(state) {
   if (state === "verde") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -112,6 +114,7 @@ export default function AcquisitionDetailPage() {
   const [processingChemistry, setProcessingChemistry] = useState(false);
   const [processingProperties, setProcessingProperties] = useState(false);
   const [processingMatch, setProcessingMatch] = useState(false);
+  const [processingFinalValidation, setProcessingFinalValidation] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
   const [draftValues, setDraftValues] = useState({});
   const [savingFieldKey, setSavingFieldKey] = useState("");
@@ -176,6 +179,13 @@ export default function AcquisitionDetailPage() {
       groups[value.blocco].push(value);
     });
     return groups;
+  }, [row]);
+
+  const canValidateFinal = useMemo(() => {
+    if (!row?.block_states) {
+      return false;
+    }
+    return FINAL_REQUIRED_BLOCKS.every((block) => row.block_states?.[block] === "verde");
   }, [row]);
 
   async function refreshRow(includeDocuments = false) {
@@ -490,6 +500,23 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  async function handleValidateFinal() {
+    setProcessingFinalValidation(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/validate-final`,
+        { method: "POST" },
+        token,
+      );
+      await refreshRow(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingFinalValidation(false);
+    }
+  }
+
   return (
     <section className="space-y-6">
       <div className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
@@ -545,6 +572,14 @@ export default function AcquisitionDetailPage() {
             >
               {processing ? "Processo in corso..." : "Processo minimo"}
             </button>
+            <button
+              className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={processingFinalValidation || !canValidateFinal}
+              onClick={handleValidateFinal}
+              type="button"
+            >
+              {processingFinalValidation ? "Validazione..." : row?.validata_finale ? "Riga validata" : "Valida riga"}
+            </button>
           </div>
         </div>
 
@@ -566,6 +601,9 @@ export default function AcquisitionDetailPage() {
               </span>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase text-slate-700">
                 Workflow · {row.stato_workflow}
+              </span>
+              <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
+                Validazione finale · {row.validata_finale ? "confermata" : canValidateFinal ? "disponibile" : "non disponibile"}
               </span>
               {Object.entries(row.block_states || {}).map(([key, state]) => (
                 <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(state)}`} key={key}>
