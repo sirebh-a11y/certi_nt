@@ -806,7 +806,7 @@ Regola importante:
 
 * il blocco `Note` e' obbligatorio nel workflow
 * il contenuto puo' essere valorizzato, vuoto o `null`
-* strategia e standardizzazione note restano un placeholder futuro in file dedicato
+* strategia e standardizzazione note restano un placeholder futuro in `docs/modules/notes_document_knowledge.md`
 
 #### Validazione finale
 
@@ -846,7 +846,7 @@ Nel riepilogo riga i blocchi macro da mostrare sempre devono essere:
 
 Le `Note` sono un blocco obbligatorio nel workflow, ma il loro contenuto puo' essere vuoto o `null`.
 
-Strategia e standardizzazione delle note restano un placeholder futuro da trattare in file dedicato.
+Strategia e standardizzazione delle note restano un placeholder futuro da trattare in `docs/modules/notes_document_knowledge.md`.
 
 ### 10.8 Struttura costante del dettaglio blocco
 
