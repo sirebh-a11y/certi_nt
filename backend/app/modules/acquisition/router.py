@@ -9,6 +9,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
     AcquisitionRowUpdateRequest,
+    DocumentBatchUploadResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
@@ -44,6 +45,7 @@ from app.modules.acquisition.service import (
     serialize_acquisition_row_detail,
     serialize_document_detail,
     upload_document,
+    upload_documents_batch,
     upsert_match,
     upsert_read_value,
     update_acquisition_row,
@@ -82,6 +84,28 @@ def upload_document_route(
         db=db,
         tipo_documento=tipo_documento,
         uploaded_file=file,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        fornitore_id=fornitore_id,
+        documento_padre_id=documento_padre_id,
+        origine_upload=origine_upload,
+    )
+
+
+@router.post("/documents/upload-batch", response_model=DocumentBatchUploadResponse)
+def upload_documents_batch_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    tipo_documento: str = Form(...),
+    files: list[UploadFile] = File(...),
+    fornitore_id: int | None = Form(default=None),
+    documento_padre_id: int | None = Form(default=None),
+    origine_upload: str = Form(default="utente"),
+) -> DocumentBatchUploadResponse:
+    return upload_documents_batch(
+        db=db,
+        tipo_documento=tipo_documento,
+        uploaded_files=files,
         actor_id=current_user.id,
         actor_email=current_user.email,
         fornitore_id=fornitore_id,

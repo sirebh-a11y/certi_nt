@@ -295,6 +295,12 @@ export default function AcquisitionListPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
+            <Link
+              className="rounded-xl border border-border bg-white px-4 py-3 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-ink"
+              to="/acquisition/upload"
+            >
+              Carica documenti
+            </Link>
             <button
               className={`rounded-xl border px-4 py-3 text-sm font-medium ${
                 onlyOpen ? "border-accent bg-accent/10 text-accent" : "border-border bg-white text-slate-600"

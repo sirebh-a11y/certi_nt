@@ -108,6 +108,19 @@ class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
 
 
+class DocumentBatchErrorResponse(BaseModel):
+    file_name: str
+    detail: str
+
+
+class DocumentBatchUploadResponse(BaseModel):
+    requested_count: int
+    uploaded_count: int
+    failed_count: int
+    uploaded: list[DocumentResponse]
+    failed: list[DocumentBatchErrorResponse]
+
+
 class AcquisitionRowCreateRequest(BaseModel):
     document_ddt_id: int
     document_certificato_id: int | None = None

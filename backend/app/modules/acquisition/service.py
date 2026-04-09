@@ -35,6 +35,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowDetailResponse,
     AcquisitionRowListItemResponse,
     AcquisitionValueHistoryResponse,
+    DocumentBatchErrorResponse,
+    DocumentBatchUploadResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
@@ -363,6 +365,51 @@ def upload_document(
         document = _index_document_from_path(db, document)
     log_service.record("acquisition", f"Document uploaded: {document.nome_file_originale}", actor_email)
     return serialize_document(document)
+
+
+def upload_documents_batch(
+    db: Session,
+    *,
+    tipo_documento: str,
+    uploaded_files: list[UploadFile],
+    actor_id: int,
+    actor_email: str,
+    fornitore_id: int | None = None,
+    documento_padre_id: int | None = None,
+    origine_upload: str = "utente",
+) -> DocumentBatchUploadResponse:
+    if not uploaded_files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided for batch upload")
+
+    uploaded: list[DocumentResponse] = []
+    failed: list[DocumentBatchErrorResponse] = []
+
+    for uploaded_file in uploaded_files:
+        file_name = Path(uploaded_file.filename or "").name or f"{tipo_documento}.bin"
+        try:
+            uploaded_document = upload_document(
+                db=db,
+                tipo_documento=tipo_documento,
+                uploaded_file=uploaded_file,
+                actor_id=actor_id,
+                actor_email=actor_email,
+                fornitore_id=fornitore_id,
+                documento_padre_id=documento_padre_id,
+                origine_upload=origine_upload,
+            )
+            uploaded.append(uploaded_document)
+        except HTTPException as exc:
+            failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc.detail)))
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc)))
+
+    return DocumentBatchUploadResponse(
+        requested_count=len(uploaded_files),
+        uploaded_count=len(uploaded),
+        failed_count=len(failed),
+        uploaded=uploaded,
+        failed=failed,
+    )
 
 
 def index_document(db: Session, document: Document, actor_email: str | None = None) -> DocumentDetailResponse:
