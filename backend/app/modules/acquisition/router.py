@@ -1,7 +1,9 @@
 from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
+from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
     AcquisitionRowCreateRequest,
     AcquisitionRowDetailResponse,
@@ -26,6 +28,7 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_evidence,
     detect_standard_notes,
+    extract_ddt_fields_with_vision,
     extract_core_fields,
     get_acquisition_row,
     get_document,
@@ -220,6 +223,19 @@ def extract_core_fields_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return extract_core_fields(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/extract-ddt-vision", response_model=AcquisitionRowDetailResponse)
+def extract_ddt_vision_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    if not current_user.openai_api_key_encrypted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured for the current user")
+    row = get_acquisition_row(db, row_id)
+    openai_api_key = decrypt_secret(current_user.openai_api_key_encrypted)
+    return extract_ddt_fields_with_vision(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
 @router.post("/rows/{row_id}/process-minimal", response_model=AcquisitionRowDetailResponse)

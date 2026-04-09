@@ -16,3 +16,7 @@ fernet = _build_fernet()
 
 def encrypt_secret(value: str) -> str:
     return fernet.encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_secret(value: str) -> str:
+    return fernet.decrypt(value.encode("utf-8")).decode("utf-8")

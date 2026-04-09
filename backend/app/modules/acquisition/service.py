@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +11,8 @@ from datetime import UTC, datetime
 import fitz
 from fastapi import UploadFile
 from fastapi import HTTPException, status
+from openai import OpenAI
+from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -837,6 +841,96 @@ def process_row_minimal(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
     return serialize_acquisition_row_detail(refreshed_row)
 
 
+def extract_ddt_fields_with_vision(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    openai_api_key: str,
+) -> AcquisitionRowDetailResponse:
+    ddt_document = get_document(db, row.document_ddt_id)
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
+
+    crop_definitions = _build_ddt_safe_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to prepare DDT image crops for vision")
+
+    extracted = _extract_ddt_fields_from_openai(crop_definitions, openai_api_key=openai_api_key)
+    extracted_count = 0
+
+    for field_name, payload in extracted.items():
+        field_value = _string_or_none(payload.get("value"))
+        if field_value is None:
+            continue
+        source_crop = payload.get("source_crop")
+        evidence_text = _string_or_none(payload.get("evidence")) or field_value
+        crop_definition = crop_definitions.get(source_crop) if source_crop else None
+
+        evidence = DocumentEvidence(
+            document_id=ddt_document.id,
+            document_page_id=crop_definition["page_id"] if crop_definition else None,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            tipo_evidenza="crop",
+            bbox=crop_definition["bbox"] if crop_definition else None,
+            testo_grezzo=evidence_text,
+            storage_key_derivato=crop_definition["storage_key"] if crop_definition else None,
+            metodo_estrazione="chatgpt",
+            mascherato=True,
+            confidenza=0.72,
+            utente_creazione_id=actor_id,
+        )
+        db.add(evidence)
+        db.flush()
+
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=evidence_text,
+            valore_standardizzato=field_value,
+            valore_finale=field_value,
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        extracted_count += 1
+
+    if row.cdq is None:
+        row.cdq = _string_or_none(extracted.get("cdq", {}).get("value")) or _string_or_none(
+            extracted.get("numero_certificato_ddt", {}).get("value")
+        )
+    if row.colata is None:
+        row.colata = _string_or_none(extracted.get("colata", {}).get("value"))
+    if row.peso is None:
+        row.peso = _string_or_none(extracted.get("peso", {}).get("value"))
+    if row.diametro is None:
+        row.diametro = _string_or_none(extracted.get("diametro", {}).get("value"))
+    if row.ordine is None:
+        row.ordine = _string_or_none(extracted.get("ordine", {}).get("value"))
+
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="campi_core_vision_rilevati" if extracted_count else "campi_core_vision_non_rilevati",
+        user_id=actor_id,
+        nota_breve=str(extracted_count) if extracted_count else None,
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
 def _get_supplier(db: Session, supplier_id: int) -> Supplier:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
@@ -1039,6 +1133,120 @@ def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> s
     pixmap = page.get_pixmap(dpi=150, alpha=False)
     pixmap.save(str(absolute_image_path))
     return image_relative_path.as_posix()
+
+
+def _build_ddt_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            width, height = image.size
+            crop_specs = [
+                ("upper", (0.08, 0.18, 0.92, 0.56)),
+                ("lower", (0.08, 0.54, 0.92, 0.90)),
+            ]
+            for suffix, (left_ratio, top_ratio, right_ratio, bottom_ratio) in crop_specs:
+                left = int(width * left_ratio)
+                top = int(height * top_ratio)
+                right = int(width * right_ratio)
+                bottom = int(height * bottom_ratio)
+                if right <= left or bottom <= top:
+                    continue
+                crop = image.crop((left, top, right, bottom))
+                storage_key = _save_ddt_crop(page, crop, suffix)
+                crop_label = f"page{page.numero_pagina}_{suffix}"
+                crops[crop_label] = {
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"{left},{top},{right},{bottom}",
+                }
+    return crops
+
+
+def _save_ddt_crop(page: DocumentPage, image: Image.Image, suffix: str) -> str:
+    base_name = f"page_{page.numero_pagina}_{suffix}_{uuid4().hex[:12]}.png"
+    relative_path = Path("crops") / "ddt_vision" / datetime.now(UTC).strftime("%Y/%m/%d") / base_name
+    absolute_path = _document_storage_root() / relative_path
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(absolute_path, format="PNG")
+    return relative_path.as_posix()
+
+
+def _extract_ddt_fields_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, dict[str, str | None]]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi solo i ritagli del corpo di un DDT metallurgico. "
+                "Non inferire dati assenti. Restituisci JSON puro con queste chiavi: "
+                "numero_certificato_ddt, cdq, colata, peso, diametro, ordine. "
+                "Ogni chiave deve essere un oggetto con campi value, evidence, source_crop. "
+                "Usa null se il dato non e' leggibile. "
+                "Se trovi 'Cert.' o 'Certificato' sul DDT, popolalo in numero_certificato_ddt. "
+                "Usa source_crop esattamente come il label del ritaglio fornito."
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        mime_type = "image/png"
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append({"type": "input_text", "text": f"Crop label: {crop_label}"})
+        content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Vision extraction request failed") from exc
+
+    return _parse_openai_json_payload(response.output_text)
+
+
+def _parse_openai_json_payload(payload: str) -> dict[str, dict[str, str | None]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from vision extraction")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from vision extraction") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected vision payload structure")
+
+    normalized: dict[str, dict[str, str | None]] = {}
+    for field_name in ("numero_certificato_ddt", "cdq", "colata", "peso", "diametro", "ordine"):
+        raw_field = data.get(field_name) or {}
+        if not isinstance(raw_field, dict):
+            raw_field = {"value": _string_or_none(raw_field), "evidence": None, "source_crop": None}
+        normalized[field_name] = {
+            "value": _string_or_none(raw_field.get("value")),
+            "evidence": _string_or_none(raw_field.get("evidence")),
+            "source_crop": _string_or_none(raw_field.get("source_crop")),
+        }
+    return normalized
 
 
 def _upsert_read_value_model(

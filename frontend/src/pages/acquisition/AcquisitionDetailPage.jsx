@@ -32,6 +32,7 @@ export default function AcquisitionDetailPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [processingVision, setProcessingVision] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
 
   useEffect(() => {
@@ -111,6 +112,25 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  async function handleProcessDdtVision() {
+    setProcessingVision(true);
+    setError("");
+    try {
+      const updatedRow = await apiRequest(
+        `/acquisition/rows/${rowId}/extract-ddt-vision`,
+        { method: "POST" },
+        token,
+      );
+      setRow(updatedRow);
+      const ddtData = await apiRequest(`/acquisition/documents/${updatedRow.ddt_document.id}`, {}, token);
+      setDdtDocument(ddtData);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingVision(false);
+    }
+  }
+
   async function handleOpenAsset(path, fileName) {
     setOpeningAsset(path);
     setError("");
@@ -146,14 +166,24 @@ export default function AcquisitionDetailPage() {
               Vista minima per DDT, certificato, blocchi tecnici, note ed evidenze del pilota.
             </p>
           </div>
-          <button
-            className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-            disabled={processing}
-            onClick={handleProcessMinimal}
-            type="button"
-          >
-            {processing ? "Processo in corso..." : "Processo minimo"}
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button
+              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              disabled={processingVision}
+              onClick={handleProcessDdtVision}
+              type="button"
+            >
+              {processingVision ? "Vision DDT..." : "Vision DDT"}
+            </button>
+            <button
+              className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+              disabled={processing}
+              onClick={handleProcessMinimal}
+              type="button"
+            >
+              {processing ? "Processo in corso..." : "Processo minimo"}
+            </button>
+          </div>
         </div>
 
         {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento riga...</p> : null}
