@@ -31,6 +31,12 @@ In particolare:
 Questo modulo NON definisce la struttura finale dei dati acquisiti.
 Definisce la conoscenza necessaria per capire come riconoscerli nei DDT reali.
 
+Questa conoscenza deve servire anche a:
+
+* unire correttamente DDT e certificati nella raccolta dati documentale
+* supportare il popolamento coerente del modulo `ddt_certificates_data_acquisition`
+* descrivere il lato DDT del legame documentale che porta alla futura riga acquisition
+
 ---
 
 ## 1. Scopo
@@ -57,6 +63,8 @@ per:
 * capire dove si trovano i dati chiave
 * definire regole documentali di riconoscimento
 * costruire una base di conoscenza documentale strutturata
+* contribuire al corretto collegamento tra riga DDT e certificato corretto
+* contribuire alla raccolta dati finale del modulo `ddt_certificates_data_acquisition`
 
 ---
 
@@ -305,6 +313,11 @@ Questa conoscenza serve per alimentare correttamente il modulo di acquisition, d
 * una riga logica di acquisizione corrisponde al materiale corretto
 * il collegamento DDT ↔ certificato dipende da questa associazione
 
+Più in generale:
+
+* il knowledge DDT e il knowledge certificati devono lavorare insieme
+* il loro obiettivo comune non è solo descrivere i documenti, ma permettere che i due documenti confluiscano nella stessa raccolta dati acquisition
+
 ---
 
 ## 9. ⚠️ Colata — caso critico
@@ -332,7 +345,116 @@ La `colata`, insieme al `cdq`, è una delle chiavi più importanti di collegamen
 
 ---
 
-## 10. Distinzione obbligatoria: dati stampati vs dati manuali
+## 10. Match reale DDT ↔ certificato
+
+Il collegamento corretto NON è:
+
+```plaintext
+DDT documento -> certificato documento
+```
+
+Il collegamento corretto è:
+
+```plaintext
+riga materiale del DDT -> certificato corretto o certificati candidati
+```
+
+### 10.1 Primo legame forte
+
+Il primo legame da comprendere è il soggetto che emette i documenti:
+
+* il DDT e il certificato devono appartenere allo stesso fornitore/emittente
+* questo è il primo vincolo di coerenza prima di valutare i campi tecnici
+
+Esempio osservato:
+
+* `Aluminium Bozen / Aluminium Bz - Sapa Bz`
+
+### 10.2 Campi forti di match da ricercare nel DDT
+
+Per ogni riga materiale Codex deve ricercare e descrivere, quando presenti:
+
+* numero certificato riportato sul DDT (`Cert. n°` o varianti)
+* `cdq` associato alla riga
+* `colata`
+* codice profilo / codice cliente
+* descrizione profilo / materiale
+* misura nominale (esempio: diametro)
+* lega e stato fisico
+* riferimento ordine
+* `cast` / `batch` / `charge` se presente
+* peso netto della riga o del blocco coerente
+
+### 10.3 Gerarchia pratica del match
+
+Nel caso reale il match verso il certificato corretto deve essere cercato con una logica di priorità, per esempio:
+
+1. stesso fornitore/emittente
+2. numero certificato riportato sul DDT, se presente
+3. coerenza tra codice profilo / codice cliente
+4. coerenza tra misura nominale
+5. coerenza tra lega e stato fisico
+6. coerenza tra ordine
+7. coerenza tra `cast` / `batch` / `charge`
+8. coerenza tra peso netto
+
+### 10.4 Varianti e scritture deboli
+
+Questi campi non devono essere confrontati in modo cieco.
+
+Codex deve osservare e registrare:
+
+* piccole varianti di scrittura
+* spazi mancanti o aggiunti
+* trattini e slash
+* inversione o trasposizione parziale di cifre
+* acronimi diversi per lo stesso concetto
+
+Questo vale in particolare per:
+
+* ordine
+* `cast`
+* `batch`
+* `charge`
+* codici profilo / cliente
+
+### 10.5 Peso netto come controllo di coerenza
+
+Il peso netto è un campo importante di collegamento tra riga DDT e certificato.
+
+Non deve essere trattato come chiave unica, ma come controllo forte di coerenza.
+
+Regola:
+
+* se il peso netto del certificato è coerente con il peso netto della riga o del blocco DDT, il match si rafforza
+
+### 10.6 Placeholder eccezioni per fornitore
+
+Le eccezioni di match non vanno hardcodate in astratto.
+
+Devono essere analizzate per fornitore/template.
+
+Esempio già noto:
+
+* `Leichtmetall`
+  * il peso effettivo da confrontare può richiedere la somma dei pesi di più righe dello stesso `batch`
+
+Placeholder da mantenere per ciascun fornitore/template:
+
+```plaintext
+Eccezioni di match DDT-certificato
+- uso del peso: diretto / somma / altro
+- uso del batch/cast/charge: obbligatorio / secondario / assente
+- uso dell'ordine: forte / medio / debole
+- varianti frequenti di scrittura
+- casi noti di mismatch apparente
+```
+
+Queste eccezioni devono essere aggiornate caso per caso nei file knowledge, non inventate in anticipo.
+
+---
+
+## 11. Distinzione obbligatoria: dati stampati vs dati manuali
 
 Codex deve sempre distinguere tra:
 
@@ -359,11 +481,11 @@ Questa distinzione deve essere esplicita nella base di conoscenza.
 
 ---
 
-## 11. Regole da derivare
+## 12. Regole da derivare
 
 Per ogni campo rilevante Codex deve definire:
 
-### 11.1 Pattern testuali
+### 12.1 Pattern testuali
 
 Esempi:
 

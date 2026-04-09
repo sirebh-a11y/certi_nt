@@ -32,6 +32,12 @@ In particolare:
 Questo modulo NON definisce la struttura finale dei dati acquisiti.
 Definisce la conoscenza necessaria per capire come riconoscerli nei certificati reali.
 
+Questa conoscenza deve servire anche a:
+
+* unire correttamente certificati e DDT nella raccolta dati documentale
+* supportare il popolamento coerente del modulo `ddt_certificates_data_acquisition`
+* descrivere il lato certificato del legame documentale che completa la futura riga acquisition
+
 ---
 
 ## 1. Scopo
@@ -58,6 +64,8 @@ per:
 * capire dove si trovano i dati chiave
 * definire regole documentali di riconoscimento
 * costruire una base di conoscenza documentale strutturata
+* contribuire al corretto collegamento tra certificato e riga DDT corretta
+* contribuire alla raccolta dati finale del modulo `ddt_certificates_data_acquisition`
 
 ---
 
@@ -296,6 +304,102 @@ Osservazione già confermata:
 * in alcuni template `C.d.Q.` e `Charge` compaiono insieme nella stessa area dell'intestazione tecnica
 * questo legame visivo/documentale deve essere descritto nel template
 
+### 6.4-bis Match con il DDT corretto
+
+Il certificato non deve essere pensato come documento isolato.
+
+Codex deve capire anche quali campi del certificato possono servire al match con la riga corretta del DDT.
+
+#### Primo vincolo di match
+
+Il primo vincolo è l'emittente:
+
+* DDT e certificato devono appartenere allo stesso fornitore/emittente
+
+Questo è il primo filtro prima di confrontare i campi tecnici.
+
+#### Campi forti da ricercare nel certificato per il match con il DDT
+
+Per ogni template certificato comprendere se e come compaiono:
+
+* numero certificato
+* `cdq`
+* `colata`
+* `cast` / `batch` / `charge`
+* codice profilo / codice cliente
+* descrizione profilo / materiale
+* misura nominale
+* lega e stato fisico
+* riferimento ordine cliente o ordine del fornitore
+* peso netto
+
+Regola importante:
+
+* nei certificati futuri caricati dall'utente NON bisogna assumere la presenza di `cdq` o `colata` scritti a mano
+* eventuali scritte manuali di questo tipo NON devono essere considerate base affidabile del match
+* il match deve basarsi prima di tutto sui campi documentali stampati/strutturati del certificato
+
+#### Regola pratica di match
+
+Il match corretto verso il DDT deve essere cercato in modo assistito, confrontando soprattutto:
+
+1. stesso fornitore/emittente
+2. numero certificato riportato sul DDT, se presente
+3. codice profilo / codice cliente
+4. misura nominale
+5. lega e stato fisico
+6. ordine
+7. `cast` / `batch` / `charge`
+8. peso netto
+
+#### Varianti di scrittura
+
+Codex deve descrivere anche le varianti che possono indebolire il match pur restando corrette, per esempio:
+
+* inversioni o trasposizioni parziali di cifre
+* spazi mancanti o aggiunti
+* trattini, slash o separatori diversi
+* sigle diverse per `cast`, `batch`, `charge`, `order`
+* piccole differenze di formattazione nei codici cliente o profilo
+
+Queste varianti sono particolarmente importanti per:
+
+* ordine
+* `cast`
+* `batch`
+* `charge`
+* codici profilo / cliente
+
+#### Peso netto come controllo forte
+
+Il peso netto del certificato deve essere trattato come controllo importante di coerenza con il DDT.
+
+Regola:
+
+* se il peso netto è coerente con la riga o con il blocco DDT, il match si rafforza
+
+#### Placeholder eccezioni per fornitore
+
+Le eccezioni di match devono essere registrate per fornitore/template.
+
+Esempio già noto:
+
+* `Leichtmetall`
+  * il peso effettivo da confrontare può richiedere la somma dei pesi di più righe con lo stesso `batch`
+
+Placeholder da mantenere:
+
+```plaintext
+Eccezioni di match certificato-DDT
+- uso del peso: diretto / somma / altro
+- uso del batch/cast/charge: obbligatorio / secondario / assente
+- uso dell'ordine: forte / medio / debole
+- varianti frequenti di scrittura
+- casi noti di mismatch apparente
+```
+
+Queste eccezioni vanno analizzate e mantenute caso per caso, a seconda del fornitore.
+
 ---
 
 ### 6.5 Standard e classificazione
@@ -454,6 +558,11 @@ Se nei certificati reali compaiono annotazioni manuali, Codex deve distinguerle 
 
 Le annotazioni manuali NON devono essere inventate né confuse con i dati tecnici originari.
 
+Regola pratica per il match:
+
+* eventuali annotazioni manuali contenenti `cdq` o `colata` non devono essere trattate come fonte standard del collegamento con il DDT
+* nei certificati futuri il sistema deve aspettarsi soprattutto dati stampati/strutturati, non scritte manuali di collegamento
+
 ---
 
 ### 6.11 Note del certificato
@@ -599,8 +708,9 @@ Questo modulo deve essere coerente con il fatto che:
 Questo modulo deve essere coerente con il fatto che:
 
 * DDT e certificati sono due fonti documentali diverse
-* il collegamento tra i due passa da campi critici come `cdq`, `colata`, materiale e fornitore
+* il collegamento tra i due passa da campi critici come `cdq`, `colata`, materiale, fornitore, ordine, `cast/batch/charge` e peso netto
 * i template certificato e i template DDT devono poter convivere nella stessa conoscenza di dominio
+* il knowledge certificati e il knowledge DDT devono essere pensati insieme per far confluire i due documenti nella stessa raccolta dati acquisition
 
 ---
 
