@@ -216,6 +216,8 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
         block_states=_compute_block_states(row),
+        match_state=row.certificate_match.stato if row.certificate_match is not None else ("proposto" if row.document_certificato_id is not None else "mancante"),
+        certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -391,7 +393,11 @@ def list_acquisition_rows(
 ) -> list[AcquisitionRowListItemResponse]:
     query = (
         db.query(AcquisitionRow)
-        .options(selectinload(AcquisitionRow.values), joinedload(AcquisitionRow.certificate_match))
+        .options(
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.certificate_match),
+            joinedload(AcquisitionRow.certificate_document),
+        )
         .order_by(AcquisitionRow.updated_at.desc(), AcquisitionRow.id.desc())
     )
     if stato_tecnico is not None:

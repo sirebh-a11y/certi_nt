@@ -82,6 +82,26 @@ function workflowLabel(value) {
   return value || "-";
 }
 
+function matchLabel(row) {
+  if (row.match_state === "confermato") {
+    return "Match confermato";
+  }
+  if (row.match_state === "proposto" || row.match_state === "cambiato") {
+    return "Match da verificare";
+  }
+  return "Match mancante";
+}
+
+function matchSecondaryLabel(row) {
+  if (row.certificate_file_name) {
+    return row.certificate_file_name;
+  }
+  if (row.document_certificato_id) {
+    return `Certificato ${row.document_certificato_id}`;
+  }
+  return "Nessun certificato";
+}
+
 function hasAttention(row) {
   return Object.values(row.block_states || {}).some((state) => state !== "verde");
 }
@@ -347,6 +367,19 @@ export default function AcquisitionListPage() {
                     {BLOCK_LABELS[key] || key} · {state}
                   </span>
                 ))}
+              </div>
+
+              <div className="mt-5 grid gap-3 lg:grid-cols-[1.5fr_auto] lg:items-center">
+                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.match || "rosso")}`}>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em]">Match Certificato</p>
+                  <p className="mt-2 text-sm font-semibold">{matchLabel(row)}</p>
+                  <p className="mt-1 text-xs opacity-80">{matchSecondaryLabel(row)}</p>
+                </div>
+                <div className="flex justify-start lg:justify-end">
+                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.match || "rosso")}`}>
+                    {row.block_states?.match || "rosso"}
+                  </span>
+                </div>
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">

@@ -371,6 +371,8 @@ class AcquisitionRowListItemResponse(BaseModel):
     priorita_operativa: str
     validata_finale: bool
     block_states: dict[str, str]
+    match_state: str
+    certificate_file_name: str | None
     created_at: datetime
     updated_at: datetime
 
