@@ -12,6 +12,23 @@ const BLOCK_LABELS = {
   note: "Note",
 };
 
+const DDT_CORE_FIELDS = [
+  "numero_certificato_ddt",
+  "cdq",
+  "colata",
+  "diametro",
+  "peso",
+  "ordine",
+];
+
+const BLOCK_DEFAULT_SOURCE = {
+  ddt: "ddt",
+  match: "ddt_certificato",
+  chimica: "certificato",
+  proprieta: "certificato",
+  note: "certificato",
+};
+
 function stateClasses(state) {
   if (state === "verde") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -20,6 +37,27 @@ function stateClasses(state) {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
   return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function readValueStateClasses(value) {
+  if (value?.stato === "confermato") {
+    return stateClasses("verde");
+  }
+  if (value?.stato === "corretto") {
+    return stateClasses("giallo");
+  }
+  if (value?.__missing) {
+    return stateClasses("rosso");
+  }
+  return stateClasses("giallo");
+}
+
+function valueDisplay(value) {
+  return value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
+}
+
+function fieldKey(block, field) {
+  return `${block}:${field}`;
 }
 
 export default function AcquisitionDetailPage() {
@@ -34,6 +72,8 @@ export default function AcquisitionDetailPage() {
   const [processing, setProcessing] = useState(false);
   const [processingVision, setProcessingVision] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
+  const [draftValues, setDraftValues] = useState({});
+  const [savingFieldKey, setSavingFieldKey] = useState("");
 
   useEffect(() => {
     let ignore = false;
@@ -86,25 +126,47 @@ export default function AcquisitionDetailPage() {
     return groups;
   }, [row]);
 
+  async function refreshRow(includeDocuments = false) {
+    const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
+    setRow(rowData);
+
+    if (includeDocuments) {
+      const requests = [apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token)];
+      if (rowData.certificate_document?.id) {
+        requests.push(apiRequest(`/acquisition/documents/${rowData.certificate_document.id}`, {}, token));
+      }
+      const [ddtData, certificateData] = await Promise.all(requests);
+      setDdtDocument(ddtData);
+      setCertificateDocument(certificateData || null);
+    }
+  }
+
+  function updateDraft(block, field, nextValue) {
+    const key = fieldKey(block, field);
+    setDraftValues((current) => ({
+      ...current,
+      [key]: nextValue,
+    }));
+  }
+
+  function getDraft(block, field, fallbackValue = "") {
+    const key = fieldKey(block, field);
+    if (Object.prototype.hasOwnProperty.call(draftValues, key)) {
+      return draftValues[key];
+    }
+    return fallbackValue;
+  }
+
   async function handleProcessMinimal() {
     setProcessing(true);
     setError("");
     try {
-      const updatedRow = await apiRequest(
+      await apiRequest(
         `/acquisition/rows/${rowId}/process-minimal`,
         { method: "POST" },
         token,
       );
-      setRow(updatedRow);
-
-      const [ddtData, certificateData] = await Promise.all([
-        apiRequest(`/acquisition/documents/${updatedRow.ddt_document.id}`, {}, token),
-        updatedRow.certificate_document?.id
-          ? apiRequest(`/acquisition/documents/${updatedRow.certificate_document.id}`, {}, token)
-          : Promise.resolve(null),
-      ]);
-      setDdtDocument(ddtData);
-      setCertificateDocument(certificateData);
+      await refreshRow(true);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -116,18 +178,117 @@ export default function AcquisitionDetailPage() {
     setProcessingVision(true);
     setError("");
     try {
-      const updatedRow = await apiRequest(
+      await apiRequest(
         `/acquisition/rows/${rowId}/extract-ddt-vision`,
         { method: "POST" },
         token,
       );
-      setRow(updatedRow);
-      const ddtData = await apiRequest(`/acquisition/documents/${updatedRow.ddt_document.id}`, {}, token);
-      setDdtDocument(ddtData);
+      await refreshRow(true);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setProcessingVision(false);
+    }
+  }
+
+  async function handleSaveValue(block, field, value) {
+    const key = fieldKey(block, field);
+    const currentDisplay = valueDisplay(value);
+    const nextValue = (getDraft(block, field, currentDisplay) || "").trim();
+
+    if (!nextValue) {
+      setError(`Inserisci un valore per ${field}.`);
+      return;
+    }
+
+    setSavingFieldKey(key);
+    setError("");
+    try {
+      const payload = value
+        ? {
+            blocco: block,
+            campo: field,
+            valore_grezzo: value.valore_grezzo || currentDisplay || nextValue,
+            valore_standardizzato: nextValue,
+            valore_finale: nextValue,
+            stato: "corretto",
+            document_evidence_id: value.document_evidence_id,
+            metodo_lettura: "utente",
+            fonte_documentale: value.fonte_documentale || BLOCK_DEFAULT_SOURCE[block] || "utente",
+            confidenza: value.confidenza,
+          }
+        : {
+            blocco: block,
+            campo: field,
+            valore_grezzo: nextValue,
+            valore_standardizzato: nextValue,
+            valore_finale: nextValue,
+            stato: "corretto",
+            document_evidence_id: null,
+            metodo_lettura: "utente",
+            fonte_documentale: BLOCK_DEFAULT_SOURCE[block] || "utente",
+            confidenza: null,
+          };
+
+      await apiRequest(
+        `/acquisition/rows/${rowId}/values`,
+        {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        },
+        token,
+      );
+      setDraftValues((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      await refreshRow(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingFieldKey("");
+    }
+  }
+
+  async function handleConfirmValue(value) {
+    const block = value.blocco;
+    const field = value.campo;
+    const key = fieldKey(block, field);
+    const display = valueDisplay(value);
+
+    if (!display) {
+      setError(`Nessun valore da confermare per ${field}.`);
+      return;
+    }
+
+    setSavingFieldKey(key);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/values`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            blocco: block,
+            campo: field,
+            valore_grezzo: value.valore_grezzo,
+            valore_standardizzato: value.valore_standardizzato || display,
+            valore_finale: value.valore_finale || value.valore_standardizzato || value.valore_grezzo,
+            stato: "confermato",
+            document_evidence_id: value.document_evidence_id,
+            metodo_lettura: value.metodo_lettura,
+            fonte_documentale: value.fonte_documentale || BLOCK_DEFAULT_SOURCE[block] || "utente",
+            confidenza: value.confidenza,
+          }),
+        },
+        token,
+      );
+      await refreshRow(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingFieldKey("");
     }
   }
 
@@ -229,7 +390,18 @@ export default function AcquisitionDetailPage() {
 
             <div className="grid gap-6 xl:grid-cols-2">
               {Object.entries(valuesByBlock).map(([block, values]) => (
-                <BlockPanel key={block} label={BLOCK_LABELS[block] || block} values={values} />
+                <BlockPanel
+                  key={block}
+                  block={block}
+                  label={BLOCK_LABELS[block] || block}
+                  values={values}
+                  expectedFields={block === "ddt" ? DDT_CORE_FIELDS : []}
+                  draftValues={draftValues}
+                  onDraftChange={updateDraft}
+                  onSaveValue={handleSaveValue}
+                  onConfirmValue={handleConfirmValue}
+                  savingFieldKey={savingFieldKey}
+                />
               ))}
             </div>
 
@@ -265,28 +437,86 @@ function InfoTile({ label, value }) {
   );
 }
 
-function BlockPanel({ label, values }) {
+function BlockPanel({
+  block,
+  label,
+  values,
+  expectedFields,
+  draftValues,
+  onDraftChange,
+  onSaveValue,
+  onConfirmValue,
+  savingFieldKey,
+}) {
+  const valueMap = new Map(values.map((value) => [value.campo, value]));
+  const extraValues = values.filter((value) => !expectedFields.includes(value.campo));
+  const orderedValues = expectedFields.map((field) => valueMap.get(field) || { blocco: block, campo: field, __missing: true });
+  const renderedValues = [...orderedValues, ...extraValues];
+
   return (
     <div className="rounded-2xl border border-border p-5">
       <h3 className="text-lg font-semibold">{label}</h3>
       <div className="mt-4 space-y-3">
-        {values.map((value) => (
-          <div className="rounded-2xl bg-slate-50 p-4" key={value.id}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                {value.campo}
-              </span>
-              <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(value.stato === "confermato" ? "verde" : "giallo")}`}>
-                {value.stato}
-              </span>
+        {renderedValues.map((value) => {
+          const key = fieldKey(block, value.campo);
+          const currentDisplay = valueDisplay(value);
+          const draftValue = Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay;
+          const isSaving = savingFieldKey === key;
+          const isMissing = Boolean(value.__missing);
+          const saveLabel = isMissing ? "Aggiungi" : "Salva";
+
+          return (
+            <div className="rounded-2xl bg-slate-50 p-4" key={key}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
+                  {value.campo}
+                </span>
+                <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${readValueStateClasses(value)}`}>
+                  {isMissing ? "mancante" : value.stato}
+                </span>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                <input
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none ring-0 transition focus:border-accent"
+                  onChange={(event) => onDraftChange(block, value.campo, event.target.value)}
+                  placeholder={isMissing ? "Inserisci valore" : "Correggi valore"}
+                  value={draftValue}
+                />
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                    disabled={isSaving}
+                    onClick={() => onSaveValue(block, value.campo, isMissing ? null : value)}
+                    type="button"
+                  >
+                    {isSaving ? "Salvataggio..." : saveLabel}
+                  </button>
+                  {!isMissing ? (
+                    <button
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
+                      disabled={isSaving || !currentDisplay}
+                      onClick={() => onConfirmValue(value)}
+                      type="button"
+                    >
+                      {value.stato === "confermato" ? "Riconferma" : "Conferma"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              {!isMissing ? (
+                <p className="mt-3 text-xs text-slate-500">
+                  Fonte {value.fonte_documentale} · Metodo {value.metodo_lettura}
+                </p>
+              ) : (
+                <p className="mt-3 text-xs text-slate-500">Campo non ancora valorizzato per questo blocco.</p>
+              )}
             </div>
-            <p className="mt-3 text-sm text-slate-800">{value.valore_finale || value.valore_standardizzato || value.valore_grezzo || "-"}</p>
-            <p className="mt-2 text-xs text-slate-500">
-              Fonte {value.fonte_documentale} · Metodo {value.metodo_lettura}
-            </p>
-          </div>
-        ))}
-        {!values.length ? <p className="text-sm text-slate-500">Nessun valore presente.</p> : null}
+          );
+        })}
+        {!renderedValues.length ? <p className="text-sm text-slate-500">Nessun valore presente.</p> : null}
       </div>
     </div>
   );

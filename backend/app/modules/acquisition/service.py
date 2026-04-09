@@ -585,6 +585,9 @@ def upsert_read_value(
         confidenza=payload.confidenza,
         actor_id=actor_id,
     )
+    if payload.blocco == "ddt":
+        _sync_row_from_ddt_values(db, row)
+        db.add(row)
     db.commit()
     db.refresh(read_value)
     return serialize_read_value(read_value)
