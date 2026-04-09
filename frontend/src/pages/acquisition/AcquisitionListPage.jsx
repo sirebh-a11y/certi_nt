@@ -32,17 +32,104 @@ function priorityClasses(priority) {
   return "bg-slate-200 text-slate-700";
 }
 
+const TECHNICAL_FILTERS = [
+  { value: "", label: "Tutti gli stati tecnici" },
+  { value: "rosso", label: "Tecnico rosso" },
+  { value: "giallo", label: "Tecnico giallo" },
+  { value: "verde", label: "Tecnico verde" },
+];
+
+const WORKFLOW_FILTERS = [
+  { value: "", label: "Tutti i workflow" },
+  { value: "nuova", label: "Nuova" },
+  { value: "in_lavorazione", label: "In lavorazione" },
+  { value: "riaperta", label: "Riaperta" },
+  { value: "validata_quality", label: "Validata quality" },
+];
+
+const PRIORITY_FILTERS = [
+  { value: "", label: "Tutte le priorità" },
+  { value: "alta", label: "Alta" },
+  { value: "media", label: "Media" },
+  { value: "bassa", label: "Bassa" },
+];
+
+const CERTIFICATE_FILTERS = [
+  { value: "", label: "DDT con e senza certificato" },
+  { value: "yes", label: "Con certificato" },
+  { value: "no", label: "Senza certificato" },
+];
+
+const ATTENTION_FILTERS = [
+  { value: "", label: "Tutte le righe" },
+  { value: "attention", label: "Solo con attenzione" },
+  { value: "validated", label: "Solo validate" },
+];
+
+function workflowLabel(value) {
+  if (value === "in_lavorazione") {
+    return "In lavorazione";
+  }
+  if (value === "validata_quality") {
+    return "Validata quality";
+  }
+  if (value === "riaperta") {
+    return "Riaperta";
+  }
+  if (value === "nuova") {
+    return "Nuova";
+  }
+  return value || "-";
+}
+
+function hasAttention(row) {
+  return Object.values(row.block_states || {}).some((state) => state !== "verde");
+}
+
+function rowSortScore(row) {
+  const priorityRank = row.priorita_operativa === "alta" ? 0 : row.priorita_operativa === "media" ? 1 : 2;
+  const technicalRank = row.stato_tecnico === "rosso" ? 0 : row.stato_tecnico === "giallo" ? 1 : 2;
+  const workflowRank = row.stato_workflow === "riaperta" ? 0 : row.stato_workflow === "in_lavorazione" ? 1 : row.stato_workflow === "nuova" ? 2 : 3;
+  const updatedAt = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+  return [priorityRank, technicalRank, workflowRank, -updatedAt, -row.id];
+}
+
 export default function AcquisitionListPage() {
   const { token } = useAuth();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [onlyOpen, setOnlyOpen] = useState(false);
+  const [technicalFilter, setTechnicalFilter] = useState("");
+  const [workflowFilter, setWorkflowFilter] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState("");
+  const [certificateFilter, setCertificateFilter] = useState("");
+  const [attentionFilter, setAttentionFilter] = useState("");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let ignore = false;
+    const queryParams = new URLSearchParams();
+    if (technicalFilter) {
+      queryParams.set("stato_tecnico", technicalFilter);
+    }
+    if (workflowFilter) {
+      queryParams.set("stato_workflow", workflowFilter);
+    }
+    if (priorityFilter) {
+      queryParams.set("priorita_operativa", priorityFilter);
+    }
+    if (certificateFilter === "yes") {
+      queryParams.set("has_certificate", "true");
+    } else if (certificateFilter === "no") {
+      queryParams.set("has_certificate", "false");
+    }
+    const path = queryParams.toString() ? `/acquisition/rows?${queryParams.toString()}` : "/acquisition/rows";
 
-    apiRequest("/acquisition/rows", {}, token)
+    setLoading(true);
+    setError("");
+
+    apiRequest(path, {}, token)
       .then((data) => {
         if (!ignore) {
           setRows(data.items);
@@ -62,14 +149,60 @@ export default function AcquisitionListPage() {
     return () => {
       ignore = true;
     };
-  }, [token]);
+  }, [certificateFilter, priorityFilter, technicalFilter, token, workflowFilter]);
 
   const visibleRows = useMemo(() => {
-    if (!onlyOpen) {
-      return rows;
+    const normalizedQuery = query.trim().toLowerCase();
+    let nextRows = rows;
+
+    if (onlyOpen) {
+      nextRows = nextRows.filter((row) => row.stato_workflow !== "validata_quality");
     }
-    return rows.filter((row) => row.stato_workflow !== "validata_quality");
-  }, [onlyOpen, rows]);
+
+    if (attentionFilter === "attention") {
+      nextRows = nextRows.filter((row) => hasAttention(row));
+    } else if (attentionFilter === "validated") {
+      nextRows = nextRows.filter((row) => row.validata_finale);
+    }
+
+    if (normalizedQuery) {
+      nextRows = nextRows.filter((row) => {
+        const haystack = [
+          row.cdq,
+          row.colata,
+          row.ordine,
+          row.peso,
+          row.diametro,
+          row.fornitore_raw,
+          row.fornitore_id,
+          row.id,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(normalizedQuery);
+      });
+    }
+
+    return [...nextRows].sort((left, right) => {
+      const leftScore = rowSortScore(left);
+      const rightScore = rowSortScore(right);
+      for (let index = 0; index < leftScore.length; index += 1) {
+        if (leftScore[index] !== rightScore[index]) {
+          return leftScore[index] - rightScore[index];
+        }
+      }
+      return 0;
+    });
+  }, [attentionFilter, onlyOpen, query, rows]);
+
+  const summary = useMemo(() => {
+    const total = rows.length;
+    const open = rows.filter((row) => row.stato_workflow !== "validata_quality").length;
+    const highPriority = rows.filter((row) => row.priorita_operativa === "alta").length;
+    const validated = rows.filter((row) => row.validata_finale).length;
+    return { total, open, highPriority, validated };
+  }, [rows]);
 
   return (
     <section className="space-y-6">
@@ -82,15 +215,88 @@ export default function AcquisitionListPage() {
               Cruscotto minimo per DDT, certificato, blocchi tecnici e note del pilota reader-acquisition.
             </p>
           </div>
-          <button
-            className={`rounded-xl border px-4 py-3 text-sm font-medium ${
-              onlyOpen ? "border-accent bg-accent/10 text-accent" : "border-border bg-white text-slate-600"
-            }`}
-            onClick={() => setOnlyOpen((value) => !value)}
-            type="button"
+          <div className="flex flex-wrap gap-3">
+            <button
+              className={`rounded-xl border px-4 py-3 text-sm font-medium ${
+                onlyOpen ? "border-accent bg-accent/10 text-accent" : "border-border bg-white text-slate-600"
+              }`}
+              onClick={() => setOnlyOpen((value) => !value)}
+              type="button"
+            >
+              {onlyOpen ? "Mostra tutte" : "Solo aperte"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <SummaryTile label="Totali" value={summary.total} tone="slate" />
+          <SummaryTile label="Aperte" value={summary.open} tone="amber" />
+          <SummaryTile label="Priorità alta" value={summary.highPriority} tone="rose" />
+          <SummaryTile label="Validate" value={summary.validated} tone="emerald" />
+        </div>
+
+        <div className="mt-6 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          <select
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setTechnicalFilter(event.target.value)}
+            value={technicalFilter}
           >
-            {onlyOpen ? "Mostra tutte" : "Solo aperte"}
-          </button>
+            {TECHNICAL_FILTERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setWorkflowFilter(event.target.value)}
+            value={workflowFilter}
+          >
+            {WORKFLOW_FILTERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setPriorityFilter(event.target.value)}
+            value={priorityFilter}
+          >
+            {PRIORITY_FILTERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setCertificateFilter(event.target.value)}
+            value={certificateFilter}
+          >
+            {CERTIFICATE_FILTERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setAttentionFilter(event.target.value)}
+            value={attentionFilter}
+          >
+            {ATTENTION_FILTERS.map((option) => (
+              <option key={option.value || "all"} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Cerca CDQ, colata, ordine..."
+            value={query}
+          />
         </div>
 
         {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento righe...</p> : null}
@@ -127,7 +333,10 @@ export default function AcquisitionListPage() {
                     {row.stato_tecnico}
                   </span>
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase text-slate-700">
-                    {row.stato_workflow}
+                    {workflowLabel(row.stato_workflow)}
+                  </span>
+                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(hasAttention(row) ? "giallo" : "rosso")}`}>
+                    {row.validata_finale ? "Validata" : "Da chiudere"}
                   </span>
                 </div>
               </div>
@@ -142,7 +351,9 @@ export default function AcquisitionListPage() {
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <p className="text-sm text-slate-500">
-                  DDT {row.document_ddt_id} {row.document_certificato_id ? `· Certificato ${row.document_certificato_id}` : "· Nessun certificato"}
+                  DDT {row.document_ddt_id} {row.document_certificato_id ? `· Certificato ${row.document_certificato_id}` : "· Nessun certificato"} ·
+                  {" "}
+                  {hasAttention(row) ? "Richiede attenzione" : "Pronta o validata"}
                 </p>
                 <Link className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700" to={`/acquisition/${row.id}`}>
                   Apri riga
@@ -165,6 +376,24 @@ function InfoTile({ label, value }) {
     <div className="rounded-2xl bg-slate-50 p-4">
       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
       <p className="mt-2 text-sm font-medium text-slate-800">{value}</p>
+    </div>
+  );
+}
+
+function SummaryTile({ label, value, tone }) {
+  const toneClasses =
+    tone === "emerald"
+      ? "bg-emerald-50 text-emerald-700"
+      : tone === "amber"
+        ? "bg-amber-50 text-amber-700"
+        : tone === "rose"
+          ? "bg-rose-50 text-rose-700"
+          : "bg-slate-50 text-slate-700";
+
+  return (
+    <div className={`rounded-2xl p-4 ${toneClasses}`}>
+      <p className="text-xs uppercase tracking-[0.2em] opacity-80">{label}</p>
+      <p className="mt-2 text-2xl font-semibold">{value}</p>
     </div>
   );
 }
