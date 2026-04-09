@@ -393,7 +393,7 @@ Questa decisione e' coerente con:
 * `ddt_certificates_data_acquisition.md`
 * il fatto che il DDT crea una o piu' righe
 * il fatto che uno o piu' certificati completano la riga
-* il fatto che il join reale passa da `cdq`, `colata`, peso e dimensione
+* il fatto che il join reale passa da campi documentali critici come `cdq`, `colata`, ordine, codici profilo/cliente, `batch/charge` e peso netto
 
 Quindi:
 
@@ -543,6 +543,7 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
    * `docs/modules/ddt_supplier_document_knowledge.md`
    * `docs/modules/certificates_supplier_document_knowledge.md`
 44. Nei file knowledge queste osservazioni devono restare semplici, ricorrenti e utili, non diventare un catalogo di singoli casi isolati.
+45. La regola concreta di aggregazione della riga acquisition non e' universale e deve essere capita nella fase knowledge leggendo insieme DDT e certificati, potendo dipendere da `batch`, `charge`, `colata` o altre combinazioni coerenti di materiale.
 
 ---
 
