@@ -21,6 +21,13 @@ const DDT_CORE_FIELDS = [
   "ordine",
 ];
 
+const NOTE_CORE_FIELDS = [
+  "nota_us_control_classe",
+  "nota_rohs",
+  "nota_radioactive_free",
+  "nota_libera_utente",
+];
+
 const BLOCK_DEFAULT_SOURCE = {
   ddt: "ddt",
   match: "ddt_certificato",
@@ -71,6 +78,7 @@ export default function AcquisitionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [processingVision, setProcessingVision] = useState(false);
+  const [processingNotes, setProcessingNotes] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
   const [draftValues, setDraftValues] = useState({});
   const [savingFieldKey, setSavingFieldKey] = useState("");
@@ -188,6 +196,23 @@ export default function AcquisitionDetailPage() {
       setError(requestError.message);
     } finally {
       setProcessingVision(false);
+    }
+  }
+
+  async function handleDetectNotes() {
+    setProcessingNotes(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/detect-notes`,
+        { method: "POST" },
+        token,
+      );
+      await refreshRow(true);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingNotes(false);
     }
   }
 
@@ -330,6 +355,14 @@ export default function AcquisitionDetailPage() {
           <div className="flex flex-wrap gap-3">
             <button
               className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              disabled={processingNotes || !row?.certificate_document}
+              onClick={handleDetectNotes}
+              type="button"
+            >
+              {processingNotes ? "Rilevo note..." : "Rileva note"}
+            </button>
+            <button
+              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={processingVision}
               onClick={handleProcessDdtVision}
               type="button"
@@ -395,7 +428,7 @@ export default function AcquisitionDetailPage() {
                   block={block}
                   label={BLOCK_LABELS[block] || block}
                   values={values}
-                  expectedFields={block === "ddt" ? DDT_CORE_FIELDS : []}
+                  expectedFields={block === "ddt" ? DDT_CORE_FIELDS : block === "note" ? NOTE_CORE_FIELDS : []}
                   draftValues={draftValues}
                   onDraftChange={updateDraft}
                   onSaveValue={handleSaveValue}
