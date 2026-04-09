@@ -403,6 +403,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     document_certificato_id: int | None
     cdq: str | None
     fornitore_id: int | None
+    fornitore_nome: str | None
     fornitore_raw: str | None
     lega_base: str | None
     lega_designazione: str | None
@@ -413,6 +414,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     peso: str | None
     ordine: str | None
     data_documento: date | None
+    ddt_data_upload: datetime | None
     note_documento: str | None
     stato_tecnico: str
     stato_workflow: str

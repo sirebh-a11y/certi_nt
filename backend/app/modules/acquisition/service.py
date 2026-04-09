@@ -236,6 +236,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         document_certificato_id=row.document_certificato_id,
         cdq=row.cdq,
         fornitore_id=row.fornitore_id,
+        fornitore_nome=row.supplier.ragione_sociale if row.supplier is not None else None,
         fornitore_raw=row.fornitore_raw,
         lega_base=row.lega_base,
         lega_designazione=row.lega_designazione,
@@ -246,6 +247,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         peso=_normalize_value_for_field("ddt", "peso", row.peso),
         ordine=row.ordine,
         data_documento=row.data_documento,
+        ddt_data_upload=row.ddt_document.data_upload if row.ddt_document is not None else None,
         note_documento=row.note_documento,
         stato_tecnico=row.stato_tecnico,
         stato_workflow=row.stato_workflow,
@@ -574,6 +576,62 @@ def _normalize_identity_text(value: str) -> str:
     return f" {normalized} "
 
 
+def _find_supplier_from_text(db: Session, raw_text: str | None) -> Supplier | None:
+    normalized_text = _normalize_identity_text(_string_or_none(raw_text) or "")
+    if not normalized_text.strip():
+        return None
+
+    suppliers = db.query(Supplier).options(joinedload(Supplier.aliases)).filter(Supplier.attivo.is_(True)).all()
+    best_supplier: Supplier | None = None
+    best_score = 0
+    second_score = 0
+
+    for supplier in suppliers:
+        aliases = [supplier.ragione_sociale] + [alias.nome_alias for alias in supplier.aliases if alias.attivo]
+        score = 0
+        for alias in aliases:
+            normalized_alias = _normalize_identity_text(alias)
+            if not normalized_alias or len(normalized_alias) < 4:
+                continue
+            if normalized_alias == normalized_text:
+                score = max(score, 100)
+            elif normalized_alias in normalized_text or normalized_text in normalized_alias:
+                score = max(score, min(80, 12 + len(normalized_alias)))
+        if score > best_score:
+            second_score = best_score
+            best_score = score
+            best_supplier = supplier
+        elif score > second_score:
+            second_score = score
+
+    if best_supplier is None:
+        return None
+    if best_score < 16:
+        return None
+    if second_score and best_score - second_score < 4:
+        return None
+    return best_supplier
+
+
+def _ensure_row_supplier_link(db: Session, row: AcquisitionRow) -> None:
+    if row.supplier is not None and row.fornitore_id is not None:
+        return
+
+    resolved_supplier = None
+    if row.ddt_document is not None and row.ddt_document.supplier is not None:
+        resolved_supplier = row.ddt_document.supplier
+    elif row.certificate_document is not None and row.certificate_document.supplier is not None:
+        resolved_supplier = row.certificate_document.supplier
+    elif row.fornitore_raw:
+        resolved_supplier = _find_supplier_from_text(db, row.fornitore_raw)
+
+    if resolved_supplier is None:
+        return
+
+    row.fornitore_id = resolved_supplier.id
+    row.supplier = resolved_supplier
+
+
 def index_document(db: Session, document: Document, actor_email: str | None = None) -> DocumentDetailResponse:
     document = _index_document_from_path(db, document)
     log_service.record("acquisition", f"Document indexed: {document.nome_file_originale}", actor_email)
@@ -840,8 +898,10 @@ def list_acquisition_rows(
         db.query(AcquisitionRow)
         .options(
             selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
             joinedload(AcquisitionRow.certificate_match),
-            joinedload(AcquisitionRow.certificate_document),
+            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
         )
         .order_by(AcquisitionRow.updated_at.desc(), AcquisitionRow.id.desc())
     )
@@ -857,15 +917,19 @@ def list_acquisition_rows(
         query = query.filter(AcquisitionRow.document_certificato_id.is_not(None))
     if has_certificate is False:
         query = query.filter(AcquisitionRow.document_certificato_id.is_(None))
-    return [serialize_acquisition_row_list_item(row) for row in query.all()]
+    rows = query.all()
+    for row in rows:
+        _ensure_row_supplier_link(db, row)
+    return [serialize_acquisition_row_list_item(row) for row in rows]
 
 
 def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
     row = (
         db.query(AcquisitionRow)
         .options(
-            joinedload(AcquisitionRow.ddt_document),
-            joinedload(AcquisitionRow.certificate_document),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
+            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
             selectinload(AcquisitionRow.evidences),
             selectinload(AcquisitionRow.values),
             selectinload(AcquisitionRow.certificate_match).selectinload(CertificateMatch.candidates),
@@ -877,6 +941,7 @@ def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
     )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acquisition row not found")
+    _ensure_row_supplier_link(db, row)
     return row
 
 

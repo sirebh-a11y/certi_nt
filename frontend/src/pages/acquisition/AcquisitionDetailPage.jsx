@@ -80,6 +80,10 @@ function stateClasses(state) {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+function displaySupplierName(row) {
+  return row.fornitore_nome || row.fornitore_raw || "-";
+}
+
 function readValueStateClasses(block, field, value) {
   if (isExplicitNullValue(block, field, value)) {
     return stateClasses("verde");
@@ -692,7 +696,7 @@ export default function AcquisitionDetailPage() {
                   </thead>
                   <tbody className="bg-white">
                     <tr>
-                      <td className="px-3 py-3 text-slate-900">{row.fornitore_raw || "-"}</td>
+                      <td className="px-3 py-3 text-slate-900">{displaySupplierName(row)}</td>
                       <td className="px-3 py-3 text-slate-800">{composeLega(row)}</td>
                       <td className="px-3 py-3 text-slate-800">{formatRowFieldDisplay("diametro", row.diametro) || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{row.cdq || "-"}</td>

@@ -33,26 +33,58 @@ function compactMatchReference(row) {
   return row.certificate_file_name.replace(/\.pdf$/i, "").slice(0, 12);
 }
 
-function stateTone(state) {
-  if (state === "accettato") {
-    return "bg-slate-400";
-  }
-  if (state === "verde") {
-    return "bg-emerald-500";
-  }
-  if (state === "giallo") {
-    return "bg-amber-500";
-  }
-  return "bg-rose-500";
-}
-
 function composeLega(row) {
   return row.lega_designazione || row.lega_base || row.variante_lega || "-";
+}
+
+function displaySupplierName(row) {
+  return row.fornitore_nome || row.fornitore_raw || "-";
+}
+
+function formatUploadDate(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function stateSurfaceClasses(state) {
+  if (state === "accettato") {
+    return "border-slate-300 bg-slate-100 text-slate-700";
+  }
+  if (state === "verde") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (state === "giallo") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  return "border-rose-200 bg-rose-50 text-rose-800";
+}
+
+function compactNoteReference(row) {
+  const noteValue = row.note_documento?.trim();
+  if (noteValue) {
+    return noteValue.length > 18 ? `${noteValue.slice(0, 18)}...` : noteValue;
+  }
+  return activityLabelFromState(row.block_states?.note || "rosso");
 }
 
 function searchableFieldValues(row) {
   return [
     row.id,
+    row.fornitore_nome,
     row.fornitore_raw,
     row.lega_designazione,
     row.lega_base,
@@ -128,6 +160,14 @@ function ddtFieldState(row, field) {
     return "rosso";
   }
   return "giallo";
+}
+
+function supplierFieldState(row) {
+  return displaySupplierName(row) !== "-" ? "verde" : "rosso";
+}
+
+function legaFieldState(row) {
+  return composeLega(row) && composeLega(row) !== "-" ? "verde" : "rosso";
 }
 
 function ddtCoreState(row) {
@@ -215,7 +255,7 @@ function rowFieldSortValue(row, field) {
     case "id":
       return row.id;
     case "fornitore":
-      return row.fornitore_raw || "";
+      return displaySupplierName(row);
     case "lega":
       return composeLega(row);
     case "diametro":
@@ -257,39 +297,32 @@ function RowStateCell({ row }) {
   const activity = rowActivityState(row);
 
   return (
-    <div className="min-w-[84px]">
-      <div className="flex items-center gap-2">
-        <StateDot state={activity.tone} />
-        <span className="text-xs font-semibold text-slate-700">{activity.label}</span>
+    <div className="min-w-[96px]">
+      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(activity.tone)}`}>
+        <span className="block text-xs font-semibold">{activity.label}</span>
       </div>
     </div>
   );
 }
 
-function StateDot({ state }) {
-  return <span className={`inline-block h-2.5 w-2.5 rounded-full ${stateTone(state)}`} />;
-}
-
 function DataCell({ value, state, secondary }) {
   return (
-    <div className="min-w-[90px]">
-      <div className="flex items-center gap-2">
-        <StateDot state={state} />
-        <span className="truncate text-sm font-medium text-slate-800">{value || "-"}</span>
+    <div className="min-w-[92px]">
+      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(state)}`}>
+        <span className="block truncate text-sm font-semibold">{value || "-"}</span>
+        {secondary ? <div className="mt-0.5 truncate text-[10px] opacity-75">{secondary}</div> : null}
       </div>
-      {secondary ? <div className="mt-1 truncate text-[11px] text-slate-500">{secondary}</div> : null}
     </div>
   );
 }
 
 function BlockCell({ label, state, secondary }) {
   return (
-    <div className="min-w-[88px]">
-      <div className="flex items-center gap-2">
-        <StateDot state={state} />
-        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700">{label}</span>
+    <div className="min-w-[100px]">
+      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(state)}`}>
+        <span className="block text-[11px] font-semibold uppercase tracking-[0.12em]">{label}</span>
+        <div className="mt-0.5 truncate text-[10px] opacity-75">{secondary}</div>
       </div>
-      <div className="mt-1 truncate text-[11px] text-slate-500">{secondary}</div>
     </div>
   );
 }
@@ -600,67 +633,63 @@ export default function AcquisitionListPage() {
                     tabIndex={0}
                   >
                     <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-700">{row.id}</td>
-                    <td className="min-w-[220px] max-w-[220px] px-3 py-3">
-                      <div className="truncate font-medium text-slate-900" title={row.fornitore_raw || "-"}>
-                        {row.fornitore_raw || "-"}
-                      </div>
+                    <td className="min-w-[220px] max-w-[220px] px-2 py-2">
+                      <DataCell
+                        state={supplierFieldState(row)}
+                        value={displaySupplierName(row)}
+                        secondary={row.ddt_data_upload ? `DDT ${formatUploadDate(row.ddt_data_upload)}` : ""}
+                      />
                     </td>
-                    <td className="max-w-[110px] px-3 py-3">
-                      <div className="truncate font-medium text-slate-800" title={composeLega(row)}>
-                        {composeLega(row)}
-                      </div>
+                    <td className="max-w-[110px] px-2 py-2">
+                      <DataCell state={legaFieldState(row)} value={composeLega(row)} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={ddtFieldState(row, "diametro")} value={formatRowFieldDisplay("diametro", row.diametro)} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={ddtFieldState(row, "cdq")} value={row.cdq} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={ddtFieldState(row, "colata")} value={row.colata} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={row.ddt ? "verde" : "rosso"} value={row.ddt || "-"} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={ddtFieldState(row, "peso")} value={formatRowFieldDisplay("peso", row.peso)} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <DataCell state={ddtFieldState(row, "ordine")} value={row.ordine} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <BlockCell
                         label={BLOCK_LABELS.match}
                         secondary={compactMatchReference(row)}
                         state={row.block_states?.match || "rosso"}
                       />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <BlockCell
                         label={BLOCK_LABELS.chimica}
                         secondary={activityLabelFromState(row.block_states?.chimica || "rosso")}
                         state={row.block_states?.chimica || "rosso"}
                       />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <BlockCell
                         label={BLOCK_LABELS.proprieta}
                         secondary={activityLabelFromState(row.block_states?.proprieta || "rosso")}
                         state={row.block_states?.proprieta || "rosso"}
                       />
                     </td>
-                    <td className="px-3 py-3">
-                      <div className="min-w-[140px]">
-                        <div className="flex items-center gap-2">
-                          <StateDot state={row.block_states?.note || "rosso"} />
-                          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700">Note</span>
-                        </div>
-                        <div className="mt-1 truncate text-[11px] text-slate-500" title={row.note_documento || activityLabelFromState(row.block_states?.note || "rosso")}>
-                          {row.note_documento || activityLabelFromState(row.block_states?.note || "rosso")}
-                        </div>
-                      </div>
+                    <td className="px-2 py-2">
+                      <BlockCell
+                        label={BLOCK_LABELS.note}
+                        secondary={compactNoteReference(row)}
+                        state={row.block_states?.note || "rosso"}
+                      />
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-2 py-2">
                       <RowStateCell row={row} />
                     </td>
                   </tr>
