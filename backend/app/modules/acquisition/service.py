@@ -17,11 +17,13 @@ from pypdf import PdfReader
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.logs.service import log_service
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
     AcquisitionRow,
     AcquisitionValueHistory,
+    AutonomousProcessingRun,
     CertificateMatch,
     CertificateMatchCandidate,
     Document,
@@ -31,6 +33,8 @@ from app.modules.acquisition.models import (
 )
 from app.modules.acquisition.schemas import (
     AcquisitionHistoryEventResponse,
+    AutonomousRunResponse,
+    AutonomousRunStartRequest,
     AcquisitionRowCreateRequest,
     AcquisitionRowDetailResponse,
     AcquisitionRowListItemResponse,
@@ -45,6 +49,7 @@ from app.modules.acquisition.schemas import (
     DocumentPageResponse,
     DocumentResponse,
     DocumentSummaryResponse,
+    MatchCandidateRequest,
     MatchCandidateResponse,
     MatchUpsertRequest,
     MatchResponse,
@@ -192,6 +197,33 @@ def serialize_value_history(entry: AcquisitionValueHistory) -> AcquisitionValueH
         valore_dopo=entry.valore_dopo,
         utente_id=entry.utente_id,
         timestamp=entry.timestamp,
+    )
+
+
+def serialize_autonomous_run(run: AutonomousProcessingRun) -> AutonomousRunResponse:
+    return AutonomousRunResponse(
+        id=run.id,
+        stato=run.stato,
+        fase_corrente=run.fase_corrente,
+        messaggio_corrente=run.messaggio_corrente,
+        totale_documenti_ddt=run.totale_documenti_ddt,
+        totale_documenti_certificato=run.totale_documenti_certificato,
+        totale_righe_target=run.totale_righe_target,
+        righe_create=run.righe_create,
+        righe_processate=run.righe_processate,
+        match_proposti=run.match_proposti,
+        chimica_rilevata=run.chimica_rilevata,
+        proprieta_rilevate=run.proprieta_rilevate,
+        note_rilevate=run.note_rilevate,
+        usa_ddt_vision=run.usa_ddt_vision,
+        current_row_id=run.current_row_id,
+        current_document_name=run.current_document_name,
+        ultimo_errore=run.ultimo_errore,
+        triggered_by_user_id=run.triggered_by_user_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        updated_at=run.updated_at,
     )
 
 
@@ -432,6 +464,233 @@ def create_document_page(db: Session, document: Document, payload: DocumentPageC
     db.commit()
     db.refresh(page)
     return serialize_document_page(page)
+
+
+def get_autonomous_run(db: Session, run_id: int) -> AutonomousProcessingRun:
+    run = db.get(AutonomousProcessingRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation run not found")
+    return run
+
+
+def start_autonomous_run(
+    db: Session,
+    *,
+    payload: AutonomousRunStartRequest,
+    actor_id: int,
+) -> AutonomousRunResponse:
+    ddt_document_ids = _normalize_document_id_list(payload.ddt_document_ids)
+    certificate_document_ids = _normalize_document_id_list(payload.certificate_document_ids)
+    if not ddt_document_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one DDT document")
+
+    _ensure_documents_type(db, ddt_document_ids, "ddt")
+    _ensure_documents_type(db, certificate_document_ids, "certificato")
+
+    active_run = (
+        db.query(AutonomousProcessingRun)
+        .filter(
+            AutonomousProcessingRun.triggered_by_user_id == actor_id,
+            AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")),
+        )
+        .order_by(AutonomousProcessingRun.created_at.desc(), AutonomousProcessingRun.id.desc())
+        .first()
+    )
+    if active_run is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="There is already an autonomous processing run in progress",
+        )
+
+    run = AutonomousProcessingRun(
+        stato="in_coda",
+        fase_corrente="in_attesa",
+        messaggio_corrente="In attesa di avvio della presa in carico automatica",
+        totale_documenti_ddt=len(ddt_document_ids),
+        totale_documenti_certificato=len(certificate_document_ids),
+        totale_righe_target=len(ddt_document_ids),
+        usa_ddt_vision=payload.usa_ddt_vision,
+        triggered_by_user_id=actor_id,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return serialize_autonomous_run(run)
+
+
+def run_autonomous_processing(
+    *,
+    run_id: int,
+    ddt_document_ids: list[int],
+    certificate_document_ids: list[int],
+    actor_id: int,
+    actor_email: str,
+    openai_api_key: str | None,
+    use_ddt_vision: bool,
+) -> None:
+    db = SessionLocal()
+    try:
+        run = get_autonomous_run(db, run_id)
+        _save_run(
+            db,
+            run,
+            stato="in_esecuzione",
+            fase_corrente="preparazione",
+            messaggio_corrente="Preparazione dei documenti caricati",
+            started_at=datetime.now(UTC),
+            ultimo_errore=None,
+        )
+
+        certificate_documents = [_get_document_of_type(db, document_id, "certificato") for document_id in certificate_document_ids]
+
+        for index, ddt_document_id in enumerate(ddt_document_ids, start=1):
+            ddt_document = _get_document_of_type(db, ddt_document_id, "ddt")
+            _save_run(
+                db,
+                run,
+                fase_corrente="riga_ddt",
+                current_document_name=ddt_document.nome_file_originale,
+                messaggio_corrente=f"Creo o recupero la riga {index}/{len(ddt_document_ids)} da {ddt_document.nome_file_originale}",
+            )
+
+            row, created = _ensure_autonomous_row(
+                db=db,
+                ddt_document=ddt_document,
+                actor_id=actor_id,
+                actor_email=actor_email,
+            )
+            row = get_acquisition_row(db, row.id)
+            if created:
+                _save_run(db, run, righe_create=run.righe_create + 1)
+
+            _save_run(db, run, current_row_id=row.id)
+
+            try:
+                _save_run(
+                    db,
+                    run,
+                    fase_corrente="lettura_ddt",
+                    messaggio_corrente=f"Leggo i campi DDT della riga #{row.id}",
+                )
+                extract_core_fields(db=db, row=row, actor_id=actor_id)
+                row = get_acquisition_row(db, row.id)
+
+                if use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
+                    _save_run(
+                        db,
+                        run,
+                        fase_corrente="vision_ddt",
+                        messaggio_corrente=f"Uso Vision DDT sulla riga #{row.id}",
+                    )
+                    try:
+                        extract_ddt_fields_with_vision(
+                            db=db,
+                            row=row,
+                            actor_id=actor_id,
+                            openai_api_key=openai_api_key,
+                        )
+                        row = get_acquisition_row(db, row.id)
+                    except HTTPException as exc:
+                        _save_run(
+                            db,
+                            run,
+                            ultimo_errore=str(exc.detail),
+                            messaggio_corrente=f"Vision DDT non riuscita su riga #{row.id}, continuo con il resto",
+                        )
+
+                _save_run(
+                    db,
+                    run,
+                    fase_corrente="match_certificato",
+                    messaggio_corrente=f"Cerco il certificato piu coerente per la riga #{row.id}",
+                )
+                matched = _auto_propose_certificate_match(
+                    db=db,
+                    row=row,
+                    certificate_documents=certificate_documents,
+                    actor_id=actor_id,
+                )
+                if matched:
+                    _save_run(db, run, match_proposti=run.match_proposti + 1)
+                    row = get_acquisition_row(db, row.id)
+
+                if row.document_certificato_id is not None:
+                    if not _block_has_confirmed_values(db, row.id, "chimica"):
+                        _save_run(
+                            db,
+                            run,
+                            fase_corrente="chimica",
+                            messaggio_corrente=f"Leggo la chimica del certificato per la riga #{row.id}",
+                        )
+                        detect_chemistry(db=db, row=row, actor_id=actor_id)
+                        row = get_acquisition_row(db, row.id)
+                        if _block_has_values(db, row.id, "chimica"):
+                            _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
+
+                    if not _block_has_confirmed_values(db, row.id, "proprieta"):
+                        _save_run(
+                            db,
+                            run,
+                            fase_corrente="proprieta",
+                            messaggio_corrente=f"Leggo le proprieta del certificato per la riga #{row.id}",
+                        )
+                        detect_properties(db=db, row=row, actor_id=actor_id)
+                        row = get_acquisition_row(db, row.id)
+                        if _block_has_values(db, row.id, "proprieta"):
+                            _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
+
+                    if not _block_has_confirmed_values(db, row.id, "note"):
+                        _save_run(
+                            db,
+                            run,
+                            fase_corrente="note",
+                            messaggio_corrente=f"Leggo le note standard del certificato per la riga #{row.id}",
+                        )
+                        detect_standard_notes(db=db, row=row, actor_id=actor_id)
+                        row = get_acquisition_row(db, row.id)
+                        if _block_has_values(db, row.id, "note"):
+                            _save_run(db, run, note_rilevate=run.note_rilevate + 1)
+            except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
+                db.rollback()
+                _save_run(
+                    db,
+                    run,
+                    ultimo_errore=str(exc),
+                    messaggio_corrente=f"Errore sulla riga #{row.id}: continuo con il resto",
+                )
+            finally:
+                _save_run(
+                    db,
+                    run,
+                    righe_processate=run.righe_processate + 1,
+                    current_row_id=row.id,
+                )
+
+        _save_run(
+            db,
+            run,
+            stato="completato",
+            fase_corrente="completato",
+            messaggio_corrente="Compilazione automatica completata. Ora puo intervenire quality.",
+            finished_at=datetime.now(UTC),
+        )
+        log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
+    except Exception as exc:  # pragma: no cover - defensive safeguard for background task
+        db.rollback()
+        run = db.get(AutonomousProcessingRun, run_id)
+        if run is not None:
+            _save_run(
+                db,
+                run,
+                stato="errore",
+                fase_corrente="errore",
+                messaggio_corrente="La presa in carico automatica si e interrotta",
+                ultimo_errore=str(exc),
+                finished_at=datetime.now(UTC),
+            )
+        log_service.record("acquisition", f"Autonomous processing failed: run {run_id}", actor_email)
+    finally:
+        db.close()
 
 
 def list_acquisition_rows(
@@ -1201,6 +1460,232 @@ def _resolve_supplier_id(
     return next(iter(supplier_ids), None)
 
 
+def _save_run(
+    db: Session,
+    run: AutonomousProcessingRun,
+    **updates: object,
+) -> AutonomousProcessingRun:
+    for field_name, value in updates.items():
+        setattr(run, field_name, value)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def _normalize_document_id_list(document_ids: list[int]) -> list[int]:
+    seen: set[int] = set()
+    normalized: list[int] = []
+    for document_id in document_ids:
+        if document_id in seen:
+            continue
+        seen.add(document_id)
+        normalized.append(document_id)
+    return normalized
+
+
+def _ensure_documents_type(db: Session, document_ids: list[int], expected_type: str) -> None:
+    for document_id in document_ids:
+        _get_document_of_type(db, document_id, expected_type)
+
+
+def _ensure_autonomous_row(
+    db: Session,
+    *,
+    ddt_document: Document,
+    actor_id: int,
+    actor_email: str,
+) -> tuple[AcquisitionRow, bool]:
+    existing_row = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
+        .order_by(AcquisitionRow.id.asc())
+        .first()
+    )
+    if existing_row is not None:
+        return get_acquisition_row(db, existing_row.id), False
+
+    supplier_name = ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None
+    created = create_acquisition_row(
+        db=db,
+        payload=AcquisitionRowCreateRequest(
+            document_ddt_id=ddt_document.id,
+            fornitore_id=ddt_document.fornitore_id,
+            fornitore_raw=supplier_name,
+        ),
+        actor_id=actor_id,
+        actor_email=actor_email,
+    )
+    return get_acquisition_row(db, created.id), True
+
+
+def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
+    values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt").all()
+    summary = _compute_ddt_field_summary_from_values(values)
+    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields()]
+    if not required_missing:
+        return False
+    ddt_document = get_document(db, row.document_ddt_id)
+    return any(page.immagine_pagina_storage_key for page in ddt_document.pages)
+
+
+def _block_has_values(db: Session, row_id: int, block: str) -> bool:
+    return (
+        db.query(ReadValue)
+        .filter(ReadValue.acquisition_row_id == row_id, ReadValue.blocco == block)
+        .first()
+        is not None
+    )
+
+
+def _block_has_confirmed_values(db: Session, row_id: int, block: str) -> bool:
+    return (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row_id,
+            ReadValue.blocco == block,
+            ReadValue.stato == "confermato",
+        )
+        .first()
+        is not None
+    )
+
+
+def _auto_propose_certificate_match(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    certificate_documents: list[Document],
+    actor_id: int,
+) -> bool:
+    if row.certificate_match is not None or row.document_certificato_id is not None:
+        return False
+
+    ddt_values = {
+        value.campo: _final_value_for_row(value)
+        for value in (
+            db.query(ReadValue)
+            .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+            .all()
+        )
+    }
+    ddt_certificate_number = ddt_values.get("numero_certificato_ddt") or row.cdq
+    same_supplier_documents = [
+        document
+        for document in certificate_documents
+        if row.fornitore_id is None or document.fornitore_id is None or row.fornitore_id == document.fornitore_id
+    ]
+
+    scored_candidates: list[dict[str, object]] = []
+    for certificate_document in certificate_documents:
+        candidate = _score_certificate_candidate(
+            db=db,
+            row=row,
+            certificate_document=certificate_document,
+            ddt_certificate_number=ddt_certificate_number,
+        )
+        if candidate is not None:
+            scored_candidates.append(candidate)
+
+    if not scored_candidates and len(same_supplier_documents) == 1:
+        scored_candidates.append(
+            {
+                "document": same_supplier_documents[0],
+                "score": 25,
+                "reason": "Unico certificato disponibile dello stesso fornitore",
+            }
+        )
+    if not scored_candidates:
+        return False
+
+    scored_candidates.sort(key=lambda item: (-int(item["score"]), int(item["document"].id)))
+    best_candidate = scored_candidates[0]
+    second_score = int(scored_candidates[1]["score"]) if len(scored_candidates) > 1 else 0
+    best_score = int(best_candidate["score"])
+    should_propose = (
+        best_score >= 80
+        or (best_score >= 45 and best_score - second_score >= 20)
+        or (len(scored_candidates) == 1 and best_score >= 35)
+        or (len(scored_candidates) == 1 and best_score >= 25 and str(best_candidate["reason"]).startswith("Unico certificato"))
+    )
+    if not should_propose:
+        return False
+
+    candidates = []
+    for rank, candidate in enumerate(scored_candidates[:3], start=1):
+        certificate_document = candidate["document"]
+        candidates.append(
+            MatchCandidateRequest(
+                document_certificato_id=certificate_document.id,
+                rank=rank,
+                motivo_breve=str(candidate["reason"]),
+                fonte_proposta="sistema",
+                stato="scelto" if rank == 1 else "candidato",
+            )
+        )
+
+    upsert_match(
+        db=db,
+        row=row,
+        payload=MatchUpsertRequest(
+            document_certificato_id=int(best_candidate["document"].id),
+            stato="proposto",
+            motivo_breve=str(best_candidate["reason"]),
+            fonte_proposta="sistema",
+            candidates=candidates,
+        ),
+        actor_id=actor_id,
+    )
+    return True
+
+
+def _score_certificate_candidate(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    certificate_document: Document,
+    ddt_certificate_number: str | None,
+) -> dict[str, object] | None:
+    if row.fornitore_id is not None and certificate_document.fornitore_id is not None and row.fornitore_id != certificate_document.fornitore_id:
+        return None
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+
+    matches = _detect_certificate_core_matches(certificate_document.pages)
+    certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
+    certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
+    certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
+
+    score = 0
+    reasons: list[str] = []
+
+    if _normalize_match_token(ddt_certificate_number) and _normalize_match_token(ddt_certificate_number) == _normalize_match_token(certificate_number):
+        score += 120
+        reasons.append("Numero certificato coerente")
+    if _normalize_match_token(row.colata) and _normalize_match_token(row.colata) == _normalize_match_token(certificate_cast):
+        score += 80
+        reasons.append("Colata coerente")
+    if _weights_are_compatible(row.peso, certificate_weight):
+        score += 20
+        reasons.append("Peso coerente")
+    if row.ordine and _document_contains_token(certificate_document.pages, row.ordine):
+        score += 25
+        reasons.append("Ordine coerente")
+    if row.diametro and _document_contains_token(certificate_document.pages, row.diametro):
+        score += 10
+        reasons.append("Diametro coerente")
+
+    if score <= 0:
+        return None
+
+    return {
+        "document": certificate_document,
+        "score": score,
+        "reason": ", ".join(reasons[:2]) or "Certificato plausibile",
+    }
+
+
 def _record_history_event(
     db: Session,
     acquisition_row_id: int,
@@ -1958,6 +2443,47 @@ def _extract_weight_from_line(line: str) -> str | None:
 
 def _normalize_weight(value: str) -> str:
     return value.replace(",", ".")
+
+
+def _normalize_match_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"[^A-Z0-9]", "", cleaned.upper())
+    return normalized or None
+
+
+def _parse_weight_number(value: str | None) -> float | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\d+(?:[.,]\d+)?", cleaned.replace(" ", ""))
+    if match is None:
+        return None
+    try:
+        return float(match.group(0).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _weights_are_compatible(row_weight: str | None, certificate_weight: str | None) -> bool:
+    left = _parse_weight_number(row_weight)
+    right = _parse_weight_number(certificate_weight)
+    if left is None or right is None:
+        return False
+    tolerance = max(0.02, max(abs(left), abs(right)) * 0.02)
+    return abs(left - right) <= tolerance
+
+
+def _document_contains_token(pages: list[DocumentPage], token: str | None) -> bool:
+    cleaned_token = _normalize_match_token(token)
+    if cleaned_token is None:
+        return False
+    for page in pages:
+        haystack = _normalize_match_token(page.testo_estratto or page.ocr_text or "")
+        if haystack and cleaned_token in haystack:
+            return True
+    return False
 
 
 def _string_or_none(value: str | int | None) -> str | None:

@@ -300,3 +300,38 @@ class AcquisitionValueHistory(Base):
     acquisition_row = relationship("AcquisitionRow", back_populates="value_history")
     value = relationship("ReadValue")
     user = relationship("User", foreign_keys=[utente_id])
+
+
+class AutonomousProcessingRun(Base):
+    __tablename__ = "acquisition_processing_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    stato: Mapped[str] = mapped_column(String(32), default="in_coda", nullable=False, index=True)
+    fase_corrente: Mapped[str] = mapped_column(String(64), default="in_attesa", nullable=False)
+    messaggio_corrente: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    totale_documenti_ddt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    totale_documenti_certificato: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    totale_righe_target: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    righe_create: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    righe_processate: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    match_proposti: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chimica_rilevata: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    proprieta_rilevate: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    note_rilevate: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usa_ddt_vision: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    current_row_id: Mapped[int | None] = mapped_column(ForeignKey("datimaterialeincoming.id"), nullable=True, index=True)
+    current_document_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ultimo_errore: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    triggered_by = relationship("User", foreign_keys=[triggered_by_user_id])
+    current_row = relationship("AcquisitionRow", foreign_keys=[current_row_id])

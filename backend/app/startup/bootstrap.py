@@ -11,6 +11,7 @@ from app.modules.acquisition.models import (  # noqa: F401
     AcquisitionHistoryEvent,
     AcquisitionRow,
     AcquisitionValueHistory,
+    AutonomousProcessingRun,
     CertificateMatch,
     CertificateMatchCandidate,
     Document,

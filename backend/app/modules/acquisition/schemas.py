@@ -20,6 +20,7 @@ DocumentSource = Literal["ddt", "certificato", "ddt_certificato", "utente", "db_
 MatchState = Literal["proposto", "confermato", "cambiato"]
 MatchSource = Literal["sistema", "chatgpt", "utente", "archivio"]
 CandidateState = Literal["candidato", "scartato", "scelto"]
+AutomationRunState = Literal["in_coda", "in_esecuzione", "completato", "errore"]
 
 
 def normalize_optional_text(value: str | None) -> str | None:
@@ -119,6 +120,39 @@ class DocumentBatchUploadResponse(BaseModel):
     failed_count: int
     uploaded: list[DocumentResponse]
     failed: list[DocumentBatchErrorResponse]
+
+
+class AutonomousRunStartRequest(BaseModel):
+    ddt_document_ids: list[int] = Field(default_factory=list)
+    certificate_document_ids: list[int] = Field(default_factory=list)
+    usa_ddt_vision: bool = True
+
+
+class AutonomousRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    stato: AutomationRunState
+    fase_corrente: str
+    messaggio_corrente: str | None
+    totale_documenti_ddt: int
+    totale_documenti_certificato: int
+    totale_righe_target: int
+    righe_create: int
+    righe_processate: int
+    match_proposti: int
+    chimica_rilevata: int
+    proprieta_rilevate: int
+    note_rilevate: int
+    usa_ddt_vision: bool
+    current_row_id: int | None
+    current_document_name: str | None
+    ultimo_errore: str | None
+    triggered_by_user_id: int | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    updated_at: datetime
 
 
 class AcquisitionRowCreateRequest(BaseModel):

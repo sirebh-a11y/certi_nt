@@ -1,10 +1,12 @@
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Query, UploadFile
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
 from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
+    AutonomousRunResponse,
+    AutonomousRunStartRequest,
     AcquisitionRowCreateRequest,
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
@@ -24,6 +26,7 @@ from app.modules.acquisition.schemas import (
     ReadValueUpsertRequest,
 )
 from app.modules.acquisition.service import (
+    get_autonomous_run,
     create_acquisition_row,
     create_document,
     create_document_page,
@@ -42,8 +45,11 @@ from app.modules.acquisition.service import (
     list_acquisition_rows,
     list_documents,
     process_row_minimal,
+    run_autonomous_processing,
     serialize_acquisition_row_detail,
     serialize_document_detail,
+    serialize_autonomous_run,
+    start_autonomous_run,
     upload_document,
     upload_documents_batch,
     upsert_match,
@@ -53,6 +59,35 @@ from app.modules.acquisition.service import (
 )
 
 router = APIRouter()
+
+
+@router.post("/automation/runs", response_model=AutonomousRunResponse)
+def start_automation_run_route(
+    payload: AutonomousRunStartRequest,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AutonomousRunResponse:
+    run = start_autonomous_run(db=db, payload=payload, actor_id=current_user.id)
+    openai_api_key = None
+    if current_user.openai_api_key_encrypted:
+        openai_api_key = decrypt_secret(current_user.openai_api_key_encrypted)
+    background_tasks.add_task(
+        run_autonomous_processing,
+        run_id=run.id,
+        ddt_document_ids=payload.ddt_document_ids,
+        certificate_document_ids=payload.certificate_document_ids,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        openai_api_key=openai_api_key,
+        use_ddt_vision=payload.usa_ddt_vision,
+    )
+    return run
+
+
+@router.get("/automation/runs/{run_id}", response_model=AutonomousRunResponse)
+def get_automation_run_route(run_id: int, _: CurrentUser, db: DbSession) -> AutonomousRunResponse:
+    return serialize_autonomous_run(get_autonomous_run(db, run_id))
 
 
 @router.get("/documents", response_model=DocumentListResponse)
