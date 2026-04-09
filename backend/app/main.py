@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.departments.router import router as departments_router
 from app.core.logs.router import router as logs_router
 from app.core.users.router import router as users_router
+from app.modules.acquisition.router import router as acquisition_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.startup.bootstrap import initialize_application
 
@@ -33,6 +34,7 @@ app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(departments_router, prefix="/api/departments", tags=["departments"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(suppliers_router, prefix="/api/suppliers", tags=["suppliers"])
+app.include_router(acquisition_router, prefix="/api/acquisition", tags=["acquisition"])
 
 
 @app.get("/api/health")

@@ -7,6 +7,17 @@ from app.core.logs.service import log_service
 from app.core.roles.constants import ROLE_ADMIN
 from app.core.security.passwords import hash_password
 from app.core.users.models import User
+from app.modules.acquisition.models import (  # noqa: F401
+    AcquisitionHistoryEvent,
+    AcquisitionRow,
+    AcquisitionValueHistory,
+    CertificateMatch,
+    CertificateMatchCandidate,
+    Document,
+    DocumentEvidence,
+    DocumentPage,
+    ReadValue,
+)
 from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
