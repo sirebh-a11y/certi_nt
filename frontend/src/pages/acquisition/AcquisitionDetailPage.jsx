@@ -28,6 +28,27 @@ const NOTE_CORE_FIELDS = [
   "nota_libera_utente",
 ];
 
+const CHEMISTRY_FIELD_ORDER = [
+  "Si",
+  "Fe",
+  "Cu",
+  "Mn",
+  "Mg",
+  "Cr",
+  "Ni",
+  "Zn",
+  "Ti",
+  "Pb",
+  "V",
+  "Bi",
+  "Sn",
+  "Zr",
+  "Be",
+  "Zr+Ti",
+  "Mn+Cr",
+  "Bi+Pb",
+];
+
 const BLOCK_DEFAULT_SOURCE = {
   ddt: "ddt",
   match: "ddt_certificato",
@@ -79,6 +100,7 @@ export default function AcquisitionDetailPage() {
   const [processing, setProcessing] = useState(false);
   const [processingVision, setProcessingVision] = useState(false);
   const [processingNotes, setProcessingNotes] = useState(false);
+  const [processingChemistry, setProcessingChemistry] = useState(false);
   const [processingMatch, setProcessingMatch] = useState(false);
   const [openingAsset, setOpeningAsset] = useState("");
   const [draftValues, setDraftValues] = useState({});
@@ -264,6 +286,23 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  async function handleDetectChemistry() {
+    setProcessingChemistry(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/detect-chemistry`,
+        { method: "POST" },
+        token,
+      );
+      await refreshRow(true);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingChemistry(false);
+    }
+  }
+
   async function handleSaveValue(block, field, value) {
     const key = fieldKey(block, field);
     const currentDisplay = valueDisplay(value);
@@ -316,6 +355,44 @@ export default function AcquisitionDetailPage() {
         delete next[key];
         return next;
       });
+      await refreshRow(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingFieldKey("");
+    }
+  }
+
+  async function handleCreateManualValue(block, field, nextValue) {
+    const key = fieldKey(block, field);
+    const cleanedValue = (nextValue || "").trim();
+    if (!cleanedValue) {
+      setError(`Inserisci un valore per ${field}.`);
+      return;
+    }
+
+    setSavingFieldKey(key);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/values`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            blocco: block,
+            campo: field,
+            valore_grezzo: cleanedValue,
+            valore_standardizzato: cleanedValue,
+            valore_finale: cleanedValue,
+            stato: "corretto",
+            document_evidence_id: null,
+            metodo_lettura: "utente",
+            fonte_documentale: BLOCK_DEFAULT_SOURCE[block] || "utente",
+            confidenza: null,
+          }),
+        },
+        token,
+      );
       await refreshRow(false);
     } catch (requestError) {
       setError(requestError.message);
@@ -411,6 +488,14 @@ export default function AcquisitionDetailPage() {
             </button>
             <button
               className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              disabled={processingChemistry || !row?.certificate_document}
+              onClick={handleDetectChemistry}
+              type="button"
+            >
+              {processingChemistry ? "Rilevo chimica..." : "Rileva chimica"}
+            </button>
+            <button
+              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={processingVision}
               onClick={handleProcessDdtVision}
               type="button"
@@ -488,7 +573,9 @@ export default function AcquisitionDetailPage() {
                   label={BLOCK_LABELS[block] || block}
                   values={values}
                   expectedFields={block === "ddt" ? DDT_CORE_FIELDS : block === "note" ? NOTE_CORE_FIELDS : []}
+                  chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
                   draftValues={draftValues}
+                  onCreateManualValue={handleCreateManualValue}
                   onDraftChange={updateDraft}
                   onSaveValue={handleSaveValue}
                   onConfirmValue={handleConfirmValue}
@@ -534,14 +621,27 @@ function BlockPanel({
   label,
   values,
   expectedFields,
+  chemistryFieldOrder,
   draftValues,
+  onCreateManualValue,
   onDraftChange,
   onSaveValue,
   onConfirmValue,
   savingFieldKey,
 }) {
   const valueMap = new Map(values.map((value) => [value.campo, value]));
-  const extraValues = values.filter((value) => !expectedFields.includes(value.campo));
+  const chemistryRank = (field) => {
+    const index = chemistryFieldOrder.indexOf(field);
+    return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+  };
+  const extraValues = values
+    .filter((value) => !expectedFields.includes(value.campo))
+    .sort((left, right) => {
+      if (block === "chimica") {
+        return chemistryRank(left.campo) - chemistryRank(right.campo) || left.campo.localeCompare(right.campo);
+      }
+      return left.campo.localeCompare(right.campo);
+    });
   const orderedValues = expectedFields.map((field) => valueMap.get(field) || { blocco: block, campo: field, __missing: true });
   const renderedValues = [...orderedValues, ...extraValues];
 
@@ -549,6 +649,9 @@ function BlockPanel({
     <div className="rounded-2xl border border-border p-5">
       <h3 className="text-lg font-semibold">{label}</h3>
       <div className="mt-4 space-y-3">
+        {block === "chimica" ? (
+          <ChemistryAdder chemistryFieldOrder={chemistryFieldOrder} onCreateValue={onCreateManualValue} />
+        ) : null}
         {renderedValues.map((value) => {
           const key = fieldKey(block, value.campo);
           const currentDisplay = valueDisplay(value);
@@ -729,6 +832,51 @@ function MatchPanel({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ChemistryAdder({ chemistryFieldOrder, onCreateValue }) {
+  const [field, setField] = useState(chemistryFieldOrder[0] || "");
+  const [value, setValue] = useState("");
+
+  async function handleAdd() {
+    if (!field || !value.trim()) {
+      return;
+    }
+    await onCreateValue("chimica", field, value);
+    setValue("");
+  }
+
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4">
+      <p className="text-sm font-medium text-slate-800">Aggiungi elemento chimico</p>
+      <div className="mt-3 grid gap-3 md:grid-cols-[1fr,1fr,auto]">
+        <select
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
+          onChange={(event) => setField(event.target.value)}
+          value={field}
+        >
+          {chemistryFieldOrder.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+        <input
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="0.07"
+          value={value}
+        />
+        <button
+          className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+          onClick={handleAdd}
+          type="button"
+        >
+          Aggiungi
+        </button>
+      </div>
     </div>
   );
 }

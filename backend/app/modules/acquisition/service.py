@@ -744,6 +744,66 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+
+    matches = _detect_chemistry_matches(certificate_document.pages)
+    if not matches:
+        _record_history_event(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="chimica",
+            azione="chimica_non_rilevata",
+            user_id=actor_id,
+        )
+        db.commit()
+        return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+    for field_name, match in matches.items():
+        evidence = _create_text_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=certificate_document.id,
+            document_page_id=match["page_id"],
+            blocco="chimica",
+            snippet=match["snippet"],
+            actor_id=actor_id,
+            confidence=0.88,
+        )
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="chimica",
+            campo=field_name,
+            valore_grezzo=match["raw"],
+            valore_standardizzato=match["standardized"],
+            valore_finale=match["final"],
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="pdf_text",
+            fonte_documentale="certificato",
+            confidenza=0.88,
+            actor_id=actor_id,
+        )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="chimica",
+        azione="chimica_rilevata",
+        user_id=actor_id,
+        nota_breve=", ".join(sorted(matches.keys())),
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
@@ -1642,6 +1702,97 @@ def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str |
                     "final": "true",
                 }
     return matches
+
+
+CHEMISTRY_FIELD_SET = {
+    "Si",
+    "Fe",
+    "Cu",
+    "Mn",
+    "Mg",
+    "Cr",
+    "Ni",
+    "Zn",
+    "Ti",
+    "Pb",
+    "V",
+    "Bi",
+    "Sn",
+    "Zr",
+    "Be",
+    "Al",
+    "Zr+Ti",
+    "Mn+Cr",
+    "Bi+Pb",
+}
+
+
+def _detect_chemistry_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        page_text = page.testo_estratto or page.ocr_text or ""
+        if not page_text:
+            continue
+        lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+        page_matches = _parse_chemistry_from_lines(lines, page.id)
+        for field_name, payload in page_matches.items():
+            matches.setdefault(field_name, payload)
+    return matches
+
+
+def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for index, line in enumerate(lines):
+        elements = _extract_chemistry_header(line)
+        if not elements:
+            continue
+
+        measurement_line = _find_chemistry_measurement_line(lines, index + 1, len(elements))
+        if measurement_line is None:
+            continue
+
+        values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", measurement_line, flags=re.IGNORECASE)
+        if len(values) < len(elements):
+            continue
+
+        for element, raw_value in zip(elements, values):
+            if raw_value in {"/", "Other", "other"}:
+                continue
+            standardized = raw_value.replace(",", ".")
+            matches.setdefault(
+                element,
+                {
+                    "page_id": page_id,
+                    "snippet": f"{line} | {measurement_line}",
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+    return matches
+
+
+def _extract_chemistry_header(line: str) -> list[str]:
+    if any(marker in line.lower() for marker in ("chemical composition", "composizione chimica", "alloy", "charge", "notes", "mechanical")):
+        return []
+    tokens = re.findall(r"[A-Z][a-z]?(?:\+[A-Z][a-z]?)?", line)
+    elements = [token for token in tokens if token in CHEMISTRY_FIELD_SET]
+    if len(elements) < 3:
+        return []
+    return elements
+
+
+def _find_chemistry_measurement_line(lines: list[str], start_index: int, expected_count: int) -> str | None:
+    for candidate in lines[start_index : min(start_index + 4, len(lines))]:
+        lowered = candidate.lower()
+        if lowered.startswith("min") or lowered.startswith("max"):
+            continue
+        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "charge", "notes", "mechanical")):
+            continue
+        values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
+        if len(values) >= min(expected_count, 3):
+            return candidate
+    return None
 
 
 def _detect_us_control_class(line: str) -> str | None:
