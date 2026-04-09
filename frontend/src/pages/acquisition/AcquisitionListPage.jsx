@@ -75,6 +75,8 @@ const DDT_FIELD_LABELS = {
   ordine: "Ordine",
 };
 
+const TECHNICAL_BLOCK_KEYS = ["chimica", "proprieta", "note"];
+
 function workflowLabel(value) {
   if (value === "in_lavorazione") {
     return "In lavorazione";
@@ -127,6 +129,36 @@ function ddtSummaryLabel(row) {
     return "DDT incompleto";
   }
   return "DDT da verificare";
+}
+
+function technicalOpenBlocks(row) {
+  return TECHNICAL_BLOCK_KEYS.filter((key) => (row.block_states?.[key] || "rosso") !== "verde");
+}
+
+function technicalCriticalBlocks(row) {
+  return TECHNICAL_BLOCK_KEYS.filter((key) => (row.block_states?.[key] || "rosso") === "rosso");
+}
+
+function technicalSummaryLabel(row) {
+  const critical = technicalCriticalBlocks(row);
+  const open = technicalOpenBlocks(row);
+  if (!open.length) {
+    return "Blocchi tecnici pronti";
+  }
+  if (critical.length) {
+    return "Criticità tecniche";
+  }
+  return "Blocchi tecnici da confermare";
+}
+
+function technicalSummaryTone(row) {
+  if (technicalCriticalBlocks(row).length) {
+    return "rosso";
+  }
+  if (technicalOpenBlocks(row).length) {
+    return "giallo";
+  }
+  return "verde";
 }
 
 function hasAttention(row) {
@@ -396,7 +428,7 @@ export default function AcquisitionListPage() {
                 ))}
               </div>
 
-              <div className="mt-5 grid gap-3 xl:grid-cols-2">
+              <div className="mt-5 grid gap-3 xl:grid-cols-3">
                 <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.ddt || "rosso")}`}>
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -437,6 +469,34 @@ export default function AcquisitionListPage() {
                       {row.block_states?.match || "rosso"}
                     </span>
                   </div>
+                </div>
+
+                <div className={`rounded-2xl border p-4 ${stateClasses(technicalSummaryTone(row))}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">Blocchi Tecnici</p>
+                      <p className="mt-2 text-sm font-semibold">{technicalSummaryLabel(row)}</p>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(technicalSummaryTone(row))}`}>
+                      {technicalOpenBlocks(row).length ? `${technicalOpenBlocks(row).length} aperti` : "ok"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {TECHNICAL_BLOCK_KEYS.map((key) => (
+                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.[key] || "rosso")}`} key={key}>
+                        {BLOCK_LABELS[key] || key} · {row.block_states?.[key] || "rosso"}
+                      </span>
+                    ))}
+                  </div>
+
+                  {technicalOpenBlocks(row).length ? (
+                    <p className="mt-3 text-xs font-medium opacity-90">
+                      Aperti: {technicalOpenBlocks(row).map((key) => BLOCK_LABELS[key] || key).join(", ")}
+                    </p>
+                  ) : (
+                    <p className="mt-3 text-xs font-medium opacity-90">Chimica, proprietà e note sono già pronte.</p>
+                  )}
                 </div>
               </div>
 
