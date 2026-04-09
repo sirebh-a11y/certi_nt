@@ -644,6 +644,15 @@ Bi+Pb:
   * se Bi e Pb presenti → Bi + Pb
   * altrimenti → NULL
 
+Placeholder da chiudere:
+
+* se il campo combinato e' presente nel certificato e anche gli elementi singoli sono presenti, va definita la regola di coerenza tra:
+  * valore combinato esplicito del certificato
+  * somma runtime degli elementi singoli
+* se il campo combinato NON e' presente e compare solo uno dei due elementi singoli, il combinato resta `NULL`
+* se uno o entrambi gli elementi singoli compaiono solo come `min` / `max` / limite e non come valore misurato, il combinato runtime resta `NULL`
+* se il certificato presenta piu' righe analisi o piu' contesti chimici, la verifica di coerenza del combinato deve avvenire solo sulla riga chimica gia' scelta come corretta per la riga acquisition
+
 ### Proprietà certificate
 
 Rp0.2 / Rm:

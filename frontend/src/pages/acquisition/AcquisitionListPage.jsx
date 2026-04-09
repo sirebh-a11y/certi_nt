@@ -50,6 +50,56 @@ function composeLega(row) {
   return row.lega_designazione || row.lega_base || row.variante_lega || "-";
 }
 
+function searchableFieldValues(row) {
+  return [
+    row.id,
+    row.fornitore_raw,
+    row.lega_designazione,
+    row.lega_base,
+    row.variante_lega,
+    row.diametro,
+    row.cdq,
+    row.colata,
+    row.ddt,
+    row.peso,
+    row.ordine,
+    row.certificate_file_name,
+    row.note_documento,
+  ]
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map((value) => String(value).toLowerCase());
+}
+
+function evaluateProgressiveFilter(values, query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return { active: false, matched: true, remainingValues: values };
+  }
+
+  const matchedIndexes = [];
+  values.forEach((value, index) => {
+    if (value.includes(normalizedQuery)) {
+      matchedIndexes.push(index);
+    }
+  });
+
+  return {
+    active: true,
+    matched: matchedIndexes.length > 0,
+    remainingValues: values.filter((_, index) => !matchedIndexes.includes(index)),
+  };
+}
+
+function combineFilterResults(first, second, operator) {
+  if (first === null) {
+    return second;
+  }
+  if (second === null) {
+    return first;
+  }
+  return operator === "or" ? first || second : first && second;
+}
+
 function parseSortableNumber(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -250,7 +300,11 @@ export default function AcquisitionListPage() {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [query, setQuery] = useState("");
+  const [queryOne, setQueryOne] = useState("");
+  const [queryTwo, setQueryTwo] = useState("");
+  const [queryThree, setQueryThree] = useState("");
+  const [operatorOne, setOperatorOne] = useState("and");
+  const [operatorTwo, setOperatorTwo] = useState("and");
   const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
@@ -287,29 +341,22 @@ export default function AcquisitionListPage() {
   }, [token]);
 
   const visibleRows = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
     let nextRows = rows;
 
-    if (normalizedQuery) {
+    if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
-        const haystack = [
-          row.id,
-          row.fornitore_raw,
-          row.lega_designazione,
-          row.lega_base,
-          row.diametro,
-          row.cdq,
-          row.colata,
-          row.ddt,
-          row.peso,
-          row.ordine,
-          row.certificate_file_name,
-          row.note_documento,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(normalizedQuery);
+        const baseValues = searchableFieldValues(row);
+        const firstResult = evaluateProgressiveFilter(baseValues, queryOne);
+        const secondResult = evaluateProgressiveFilter(firstResult.remainingValues, queryTwo);
+        const thirdResult = evaluateProgressiveFilter(secondResult.remainingValues, queryThree);
+
+        const firstMatch = firstResult.active ? firstResult.matched : null;
+        const secondMatch = secondResult.active ? secondResult.matched : null;
+        const thirdMatch = thirdResult.active ? thirdResult.matched : null;
+
+        const firstCombined = combineFilterResults(firstMatch, secondMatch, operatorOne);
+        const finalCombined = combineFilterResults(firstCombined, thirdMatch, operatorTwo);
+        return finalCombined ?? true;
       });
     }
 
@@ -334,7 +381,7 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [query, rows, sortConfig]);
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, sortConfig]);
 
   const summary = useMemo(() => {
     const total = rows.length;
@@ -433,18 +480,70 @@ export default function AcquisitionListPage() {
         <SummaryCell label="Logica attività" value="Placeholder" />
       </div>
 
-      <div className="grid gap-2 xl:max-w-xl">
-        <div className="min-w-0">
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search">
-            Ricerca
+      <div className="flex items-end gap-2 overflow-x-auto pb-1">
+        <div className="min-w-[220px] max-w-[220px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search-1">
+            Filtro 1
           </label>
           <input
-          className="rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
-          id="incoming-quality-search"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Fornitore, cdq, colata, ddt..."
-          value={query}
-        />
+            className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+            id="incoming-quality-search-1"
+            onChange={(event) => setQueryOne(event.target.value)}
+            placeholder="Tutti i campi"
+            value={queryOne}
+          />
+        </div>
+        <div className="min-w-[90px] max-w-[90px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-operator-1">
+            Logica
+          </label>
+          <select
+            className="w-full rounded-xl border border-border bg-white px-2 py-2 text-sm text-slate-700"
+            id="incoming-quality-operator-1"
+            onChange={(event) => setOperatorOne(event.target.value)}
+            value={operatorOne}
+          >
+            <option value="and">AND</option>
+            <option value="or">OR</option>
+          </select>
+        </div>
+        <div className="min-w-[220px] max-w-[220px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search-2">
+            Filtro 2
+          </label>
+          <input
+            className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+            id="incoming-quality-search-2"
+            onChange={(event) => setQueryTwo(event.target.value)}
+            placeholder="Campi non presi dal 1"
+            value={queryTwo}
+          />
+        </div>
+        <div className="min-w-[90px] max-w-[90px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-operator-2">
+            Logica
+          </label>
+          <select
+            className="w-full rounded-xl border border-border bg-white px-2 py-2 text-sm text-slate-700"
+            id="incoming-quality-operator-2"
+            onChange={(event) => setOperatorTwo(event.target.value)}
+            value={operatorTwo}
+          >
+            <option value="and">AND</option>
+            <option value="or">OR</option>
+          </select>
+        </div>
+        <div className="min-w-[220px] max-w-[220px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search-3">
+            Filtro 3
+          </label>
+          <input
+            className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+            id="incoming-quality-search-3"
+            onChange={(event) => setQueryThree(event.target.value)}
+            placeholder="Campi non presi da 1 e 2"
+            value={queryThree}
+          />
         </div>
       </div>
 

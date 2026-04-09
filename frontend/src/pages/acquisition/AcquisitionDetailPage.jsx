@@ -80,7 +80,10 @@ function stateClasses(state) {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
-function readValueStateClasses(value) {
+function readValueStateClasses(block, field, value) {
+  if (isExplicitNullValue(block, field, value)) {
+    return stateClasses("verde");
+  }
   if (value?.stato === "confermato") {
     return stateClasses("verde");
   }
@@ -96,6 +99,14 @@ function readValueStateClasses(value) {
 function valueDisplay(block, field, value) {
   const raw = value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
   return formatFieldDisplay(block, field, raw);
+}
+
+function valueHasPayload(block, field, value) {
+  return Boolean(valueDisplay(block, field, value));
+}
+
+function isExplicitNullValue(block, field, value) {
+  return Boolean(value && !value.__missing && !valueHasPayload(block, field, value));
 }
 
 function fieldKey(block, field) {
@@ -152,7 +163,10 @@ function workflowStepAction(row, step) {
   return "Non pronto";
 }
 
-function readValueStateLabel(value) {
+function readValueStateLabel(block, field, value) {
+  if (isExplicitNullValue(block, field, value)) {
+    return "null";
+  }
   if (value?.__missing) {
     return "non pronto";
   }
@@ -546,6 +560,44 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  async function handleSetNullValue(block, field, value) {
+    const key = fieldKey(block, field);
+
+    setSavingFieldKey(key);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/values`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            blocco: block,
+            campo: field,
+            valore_grezzo: null,
+            valore_standardizzato: null,
+            valore_finale: null,
+            stato: "confermato",
+            document_evidence_id: value?.document_evidence_id || null,
+            metodo_lettura: "utente",
+            fonte_documentale: value?.fonte_documentale || BLOCK_DEFAULT_SOURCE[block] || "utente",
+            confidenza: null,
+          }),
+        },
+        token,
+      );
+      setDraftValues((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      await refreshRow(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingFieldKey("");
+    }
+  }
+
   async function handleOpenAsset(path, fileName) {
     setOpeningAsset(path);
     setError("");
@@ -711,13 +763,22 @@ export default function AcquisitionDetailPage() {
                   block={block}
                   label={BLOCK_LABELS[block] || block}
                   values={valuesByBlock[block] || []}
-                  expectedFields={block === "ddt" ? DDT_CORE_FIELDS : block === "note" ? NOTE_CORE_FIELDS : []}
+                  expectedFields={
+                    block === "ddt"
+                      ? DDT_CORE_FIELDS
+                      : block === "note"
+                        ? NOTE_CORE_FIELDS
+                        : block === "chimica"
+                          ? CHEMISTRY_FIELD_ORDER
+                          : []
+                  }
                   chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
                   propertyFieldOrder={PROPERTY_FIELD_ORDER}
                   draftValues={draftValues}
                   onCreateManualValue={handleCreateManualValue}
                   onDraftChange={updateDraft}
                   onSaveValue={handleSaveValue}
+                  onSetNullValue={handleSetNullValue}
                   onConfirmValue={handleConfirmValue}
                   savingFieldKey={savingFieldKey}
                 />
@@ -783,6 +844,7 @@ function BlockPanel({
   onCreateManualValue,
   onDraftChange,
   onSaveValue,
+  onSetNullValue,
   onConfirmValue,
   savingFieldKey,
 }) {
@@ -818,9 +880,6 @@ function BlockPanel({
         <span className="text-xs text-slate-500">{renderedValues.length} campi</span>
       </div>
       <div className="space-y-3">
-        {block === "chimica" ? (
-          <ChemistryAdder chemistryFieldOrder={chemistryFieldOrder} onCreateValue={onCreateManualValue} />
-        ) : null}
         {block === "proprieta" ? (
           <PropertyAdder onCreateValue={onCreateManualValue} propertyFieldOrder={propertyFieldOrder} />
         ) : null}
@@ -842,6 +901,7 @@ function BlockPanel({
           const draftValue = Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay;
           const isSaving = savingFieldKey === key;
           const isMissing = Boolean(value.__missing);
+          const isExplicitNull = isExplicitNullValue(block, value.campo, value);
           const saveLabel = isMissing ? "Aggiungi" : "Salva";
 
           return (
@@ -856,8 +916,8 @@ function BlockPanel({
                 />
               </td>
               <td className="px-3 py-3">
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${readValueStateClasses(value)}`}>
-                  {readValueStateLabel(value)}
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${readValueStateClasses(block, value.campo, value)}`}>
+                  {readValueStateLabel(block, value.campo, value)}
                 </span>
               </td>
               <td className="px-3 py-3 text-xs text-slate-500">
@@ -881,6 +941,16 @@ function BlockPanel({
                       type="button"
                     >
                       {value.stato === "confermato" ? "Riconferma" : "Conferma"}
+                    </button>
+                  ) : null}
+                  {block === "chimica" ? (
+                    <button
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      disabled={isSaving}
+                      onClick={() => onSetNullValue(block, value.campo, isMissing || isExplicitNull ? null : value)}
+                      type="button"
+                    >
+                      Null
                     </button>
                   ) : null}
                 </div>
@@ -1034,7 +1104,7 @@ function ChemistryAdder({ chemistryFieldOrder, onCreateValue }) {
 
   return (
     <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
-      <p className="text-sm font-medium text-slate-800">Aggiungi elemento chimico</p>
+      <p className="text-sm font-medium text-slate-800">Aggiungi elemento chimico presente nel certificato</p>
       <div className="mt-3 grid gap-3 md:grid-cols-[1fr,1fr,auto]">
         <select
           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"

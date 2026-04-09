@@ -1726,25 +1726,25 @@ def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
 
 
 def _block_has_values(db: Session, row_id: int, block: str) -> bool:
-    return (
-        db.query(ReadValue)
-        .filter(ReadValue.acquisition_row_id == row_id, ReadValue.blocco == block)
-        .first()
-        is not None
-    )
+    values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row_id, ReadValue.blocco == block).all()
+    if block in {"chimica", "proprieta"}:
+        return any(_read_value_has_payload(value) for value in values)
+    return bool(values)
 
 
 def _block_has_confirmed_values(db: Session, row_id: int, block: str) -> bool:
-    return (
+    values = (
         db.query(ReadValue)
         .filter(
             ReadValue.acquisition_row_id == row_id,
             ReadValue.blocco == block,
             ReadValue.stato == "confermato",
         )
-        .first()
-        is not None
+        .all()
     )
+    if block in {"chimica", "proprieta"}:
+        return any(_read_value_has_payload(value) for value in values)
+    return bool(values)
 
 
 def _auto_propose_certificate_match(
@@ -1973,8 +1973,8 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
         "match": _compute_match_block_state(row),
-        "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
-        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
+        "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
+        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
         "note": _compute_value_block_state(values_by_block.get("note", [])),
     }
 
@@ -1994,8 +1994,8 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
-        "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
-        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
+        "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
+        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
         "note": _compute_value_block_state(values_by_block.get("note", [])),
     }
 
@@ -2017,10 +2017,11 @@ def _compute_match_block_state_from_match(
     return "rosso"
 
 
-def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso") -> str:
-    if not values:
+def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso", *, require_payload: bool = False) -> str:
+    effective_values = [value for value in values if _read_value_has_payload(value)] if require_payload else values
+    if not effective_values:
         return fallback
-    if all(value.stato == "confermato" for value in values):
+    if all(value.stato == "confermato" for value in effective_values):
         return "verde"
     return "giallo"
 
@@ -2621,6 +2622,17 @@ def _final_value_for_row(value: ReadValue | None) -> str | None:
         value.blocco,
         value.campo,
         value.valore_finale or value.valore_standardizzato or value.valore_grezzo,
+    )
+
+
+def _read_value_has_payload(value: ReadValue) -> bool:
+    return any(
+        _string_or_none(candidate) is not None
+        for candidate in (
+            _normalize_value_for_field(value.blocco, value.campo, value.valore_finale),
+            _normalize_value_for_field(value.blocco, value.campo, value.valore_standardizzato),
+            _string_or_none(value.valore_grezzo),
+        )
     )
 
 
