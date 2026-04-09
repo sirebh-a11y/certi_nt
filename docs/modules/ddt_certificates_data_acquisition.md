@@ -400,7 +400,13 @@ Campi ESCLUSI da questa entità:
 
 Lista controllata iniziale.
 
-La lista è ufficiale per l’avvio del sistema, ma deve poter essere estesa in futuro se emergono nuovi elementi reali o nuovi standard.
+La lista è ufficiale e bloccata per l’avvio del sistema, ma deve poter essere estesa in futuro solo quando emergono nuovi casi reali documentati.
+
+Nota importante:
+
+* questa lista non contiene solo elementi singoli
+* contiene anche campi combinati realmente osservati nei certificati
+* i campi combinati fanno parte del vocabolario controllato del sistema e NON devono essere inventati runtime nel livello `acquisition`
 
 Elenco ufficiale iniziale:
 
@@ -460,10 +466,42 @@ Struttura:
 
 Valori chimici letti dal certificato e associati alla riga acquisition.
 
+Questa parte va progettata in modo piu' rigoroso di una semplice tabella `elemento + valore`.
+
+La fonte di verita' del blocco `chimica` nel livello `acquisition` e':
+
+* il `valore_letto` con `blocco = chimica`
+* associato alla riga acquisition corretta
+* collegato alla sua evidenza documentale
+
+La tabella `proprietachimiche`, se mantenuta, deve essere intesa come proiezione normalizzata dei soli valori chimici effettivi/misurati del certificato.
+
+Regole obbligatorie:
+
+* salvare un solo valore per `riga acquisition + campo chimico`
+* il `campo chimico` deve appartenere al vocabolario controllato iniziale
+* salvare solo il valore effettivo/misurato riferito alla riga/cast/charge/colata corretta
+* NON salvare in `proprietachimiche` righe `min`, `max`, limiti, target o richiami normativi
+* NON calcolare in `acquisition` campi combinati assenti nel certificato
+* campi come `Zr+Ti`, `Mn+Cr`, `Bi+Pb` si salvano solo se compaiono davvero nel certificato
+* il `valore_grezzo` puo' contenere `%`, testo di riga o frammenti del certificato
+* il `valore_standardizzato` e il `valore_finale` devono contenere solo il numero, senza `%`
+* se il certificato contiene piu' analisi, piu' colate o piu' righe chimiche, va scelta solo quella coerente con la riga acquisition
+* se questa coerenza non e' chiara, il blocco `chimica` non deve essere considerato robusto automaticamente
+
+Unità implicita di sistema:
+
+* per i valori chimici l'unita' implicita e' `%`
+* l'unita' NON deve comparire nel valore mostrato in UI
+
 * `id` (PK)
 * `datimaterialeincoming_id` (FK)
 * `elemento_id` (FK)
-* `valore`
+* `valore_grezzo`
+* `valore_standardizzato`
+* `valore_finale`
+* `document_evidence_id` (o riferimento equivalente all'evidenza principale)
+* `stato`
 
 ---
 
@@ -539,9 +577,13 @@ Regola:
 
 ### 5.3 Chimica
 
-* salvare elementi singoli se presenti
-* salvare composti SOLO se presenti
+* salvare elementi singoli solo se presenti come valori effettivi/misurati
+* salvare composti/campi combinati SOLO se presenti esplicitamente nel certificato
 * non inventare elementi non presenti
+* non trasformare automaticamente righe `min` / `max` / target in valori acquisition
+* non confondere valore misurato con limite documentale
+* se esistono piu' righe chimiche, scegliere solo la riga coerente con la colata / cast / batch / charge corretta
+* se la coerenza non e' sufficientemente forte, la chimica resta da verificare
 
 ---
 
@@ -583,9 +625,23 @@ Il sistema può avere logiche runtime sui derivati, ma i derivati non entrano ne
 
 Zr+Ti:
 
-* se presente → usare valore salvato
+* se presente nel certificato → usare valore salvato
 * altrimenti:
   * se Zr e Ti presenti → Zr + Ti
+  * altrimenti → NULL
+
+Mn+Cr:
+
+* se presente nel certificato → usare valore salvato
+* altrimenti:
+  * se Mn e Cr presenti → Mn + Cr
+  * altrimenti → NULL
+
+Bi+Pb:
+
+* se presente nel certificato → usare valore salvato
+* altrimenti:
+  * se Bi e Pb presenti → Bi + Pb
   * altrimenti → NULL
 
 ### Proprietà certificate
@@ -607,6 +663,11 @@ Un valore derivato è calcolabile SOLO se:
 Altrimenti:
 
 → NULL
+
+Regola forte:
+
+* questi derivati appartengono alla logica runtime / vista derivata
+* NON devono riscrivere o sporcare il dato `acquisition` se il campo combinato non era presente nel certificato origine
 
 ---
 
