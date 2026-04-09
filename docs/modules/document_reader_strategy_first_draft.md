@@ -1443,3 +1443,70 @@ Solo dopo conviene disegnare in dettaglio:
 * tabelle DB
 * UI di revisione
 * interazione precisa con il modulo acquisition
+
+---
+
+## 20. Perimetro chiuso del primo pilota
+
+Per evitare espansione continua del modello, il primo pilota software deve avere un perimetro chiuso e dichiarato.
+
+### 20.1 Entra nel pilota 1
+
+Oggetti minimi:
+
+* `document`
+* `document_page`
+* `acquisition_row`
+* `match_certificato`
+* `valore_letto`
+* storico minimo
+
+UI minima `quality`:
+
+* lista righe
+* accesso ai blocchi
+* conferma/correzione
+* match certificato semplice
+
+Blocchi documentali minimi:
+
+* `DDT`
+* `Match`
+* `Chimica`
+* `Proprieta'`
+* `Note`
+
+Nota importante:
+
+* il blocco `Note` entra nel pilota 1 come gestione base di lettura, evidenza, correzione e conferma
+* il valore finale delle note puo' essere anche vuoto o `null`
+
+### 20.2 Entra in forma minima
+
+* `document_evidence`
+  * solo quanto basta per collegare prova e valore
+  * bbox, crop, testo o derivato essenziale
+* `match_certificato_candidato`
+  * solo se servono davvero candidati multipli nel workflow reale
+
+### 20.3 Resta fuori dal pilota 1
+
+* machine learning vero e proprio
+* analytics ricche sulle debolezze ricorrenti
+* motore note avanzato
+* standardizzazione avanzata delle note
+* workflow `administration`
+* gestione ricca di versioning documentale
+* logiche avanzate di derivati e crop multipli non necessari al caso reale iniziale
+
+### 20.4 Regola di chiusura del consolidato
+
+Se una scelta non e' necessaria per:
+
+* leggere i documenti
+* creare la riga acquisition
+* proporre il match
+* leggere i blocchi principali
+* permettere correzione e validazione `quality`
+
+allora deve restare fuori dal pilota 1 o come placeholder futuro.
