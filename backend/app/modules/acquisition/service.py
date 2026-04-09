@@ -541,10 +541,15 @@ def run_autonomous_processing(
             ultimo_errore=None,
         )
 
-        certificate_documents = [_get_document_of_type(db, document_id, "certificato") for document_id in certificate_document_ids]
+        ddt_documents = [_get_document_of_type(db, document_id, "ddt") for document_id in ddt_document_ids]
+        certificate_documents = _resolve_certificate_documents_for_automation(
+            db,
+            ddt_documents=ddt_documents,
+            explicit_certificate_document_ids=certificate_document_ids,
+        )
+        _save_run(db, run, totale_documenti_certificato=len(certificate_documents))
 
-        for index, ddt_document_id in enumerate(ddt_document_ids, start=1):
-            ddt_document = _get_document_of_type(db, ddt_document_id, "ddt")
+        for index, ddt_document in enumerate(ddt_documents, start=1):
             _save_run(
                 db,
                 run,
@@ -622,7 +627,7 @@ def run_autonomous_processing(
                             fase_corrente="chimica",
                             messaggio_corrente=f"Leggo la chimica del certificato per la riga #{row.id}",
                         )
-                        detect_chemistry(db=db, row=row, actor_id=actor_id)
+                        detect_chemistry(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
                         row = get_acquisition_row(db, row.id)
                         if _block_has_values(db, row.id, "chimica"):
                             _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
@@ -634,7 +639,7 @@ def run_autonomous_processing(
                             fase_corrente="proprieta",
                             messaggio_corrente=f"Leggo le proprieta del certificato per la riga #{row.id}",
                         )
-                        detect_properties(db=db, row=row, actor_id=actor_id)
+                        detect_properties(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
                         row = get_acquisition_row(db, row.id)
                         if _block_has_values(db, row.id, "proprieta"):
                             _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
@@ -1070,7 +1075,12 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
-def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+def detect_chemistry(
+    db: Session,
+    row: AcquisitionRow,
+    actor_id: int,
+    openai_api_key: str | None = None,
+) -> AcquisitionRowDetailResponse:
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -1081,6 +1091,16 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="chimica")
     matches = _detect_chemistry_matches(certificate_document.pages)
+    if openai_api_key and len(matches) < 4:
+        certificate_document = _ensure_document_page_images(db, certificate_document)
+        if _document_has_image_pages(certificate_document):
+            vision_matches = _detect_chemistry_matches_with_vision(
+                certificate_document.pages,
+                openai_api_key=openai_api_key,
+            )
+            if vision_matches:
+                for field_name, match in vision_matches.items():
+                    matches.setdefault(field_name, match)
     if not matches:
         _record_history_event(
             db=db,
@@ -1094,6 +1114,8 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
     for field_name, match in matches.items():
+        extraction_method = str(match.get("method") or "pdf_text")
+        confidence = 0.76 if extraction_method == "chatgpt" else 0.88
         evidence = _create_text_evidence(
             db=db,
             row_id=row.id,
@@ -1102,7 +1124,7 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
             blocco="chimica",
             snippet=match["snippet"],
             actor_id=actor_id,
-            confidence=0.88,
+            confidence=confidence,
         )
         _upsert_read_value_model(
             db=db,
@@ -1114,9 +1136,9 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
             valore_finale=match["final"],
             stato="proposto",
             document_evidence_id=evidence.id,
-            metodo_lettura="pdf_text",
+            metodo_lettura=extraction_method,
             fonte_documentale="certificato",
-            confidenza=0.88,
+            confidenza=confidence,
             actor_id=actor_id,
         )
 
@@ -1133,7 +1155,12 @@ def detect_chemistry(db: Session, row: AcquisitionRow, actor_id: int) -> Acquisi
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
-def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+def detect_properties(
+    db: Session,
+    row: AcquisitionRow,
+    actor_id: int,
+    openai_api_key: str | None = None,
+) -> AcquisitionRowDetailResponse:
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -1144,6 +1171,16 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="proprieta")
     matches = _detect_property_matches(certificate_document.pages)
+    if openai_api_key and len(matches) < 3:
+        certificate_document = _ensure_document_page_images(db, certificate_document)
+        if _document_has_image_pages(certificate_document):
+            vision_matches = _detect_property_matches_with_vision(
+                certificate_document.pages,
+                openai_api_key=openai_api_key,
+            )
+            if vision_matches:
+                for field_name, match in vision_matches.items():
+                    matches.setdefault(field_name, match)
     if not matches:
         _record_history_event(
             db=db,
@@ -1157,6 +1194,8 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
     for field_name, match in matches.items():
+        extraction_method = str(match.get("method") or "pdf_text")
+        confidence = 0.74 if extraction_method == "chatgpt" else 0.86
         evidence = _create_text_evidence(
             db=db,
             row_id=row.id,
@@ -1165,7 +1204,7 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
             blocco="proprieta",
             snippet=match["snippet"],
             actor_id=actor_id,
-            confidence=0.86,
+            confidence=confidence,
         )
         _upsert_read_value_model(
             db=db,
@@ -1177,9 +1216,9 @@ def detect_properties(db: Session, row: AcquisitionRow, actor_id: int) -> Acquis
             valore_finale=match["final"],
             stato="proposto",
             document_evidence_id=evidence.id,
-            metodo_lettura="pdf_text",
+            metodo_lettura=extraction_method,
             fonte_documentale="certificato",
-            confidenza=0.86,
+            confidenza=confidence,
             actor_id=actor_id,
         )
 
@@ -1339,6 +1378,7 @@ def extract_ddt_fields_with_vision(
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
         ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
 
     image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
     if not image_pages:
@@ -1489,6 +1529,31 @@ def _ensure_documents_type(db: Session, document_ids: list[int], expected_type: 
         _get_document_of_type(db, document_id, expected_type)
 
 
+def _resolve_certificate_documents_for_automation(
+    db: Session,
+    *,
+    ddt_documents: list[Document],
+    explicit_certificate_document_ids: list[int],
+) -> list[Document]:
+    documents_by_id: dict[int, Document] = {}
+
+    for document_id in explicit_certificate_document_ids:
+        document = _get_document_of_type(db, document_id, "certificato")
+        documents_by_id[document.id] = document
+
+    supplier_ids = {document.fornitore_id for document in ddt_documents if document.fornitore_id is not None}
+    repository_query = db.query(Document).filter(Document.tipo_documento == "certificato")
+    if supplier_ids:
+        repository_query = repository_query.filter(
+            (Document.fornitore_id.in_(supplier_ids)) | (Document.fornitore_id.is_(None))
+        )
+
+    for document in repository_query.order_by(Document.id.asc()).all():
+        documents_by_id.setdefault(document.id, document)
+
+    return list(documents_by_id.values())
+
+
 def _ensure_autonomous_row(
     db: Session,
     *,
@@ -1523,10 +1588,7 @@ def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
     values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt").all()
     summary = _compute_ddt_field_summary_from_values(values)
     required_missing = [field for field in summary["missing"] if field in _ddt_required_fields()]
-    if not required_missing:
-        return False
-    ddt_document = get_document(db, row.document_ddt_id)
-    return any(page.immagine_pagina_storage_key for page in ddt_document.pages)
+    return bool(required_missing)
 
 
 def _block_has_values(db: Session, row_id: int, block: str) -> bool:
@@ -1656,6 +1718,7 @@ def _score_certificate_candidate(
     certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
     certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
     certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
+    file_name_token = _normalize_match_token(certificate_document.nome_file_originale) or ""
 
     score = 0
     reasons: list[str] = []
@@ -1663,9 +1726,15 @@ def _score_certificate_candidate(
     if _normalize_match_token(ddt_certificate_number) and _normalize_match_token(ddt_certificate_number) == _normalize_match_token(certificate_number):
         score += 120
         reasons.append("Numero certificato coerente")
+    elif _normalize_match_token(ddt_certificate_number) and _normalize_match_token(ddt_certificate_number) in file_name_token:
+        score += 85
+        reasons.append("Numero certificato coerente (nome file)")
     if _normalize_match_token(row.colata) and _normalize_match_token(row.colata) == _normalize_match_token(certificate_cast):
         score += 80
         reasons.append("Colata coerente")
+    elif _normalize_match_token(row.colata) and _normalize_match_token(row.colata) in file_name_token:
+        score += 55
+        reasons.append("Colata coerente (nome file)")
     if _weights_are_compatible(row.peso, certificate_weight):
         score += 20
         reasons.append("Peso coerente")
@@ -1675,6 +1744,9 @@ def _score_certificate_candidate(
     if row.diametro and _document_contains_token(certificate_document.pages, row.diametro):
         score += 10
         reasons.append("Diametro coerente")
+    elif _normalize_match_token(row.diametro) and _normalize_match_token(row.diametro) in file_name_token:
+        score += 10
+        reasons.append("Diametro coerente (nome file)")
 
     if score <= 0:
         return None
@@ -1843,16 +1915,10 @@ def _compute_ddt_field_summary_from_values(values: list[ReadValue]) -> dict[str,
     missing: list[str] = []
 
     for field in _ddt_required_fields() + _ddt_optional_fields():
-        value = by_field.get(field)
-        has_payload = False
-        if value is not None:
-            has_payload = any(
-                _string_or_none(candidate) is not None
-                for candidate in (value.valore_finale, value.valore_standardizzato, value.valore_grezzo)
-            )
+        has_payload = _ddt_field_has_payload(by_field, field)
         if not has_payload:
             missing.append(field)
-        elif value is not None and value.stato == "confermato":
+        elif _ddt_field_is_confirmed(by_field, field):
             confirmed.append(field)
         else:
             pending.append(field)
@@ -1862,6 +1928,33 @@ def _compute_ddt_field_summary_from_values(values: list[ReadValue]) -> dict[str,
         "pending": pending,
         "missing": missing,
     }
+
+
+def _ddt_field_has_payload(by_field: dict[str, ReadValue], field: str) -> bool:
+    value = by_field.get(field)
+    if value is not None and any(
+        _string_or_none(candidate) is not None
+        for candidate in (value.valore_finale, value.valore_standardizzato, value.valore_grezzo)
+    ):
+        return True
+
+    if field == "cdq":
+        fallback_value = by_field.get("numero_certificato_ddt")
+        return fallback_value is not None and any(
+            _string_or_none(candidate) is not None
+            for candidate in (fallback_value.valore_finale, fallback_value.valore_standardizzato, fallback_value.valore_grezzo)
+        )
+    return False
+
+
+def _ddt_field_is_confirmed(by_field: dict[str, ReadValue], field: str) -> bool:
+    value = by_field.get(field)
+    if value is not None and value.stato == "confermato" and _ddt_field_has_payload(by_field, field):
+        return True
+    if field == "cdq":
+        fallback_value = by_field.get("numero_certificato_ddt")
+        return fallback_value is not None and fallback_value.stato == "confermato" and _ddt_field_has_payload(by_field, field)
+    return False
 
 
 def _ddt_required_fields() -> tuple[str, ...]:
@@ -1975,6 +2068,35 @@ def _extract_pdf_page_payloads(document: Document, storage_path: Path) -> list[d
     return page_payloads
 
 
+def _ensure_document_page_images(db: Session, document: Document) -> Document:
+    if any(page.immagine_pagina_storage_key for page in document.pages):
+        return document
+
+    storage_path = get_document_file_path(document)
+    if not _is_pdf_document(document, document.mime_type):
+        return document
+
+    fitz_doc = fitz.open(str(storage_path))
+    changed = False
+    try:
+        for page in document.pages:
+            if page.immagine_pagina_storage_key:
+                continue
+            fitz_page = fitz_doc.load_page(page.numero_pagina - 1)
+            page.immagine_pagina_storage_key = _render_page_image(document.storage_key, fitz_page, page.numero_pagina)
+            if page.stato_estrazione == "testo_pdf":
+                page.stato_estrazione = "testo_pdf_immagine_pronta"
+            db.add(page)
+            changed = True
+    finally:
+        fitz_doc.close()
+
+    if changed:
+        db.commit()
+        return get_document(db, document.id)
+    return document
+
+
 def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> str:
     relative_pdf_path = Path(storage_key)
     image_relative_path = Path("renders") / relative_pdf_path.parent / f"{relative_pdf_path.stem}_page_{page_number}.png"
@@ -2018,6 +2140,51 @@ def _build_ddt_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str 
 def _save_ddt_crop(page: DocumentPage, image: Image.Image, suffix: str) -> str:
     base_name = f"page_{page.numero_pagina}_{suffix}_{uuid4().hex[:12]}.png"
     relative_path = Path("crops") / "ddt_vision" / datetime.now(UTC).strftime("%Y/%m/%d") / base_name
+    absolute_path = _document_storage_root() / relative_path
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(absolute_path, format="PNG")
+    return relative_path.as_posix()
+
+
+def _document_has_image_pages(document: Document) -> bool:
+    return any(page.immagine_pagina_storage_key for page in document.pages)
+
+
+def _build_certificate_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        if not page.immagine_pagina_storage_key:
+            continue
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            width, height = image.size
+            crop_specs = [
+                ("body_upper", (0.10, 0.16, 0.92, 0.48)),
+                ("body_middle", (0.10, 0.34, 0.92, 0.70)),
+                ("body_lower", (0.10, 0.56, 0.92, 0.90)),
+            ]
+            for suffix, (left_ratio, top_ratio, right_ratio, bottom_ratio) in crop_specs:
+                left = int(width * left_ratio)
+                top = int(height * top_ratio)
+                right = int(width * right_ratio)
+                bottom = int(height * bottom_ratio)
+                if right <= left or bottom <= top:
+                    continue
+                crop = image.crop((left, top, right, bottom))
+                storage_key = _save_certificate_crop(page, crop, suffix)
+                crop_label = f"page{page.numero_pagina}_{suffix}"
+                crops[crop_label] = {
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"{left},{top},{right},{bottom}",
+                }
+    return crops
+
+
+def _save_certificate_crop(page: DocumentPage, image: Image.Image, suffix: str) -> str:
+    base_name = f"page_{page.numero_pagina}_{suffix}_{uuid4().hex[:12]}.png"
+    relative_path = Path("crops") / "certificate_vision" / datetime.now(UTC).strftime("%Y/%m/%d") / base_name
     absolute_path = _document_storage_root() / relative_path
     absolute_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(absolute_path, format="PNG")
@@ -2071,6 +2238,79 @@ def _extract_ddt_fields_from_openai(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Vision extraction request failed") from exc
 
     return _parse_openai_json_payload(response.output_text)
+
+
+def _extract_certificate_fields_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+    field_names: list[str],
+    instruction: str,
+) -> dict[str, dict[str, str | None]]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                f"{instruction} "
+                "Restituisci JSON puro. "
+                f"Usa solo queste chiavi: {', '.join(field_names)}. "
+                "Ogni chiave deve essere un oggetto con campi value, evidence, source_crop. "
+                "Usa null se il dato non e' leggibile o se sei incerto. "
+                "Usa source_crop esattamente come il label del ritaglio fornito. "
+                "Non inventare valori mancanti."
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        mime_type = "image/png"
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append({"type": "input_text", "text": f"Crop label: {crop_label}"})
+        content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Certificate vision extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_fields(response.output_text, field_names)
+
+
+def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from vision extraction")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from vision extraction") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected vision payload structure")
+
+    normalized: dict[str, dict[str, str | None]] = {}
+    for field_name in field_names:
+        raw_field = data.get(field_name) or {}
+        if not isinstance(raw_field, dict):
+            raw_field = {"value": _string_or_none(raw_field), "evidence": None, "source_crop": None}
+        normalized[field_name] = {
+            "value": _string_or_none(raw_field.get("value")),
+            "evidence": _string_or_none(raw_field.get("evidence")),
+            "source_crop": _string_or_none(raw_field.get("source_crop")),
+        }
+    return normalized
 
 
 def _parse_openai_json_payload(payload: str) -> dict[str, dict[str, str | None]]:
@@ -2582,6 +2822,74 @@ def _detect_property_matches(pages: list[DocumentPage]) -> dict[str, dict[str, s
             matches.setdefault(field_name, payload)
 
     return matches
+
+
+def _detect_chemistry_matches_with_vision(
+    pages: list[DocumentPage],
+    *,
+    openai_api_key: str,
+) -> dict[str, dict[str, str | int]]:
+    crops = _build_certificate_safe_crops(pages)
+    if not crops:
+        return {}
+    extracted = _extract_certificate_fields_from_openai(
+        crops,
+        openai_api_key=openai_api_key,
+        field_names=sorted(CHEMISTRY_FIELD_SET),
+        instruction=(
+            "Leggi solo i ritagli del corpo di un certificato materiale. "
+            "Cerca la tabella di composizione chimica e riporta solo gli elementi chiaramente leggibili."
+        ),
+    )
+    return _normalize_vision_numeric_matches(extracted, crops)
+
+
+def _detect_property_matches_with_vision(
+    pages: list[DocumentPage],
+    *,
+    openai_api_key: str,
+) -> dict[str, dict[str, str | int]]:
+    crops = _build_certificate_safe_crops(pages)
+    if not crops:
+        return {}
+    extracted = _extract_certificate_fields_from_openai(
+        crops,
+        openai_api_key=openai_api_key,
+        field_names=sorted(PROPERTY_FIELD_SET),
+        instruction=(
+            "Leggi solo i ritagli del corpo di un certificato materiale. "
+            "Cerca la tabella delle proprieta meccaniche o fisiche e riporta solo i valori chiaramente leggibili."
+        ),
+    )
+    return _normalize_vision_numeric_matches(extracted, crops)
+
+
+def _normalize_vision_numeric_matches(
+    extracted: dict[str, dict[str, str | None]],
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    normalized: dict[str, dict[str, str | int]] = {}
+    for field_name, payload in extracted.items():
+        raw_value = _string_or_none(payload.get("value"))
+        if raw_value is None:
+            continue
+        cleaned_value = raw_value.replace(",", ".").strip()
+        if not re.search(r"\d", cleaned_value):
+            continue
+        source_crop = _string_or_none(payload.get("source_crop"))
+        crop = crops.get(source_crop) if source_crop else None
+        page_id = int(crop["page_id"]) if crop and crop.get("page_id") is not None else 0
+        if page_id <= 0:
+            continue
+        normalized[field_name] = {
+            "page_id": page_id,
+            "snippet": _string_or_none(payload.get("evidence")) or raw_value,
+            "raw": raw_value,
+            "standardized": cleaned_value,
+            "final": cleaned_value,
+            "method": "chatgpt",
+        }
+    return normalized
 
 
 def _parse_properties_from_spec_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     mail_from_name: str = Field(default="CERTI_nt System", alias="MAIL_FROM_NAME")
     document_storage_root: str = Field(default="storage/documents", alias="DOCUMENT_STORAGE_ROOT")
     document_vision_model: str = Field(default="gpt-5.4", alias="DOCUMENT_VISION_MODEL")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
 
     @property
     def cors_origins(self) -> list[str]:

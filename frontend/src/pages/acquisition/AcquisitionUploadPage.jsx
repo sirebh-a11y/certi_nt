@@ -239,7 +239,7 @@ export default function AcquisitionUploadPage() {
                 {startingRun ? "Avvio in corso..." : "Avvia presa in carico automatica"}
               </button>
               <p className="self-center text-sm text-slate-500">
-                Vision DDT viene usata quando serve e quando l’utente ha una chiave OpenAI configurata.
+                Vision DDT viene usata quando serve e quando e disponibile una chiave OpenAI utente o di sistema.
               </p>
             </div>
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Query, UploadFile
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
+from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
@@ -61,6 +62,12 @@ from app.modules.acquisition.service import (
 router = APIRouter()
 
 
+def _resolve_openai_api_key(current_user: CurrentUser) -> str | None:
+    if current_user.openai_api_key_encrypted:
+        return decrypt_secret(current_user.openai_api_key_encrypted)
+    return settings.openai_api_key
+
+
 @router.post("/automation/runs", response_model=AutonomousRunResponse)
 def start_automation_run_route(
     payload: AutonomousRunStartRequest,
@@ -69,9 +76,7 @@ def start_automation_run_route(
     db: DbSession,
 ) -> AutonomousRunResponse:
     run = start_autonomous_run(db=db, payload=payload, actor_id=current_user.id)
-    openai_api_key = None
-    if current_user.openai_api_key_encrypted:
-        openai_api_key = decrypt_secret(current_user.openai_api_key_encrypted)
+    openai_api_key = _resolve_openai_api_key(current_user)
     background_tasks.add_task(
         run_autonomous_processing,
         run_id=run.id,
@@ -284,7 +289,7 @@ def detect_chemistry_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
-    return detect_chemistry(db=db, row=row, actor_id=current_user.id)
+    return detect_chemistry(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
 @router.post("/rows/{row_id}/detect-properties", response_model=AcquisitionRowDetailResponse)
@@ -294,7 +299,7 @@ def detect_properties_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
-    return detect_properties(db=db, row=row, actor_id=current_user.id)
+    return detect_properties(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
 @router.post("/rows/{row_id}/extract-core-fields", response_model=AcquisitionRowDetailResponse)
@@ -313,10 +318,10 @@ def extract_ddt_vision_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    if not current_user.openai_api_key_encrypted:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured for the current user")
+    openai_api_key = _resolve_openai_api_key(current_user)
+    if not openai_api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
     row = get_acquisition_row(db, row_id)
-    openai_api_key = decrypt_secret(current_user.openai_api_key_encrypted)
     return extract_ddt_fields_with_vision(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
