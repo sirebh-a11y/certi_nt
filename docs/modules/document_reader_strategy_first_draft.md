@@ -384,6 +384,78 @@ Senza ancora definire il DB finale, questo draft suggerisce di ragionare almeno 
 
 Rappresenta il PDF caricato e il suo contesto.
 
+Campi minimi da prevedere nel modello futuro:
+
+* `id`
+* `tipo_documento`
+* `fornitore_id`
+* `nome_file_originale`
+* `storage_key`
+* `hash_file`
+* `numero_pagine`
+* `data_upload`
+* `utente_upload`
+* `stato_elaborazione`
+
+Regola importante:
+
+* la riga acquisition deve poter riferire il PDF DDT specifico e il PDF certificato specifico realmente usati
+* non basta salvare solo `cdq`
+
+I file pesanti dovrebbero stare in storage/repository documentale, non nella tabella business principale.
+
+### 8.1-bis Document page
+
+Rappresenta la singola pagina del documento.
+
+Serve per:
+
+* OCR
+* testo PDF
+* render pagina
+* crop
+* masking
+* invio controllato a ChatGPT/OpenAI
+
+Campi minimi da prevedere:
+
+* `id`
+* `document_id`
+* `numero_pagina`
+* `larghezza`
+* `altezza`
+* `testo_estratto`
+* `ocr_text`
+* `immagine_pagina_storage_key`
+
+### 8.1-ter Document evidence
+
+Rappresenta la prova concreta usata per leggere, proporre o validare un dato.
+
+Esempi:
+
+* testo
+* crop
+* tabella
+* cella
+* bbox
+* pagina mascherata
+
+Campi minimi da prevedere:
+
+* `id`
+* `document_id`
+* `document_page_id`
+* `acquisition_row_id`
+* `blocco`
+* `tipo_evidenza`
+* `bbox`
+* `testo_grezzo`
+* `storage_key_derivato`
+* `metodo_estrazione`
+* `mascherato`
+* `confidenza`
+
 ### 8.2 Incoming row
 
 La vera unita' operativa del sistema deve essere la **riga incoming**.
@@ -403,10 +475,93 @@ Quindi:
 Placeholder di allineamento futuro:
 
 * il workflow reader e la UI sono fortemente centrati sulla `riga incoming`
-* il modello `acquisition` documentato oggi usa ancora una formulazione semplificata "una riga logica per `cdq`"
+* il modello `acquisition` deve restare centrato sulla riga materiale / acquisition row
 * questo punto dovra' essere riallineato in un passaggio successivo, senza forzarlo in questo draft
 
-### 8.3 Field evidence
+### 8.3 Repository documentale minimo
+
+Il lettore deve essere pensato insieme a un repository documentale minimo.
+
+Base minima consigliata:
+
+* `document`
+* `document_page`
+* `document_evidence`
+* `acquisition_row`
+
+Questa base e' il punto in cui si incontrano:
+
+* tracciabilita' documentale
+* OCR
+* masking
+* ChatGPT/OpenAI
+* validazione utente
+* futuro machine learning
+
+### 8.4 Valore letto
+
+Accanto alla prova documentale serve un oggetto che rappresenti il dato proposto.
+
+Campi minimi da prevedere:
+
+* `id`
+* `acquisition_row_id`
+* `blocco`
+* `campo`
+* `valore_grezzo`
+* `valore_standardizzato`
+* `valore_finale`
+* `stato`
+* `document_evidence_id` principale
+* `metodo_lettura`
+* `fonte_documentale`
+* `confidenza`
+
+Valori iniziali utili di `fonte_documentale`:
+
+* `ddt`
+* `certificato`
+* `ddt_certificato`
+* `utente`
+* `db_esterno`
+* `calcolato`
+
+Regola:
+
+* ogni valore ha una evidenza principale
+* puo' avere anche evidenze secondarie
+
+### 8.5 Match certificato
+
+Il `match_certificato` non dovrebbe essere trattato come un semplice valore letto.
+
+E' un oggetto separato ma leggero, per non appesantire l'utente.
+
+Campi minimi da prevedere:
+
+* `id`
+* `acquisition_row_id`
+* `document_certificato_id`
+* `stato`
+* `motivo_breve`
+* `fonte_proposta`
+* `utente_conferma`
+* `timestamp`
+
+Eventuali candidati alternativi possono stare in una struttura separata e leggera:
+
+* `match_certificato_candidato`
+
+con campi minimi tipo:
+
+* `match_certificato_id`
+* `document_certificato_id`
+* `rank`
+* `motivo_breve`
+* `fonte_proposta`
+* `stato`
+
+### 8.6 Field evidence
 
 Rappresenta la prova osservata nel documento.
 
@@ -418,11 +573,11 @@ Esempi:
 * nota
 * annotazione manuale
 
-### 8.4 Field resolution
+### 8.7 Field resolution
 
 Rappresenta il valore finale deciso dal sistema o confermato dall'utente.
 
-### 8.5 Section status
+### 8.8 Section status
 
 Ogni riga deve essere composta da sezioni funzionali con stato autonomo, per esempio:
 
@@ -441,7 +596,7 @@ Ogni sezione deve avere:
 * correzioni
 * validazione
 
-### 8.6 Row status
+### 8.9 Row status
 
 Ogni riga deve avere anche uno stato globale.
 

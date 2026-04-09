@@ -93,8 +93,13 @@ Questo livello NON fa parte del modello `acquisition`.
 
 ## 3. Entità principali
 
-* Certificato (CDQ)
+* Documento
+* Pagina documento
+* Evidenza documentale
+* Match certificato
+* Candidati match certificato
 * Dati materiale acquisition
+* Valori letti
 * Proprietà chimiche
 * Proprietà certificate
 
@@ -117,6 +122,167 @@ Nota importante:
 
 ## 4. Modello dati (`acquisition`)
 
+### 4.0 Livello repository documentale minimo
+
+Per supportare:
+
+* tracciabilita' documentale reale
+* audit
+* validazione utente
+* futuro machine learning
+
+il modulo deve prevedere anche un repository documentale minimo.
+
+Regola architetturale:
+
+* il DB business non deve contenere direttamente i file pesanti
+* PDF originali, immagini pagina e crop devono stare in storage/repository documentale dedicato
+* il DB deve salvare riferimenti, hash, metadati e collegamenti logici
+
+#### 4.0.1 document
+
+Rappresenta un file sorgente caricato.
+
+Puo' essere:
+
+* `ddt`
+* `certificato`
+
+Campi minimi:
+
+* `id`
+* `tipo_documento`
+* `fornitore_id` (nullable finche' il mapping non e' completato)
+* `nome_file_originale`
+* `storage_key`
+* `hash_file`
+* `mime_type`
+* `numero_pagine`
+* `data_upload`
+* `utente_upload`
+* `stato_elaborazione`
+* `origine_upload`
+* `documento_padre_id` (nullable, per derivati/versioni future)
+
+Nota importante:
+
+* la riga acquisition deve poter salvare il riferimento specifico al PDF DDT e al PDF certificato realmente usati
+* non basta salvare solo `cdq` o numero DDT
+
+#### 4.0.2 document_page
+
+Rappresenta una pagina del documento.
+
+Serve per:
+
+* OCR
+* testo PDF
+* coordinate
+* crop
+* masking
+* invio controllato a ChatGPT/OpenAI
+
+Campi minimi:
+
+* `id`
+* `document_id`
+* `numero_pagina`
+* `larghezza`
+* `altezza`
+* `rotazione` (nullable)
+* `testo_estratto` (nullable)
+* `ocr_text` (nullable)
+* `immagine_pagina_storage_key` (nullable)
+* `stato_estrazione`
+* `hash_render` (nullable)
+
+#### 4.0.3 document_evidence
+
+Rappresenta la prova concreta usata dal reader o dall'utente.
+
+Campi minimi:
+
+* `id`
+* `document_id`
+* `document_page_id`
+* `acquisition_row_id` (nullable)
+* `blocco`
+* `tipo_evidenza`
+* `bbox` (nullable)
+* `testo_grezzo` (nullable)
+* `storage_key_derivato` (nullable)
+* `metodo_estrazione`
+* `mascherato`
+* `confidenza` (nullable)
+* `data_creazione`
+* `utente_creazione` (nullable)
+
+#### 4.0.4 valore_letto
+
+Rappresenta il dato proposto, standardizzato e poi eventualmente confermato.
+
+Campi minimi:
+
+* `id`
+* `acquisition_row_id`
+* `blocco`
+* `campo`
+* `valore_grezzo`
+* `valore_standardizzato` (nullable)
+* `valore_finale` (nullable)
+* `stato`
+* `document_evidence_id` (evidenza principale)
+* `metodo_lettura`
+* `fonte_documentale`
+* `confidenza` (nullable)
+* `utente_ultima_modifica` (nullable)
+* `timestamp_ultima_modifica`
+
+Regola:
+
+* ogni `valore_letto` ha una evidenza principale
+* puo' avere anche evidenze secondarie in una relazione dedicata
+
+Valori ammessi iniziali per `fonte_documentale`:
+
+* `ddt`
+* `certificato`
+* `ddt_certificato`
+* `utente`
+* `db_esterno`
+* `calcolato`
+
+#### 4.0.5 match_certificato
+
+Rappresenta il certificato proposto o confermato per una riga acquisition.
+
+E' un oggetto autonomo di collegamento documentale.
+
+Campi minimi:
+
+* `id`
+* `acquisition_row_id`
+* `document_certificato_id`
+* `stato`
+* `motivo_breve` (nullable)
+* `fonte_proposta`
+* `utente_conferma` (nullable)
+* `timestamp`
+
+#### 4.0.6 match_certificato_candidato
+
+Rappresenta eventuali candidati alternativi del match.
+
+Campi minimi:
+
+* `id`
+* `match_certificato_id`
+* `document_certificato_id`
+* `rank`
+* `motivo_breve` (nullable)
+* `fonte_proposta`
+* `stato`
+
 ### 4.1 datimaterialeincoming
 
 Una riga logica per materiale / riga acquisition.
@@ -127,11 +293,26 @@ Non rappresenta il documento certificato in astratto.
 
 Rappresenta la singola unità materiale su cui poi si lavora.
 
+Regola importante:
+
+* questa unita' materiale non coincide automaticamente con il singolo collo o con la singola riga stampata del DDT
+* in alcuni fornitori/template la riga acquisition puo' richiedere aggregazione di piu' colli o sottorighe omogenee
+* il criterio corretto di aggregazione deve essere capito nella fase knowledge leggendo insieme DDT e certificati
+
+Esempi possibili di criterio reale:
+
+* stesso `batch`
+* stessa `charge`
+* stessa `colata`
+* stessa combinazione coerente di materiale, lega, diametro e certificato
+
 Rappresenta solo dati sorgente/documentali.
 
 Campi:
 
 * `id` (PK tecnico interno)
+* `document_ddt_id` (FK → document.id, riferimento specifico al PDF DDT usato)
+* `document_certificato_id` (FK → document.id, riferimento specifico al PDF certificato finale usato, nullable fino alla conferma)
 * `cdq` (identificativo legacy del certificato qualità, campo documentale critico)
 * `fornitore_id` (FK → fornitori.id, nullable finché il mapping non è completato)
 * `fornitore_raw` (testo originale letto da OCR / DDT / certificato)
@@ -151,11 +332,13 @@ Cardinalità concettuale minima:
 * un DDT può generare più righe `datimaterialeincoming`
 * una riga `datimaterialeincoming` può nascere anche prima del caricamento/conferma del certificato
 * uno stesso `cdq` può essere riutilizzato su più righe se il certificato corretto copre più unità materiali
+* una riga `datimaterialeincoming` ha un solo DDT e un solo certificato finale associato
 
 Conseguenza:
 
 * `cdq` NON deve essere usato come vincolo di unicità assoluta della tabella
 * la tracciabilità documentale resta forte, ma il record resta centrato sulla riga materiale
+* la riga deve conservare il riferimento preciso ai documenti sorgente realmente associati
 
 Campi ESCLUSI da questa entità:
 

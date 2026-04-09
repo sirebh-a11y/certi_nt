@@ -438,6 +438,16 @@ Esempio già noto:
 
 * `Leichtmetall`
   * il peso effettivo da confrontare può richiedere la somma dei pesi di più righe dello stesso `batch`
+* `Impol`
+  * il peso effettivo può essere ricostruito sulla stessa `charge`
+  * il DDT può già riportare la somma dei kg netti per `charge`
+
+Regola più generale:
+
+* il criterio corretto per capire quando più righe o colli del DDT rappresentano una sola riga acquisition NON è universale
+* può dipendere da `batch`, `charge`, `colata` o da altre combinazioni coerenti di materiale
+* questo criterio non va capito leggendo solo il DDT
+* deve essere capito leggendo insieme DDT e certificati dello stesso fornitore/template
 
 Placeholder da mantenere per ciascun fornitore/template:
 
@@ -445,6 +455,7 @@ Placeholder da mantenere per ciascun fornitore/template:
 Eccezioni di match DDT-certificato
 - uso del peso: diretto / somma / altro
 - uso del batch/cast/charge: obbligatorio / secondario / assente
+- criterio di aggregazione della riga acquisition: per riga / per batch / per charge / per colata / altro
 - uso dell'ordine: forte / medio / debole
 - varianti frequenti di scrittura
 - casi noti di mismatch apparente
