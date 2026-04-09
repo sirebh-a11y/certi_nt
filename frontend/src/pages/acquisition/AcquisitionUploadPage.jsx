@@ -21,16 +21,16 @@ function runProgress(run) {
 
 function runStateLabel(run) {
   if (!run) {
-    return "Nessuna presa in carico";
+    return "Nessun run";
   }
   if (run.stato === "in_esecuzione") {
     return "In corso";
   }
   if (run.stato === "completato") {
-    return "Completata";
+    return "Completato";
   }
   if (run.stato === "errore") {
-    return "Interrotta";
+    return "Errore";
   }
   return "In coda";
 }
@@ -135,12 +135,9 @@ export default function AcquisitionUploadPage() {
       setSessionDdtDocuments((current) => mergeUploadedDocuments(current, detectedDdt));
       setSessionCertificateDocuments((current) => mergeUploadedDocuments(current, detectedCertificates));
 
-      const movedCount =
-        tipoDocumento === "ddt"
-          ? detectedCertificates.length
-          : detectedDdt.length;
+      const movedCount = tipoDocumento === "ddt" ? detectedCertificates.length : detectedDdt.length;
       if (movedCount) {
-        setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riconosciuto" : "sono stati riconosciuti"} come ${tipoDocumento === "ddt" ? "certificato" : "DDT"} e spostato automaticamente nel gruppo corretto.`);
+        setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riclassificato" : "sono stati riclassificati"} automaticamente.`);
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -151,7 +148,7 @@ export default function AcquisitionUploadPage() {
 
   async function startAutomationRun(signature = automationSignature) {
     if (!sessionDdtDocuments.length) {
-      setError("Carica almeno un DDT per avviare la presa in carico automatica.");
+      setError("Carica almeno un DDT per avviare la lavorazione.");
       return;
     }
 
@@ -211,119 +208,131 @@ export default function AcquisitionUploadPage() {
       return;
     }
     startAutomationRun(automationSignature);
-  }, [
-    autoStartEnabled,
-    automationSignature,
-    currentRun,
-    lastStartedSignature,
-    sessionDdtDocuments.length,
-    startingRun,
-  ]);
+  }, [autoStartEnabled, automationSignature, currentRun, lastStartedSignature, sessionDdtDocuments.length, startingRun]);
 
   return (
-    <section className="space-y-6">
-      <div className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <section className="space-y-4">
+      <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
-            <h2 className="mt-2 text-2xl font-semibold">Caricamento documenti</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Caricamento documenti</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Carichi DDT e certificati nel repository, poi il sistema prende in carico da solo il piu possibile:
-              crea le righe, legge i campi DDT, propone il match e prova a compilare chimica, proprietà e note prima di passare la parola a quality.
+              Flusso semplice: carichi DDT e certificati, il sistema lavora da solo il più possibile, poi quality entra sulle righe.
             </p>
           </div>
-          <Link className="rounded-xl border border-border px-4 py-3 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-ink" to="/acquisition">
-            Torna alla lista
+          <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
+            Torna alla griglia
           </Link>
         </div>
 
-        {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
-        {notice ? <p className="mt-3 text-sm text-amber-700">{notice}</p> : null}
+        {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+        {notice ? <p className="mt-2 text-sm text-amber-700">{notice}</p> : null}
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-2">
-          <UploadCard
-            suppliers={suppliers}
-            selectedSupplierId={ddtSupplierId}
-            onSupplierChange={setDdtSupplierId}
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <UploadSection
             buttonLabel={processingDdt ? "Carico DDT..." : "Carica DDT"}
             count={ddtCount}
             files={ddtFiles}
-            helperText="Carica uno o più DDT. Se un file assomiglia a un certificato, il sistema prova a correggere il tipo."
+            helperText="Puoi caricare molti DDT insieme."
             onChange={(event) => setDdtFiles(Array.from(event.target.files || []))}
             onSubmit={() => handleBatchUpload("ddt")}
             processing={processingDdt}
             result={ddtResult}
-            title="1. Carica DDT"
-          />
-
-          <UploadCard
+            selectedSupplierId={ddtSupplierId}
             suppliers={suppliers}
-            selectedSupplierId={certificateSupplierId}
-            onSupplierChange={setCertificateSupplierId}
+            title="1. DDT"
+            onSupplierChange={setDdtSupplierId}
+          />
+          <UploadSection
             buttonLabel={processingCertificates ? "Carico certificati..." : "Carica certificati"}
             count={certificateCount}
             files={certificateFiles}
-            helperText="Carica uno o più certificati. Se un file assomiglia a un DDT, il sistema prova a correggere il tipo."
+            helperText="Puoi caricare molti certificati insieme."
             onChange={(event) => setCertificateFiles(Array.from(event.target.files || []))}
             onSubmit={() => handleBatchUpload("certificato")}
             processing={processingCertificates}
             result={certificateResult}
-            title="2. Carica certificati"
+            selectedSupplierId={certificateSupplierId}
+            suppliers={suppliers}
+            title="2. Certificati"
+            onSupplierChange={setCertificateSupplierId}
           />
         </div>
 
-        <div className="mt-6 grid gap-4 xl:grid-cols-[1fr,1.3fr]">
-          <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Documenti pronti</p>
-            <p className="mt-2 text-sm text-slate-600">
-              Qui vedi cosa il sistema ha riconosciuto davvero prima di far partire la lavorazione.
-            </p>
-            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-              <UploadedList title="DDT pronti" items={sessionDdtDocuments} emptyLabel="Nessun DDT pronto." />
-              <UploadedList title="Certificati pronti" items={sessionCertificateDocuments} emptyLabel="Nessun certificato pronto." />
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr,0.85fr]">
+          <div className="rounded-2xl border border-border bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Documenti pronti</h3>
+                <p className="mt-1 text-sm text-slate-500">Tipo reale riconosciuto e fornitore dove disponibile.</p>
+              </div>
+              <div className="text-xs text-slate-500">
+                {sessionDdtDocuments.length} DDT · {sessionCertificateDocuments.length} certificati
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              <DocumentTable emptyLabel="Nessun DDT pronto." items={sessionDdtDocuments} title="DDT pronti" />
+              <DocumentTable emptyLabel="Nessun certificato pronto." items={sessionCertificateDocuments} title="Certificati pronti" />
             </div>
           </div>
 
-          <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="rounded-2xl border border-border bg-white p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">3. Avvia lavorazione automatica</p>
-                <p className="mt-2 text-sm text-slate-600">
-                  Il sistema usa i DDT caricati e tutti i certificati disponibili: quelli della sessione e quelli già presenti nel repository.
+                <h3 className="text-base font-semibold text-slate-900">3. Lavorazione automatica</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Usa i DDT caricati e i certificati già presenti nel repository, non solo quelli della sessione.
                 </p>
               </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-border bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
-                <input
-                  checked={autoStartEnabled}
-                  className="h-4 w-4 accent-teal-700"
-                  onChange={(event) => setAutoStartEnabled(event.target.checked)}
-                  type="checkbox"
-                />
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input checked={autoStartEnabled} className="h-4 w-4 accent-teal-700" onChange={(event) => setAutoStartEnabled(event.target.checked)} type="checkbox" />
                 Avvio automatico
               </label>
             </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <SessionTile label="DDT pronti" value={sessionDdtDocuments.length} />
-              <SessionTile label="Certificati pronti" value={sessionCertificateDocuments.length} />
-              <SessionTile label="Run attuale" value={currentRun ? `#${currentRun.id}` : "-"} />
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="mt-4 flex flex-wrap gap-2">
               <button
-                className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
                 disabled={startingRun || !sessionDdtDocuments.length || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
                 onClick={() => startAutomationRun(automationSignature)}
                 type="button"
               >
-                {startingRun ? "Avvio in corso..." : "Avvia lavorazione"}
+                {startingRun ? "Avvio..." : "Avvia lavorazione"}
               </button>
-              <p className="self-center text-sm text-slate-500">
-                Vision DDT viene usata quando serve e quando e disponibile una chiave OpenAI utente o di sistema.
-              </p>
+              <span className="self-center text-xs text-slate-500">Vision DDT viene usata quando disponibile.</span>
             </div>
 
-            {currentRun ? <AutomationRunCard run={currentRun} /> : null}
+            <div className={`mt-4 rounded-2xl border p-4 ${runStateClasses(currentRun)}`}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em]">Run</div>
+                  <div className="mt-1 text-lg font-semibold">{currentRun ? `#${currentRun.id}` : "-"}</div>
+                  <div className="mt-1 text-sm">{runStateLabel(currentRun)}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-semibold">{runProgress(currentRun)}%</div>
+                  <div className="text-xs opacity-80">
+                    {currentRun ? `${currentRun.righe_processate}/${currentRun.totale_righe_target}` : "0/0"} righe
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/60">
+                <div className="h-full rounded-full bg-current transition-all duration-300" style={{ width: `${runProgress(currentRun)}%` }} />
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <RunStat label="Match proposti" value={currentRun?.match_proposti || 0} />
+                <RunStat label="Note rilevate" value={currentRun?.note_rilevate || 0} />
+                <RunStat label="Chimica" value={currentRun?.chimica_rilevata || 0} />
+                <RunStat label="Proprietà" value={currentRun?.proprieta_rilevate || 0} />
+              </div>
+
+              {currentRun?.messaggio_corrente ? <div className="mt-3 text-sm opacity-90">{currentRun.messaggio_corrente}</div> : null}
+              {currentRun?.ultimo_errore ? <div className="mt-2 text-sm text-rose-700">Errore: {currentRun.ultimo_errore}</div> : null}
+            </div>
           </div>
         </div>
       </div>
@@ -331,7 +340,7 @@ export default function AcquisitionUploadPage() {
   );
 }
 
-function UploadCard({
+function UploadSection({
   title,
   helperText,
   files,
@@ -346,81 +355,64 @@ function UploadCard({
   onSupplierChange,
 }) {
   return (
-    <div className="rounded-3xl border border-border bg-white p-6 shadow-sm shadow-slate-200/40">
-      <h3 className="text-lg font-semibold">{title}</h3>
-      <p className="mt-2 text-sm text-slate-500">{helperText}</p>
+    <div className="rounded-2xl border border-border bg-white p-4">
+      <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+      <p className="mt-1 text-sm text-slate-500">{helperText}</p>
 
-      <label className="mt-4 block text-sm font-medium text-slate-700">
-        Fornitore del batch
-        <select
-          className="mt-2 w-full rounded-2xl border border-border bg-slate-50 px-4 py-3 text-sm text-slate-700"
-          onChange={(event) => onSupplierChange(event.target.value)}
-          value={selectedSupplierId}
+      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr,auto]">
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor={`${title}-supplier`}>
+            Fornitore batch
+          </label>
+          <select
+            className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+            id={`${title}-supplier`}
+            onChange={(event) => onSupplierChange(event.target.value)}
+            value={selectedSupplierId}
+          >
+            <option value="">Rilevamento automatico</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={String(supplier.id)}>
+                {supplier.ragione_sociale}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          className="self-end rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+          disabled={processing || !count}
+          onClick={onSubmit}
+          type="button"
         >
-          <option value="">Rilevamento automatico</option>
-          {suppliers.map((supplier) => (
-            <option key={supplier.id} value={String(supplier.id)}>
-              {supplier.ragione_sociale}
-            </option>
-          ))}
-        </select>
-      </label>
+          {buttonLabel}
+        </button>
+      </div>
 
-      <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
+      <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
         <input accept=".pdf,application/pdf" className="w-full text-sm text-slate-700" multiple onChange={onChange} type="file" />
-        <p className="mt-3 text-sm text-slate-600">
-          {count ? `${count} file selezionati` : "Nessun file selezionato"}
-        </p>
+        <div className="mt-2 text-sm text-slate-600">{count ? `${count} file selezionati` : "Nessun file selezionato"}</div>
         {files.length ? (
-          <ul className="mt-3 space-y-2 text-sm text-slate-700">
-            {files.slice(0, 8).map((file) => (
+          <ul className="mt-2 space-y-1 text-sm text-slate-700">
+            {files.slice(0, 6).map((file) => (
               <li key={`${file.name}-${file.size}`}>{file.name}</li>
             ))}
-            {files.length > 8 ? <li>… e altri {files.length - 8}</li> : null}
+            {files.length > 6 ? <li>… e altri {files.length - 6}</li> : null}
           </ul>
         ) : null}
       </div>
 
-      <button
-        className="mt-4 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-        disabled={processing || !count}
-        onClick={onSubmit}
-        type="button"
-      >
-        {buttonLabel}
-      </button>
-
       {result ? (
-        <div className="mt-5 rounded-2xl border border-border p-4">
-          <p className="text-sm font-semibold text-slate-800">
-            Caricati {result.uploaded_count} di {result.requested_count}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">Falliti: {result.failed_count}</p>
-
+        <div className="mt-3 rounded-2xl border border-border bg-slate-50 p-4">
+          <div className="text-sm font-medium text-slate-800">
+            Caricati {result.uploaded_count}/{result.requested_count} · falliti {result.failed_count}
+          </div>
           {result.uploaded?.length ? (
-            <div className="mt-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Caricati</p>
-              <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                {result.uploaded.slice(0, 8).map((item) => (
-                  <li key={item.id}>
-                    #{item.id} · {item.nome_file_originale} · {item.tipo_documento.toUpperCase()} {item.fornitore_nome ? `· ${item.fornitore_nome}` : ""}
-                  </li>
-                ))}
-                {result.uploaded.length > 8 ? <li>… e altri {result.uploaded.length - 8}</li> : null}
-              </ul>
-            </div>
-          ) : null}
-
-          {result.failed?.length ? (
-            <div className="mt-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-500">Falliti</p>
-              <ul className="mt-2 space-y-2 text-sm text-rose-700">
-                {result.failed.map((item) => (
-                  <li key={`${item.file_name}-${item.detail}`}>
-                    {item.file_name} · {item.detail}
-                  </li>
-                ))}
-              </ul>
+            <div className="mt-2 text-xs text-slate-500">
+              {result.uploaded.slice(0, 4).map((item) => (
+                <div key={item.id}>
+                  #{item.id} · {item.nome_file_originale} · {item.tipo_documento} {item.fornitore_nome ? `· ${item.fornitore_nome}` : ""}
+                </div>
+              ))}
             </div>
           ) : null}
         </div>
@@ -429,91 +421,48 @@ function UploadCard({
   );
 }
 
-function AutomationRunCard({ run }) {
-  const progress = runProgress(run);
-  const completed = run.stato === "completato";
-
+function DocumentTable({ title, items, emptyLabel }) {
   return (
-    <div className={`mt-5 rounded-3xl border p-5 ${runStateClasses(run)}`}>
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em]">Run #{run.id}</p>
-          <p className="mt-2 text-lg font-semibold">{runStateLabel(run)}</p>
-          <p className="mt-2 text-sm opacity-90">{run.messaggio_corrente || "Il sistema sta lavorando sui documenti caricati."}</p>
-        </div>
-        <div className="rounded-2xl bg-white/70 px-4 py-3 text-sm">
-          <p className="font-semibold">{progress}%</p>
-          <p className="mt-1 opacity-80">{run.righe_processate} di {run.totale_righe_target} righe gestite</p>
-        </div>
+    <div>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</div>
+      <div className="overflow-hidden rounded-2xl border border-border">
+        <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <thead className="bg-slate-50">
+            <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <th className="px-3 py-2">ID</th>
+              <th className="px-3 py-2">File</th>
+              <th className="px-3 py-2">Tipo</th>
+              <th className="px-3 py-2">Fornitore</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-700">{item.id}</td>
+                <td className="px-3 py-2 text-slate-800">{item.nome_file_originale}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-700">{item.tipo_documento}</td>
+                <td className="px-3 py-2 text-slate-600">{item.fornitore_nome || "-"}</td>
+              </tr>
+            ))}
+            {!items.length ? (
+              <tr>
+                <td className="px-3 py-4 text-sm text-slate-500" colSpan={4}>
+                  {emptyLabel}
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </div>
-
-      <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/60">
-        <div className="h-full rounded-full bg-current transition-all duration-300" style={{ width: `${progress}%` }} />
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-4">
-        <RunMetric label="Righe create" value={run.righe_create} />
-        <RunMetric label="Match proposti" value={run.match_proposti} />
-        <RunMetric label="Chimica letta" value={run.chimica_rilevata} />
-        <RunMetric label="Note lette" value={run.note_rilevate} />
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2 text-xs font-medium opacity-90">
-        <span className="rounded-full bg-white/70 px-3 py-1">Fase: {run.fase_corrente}</span>
-        {run.current_row_id ? <span className="rounded-full bg-white/70 px-3 py-1">Riga corrente #{run.current_row_id}</span> : null}
-        {run.current_document_name ? <span className="rounded-full bg-white/70 px-3 py-1">{run.current_document_name}</span> : null}
-      </div>
-
-      {run.ultimo_errore ? <p className="mt-4 text-sm text-rose-700">Ultimo errore: {run.ultimo_errore}</p> : null}
-
-      {completed ? (
-        <div className="mt-4 flex flex-wrap gap-3">
-          <Link className="rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50" to="/acquisition">
-            Apri lista quality
-          </Link>
-        </div>
-      ) : null}
     </div>
   );
 }
 
-function SessionTile({ label, value }) {
+function RunStat({ label, value }) {
   return (
-    <div className="rounded-2xl bg-slate-50 p-4">
-      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-800">{value}</p>
-    </div>
-  );
-}
-
-function RunMetric({ label, value }) {
-  return (
-    <div className="rounded-2xl bg-white/70 p-4">
-      <p className="text-xs uppercase tracking-[0.2em] opacity-70">{label}</p>
-      <p className="mt-2 text-xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function UploadedList({ title, items, emptyLabel }) {
-  return (
-    <div className="rounded-2xl border border-border bg-slate-50 p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{title}</p>
-      {items.length ? (
-        <ul className="mt-3 space-y-2 text-sm text-slate-700">
-          {items.slice(0, 8).map((item) => (
-            <li key={item.id}>
-              #{item.id} · {item.nome_file_originale}
-              <div className="mt-1 text-xs text-slate-500">
-                {item.tipo_documento.toUpperCase()} {item.fornitore_nome ? `· ${item.fornitore_nome}` : "· fornitore non riconosciuto"}
-              </div>
-            </li>
-          ))}
-          {items.length > 8 ? <li>… e altri {items.length - 8}</li> : null}
-        </ul>
-      ) : (
-        <p className="mt-3 text-sm text-slate-500">{emptyLabel}</p>
-      )}
+    <div className="rounded-xl bg-white/70 px-3 py-2">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-75">{label}</div>
+      <div className="mt-1 text-lg font-semibold">{value}</div>
     </div>
   );
 }

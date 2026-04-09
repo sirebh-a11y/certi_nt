@@ -117,6 +117,22 @@ function workflowStepLabel(step) {
   return BLOCK_LABELS[step] || step;
 }
 
+function workflowLabel(value) {
+  if (value === "in_lavorazione") {
+    return "In lavorazione";
+  }
+  if (value === "validata_quality") {
+    return "Validata";
+  }
+  if (value === "riaperta") {
+    return "Riaperta";
+  }
+  if (value === "nuova") {
+    return "Nuova";
+  }
+  return value || "-";
+}
+
 function workflowStepAction(row, step) {
   const state = workflowStepState(row, step);
   if (step === "validazione_finale") {
@@ -142,6 +158,10 @@ function readValueStateLabel(value) {
     return "pronto";
   }
   return "da verificare";
+}
+
+function composeLega(row) {
+  return row?.lega_designazione || row?.lega_base || row?.variante_lega || "-";
 }
 
 export default function AcquisitionDetailPage() {
@@ -563,122 +583,100 @@ export default function AcquisitionDetailPage() {
   }
 
   return (
-    <section className="space-y-6">
-      <div className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
+    <section className="space-y-4">
+      <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <button className="text-sm font-medium text-accent hover:underline" onClick={() => navigate("/acquisition")} type="button">
-              Torna alle righe
+              Torna alla griglia
             </button>
-            <p className="mt-4 text-sm uppercase tracking-[0.3em] text-slate-500">Dettaglio acquisition</p>
-            <h2 className="mt-2 text-2xl font-semibold">Riga #{rowId}</h2>
-            <p className="mt-2 text-sm text-slate-500">
-              Vista minima per DDT, certificato, blocchi tecnici, note ed evidenze del pilota.
-            </p>
+            <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Dettaglio acquisition</p>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">Riga #{rowId}</h2>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <button
-              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              disabled={processingNotes || !row?.certificate_document}
-              onClick={handleDetectNotes}
-              type="button"
-            >
-              {processingNotes ? "Rilevo note..." : "Rileva note"}
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision} onClick={handleProcessDdtVision} type="button">
+              {processingVision ? "Vision..." : "Vision DDT"}
             </button>
-            <button
-              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              disabled={processingChemistry || !row?.certificate_document}
-              onClick={handleDetectChemistry}
-              type="button"
-            >
-              {processingChemistry ? "Rilevo chimica..." : "Rileva chimica"}
+            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document} onClick={handleDetectChemistry} type="button">
+              {processingChemistry ? "Chimica..." : "Rileva chimica"}
             </button>
-            <button
-              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              disabled={processingProperties || !row?.certificate_document}
-              onClick={handleDetectProperties}
-              type="button"
-            >
-              {processingProperties ? "Rilevo proprietà..." : "Rileva proprietà"}
+            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document} onClick={handleDetectProperties} type="button">
+              {processingProperties ? "Proprietà..." : "Rileva proprietà"}
             </button>
-            <button
-              className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              disabled={processingVision}
-              onClick={handleProcessDdtVision}
-              type="button"
-            >
-              {processingVision ? "Vision DDT..." : "Vision DDT"}
+            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document} onClick={handleDetectNotes} type="button">
+              {processingNotes ? "Note..." : "Rileva note"}
             </button>
-            <button
-              className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-              disabled={processing}
-              onClick={handleProcessMinimal}
-              type="button"
-            >
-              {processing ? "Processo in corso..." : "Processo minimo"}
+            <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing} onClick={handleProcessMinimal} type="button">
+              {processing ? "Processo..." : "Processo minimo"}
             </button>
-            <button
-              className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={processingFinalValidation || !canValidateFinal}
-              onClick={handleValidateFinal}
-              type="button"
-            >
+            <button className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={processingFinalValidation || !canValidateFinal} onClick={handleValidateFinal} type="button">
               {processingFinalValidation ? "Validazione..." : row?.validata_finale ? "Riga validata" : "Valida riga"}
             </button>
           </div>
         </div>
 
-        {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento riga...</p> : null}
-        {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
+        {loading ? <p className="mt-4 text-sm text-slate-500">Caricamento riga...</p> : null}
+        {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
 
         {row ? (
-          <div className="mt-6 space-y-6">
-            <div className="grid gap-4 md:grid-cols-4">
-              <InfoTile label="CDQ" value={row.cdq || "-"} />
-              <InfoTile label="Colata" value={row.colata || "-"} />
-              <InfoTile label="Peso" value={row.peso || "-"} />
-              <InfoTile label="Ordine" value={row.ordine || "-"} />
+          <div className="mt-4 space-y-4">
+            <div className="overflow-hidden rounded-2xl border border-border bg-white">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50">
+                    <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      <th className="px-3 py-2">Fornitore</th>
+                      <th className="px-3 py-2">Lega</th>
+                      <th className="px-3 py-2">Ø</th>
+                      <th className="px-3 py-2">Cdq</th>
+                      <th className="px-3 py-2">Colata</th>
+                      <th className="px-3 py-2">Ddt</th>
+                      <th className="px-3 py-2">Peso Kg</th>
+                      <th className="px-3 py-2">Ordine</th>
+                      <th className="px-3 py-2">Stato</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white">
+                    <tr>
+                      <td className="px-3 py-3 text-slate-900">{row.fornitore_raw || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{composeLega(row)}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.diametro || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.cdq || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.colata || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.ddt || `#${row.document_ddt_id}`}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.peso || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{row.ordine || "-"}</td>
+                      <td className="px-3 py-3">
+                        <div className="flex flex-wrap gap-1.5">
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateClasses(row.stato_tecnico)}`}>Tecnico {row.stato_tecnico}</span>
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow)}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
+                            {row.validata_finale ? "Validata" : canValidateFinal ? "Pronta da validare" : "Non pronta"}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${stateClasses(row.stato_tecnico)}`}>
-                Tecnico · {row.stato_tecnico}
-              </span>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase text-slate-700">
-                Workflow · {row.stato_workflow}
-              </span>
-              <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
-                Validazione finale · {row.validata_finale ? "validata" : canValidateFinal ? "pronta da validare" : "non pronta"}
-              </span>
-              {Object.entries(row.block_states || {}).map(([key, state]) => (
-                <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(state)}`} key={key}>
-                  {BLOCK_LABELS[key] || key} · {state}
-                </span>
-              ))}
-            </div>
-
-            <div className="rounded-2xl border border-border p-5">
-              <h3 className="text-lg font-semibold">Percorso operativo</h3>
-              <p className="mt-2 text-sm text-slate-500">
-                Ordine consigliato per il lavoro quality: DDT, match certificato, blocchi tecnici e chiusura finale.
-              </p>
-              <div className="mt-4 grid gap-3 xl:grid-cols-3">
-                {[...ORDERED_BLOCKS, "validazione_finale"].map((step, index) => {
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Percorso operativo</div>
+              <div className="grid gap-2 xl:grid-cols-6">
+                {[...ORDERED_BLOCKS, "validazione_finale"].map((step) => {
                   const state = workflowStepState(row, step);
                   return (
-                    <div className={`rounded-2xl border p-4 ${stateClasses(state)}`} key={step}>
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">
-                        Step {index + 1}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold">{workflowStepLabel(step)}</p>
-                      <p className="mt-1 text-xs opacity-80">{workflowStepAction(row, step)}</p>
+                    <div className={`rounded-xl border px-3 py-2 ${stateClasses(state)}`} key={step}>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em]">{workflowStepLabel(step)}</div>
+                      <div className="mt-1 text-xs">{workflowStepAction(row, step)}</div>
                     </div>
                   );
                 })}
               </div>
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-2">
+            <div className="grid gap-4 xl:grid-cols-2">
               <DocumentPanel
                 document={ddtDocument}
                 onOpenAsset={handleOpenAsset}
@@ -704,7 +702,7 @@ export default function AcquisitionDetailPage() {
               processingMatch={processingMatch}
             />
 
-            <div className="grid gap-6 xl:grid-cols-2">
+            <div className="space-y-4">
               {ORDERED_BLOCKS.map((block) => (
                 <BlockPanel
                   key={block}
@@ -724,20 +722,36 @@ export default function AcquisitionDetailPage() {
               ))}
             </div>
 
-            <div className="rounded-2xl border border-border p-5">
-              <h3 className="text-lg font-semibold">Storico recente</h3>
-              <div className="mt-4 space-y-3">
-                {(row.history_events || []).slice(0, 8).map((event) => (
-                  <div className="rounded-2xl bg-slate-50 p-4" key={event.id}>
-                    <p className="text-sm font-medium text-slate-800">
-                      {event.blocco} · {event.azione}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {new Date(event.timestamp).toLocaleString()} {event.nota_breve ? `· ${event.nota_breve}` : ""}
-                    </p>
-                  </div>
-                ))}
-                {!row.history_events?.length ? <p className="text-sm text-slate-500">Nessun evento disponibile.</p> : null}
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="mb-3 text-base font-semibold text-slate-900">Storico recente</div>
+              <div className="overflow-hidden rounded-2xl border border-border">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50">
+                    <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      <th className="px-3 py-2">Blocco</th>
+                      <th className="px-3 py-2">Azione</th>
+                      <th className="px-3 py-2">Quando</th>
+                      <th className="px-3 py-2">Nota</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {(row.history_events || []).slice(0, 8).map((event) => (
+                      <tr key={event.id}>
+                        <td className="px-3 py-2 text-slate-800">{event.blocco}</td>
+                        <td className="px-3 py-2 text-slate-800">{event.azione}</td>
+                        <td className="px-3 py-2 text-slate-600">{new Date(event.timestamp).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-slate-600">{event.nota_breve || "-"}</td>
+                      </tr>
+                    ))}
+                    {!row.history_events?.length ? (
+                      <tr>
+                        <td className="px-3 py-4 text-sm text-slate-500" colSpan={4}>
+                          Nessun evento disponibile.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -749,7 +763,7 @@ export default function AcquisitionDetailPage() {
 
 function InfoTile({ label, value }) {
   return (
-    <div className="rounded-2xl bg-slate-50 p-4">
+    <div className="rounded-xl border border-border bg-slate-50 px-3 py-2">
       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
       <p className="mt-2 text-sm font-medium text-slate-800">{value}</p>
     </div>
@@ -796,16 +810,31 @@ function BlockPanel({
   const renderedValues = [...orderedValues, ...extraValues];
 
   return (
-    <div className="rounded-2xl border border-border p-5">
-      <h3 className="text-lg font-semibold">{label}</h3>
-      <div className="mt-4 space-y-3">
+    <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold text-slate-900">{label}</h3>
+        <span className="text-xs text-slate-500">{renderedValues.length} campi</span>
+      </div>
+      <div className="space-y-3">
         {block === "chimica" ? (
           <ChemistryAdder chemistryFieldOrder={chemistryFieldOrder} onCreateValue={onCreateManualValue} />
         ) : null}
         {block === "proprieta" ? (
           <PropertyAdder onCreateValue={onCreateManualValue} propertyFieldOrder={propertyFieldOrder} />
         ) : null}
-        {renderedValues.map((value) => {
+        <div className="overflow-hidden rounded-2xl border border-border">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <th className="px-3 py-2">Campo</th>
+                <th className="px-3 py-2">Valore</th>
+                <th className="px-3 py-2">Stato</th>
+                <th className="px-3 py-2">Fonte</th>
+                <th className="px-3 py-2">Azioni</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {renderedValues.map((value) => {
           const key = fieldKey(block, value.campo);
           const currentDisplay = valueDisplay(value);
           const draftValue = Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay;
@@ -814,27 +843,28 @@ function BlockPanel({
           const saveLabel = isMissing ? "Aggiungi" : "Salva";
 
           return (
-            <div className="rounded-2xl bg-slate-50 p-4" key={key}>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                  {value.campo}
-                </span>
-                <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${readValueStateClasses(value)}`}>
-                  {readValueStateLabel(value)}
-                </span>
-              </div>
-
-              <div className="mt-3 space-y-3">
+            <tr key={key}>
+              <td className="px-3 py-3 font-medium text-slate-900">{value.campo}</td>
+              <td className="px-3 py-3">
                 <input
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none ring-0 transition focus:border-accent"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-accent"
                   onChange={(event) => onDraftChange(block, value.campo, event.target.value)}
                   placeholder={isMissing ? "Inserisci valore" : "Correggi valore"}
                   value={draftValue}
                 />
-
+              </td>
+              <td className="px-3 py-3">
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${readValueStateClasses(value)}`}>
+                  {readValueStateLabel(value)}
+                </span>
+              </td>
+              <td className="px-3 py-3 text-xs text-slate-500">
+                {!isMissing ? `${value.fonte_documentale} · ${value.metodo_lettura}` : "manuale"}
+              </td>
+              <td className="px-3 py-3">
                 <div className="flex flex-wrap gap-2">
                   <button
-                    className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                    className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
                     disabled={isSaving}
                     onClick={() => onSaveValue(block, value.campo, isMissing ? null : value)}
                     type="button"
@@ -843,7 +873,7 @@ function BlockPanel({
                   </button>
                   {!isMissing ? (
                     <button
-                      className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
+                      className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
                       disabled={isSaving || !currentDisplay}
                       onClick={() => onConfirmValue(value)}
                       type="button"
@@ -852,19 +882,20 @@ function BlockPanel({
                     </button>
                   ) : null}
                 </div>
-              </div>
-
-              {!isMissing ? (
-                <p className="mt-3 text-xs text-slate-500">
-                  Fonte {value.fonte_documentale} · Metodo {value.metodo_lettura}
-                </p>
-              ) : (
-                <p className="mt-3 text-xs text-slate-500">Campo non ancora valorizzato per questo blocco.</p>
-              )}
-            </div>
+              </td>
+            </tr>
           );
         })}
-        {!renderedValues.length ? <p className="text-sm text-slate-500">Nessun valore presente.</p> : null}
+              {!renderedValues.length ? (
+                <tr>
+                  <td className="px-3 py-4 text-sm text-slate-500" colSpan={5}>
+                    Nessun valore presente.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -889,13 +920,11 @@ function MatchPanel({
   }, [availableCertificates, certificateDocument]);
 
   return (
-    <div className="rounded-2xl border border-border p-5">
+    <div className="rounded-2xl border border-border bg-white p-4">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Match Certificato</h3>
-          <p className="mt-2 text-sm text-slate-500">
-            Seleziona il certificato corretto e conferma il match dal blocco quality.
-          </p>
+          <h3 className="text-base font-semibold text-slate-900">Match certificato</h3>
+          <p className="mt-1 text-sm text-slate-500">Seleziona il certificato corretto e conferma il match.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -918,7 +947,7 @@ function MatchPanel({
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-2xl bg-slate-50 p-4">
+        <div className="rounded-2xl border border-border bg-slate-50 p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Certificato attuale</p>
           <p className="mt-2 text-sm font-medium text-slate-800">
             {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
@@ -936,7 +965,7 @@ function MatchPanel({
           {match?.motivo_breve ? <p className="mt-3 text-xs text-slate-500">{match.motivo_breve}</p> : null}
         </div>
 
-        <div className="space-y-3 rounded-2xl bg-slate-50 p-4">
+        <div className="space-y-3 rounded-2xl border border-border bg-white p-4">
           <div>
             <label className="text-xs uppercase tracking-[0.2em] text-slate-500" htmlFor="match-document">
               Certificato da collegare
@@ -974,7 +1003,7 @@ function MatchPanel({
         <div className="mt-4 space-y-3">
           <p className="text-sm font-medium text-slate-700">Candidati registrati</p>
           {match.candidates.map((candidate) => (
-            <div className="rounded-2xl bg-slate-50 p-4" key={candidate.id}>
+            <div className="rounded-xl border border-border bg-slate-50 p-4" key={candidate.id}>
               <p className="text-sm font-medium text-slate-800">
                 Certificato #{candidate.document_certificato_id} · rank {candidate.rank}
               </p>
@@ -1002,7 +1031,7 @@ function ChemistryAdder({ chemistryFieldOrder, onCreateValue }) {
   }
 
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4">
+    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
       <p className="text-sm font-medium text-slate-800">Aggiungi elemento chimico</p>
       <div className="mt-3 grid gap-3 md:grid-cols-[1fr,1fr,auto]">
         <select
@@ -1047,7 +1076,7 @@ function PropertyAdder({ onCreateValue, propertyFieldOrder }) {
   }
 
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4">
+    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
       <p className="text-sm font-medium text-slate-800">Aggiungi proprietà</p>
       <div className="mt-3 grid gap-3 md:grid-cols-[1fr,1fr,auto]">
         <select
@@ -1081,10 +1110,10 @@ function PropertyAdder({ onCreateValue, propertyFieldOrder }) {
 
 function DocumentPanel({ title, document, onOpenAsset, openingAsset }) {
   return (
-    <div className="rounded-2xl border border-border p-5">
+    <div className="rounded-2xl border border-border bg-white p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold">{title}</h3>
+          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
           <p className="mt-2 text-sm text-slate-500">
             {document ? `${document.nome_file_originale} · ${document.numero_pagine || 0} pagine` : "Documento non collegato"}
           </p>
@@ -1102,29 +1131,40 @@ function DocumentPanel({ title, document, onOpenAsset, openingAsset }) {
       </div>
 
       {document?.pages?.length ? (
-        <div className="mt-4 grid gap-3">
-          {document.pages.map((page) => (
-            <div className="rounded-2xl bg-slate-50 p-4" key={page.id}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-800">Pagina {page.numero_pagina}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {page.stato_estrazione} {page.testo_estratto ? "· testo disponibile" : "· immagine disponibile"}
-                  </p>
-                </div>
-                {page.image_url ? (
-                  <button
-                    className="rounded-xl border border-border px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
-                    disabled={openingAsset === page.image_url}
-                    onClick={() => onOpenAsset(page.image_url, `pagina-${page.numero_pagina}.png`)}
-                    type="button"
-                  >
-                    {openingAsset === page.image_url ? "Apertura..." : "Apri immagine"}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ))}
+        <div className="mt-4 overflow-hidden rounded-2xl border border-border">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <th className="px-3 py-2">Pagina</th>
+                <th className="px-3 py-2">Stato</th>
+                <th className="px-3 py-2">Contenuto</th>
+                <th className="px-3 py-2 text-right">Apri</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {document.pages.map((page) => (
+                <tr key={page.id}>
+                  <td className="px-3 py-2 text-slate-800">{page.numero_pagina}</td>
+                  <td className="px-3 py-2 text-slate-600">{page.stato_estrazione}</td>
+                  <td className="px-3 py-2 text-slate-600">{page.testo_estratto ? "testo disponibile" : "immagine disponibile"}</td>
+                  <td className="px-3 py-2 text-right">
+                    {page.image_url ? (
+                      <button
+                        className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white disabled:opacity-60"
+                        disabled={openingAsset === page.image_url}
+                        onClick={() => onOpenAsset(page.image_url, `pagina-${page.numero_pagina}.png`)}
+                        type="button"
+                      >
+                        {openingAsset === page.image_url ? "Apertura..." : "Apri immagine"}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : null}
     </div>

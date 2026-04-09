@@ -1,18 +1,68 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
 const BLOCK_LABELS = {
-  ddt: "DDT",
   match: "Match",
   chimica: "Chim.",
   proprieta: "Prop.",
   note: "Note",
 };
 
-function stateClasses(state) {
+function activityLabelFromState(state) {
+  if (state === "verde") {
+    return "verifica";
+  }
+  if (state === "giallo") {
+    return "quasi";
+  }
+  return "da fare";
+}
+
+function finalActivityLabel(row) {
+  if (row.validata_finale) {
+    return "confermata";
+  }
+  if (row.stato_tecnico === "verde") {
+    return "verifica";
+  }
+  if (row.stato_tecnico === "giallo") {
+    return "quasi";
+  }
+  return "da fare";
+}
+
+function finalActivityClasses(row) {
+  if (row.validata_finale) {
+    return "border-slate-300 bg-slate-100 text-slate-700";
+  }
+  return stateBadgeClasses(row.stato_tecnico);
+}
+
+function compactMatchReference(row) {
+  if (!row.certificate_file_name) {
+    return activityLabelFromState(row.block_states?.match || "rosso");
+  }
+  const numericMatch = row.certificate_file_name.match(/\d{4,}/);
+  if (numericMatch) {
+    return numericMatch[0];
+  }
+  return row.certificate_file_name.replace(/\.pdf$/i, "").slice(0, 12);
+}
+
+function stateTone(state) {
+  if (state === "verde") {
+    return "bg-emerald-500";
+  }
+  if (state === "giallo") {
+    return "bg-amber-500";
+  }
+  return "bg-rose-500";
+}
+
+function stateBadgeClasses(state) {
   if (state === "verde") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
@@ -21,61 +71,6 @@ function stateClasses(state) {
   }
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
-
-function priorityClasses(priority) {
-  if (priority === "alta") {
-    return "bg-rose-100 text-rose-700";
-  }
-  if (priority === "media") {
-    return "bg-amber-100 text-amber-700";
-  }
-  return "bg-slate-200 text-slate-700";
-}
-
-const TECHNICAL_FILTERS = [
-  { value: "", label: "Tutti gli stati tecnici" },
-  { value: "rosso", label: "Tecnico rosso" },
-  { value: "giallo", label: "Tecnico giallo" },
-  { value: "verde", label: "Tecnico verde" },
-];
-
-const WORKFLOW_FILTERS = [
-  { value: "", label: "Tutti i workflow" },
-  { value: "nuova", label: "Nuova" },
-  { value: "in_lavorazione", label: "In lavorazione" },
-  { value: "riaperta", label: "Riaperta" },
-  { value: "validata_quality", label: "Validata" },
-];
-
-const PRIORITY_FILTERS = [
-  { value: "", label: "Tutte le priorità" },
-  { value: "alta", label: "Alta" },
-  { value: "media", label: "Media" },
-  { value: "bassa", label: "Bassa" },
-];
-
-const CERTIFICATE_FILTERS = [
-  { value: "", label: "DDT con e senza certificato" },
-  { value: "yes", label: "Con certificato" },
-  { value: "no", label: "Senza certificato" },
-];
-
-const ATTENTION_FILTERS = [
-  { value: "", label: "Tutte le righe" },
-  { value: "attention", label: "Solo con attenzione" },
-  { value: "validated", label: "Solo validate" },
-];
-
-const DDT_FIELD_LABELS = {
-  numero_certificato_ddt: "Cert.",
-  cdq: "CDQ",
-  colata: "Colata",
-  diametro: "Diametro",
-  peso: "Peso",
-  ordine: "Ordine",
-};
-
-const TECHNICAL_BLOCK_KEYS = ["chimica", "proprieta", "note"];
 
 function workflowLabel(value) {
   if (value === "in_lavorazione") {
@@ -93,6 +88,10 @@ function workflowLabel(value) {
   return value || "-";
 }
 
+function composeLega(row) {
+  return row.lega_designazione || row.lega_base || row.variante_lega || "-";
+}
+
 function matchLabel(row) {
   if (row.match_state === "confermato") {
     return "Pronto";
@@ -103,62 +102,14 @@ function matchLabel(row) {
   return "Non pronto";
 }
 
-function matchSecondaryLabel(row) {
-  if (row.certificate_file_name) {
-    return row.certificate_file_name;
+function ddtFieldState(row, field) {
+  if (row.ddt_confirmed_fields?.includes(field)) {
+    return "verde";
   }
-  if (row.document_certificato_id) {
-    return `Certificato ${row.document_certificato_id}`;
-  }
-  return "Nessun certificato";
-}
-
-function ddtFieldLabel(field) {
-  return DDT_FIELD_LABELS[field] || field;
-}
-
-function ddtSummaryLabel(row) {
-  const state = row.block_states?.ddt || "rosso";
-  if (state === "verde") {
-    return "Pronto";
-  }
-  if (row.ddt_pending_fields?.length) {
-    return "Da verificare";
-  }
-  if (row.ddt_missing_fields?.length) {
-    return "Non pronto";
-  }
-  return "Da verificare";
-}
-
-function technicalOpenBlocks(row) {
-  return TECHNICAL_BLOCK_KEYS.filter((key) => (row.block_states?.[key] || "rosso") !== "verde");
-}
-
-function technicalCriticalBlocks(row) {
-  return TECHNICAL_BLOCK_KEYS.filter((key) => (row.block_states?.[key] || "rosso") === "rosso");
-}
-
-function technicalSummaryLabel(row) {
-  const critical = technicalCriticalBlocks(row);
-  const open = technicalOpenBlocks(row);
-  if (!open.length) {
-    return "Pronti";
-  }
-  if (critical.length) {
-    return "Non pronti";
-  }
-  return "Da verificare";
-}
-
-function technicalSummaryTone(row) {
-  if (technicalCriticalBlocks(row).length) {
+  if (row.ddt_missing_fields?.includes(field)) {
     return "rosso";
   }
-  if (technicalOpenBlocks(row).length) {
-    return "giallo";
-  }
-  return "verde";
+  return "giallo";
 }
 
 function hasAttention(row) {
@@ -173,45 +124,71 @@ function rowSortScore(row) {
   return [priorityRank, technicalRank, workflowRank, -updatedAt, -row.id];
 }
 
+function RowStateCell({ row }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <StateDot state={row.stato_tecnico} />
+        <span className="text-xs font-semibold text-slate-700">{activityLabelFromState(row.stato_tecnico)}</span>
+      </div>
+      <div className="text-[11px] text-slate-500">{workflowLabel(row.stato_workflow)}</div>
+      <div className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${finalActivityClasses(row)}`}>
+        {finalActivityLabel(row)}
+      </div>
+    </div>
+  );
+}
+
+function StateDot({ state }) {
+  return <span className={`inline-block h-2.5 w-2.5 rounded-full ${stateTone(state)}`} />;
+}
+
+function DataCell({ value, state, secondary }) {
+  return (
+    <div className="min-w-[90px]">
+      <div className="flex items-center gap-2">
+        <StateDot state={state} />
+        <span className="truncate text-sm font-medium text-slate-800">{value || "-"}</span>
+      </div>
+      {secondary ? <div className="mt-1 truncate text-[11px] text-slate-500">{secondary}</div> : null}
+    </div>
+  );
+}
+
+function BlockCell({ label, state, secondary }) {
+  return (
+    <div className="min-w-[88px]">
+      <div className="flex items-center gap-2">
+        <StateDot state={state} />
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700">{label}</span>
+      </div>
+      <div className="mt-1 truncate text-[11px] text-slate-500">{secondary}</div>
+    </div>
+  );
+}
+
 export default function AcquisitionListPage() {
   const { token } = useAuth();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [onlyOpen, setOnlyOpen] = useState(false);
-  const [technicalFilter, setTechnicalFilter] = useState("");
-  const [workflowFilter, setWorkflowFilter] = useState("");
-  const [priorityFilter, setPriorityFilter] = useState("");
-  const [certificateFilter, setCertificateFilter] = useState("");
-  const [attentionFilter, setAttentionFilter] = useState("");
   const [query, setQuery] = useState("");
+  const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
+  const topScrollRef = useRef(null);
+  const tableViewportRef = useRef(null);
+  const tableRef = useRef(null);
+  const syncingScrollRef = useRef(false);
 
   useEffect(() => {
     let ignore = false;
-    const queryParams = new URLSearchParams();
-    if (technicalFilter) {
-      queryParams.set("stato_tecnico", technicalFilter);
-    }
-    if (workflowFilter) {
-      queryParams.set("stato_workflow", workflowFilter);
-    }
-    if (priorityFilter) {
-      queryParams.set("priorita_operativa", priorityFilter);
-    }
-    if (certificateFilter === "yes") {
-      queryParams.set("has_certificate", "true");
-    } else if (certificateFilter === "no") {
-      queryParams.set("has_certificate", "false");
-    }
-    const path = queryParams.toString() ? `/acquisition/rows?${queryParams.toString()}` : "/acquisition/rows";
 
     setLoading(true);
     setError("");
 
-    apiRequest(path, {}, token)
+    apiRequest("/acquisition/rows", {}, token)
       .then((data) => {
         if (!ignore) {
-          setRows(data.items);
+          setRows(data.items || []);
         }
       })
       .catch((requestError) => {
@@ -228,33 +205,27 @@ export default function AcquisitionListPage() {
     return () => {
       ignore = true;
     };
-  }, [certificateFilter, priorityFilter, technicalFilter, token, workflowFilter]);
+  }, [token]);
 
   const visibleRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     let nextRows = rows;
 
-    if (onlyOpen) {
-      nextRows = nextRows.filter((row) => row.stato_workflow !== "validata_quality");
-    }
-
-    if (attentionFilter === "attention") {
-      nextRows = nextRows.filter((row) => hasAttention(row));
-    } else if (attentionFilter === "validated") {
-      nextRows = nextRows.filter((row) => row.validata_finale);
-    }
-
     if (normalizedQuery) {
       nextRows = nextRows.filter((row) => {
         const haystack = [
+          row.id,
+          row.fornitore_raw,
+          row.lega_designazione,
+          row.lega_base,
+          row.diametro,
           row.cdq,
           row.colata,
-          row.ordine,
+          row.ddt,
           row.peso,
-          row.diametro,
-          row.fornitore_raw,
-          row.fornitore_id,
-          row.id,
+          row.ordine,
+          row.certificate_file_name,
+          row.note_documento,
         ]
           .filter(Boolean)
           .join(" ")
@@ -273,293 +244,230 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [attentionFilter, onlyOpen, query, rows]);
+  }, [query, rows]);
 
   const summary = useMemo(() => {
     const total = rows.length;
     const open = rows.filter((row) => row.stato_workflow !== "validata_quality").length;
-    const highPriority = rows.filter((row) => row.priorita_operativa === "alta").length;
-    const validated = rows.filter((row) => row.validata_finale).length;
-    return { total, open, highPriority, validated };
+    return { total, open };
   }, [rows]);
 
+  useEffect(() => {
+    function updateScrollMetrics() {
+      const viewport = tableViewportRef.current;
+      const table = tableRef.current;
+      if (!viewport || !table) {
+        return;
+      }
+      setScrollMetrics({
+        contentWidth: table.scrollWidth,
+        viewportWidth: viewport.clientWidth,
+      });
+    }
+
+    updateScrollMetrics();
+
+    const viewport = tableViewportRef.current;
+    const table = tableRef.current;
+    let observer = null;
+
+    if (typeof ResizeObserver !== "undefined" && viewport && table) {
+      observer = new ResizeObserver(() => updateScrollMetrics());
+      observer.observe(viewport);
+      observer.observe(table);
+    }
+
+    window.addEventListener("resize", updateScrollMetrics);
+    return () => {
+      window.removeEventListener("resize", updateScrollMetrics);
+      if (observer) {
+        observer.disconnect();
+      }
+    };
+  }, [visibleRows.length, rows.length]);
+
+  function syncScroll(target, source) {
+    if (!target || !source) {
+      return;
+    }
+    if (syncingScrollRef.current) {
+      return;
+    }
+    syncingScrollRef.current = true;
+    target.scrollLeft = source.scrollLeft;
+    window.requestAnimationFrame(() => {
+      syncingScrollRef.current = false;
+    });
+  }
+
   return (
-    <section className="space-y-6">
-      <div className="rounded-3xl border border-border bg-panel p-8 shadow-lg shadow-slate-200/40">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <section className="space-y-2">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
-            <h2 className="mt-2 text-2xl font-semibold">Righe acquisition</h2>
-            <p className="mt-2 text-sm text-slate-500">
-              Cruscotto minimo per DDT, certificato, blocchi tecnici e note del pilota reader-acquisition.
-            </p>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <Link
-              className="rounded-xl border border-border bg-white px-4 py-3 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-ink"
-              to="/acquisition/upload"
-            >
-              Carica documenti
-            </Link>
-            <button
-              className={`rounded-xl border px-4 py-3 text-sm font-medium ${
-                onlyOpen ? "border-accent bg-accent/10 text-accent" : "border-border bg-white text-slate-600"
-              }`}
-              onClick={() => setOnlyOpen((value) => !value)}
-              type="button"
-            >
-              {onlyOpen ? "Mostra tutte" : "Solo aperte"}
-            </button>
-          </div>
+        <div className="flex flex-wrap gap-2">
+          <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition/upload">
+            Carica documenti
+          </Link>
         </div>
+      </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryTile label="Totali" value={summary.total} tone="slate" />
-          <SummaryTile label="Aperte" value={summary.open} tone="amber" />
-          <SummaryTile label="Priorità alta" value={summary.highPriority} tone="rose" />
-          <SummaryTile label="Validate" value={summary.validated} tone="emerald" />
-        </div>
+      <div className="flex flex-wrap gap-2">
+        <SummaryCell label="Righe" value={summary.total} />
+        <SummaryCell label="Aperte" value={summary.open} />
+        <SummaryCell label="Logica attività" value="Placeholder" />
+      </div>
 
-        <div className="mt-6 grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
-          <select
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setTechnicalFilter(event.target.value)}
-            value={technicalFilter}
-          >
-            {TECHNICAL_FILTERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setWorkflowFilter(event.target.value)}
-            value={workflowFilter}
-          >
-            {WORKFLOW_FILTERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setPriorityFilter(event.target.value)}
-            value={priorityFilter}
-          >
-            {PRIORITY_FILTERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setCertificateFilter(event.target.value)}
-            value={certificateFilter}
-          >
-            {CERTIFICATE_FILTERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setAttentionFilter(event.target.value)}
-            value={attentionFilter}
-          >
-            {ATTENTION_FILTERS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+      <div className="grid gap-2 xl:max-w-xl">
+        <div className="min-w-0">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search">
+            Ricerca
+          </label>
           <input
-            className="rounded-2xl border border-border bg-white px-4 py-3 text-sm text-slate-700"
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Cerca CDQ, colata, ordine..."
-            value={query}
-          />
+          className="rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+          id="incoming-quality-search"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Fornitore, cdq, colata, ddt..."
+          value={query}
+        />
         </div>
+      </div>
 
-        {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento righe...</p> : null}
-        {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
+      {loading ? <p className="text-sm text-slate-500">Caricamento righe...</p> : null}
+      {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
-        <div className="mt-6 space-y-4">
-          {visibleRows.map((row) => (
-            <article
-              className="rounded-3xl border border-border bg-white p-5 shadow-sm shadow-slate-200/40"
-              key={row.id}
-            >
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                      CDQ {row.cdq || "n/d"}
-                    </span>
-                    <span className="text-sm font-medium text-slate-700">Colata {row.colata || "-"}</span>
-                    <span className="text-sm text-slate-500">Riga #{row.id}</span>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <InfoTile label="Fornitore" value={row.fornitore_raw || row.fornitore_id || "-"} />
-                    <InfoTile label="Diametro" value={row.diametro || "-"} />
-                    <InfoTile label="Peso" value={row.peso || "-"} />
-                    <InfoTile label="Ordine" value={row.ordine || "-"} />
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 xl:max-w-sm xl:justify-end">
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${priorityClasses(row.priorita_operativa)}`}>
-                    {row.priorita_operativa}
-                  </span>
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${stateClasses(row.stato_tecnico)}`}>
-                    {row.stato_tecnico}
-                  </span>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase text-slate-700">
-                    {workflowLabel(row.stato_workflow)}
-                  </span>
-                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${row.validata_finale ? stateClasses("verde") : stateClasses(hasAttention(row) ? "giallo" : "rosso")}`}>
-                    {row.validata_finale ? "Validata" : "Da validare"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                {Object.entries(row.block_states || {}).map(([key, state]) => (
-                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(state)}`} key={key}>
-                    {BLOCK_LABELS[key] || key} · {state}
-                  </span>
+      <div className="overflow-hidden rounded-2xl border border-border bg-white">
+        <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+          <div
+            className="incoming-top-scroll overflow-x-auto overflow-y-hidden"
+            onScroll={(event) => syncScroll(tableViewportRef.current, event.currentTarget)}
+            ref={topScrollRef}
+          >
+            <div
+              className="h-4 min-w-full"
+              style={{
+                width: Math.max(scrollMetrics.contentWidth, scrollMetrics.viewportWidth),
+              }}
+            />
+          </div>
+        </div>
+        <div
+          className="incoming-grid-scroll h-[calc(100vh-250px)] min-h-[520px] overflow-y-auto overflow-x-hidden"
+          onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
+          ref={tableViewportRef}
+        >
+          <table className="min-w-[1480px] divide-y divide-slate-200 text-sm" ref={tableRef}>
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <th className="px-3 py-3">N°</th>
+                  <th className="px-3 py-3">Fornitore</th>
+                  <th className="px-3 py-3">Lega</th>
+                  <th className="px-3 py-3">Ø</th>
+                  <th className="px-3 py-3">Cdq</th>
+                  <th className="px-3 py-3">Colata</th>
+                  <th className="px-3 py-3">Ddt</th>
+                  <th className="px-3 py-3">Peso Kg</th>
+                  <th className="px-3 py-3">Ordine</th>
+                  <th className="px-3 py-3">Match</th>
+                  <th className="px-3 py-3">Chim.</th>
+                  <th className="px-3 py-3">Prop.</th>
+                  <th className="px-3 py-3">Note</th>
+                  <th className="px-3 py-3">Stato</th>
+                  <th className="px-3 py-3 text-right">Apri</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visibleRows.map((row) => (
+                  <tr className="align-top hover:bg-slate-50/70" key={row.id}>
+                    <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-700">{row.id}</td>
+                    <td className="min-w-[220px] max-w-[220px] px-3 py-3">
+                      <div className="truncate font-medium text-slate-900" title={row.fornitore_raw || "-"}>
+                        {row.fornitore_raw || "-"}
+                      </div>
+                    </td>
+                    <td className="max-w-[110px] px-3 py-3">
+                      <div className="truncate font-medium text-slate-800" title={composeLega(row)}>
+                        {composeLega(row)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={ddtFieldState(row, "diametro")} value={row.diametro} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={ddtFieldState(row, "cdq")} value={row.cdq} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={ddtFieldState(row, "colata")} value={row.colata} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={row.ddt ? "verde" : "rosso"} value={row.ddt || `#${row.document_ddt_id}`} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={ddtFieldState(row, "peso")} value={row.peso} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <DataCell state={ddtFieldState(row, "ordine")} value={row.ordine} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <BlockCell
+                        label={BLOCK_LABELS.match}
+                        secondary={compactMatchReference(row)}
+                        state={row.block_states?.match || "rosso"}
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <BlockCell
+                        label={BLOCK_LABELS.chimica}
+                        secondary={activityLabelFromState(row.block_states?.chimica || "rosso")}
+                        state={row.block_states?.chimica || "rosso"}
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <BlockCell
+                        label={BLOCK_LABELS.proprieta}
+                        secondary={activityLabelFromState(row.block_states?.proprieta || "rosso")}
+                        state={row.block_states?.proprieta || "rosso"}
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="min-w-[140px]">
+                        <div className="flex items-center gap-2">
+                          <StateDot state={row.block_states?.note || "rosso"} />
+                          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700">Note</span>
+                        </div>
+                        <div className="mt-1 truncate text-[11px] text-slate-500" title={row.note_documento || activityLabelFromState(row.block_states?.note || "rosso")}>
+                          {row.note_documento || activityLabelFromState(row.block_states?.note || "rosso")}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <RowStateCell row={row} />
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-3 text-right">
+                      <Link className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white" to={`/acquisition/${row.id}`}>
+                        Apri
+                      </Link>
+                    </td>
+                  </tr>
                 ))}
-              </div>
-
-              <div className="mt-5 grid gap-3 xl:grid-cols-3">
-                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.ddt || "rosso")}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">DDT Core</p>
-                      <p className="mt-2 text-sm font-semibold">{ddtSummaryLabel(row)}</p>
-                    </div>
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.ddt || "rosso")}`}>
-                      {row.block_states?.ddt || "rosso"}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                    <MiniValueTile label="CDQ" value={row.cdq || "-"} />
-                    <MiniValueTile label="Colata" value={row.colata || "-"} />
-                    <MiniValueTile label="Peso" value={row.peso || "-"} />
-                  </div>
-
-                  {row.ddt_pending_fields?.length ? (
-                    <p className="mt-3 text-xs font-medium text-amber-800">
-                      Da confermare: {row.ddt_pending_fields.map(ddtFieldLabel).join(", ")}
-                    </p>
-                  ) : null}
-                  {row.ddt_missing_fields?.length ? (
-                    <p className="mt-2 text-xs font-medium text-rose-800">
-                      Mancanti: {row.ddt_missing_fields.map(ddtFieldLabel).join(", ")}
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className={`rounded-2xl border p-4 ${stateClasses(row.block_states?.match || "rosso")}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">Match Certificato</p>
-                      <p className="mt-2 text-sm font-semibold">{matchLabel(row)}</p>
-                      <p className="mt-1 text-xs opacity-80">{matchSecondaryLabel(row)}</p>
-                    </div>
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.match || "rosso")}`}>
-                      {row.block_states?.match || "rosso"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className={`rounded-2xl border p-4 ${stateClasses(technicalSummaryTone(row))}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">Blocchi Tecnici</p>
-                      <p className="mt-2 text-sm font-semibold">{technicalSummaryLabel(row)}</p>
-                    </div>
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(technicalSummaryTone(row))}`}>
-                      {technicalOpenBlocks(row).length ? `${technicalOpenBlocks(row).length} aperti` : "ok"}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {TECHNICAL_BLOCK_KEYS.map((key) => (
-                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.block_states?.[key] || "rosso")}`} key={key}>
-                        {BLOCK_LABELS[key] || key} · {row.block_states?.[key] || "rosso"}
-                      </span>
-                    ))}
-                  </div>
-
-                  {technicalOpenBlocks(row).length ? (
-                    <p className="mt-3 text-xs font-medium opacity-90">
-                      Aperti: {technicalOpenBlocks(row).map((key) => BLOCK_LABELS[key] || key).join(", ")}
-                    </p>
-                  ) : (
-                    <p className="mt-3 text-xs font-medium opacity-90">Chimica, proprietà e note sono già pronte.</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5 flex items-center justify-between gap-3">
-                <p className="text-sm text-slate-500">
-                  DDT {row.document_ddt_id} {row.document_certificato_id ? `· Certificato ${row.document_certificato_id}` : "· Nessun certificato"} ·
-                  {" "}
-                  {hasAttention(row) ? "Richiede attenzione" : "Pronta o validata"}
-                </p>
-                <Link className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700" to={`/acquisition/${row.id}`}>
-                  Apri riga
-                </Link>
-              </div>
-            </article>
-          ))}
+              </tbody>
+            </table>
         </div>
 
         {!loading && !visibleRows.length && !error ? (
-          <p className="mt-6 text-sm text-slate-500">Nessuna riga acquisition disponibile.</p>
+          <div className="px-4 py-6 text-sm text-slate-500">Nessuna riga acquisition disponibile.</div>
         ) : null}
       </div>
     </section>
   );
 }
 
-function InfoTile({ label, value }) {
+function SummaryCell({ label, value }) {
   return (
-    <div className="rounded-2xl bg-slate-50 p-4">
-      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{label}</p>
-      <p className="mt-2 text-sm font-medium text-slate-800">{value}</p>
-    </div>
-  );
-}
-
-function SummaryTile({ label, value, tone }) {
-  const toneClasses =
-    tone === "emerald"
-      ? "bg-emerald-50 text-emerald-700"
-      : tone === "amber"
-        ? "bg-amber-50 text-amber-700"
-        : tone === "rose"
-          ? "bg-rose-50 text-rose-700"
-          : "bg-slate-50 text-slate-700";
-
-  return (
-    <div className={`rounded-2xl p-4 ${toneClasses}`}>
-      <p className="text-xs uppercase tracking-[0.2em] opacity-80">{label}</p>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function MiniValueTile({ label, value }) {
-  return (
-    <div className="rounded-xl bg-white/70 px-3 py-2">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] opacity-70">{label}</p>
-      <p className="mt-1 text-sm font-semibold">{value}</p>
+    <div className="rounded-lg border border-border bg-white px-2.5 py-2">
+      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-0.5 text-base font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

@@ -21,3 +21,35 @@ textarea {
 button {
   @apply transition;
 }
+
+.incoming-top-scroll {
+  scrollbar-color: #94a3b8 #e2e8f0;
+  scrollbar-width: thin;
+}
+
+.incoming-top-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+
+.incoming-top-scroll::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 9999px;
+}
+
+.incoming-top-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 9999px;
+}
+
+.incoming-grid-scroll {
+  scrollbar-color: #94a3b8 #e2e8f0;
+}
+
+.incoming-grid-scroll::-webkit-scrollbar:horizontal {
+  height: 0;
+  display: none;
+}
+
+.incoming-grid-scroll::-webkit-scrollbar:vertical {
+  width: 12px;
+}
