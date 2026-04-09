@@ -67,6 +67,7 @@ const BLOCK_DEFAULT_SOURCE = {
 };
 
 const FINAL_REQUIRED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
+const ORDERED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
 
 function stateClasses(state) {
   if (state === "verde") {
@@ -97,6 +98,40 @@ function valueDisplay(value) {
 
 function fieldKey(block, field) {
   return `${block}:${field}`;
+}
+
+function workflowStepState(row, step) {
+  if (step === "validazione_finale") {
+    if (row?.validata_finale) {
+      return "verde";
+    }
+    return FINAL_REQUIRED_BLOCKS.every((block) => row?.block_states?.[block] === "verde") ? "giallo" : "rosso";
+  }
+  return row?.block_states?.[step] || "rosso";
+}
+
+function workflowStepLabel(step) {
+  if (step === "validazione_finale") {
+    return "Validazione finale";
+  }
+  return BLOCK_LABELS[step] || step;
+}
+
+function workflowStepAction(row, step) {
+  const state = workflowStepState(row, step);
+  if (step === "validazione_finale") {
+    if (row?.validata_finale) {
+      return "Riga chiusa";
+    }
+    return state === "giallo" ? "Pronta da validare" : "Completa prima i blocchi";
+  }
+  if (state === "verde") {
+    return "Pronto";
+  }
+  if (state === "giallo") {
+    return "Verifica e conferma";
+  }
+  return "Da completare";
 }
 
 export default function AcquisitionDetailPage() {
@@ -612,6 +647,27 @@ export default function AcquisitionDetailPage() {
               ))}
             </div>
 
+            <div className="rounded-2xl border border-border p-5">
+              <h3 className="text-lg font-semibold">Percorso operativo</h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Ordine consigliato per il lavoro quality: DDT, match certificato, blocchi tecnici e chiusura finale.
+              </p>
+              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                {[...ORDERED_BLOCKS, "validazione_finale"].map((step, index) => {
+                  const state = workflowStepState(row, step);
+                  return (
+                    <div className={`rounded-2xl border p-4 ${stateClasses(state)}`} key={step}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em]">
+                        Step {index + 1}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold">{workflowStepLabel(step)}</p>
+                      <p className="mt-1 text-xs opacity-80">{workflowStepAction(row, step)}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="grid gap-6 xl:grid-cols-2">
               <DocumentPanel
                 document={ddtDocument}
@@ -639,12 +695,12 @@ export default function AcquisitionDetailPage() {
             />
 
             <div className="grid gap-6 xl:grid-cols-2">
-              {Object.entries(valuesByBlock).map(([block, values]) => (
+              {ORDERED_BLOCKS.map((block) => (
                 <BlockPanel
                   key={block}
                   block={block}
                   label={BLOCK_LABELS[block] || block}
-                  values={values}
+                  values={valuesByBlock[block] || []}
                   expectedFields={block === "ddt" ? DDT_CORE_FIELDS : block === "note" ? NOTE_CORE_FIELDS : []}
                   chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
                   propertyFieldOrder={PROPERTY_FIELD_ORDER}
