@@ -24,8 +24,10 @@ from app.modules.acquisition.service import (
     create_document,
     create_document_page,
     create_evidence,
+    detect_standard_notes,
     get_acquisition_row,
     get_document,
+    index_document,
     list_acquisition_rows,
     list_documents,
     serialize_acquisition_row_detail,
@@ -79,6 +81,12 @@ def upload_document_route(
 @router.get("/documents/{document_id}", response_model=DocumentDetailResponse)
 def get_document_route(document_id: int, _: CurrentUser, db: DbSession) -> DocumentDetailResponse:
     return serialize_document_detail(get_document(db, document_id))
+
+
+@router.post("/documents/{document_id}/index", response_model=DocumentDetailResponse)
+def index_document_route(document_id: int, current_user: CurrentUser, db: DbSession) -> DocumentDetailResponse:
+    document = get_document(db, document_id)
+    return index_document(db=db, document=document, actor_email=current_user.email)
 
 
 @router.post("/documents/{document_id}/pages", response_model=DocumentPageResponse)
@@ -170,3 +178,13 @@ def upsert_match_route(
 ) -> MatchResponse:
     row = get_acquisition_row(db, row_id)
     return upsert_match(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/detect-notes", response_model=AcquisitionRowDetailResponse)
+def detect_standard_notes_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return detect_standard_notes(db=db, row=row, actor_id=current_user.id)

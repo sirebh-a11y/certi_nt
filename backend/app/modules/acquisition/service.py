@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from uuid import uuid4
 from datetime import UTC, datetime
 
 from fastapi import UploadFile
 from fastapi import HTTPException, status
+from pypdf import PdfReader
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -325,8 +327,16 @@ def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
+    if _is_pdf_document(document, uploaded_file.content_type):
+        document = _index_document_from_path(db, document)
     log_service.record("acquisition", f"Document uploaded: {document.nome_file_originale}", actor_email)
     return serialize_document(document)
+
+
+def index_document(db: Session, document: Document, actor_email: str | None = None) -> DocumentDetailResponse:
+    document = _index_document_from_path(db, document)
+    log_service.record("acquisition", f"Document indexed: {document.nome_file_originale}", actor_email)
+    return serialize_document_detail(document)
 
 
 def create_document_page(db: Session, document: Document, payload: DocumentPageCreateRequest) -> DocumentPageResponse:
@@ -530,66 +540,24 @@ def upsert_read_value(
         if evidence is None or evidence.acquisition_row_id != row.id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Evidence not available for row")
 
-    existing = (
-        db.query(ReadValue)
-        .filter(
-            ReadValue.acquisition_row_id == row.id,
-            ReadValue.blocco == payload.blocco,
-            ReadValue.campo == payload.campo,
-        )
-        .one_or_none()
-    )
-
-    before_value = None
-    action = "valore_creato"
-    if existing is None:
-        existing = ReadValue(
-            acquisition_row_id=row.id,
-            blocco=payload.blocco,
-            campo=payload.campo,
-        )
-        db.add(existing)
-    else:
-        before_value = existing.valore_finale or existing.valore_standardizzato or existing.valore_grezzo
-        action = "valore_aggiornato"
-
-    existing.valore_grezzo = payload.valore_grezzo
-    existing.valore_standardizzato = payload.valore_standardizzato
-    existing.valore_finale = payload.valore_finale
-    existing.stato = payload.stato
-    existing.document_evidence_id = payload.document_evidence_id
-    existing.metodo_lettura = payload.metodo_lettura
-    existing.fonte_documentale = payload.fonte_documentale
-    existing.confidenza = payload.confidenza
-    existing.utente_ultima_modifica_id = actor_id
-    existing.timestamp_ultima_modifica = datetime.now(UTC)
-    db.flush()
-
-    after_value = existing.valore_finale or existing.valore_standardizzato or existing.valore_grezzo
-    if before_value != after_value:
-        db.add(
-            AcquisitionValueHistory(
-                acquisition_row_id=row.id,
-                value_id=existing.id,
-                blocco=payload.blocco,
-                campo=payload.campo,
-                valore_prima=before_value,
-                valore_dopo=after_value,
-                utente_id=actor_id,
-            )
-        )
-
-    _record_history_event(
+    read_value = _upsert_read_value_model(
         db=db,
         acquisition_row_id=row.id,
         blocco=payload.blocco,
-        azione=action,
-        user_id=actor_id,
-        nota_breve=payload.campo,
+        campo=payload.campo,
+        valore_grezzo=payload.valore_grezzo,
+        valore_standardizzato=payload.valore_standardizzato,
+        valore_finale=payload.valore_finale,
+        stato=payload.stato,
+        document_evidence_id=payload.document_evidence_id,
+        metodo_lettura=payload.metodo_lettura,
+        fonte_documentale=payload.fonte_documentale,
+        confidenza=payload.confidenza,
+        actor_id=actor_id,
     )
     db.commit()
-    db.refresh(existing)
-    return serialize_read_value(existing)
+    db.refresh(read_value)
+    return serialize_read_value(read_value)
 
 
 def upsert_match(
@@ -676,6 +644,73 @@ def upsert_match(
     return serialize_match(updated_row.certificate_match)
 
 
+def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+
+    matches = _detect_note_matches(certificate_document.pages)
+    if not matches:
+        _record_history_event(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="note",
+            azione="note_non_rilevate",
+            user_id=actor_id,
+        )
+        db.commit()
+        return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+    for field_name, match in matches.items():
+        evidence = DocumentEvidence(
+            document_id=certificate_document.id,
+            document_page_id=match["page_id"],
+            acquisition_row_id=row.id,
+            blocco="note",
+            tipo_evidenza="testo",
+            bbox=None,
+            testo_grezzo=match["snippet"],
+            storage_key_derivato=None,
+            metodo_estrazione="pdf_text",
+            mascherato=False,
+            confidenza=0.9,
+            utente_creazione_id=actor_id,
+        )
+        db.add(evidence)
+        db.flush()
+
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="note",
+            campo=field_name,
+            valore_grezzo=match["snippet"],
+            valore_standardizzato=match["standardized"],
+            valore_finale=match["final"],
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="pdf_text",
+            fonte_documentale="certificato",
+            confidenza=0.9,
+            actor_id=actor_id,
+        )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="note",
+        azione="note_rilevate",
+        user_id=actor_id,
+        nota_breve=", ".join(sorted(matches.keys())),
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
 def _get_supplier(db: Session, supplier_id: int) -> Supplier:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
@@ -732,3 +767,187 @@ def _record_history_event(
 
 def _document_storage_root() -> Path:
     return Path(settings.document_storage_root)
+
+
+def _index_document_from_path(db: Session, document: Document) -> Document:
+    storage_path = _document_storage_root() / Path(document.storage_key)
+    if not storage_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored document file not found")
+
+    db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete()
+
+    try:
+        reader = PdfReader(str(storage_path))
+        for index, page in enumerate(reader.pages, start=1):
+            try:
+                extracted_text = page.extract_text()
+            except Exception:
+                extracted_text = None
+
+            db.add(
+                DocumentPage(
+                    document_id=document.id,
+                    numero_pagina=index,
+                    larghezza=float(page.mediabox.width) if page.mediabox.width is not None else None,
+                    altezza=float(page.mediabox.height) if page.mediabox.height is not None else None,
+                    rotazione=None,
+                    testo_estratto=normalize_extracted_text(extracted_text),
+                    ocr_text=None,
+                    immagine_pagina_storage_key=None,
+                    stato_estrazione="testo_pdf" if normalize_extracted_text(extracted_text) else "non_elaborata",
+                    hash_render=None,
+                )
+            )
+
+        document.numero_pagine = len(reader.pages)
+        document.stato_elaborazione = "indicizzato"
+    except Exception:
+        document.numero_pagine = None
+        document.stato_elaborazione = "errore"
+
+    db.add(document)
+    db.commit()
+    return get_document(db, document.id)
+
+
+def _is_pdf_document(document: Document, mime_type: str | None) -> bool:
+    if mime_type == "application/pdf":
+        return True
+    return Path(document.nome_file_originale).suffix.lower() == ".pdf"
+
+
+def normalize_extracted_text(value: str | None) -> str | None:
+    return value.strip() if value and value.strip() else None
+
+
+def _upsert_read_value_model(
+    db: Session,
+    *,
+    acquisition_row_id: int,
+    blocco: str,
+    campo: str,
+    valore_grezzo: str | None,
+    valore_standardizzato: str | None,
+    valore_finale: str | None,
+    stato: str,
+    document_evidence_id: int | None,
+    metodo_lettura: str,
+    fonte_documentale: str,
+    confidenza: float | None,
+    actor_id: int,
+) -> ReadValue:
+    existing = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == acquisition_row_id,
+            ReadValue.blocco == blocco,
+            ReadValue.campo == campo,
+        )
+        .one_or_none()
+    )
+
+    before_value = None
+    action = "valore_creato"
+    if existing is None:
+        existing = ReadValue(acquisition_row_id=acquisition_row_id, blocco=blocco, campo=campo)
+        db.add(existing)
+    else:
+        before_value = existing.valore_finale or existing.valore_standardizzato or existing.valore_grezzo
+        action = "valore_aggiornato"
+
+    existing.valore_grezzo = valore_grezzo
+    existing.valore_standardizzato = valore_standardizzato
+    existing.valore_finale = valore_finale
+    existing.stato = stato
+    existing.document_evidence_id = document_evidence_id
+    existing.metodo_lettura = metodo_lettura
+    existing.fonte_documentale = fonte_documentale
+    existing.confidenza = confidenza
+    existing.utente_ultima_modifica_id = actor_id
+    existing.timestamp_ultima_modifica = datetime.now(UTC)
+    db.flush()
+
+    after_value = existing.valore_finale or existing.valore_standardizzato or existing.valore_grezzo
+    if before_value != after_value:
+        db.add(
+            AcquisitionValueHistory(
+                acquisition_row_id=acquisition_row_id,
+                value_id=existing.id,
+                blocco=blocco,
+                campo=campo,
+                valore_prima=before_value,
+                valore_dopo=after_value,
+                utente_id=actor_id,
+            )
+        )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=acquisition_row_id,
+        blocco=blocco,
+        azione=action,
+        user_id=actor_id,
+        nota_breve=campo,
+    )
+    return existing
+
+
+def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        page_text = page.testo_estratto or page.ocr_text or ""
+        if not page_text:
+            continue
+        lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+        for line in lines:
+            normalized_line = line.lower()
+            if "nota_us_control_classe" not in matches:
+                us_control_value = _detect_us_control_class(normalized_line)
+                if us_control_value is not None:
+                    matches["nota_us_control_classe"] = {
+                        "page_id": page.id,
+                        "snippet": line,
+                        "standardized": us_control_value,
+                        "final": us_control_value,
+                    }
+            if "nota_rohs" not in matches and "rohs" in normalized_line:
+                matches["nota_rohs"] = {
+                    "page_id": page.id,
+                    "snippet": line,
+                    "standardized": "true",
+                    "final": "true",
+                }
+            if "nota_radioactive_free" not in matches and _is_radioactive_free_line(normalized_line):
+                matches["nota_radioactive_free"] = {
+                    "page_id": page.id,
+                    "snippet": line,
+                    "standardized": "true",
+                    "final": "true",
+                }
+    return matches
+
+
+def _detect_us_control_class(line: str) -> str | None:
+    if "astm" not in line and "ams" not in line:
+        return None
+    if re.search(r"(class|classe)\s*a", line):
+        return "A"
+    if re.search(r"(class|classe)\s*b", line):
+        return "B"
+    return None
+
+
+def _is_radioactive_free_line(line: str) -> bool:
+    if "radio" not in line:
+        return False
+    if "free from radioactive contamination" in line:
+        return True
+    if "free of radioactive contaminants" in line:
+        return True
+    if "contaminazione radioattiva" in line:
+        return True
+    if "radioaktiver kontamination" in line:
+        return True
+    if "contamination radioactive" in line:
+        return True
+    return False
