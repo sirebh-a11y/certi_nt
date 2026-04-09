@@ -141,6 +141,20 @@ Le proprietà certificate possono appartenere a categorie diverse, per esempio:
 * NON salvare unità nel database
 * le unità sono definite a livello di sistema
 * input può contenere unità → ignorare in fase di salvataggio
+* lato utente il valore mostrato deve restare numerico, senza ripetere l'unità dentro la cella
+
+Controllo di coerenza richiesto:
+
+* il sistema deve verificare che il numero letto sia coerente con il contesto del documento origine
+* l'unità attesa deriva dal campo/proprietà, non dal valore salvato
+* se il documento origine non supporta in modo sufficiente l'interpretazione dell'unità attesa, il dato non deve essere trattato come robusto/confermabile automaticamente
+
+Esempi:
+
+* `Rp0.2` e `Rm` → atteso `MPa`
+* `A%` → atteso `%`
+* `IACS%` → atteso `% IACS`
+* chimica elementi → atteso `%`
 
 ---
 

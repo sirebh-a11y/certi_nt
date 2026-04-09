@@ -327,6 +327,48 @@ Campi:
 * `data_documento` (nullable, solo se presente nella fonte documentale)
 * `note_documento` (nullable, solo se la nota appartiene al documento sorgente)
 
+#### 4.1.1 Regola operativa campo per campo: documentale vs standardizzato
+
+Per evitare ambiguita' tra backend API e frontend, i campi della riga acquisition devono essere trattati cosi':
+
+| Campo | Natura | Regola di visualizzazione |
+| ----- | ------ | ------------------------- |
+| `cdq` | documentale puro | mostrare esattamente il valore documentale |
+| `colata` | documentale puro | mostrare esattamente il valore documentale |
+| `ddt` | documentale puro | mostrare esattamente il numero DDT documentale |
+| `ordine` | documentale puro | mostrare esattamente il valore documentale se presente |
+| `fornitore_raw` | documentale puro | mostrare il testo documentale o il mapping fornitore coerente |
+| `diametro` | numerico standardizzato | in UI mostrare solo il numero, senza `mm` |
+| `peso` | numerico standardizzato | in UI mostrare solo il numero, senza `kg` |
+| `note_documento` | documentale sintetico | mostrare solo contenuto o sintesi utile, non testo tecnico di servizio |
+| `proprietachimiche.valore` | numerico standardizzato | in UI mostrare solo il numero, con `%` implicita di sistema |
+| `proprietacertificato.valore` | numerico standardizzato | in UI mostrare solo il numero, con unità implicita definita dalla proprietà (`MPa`, `%`, `% IACS`, nessuna) |
+
+Regola forte:
+
+* il `valore_grezzo` puo' contenere unita' e testo originale del documento
+* il `valore_standardizzato` NON deve contenere unita'
+* il `valore_finale` usato in UI lista/dettaglio deve seguire la stessa regola del valore standardizzato per i campi numerici
+* le unita' devono stare nelle label di sistema o nelle intestazioni colonna, non nel valore mostrato
+* il sistema deve controllare che il numero letto sia coerente con il contesto del documento origine e con l'unita' attesa del campo
+* se il documento origine non supporta in modo sufficiente l'unita' attesa, il valore non deve essere considerato robusto automaticamente
+
+Esempi corretti:
+
+* colonna `Ø (mm)` -> cella `295,00`
+* colonna `peso Kg` -> cella `6,730`
+* proprieta' `Rp0.2 (MPa)` -> valore `310`
+* proprieta' `A%` -> valore `12,5`
+* chimica `Mg %` -> valore `0,80`
+
+Esempi errati:
+
+* `295,00 mm`
+* `6,730 KG`
+* `310 MPa`
+* `12,5 %`
+* `0,80 %`
+
 Cardinalità concettuale minima:
 
 * un DDT può generare più righe `datimaterialeincoming`

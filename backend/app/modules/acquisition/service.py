@@ -137,8 +137,8 @@ def serialize_read_value(value: ReadValue) -> ReadValueResponse:
         blocco=value.blocco,
         campo=value.campo,
         valore_grezzo=value.valore_grezzo,
-        valore_standardizzato=value.valore_standardizzato,
-        valore_finale=value.valore_finale,
+        valore_standardizzato=_normalize_value_for_field(value.blocco, value.campo, value.valore_standardizzato),
+        valore_finale=_normalize_value_for_field(value.blocco, value.campo, value.valore_finale),
         stato=value.stato,
         document_evidence_id=value.document_evidence_id,
         metodo_lettura=value.metodo_lettura,
@@ -240,10 +240,10 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         lega_base=row.lega_base,
         lega_designazione=row.lega_designazione,
         variante_lega=row.variante_lega,
-        diametro=row.diametro,
+        diametro=_normalize_value_for_field("ddt", "diametro", row.diametro),
         colata=row.colata,
         ddt=row.ddt,
-        peso=row.peso,
+        peso=_normalize_value_for_field("ddt", "peso", row.peso),
         ordine=row.ordine,
         data_documento=row.data_documento,
         note_documento=row.note_documento,
@@ -2617,7 +2617,11 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
 def _final_value_for_row(value: ReadValue | None) -> str | None:
     if value is None:
         return None
-    return _string_or_none(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
+    return _normalize_value_for_field(
+        value.blocco,
+        value.campo,
+        value.valore_finale or value.valore_standardizzato or value.valore_grezzo,
+    )
 
 
 def _upsert_read_value_model(
@@ -2655,9 +2659,18 @@ def _upsert_read_value_model(
         before_value = existing.valore_finale or existing.valore_standardizzato or existing.valore_grezzo
         action = "valore_aggiornato"
 
-    existing.valore_grezzo = valore_grezzo
-    existing.valore_standardizzato = valore_standardizzato
-    existing.valore_finale = valore_finale
+    normalized_grezzo = _string_or_none(valore_grezzo)
+    normalized_standardizzato = _normalize_value_for_field(blocco, campo, valore_standardizzato)
+    normalized_finale = _normalize_value_for_field(blocco, campo, valore_finale)
+
+    if normalized_standardizzato is None and _is_numeric_standardized_field(blocco, campo):
+        normalized_standardizzato = _normalize_value_for_field(blocco, campo, normalized_grezzo)
+    if normalized_finale is None and normalized_standardizzato is not None:
+        normalized_finale = normalized_standardizzato
+
+    existing.valore_grezzo = normalized_grezzo
+    existing.valore_standardizzato = normalized_standardizzato
+    existing.valore_finale = normalized_finale
     existing.stato = stato
     existing.document_evidence_id = document_evidence_id
     existing.metodo_lettura = metodo_lettura
@@ -2690,6 +2703,50 @@ def _upsert_read_value_model(
         nota_breve=campo,
     )
     return existing
+
+
+def normalize_existing_numeric_values(db: Session) -> dict[str, int]:
+    updated_values = 0
+    updated_rows = 0
+
+    values = db.query(ReadValue).all()
+    for value in values:
+        if not _is_numeric_standardized_field(value.blocco, value.campo):
+            continue
+
+        normalized_standardizzato = _normalize_value_for_field(value.blocco, value.campo, value.valore_standardizzato)
+        normalized_finale = _normalize_value_for_field(value.blocco, value.campo, value.valore_finale)
+
+        if normalized_standardizzato is None:
+            normalized_standardizzato = _normalize_value_for_field(value.blocco, value.campo, value.valore_grezzo)
+        if normalized_finale is None and normalized_standardizzato is not None:
+            normalized_finale = normalized_standardizzato
+
+        if value.valore_standardizzato != normalized_standardizzato:
+            value.valore_standardizzato = normalized_standardizzato
+            updated_values += 1
+        if value.valore_finale != normalized_finale:
+            value.valore_finale = normalized_finale
+            updated_values += 1
+
+    rows = db.query(AcquisitionRow).options(selectinload(AcquisitionRow.values)).all()
+    for row in rows:
+        ddt_values = {value.campo: value for value in row.values if value.blocco == "ddt"}
+        normalized_diametro = _final_value_for_row(ddt_values.get("diametro"))
+        normalized_peso = _final_value_for_row(ddt_values.get("peso"))
+
+        if row.diametro != normalized_diametro:
+            row.diametro = normalized_diametro
+            updated_rows += 1
+        if row.peso != normalized_peso:
+            row.peso = normalized_peso
+            updated_rows += 1
+
+    db.commit()
+    return {
+        "updated_values": updated_values,
+        "updated_rows": updated_rows,
+    }
 
 
 def _create_text_evidence(
@@ -2926,6 +2983,44 @@ CHEMISTRY_FIELD_SET = {
 
 
 PROPERTY_FIELD_SET = {"HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "IACS%"}
+
+DDT_NUMERIC_FIELD_SET = {"diametro", "peso"}
+
+
+def _is_numeric_standardized_field(blocco: str, campo: str) -> bool:
+    if blocco == "ddt":
+        return campo in DDT_NUMERIC_FIELD_SET
+    if blocco == "chimica":
+        return campo in CHEMISTRY_FIELD_SET
+    if blocco == "proprieta":
+        return campo in PROPERTY_FIELD_SET
+    return False
+
+
+def _extract_numeric_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"-?\d+(?:[.,]\d+)?", cleaned.replace("−", "-"))
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def _normalize_numeric_value(value: str | None) -> str | None:
+    token = _extract_numeric_token(value)
+    if token is None:
+        return None
+    return token.replace(",", ".")
+
+
+def _normalize_value_for_field(blocco: str, campo: str, value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    if not _is_numeric_standardized_field(blocco, campo):
+        return cleaned
+    return _normalize_numeric_value(cleaned) or cleaned
 
 
 def _detect_chemistry_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:

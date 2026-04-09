@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
   match: "Match",
@@ -85,7 +86,7 @@ function ddtCoreState(row) {
     !row.cdq ||
     !row.colata ||
     !row.peso ||
-    (!row.ddt && !row.document_ddt_id);
+    !row.ddt;
 
   if (hasMissingCore) {
     return "rosso";
@@ -174,7 +175,7 @@ function rowFieldSortValue(row, field) {
     case "colata":
       return row.colata || "";
     case "ddt":
-      return row.ddt || row.document_ddt_id || "";
+      return row.ddt || "";
     case "peso":
       return parseSortableNumber(row.peso);
     case "ordine":
@@ -511,7 +512,7 @@ export default function AcquisitionListPage() {
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      <DataCell state={ddtFieldState(row, "diametro")} value={row.diametro} />
+                      <DataCell state={ddtFieldState(row, "diametro")} value={formatRowFieldDisplay("diametro", row.diametro)} />
                     </td>
                     <td className="px-3 py-3">
                       <DataCell state={ddtFieldState(row, "cdq")} value={row.cdq} />
@@ -520,10 +521,10 @@ export default function AcquisitionListPage() {
                       <DataCell state={ddtFieldState(row, "colata")} value={row.colata} />
                     </td>
                     <td className="px-3 py-3">
-                      <DataCell state={row.ddt ? "verde" : "rosso"} value={row.ddt || `#${row.document_ddt_id}`} />
+                      <DataCell state={row.ddt ? "verde" : "rosso"} value={row.ddt || "-"} />
                     </td>
                     <td className="px-3 py-3">
-                      <DataCell state={ddtFieldState(row, "peso")} value={row.peso} />
+                      <DataCell state={ddtFieldState(row, "peso")} value={formatRowFieldDisplay("peso", row.peso)} />
                     </td>
                     <td className="px-3 py-3">
                       <DataCell state={ddtFieldState(row, "ordine")} value={row.ordine} />

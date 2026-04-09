@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { formatFieldDisplay, formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
   ddt: "DDT",
@@ -92,8 +93,9 @@ function readValueStateClasses(value) {
   return stateClasses("giallo");
 }
 
-function valueDisplay(value) {
-  return value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
+function valueDisplay(block, field, value) {
+  const raw = value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
+  return formatFieldDisplay(block, field, raw);
 }
 
 function fieldKey(block, field) {
@@ -407,7 +409,7 @@ export default function AcquisitionDetailPage() {
 
   async function handleSaveValue(block, field, value) {
     const key = fieldKey(block, field);
-    const currentDisplay = valueDisplay(value);
+    const currentDisplay = valueDisplay(block, field, value);
     const nextValue = (getDraft(block, field, currentDisplay) || "").trim();
 
     if (!nextValue) {
@@ -507,7 +509,7 @@ export default function AcquisitionDetailPage() {
     const block = value.blocco;
     const field = value.campo;
     const key = fieldKey(block, field);
-    const display = valueDisplay(value);
+    const display = valueDisplay(block, field, value);
 
     if (!display) {
       setError(`Nessun valore da confermare per ${field}.`);
@@ -640,11 +642,11 @@ export default function AcquisitionDetailPage() {
                     <tr>
                       <td className="px-3 py-3 text-slate-900">{row.fornitore_raw || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{composeLega(row)}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.diametro || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{formatRowFieldDisplay("diametro", row.diametro) || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{row.cdq || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{row.colata || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{row.ddt || `#${row.document_ddt_id}`}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.peso || "-"}</td>
+                      <td className="px-3 py-3 text-slate-800">{formatRowFieldDisplay("peso", row.peso) || "-"}</td>
                       <td className="px-3 py-3 text-slate-800">{row.ordine || "-"}</td>
                       <td className="px-3 py-3">
                         <div className="flex flex-wrap gap-1.5">
@@ -836,7 +838,7 @@ function BlockPanel({
             <tbody className="divide-y divide-slate-100 bg-white">
               {renderedValues.map((value) => {
           const key = fieldKey(block, value.campo);
-          const currentDisplay = valueDisplay(value);
+          const currentDisplay = valueDisplay(block, value.campo, value);
           const draftValue = Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay;
           const isSaving = savingFieldKey === key;
           const isMissing = Boolean(value.__missing);
