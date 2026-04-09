@@ -76,6 +76,7 @@ class DocumentPageResponse(BaseModel):
     testo_estratto: str | None
     ocr_text: str | None
     immagine_pagina_storage_key: str | None
+    image_url: str | None
     stato_estrazione: str
     hash_render: str | None
 
@@ -88,6 +89,7 @@ class DocumentResponse(BaseModel):
     fornitore_id: int | None
     nome_file_originale: str
     storage_key: str
+    file_url: str
     hash_file: str | None
     mime_type: str | None
     numero_pagine: int | None
@@ -190,6 +192,7 @@ class DocumentSummaryResponse(BaseModel):
     tipo_documento: str
     nome_file_originale: str
     storage_key: str
+    file_url: str
 
 
 class DocumentEvidenceCreateRequest(BaseModel):
@@ -367,6 +370,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     stato_workflow: str
     priorita_operativa: str
     validata_finale: bool
+    block_states: dict[str, str]
     created_at: datetime
     updated_at: datetime
 

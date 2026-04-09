@@ -9,6 +9,8 @@ import AppShell from "../components/layout/AppShell";
 import ChangePasswordPage from "../pages/auth/ChangePasswordPage";
 import LoginPage from "../pages/auth/LoginPage";
 import SetPasswordPage from "../pages/auth/SetPasswordPage";
+import AcquisitionDetailPage from "../pages/acquisition/AcquisitionDetailPage";
+import AcquisitionListPage from "../pages/acquisition/AcquisitionListPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import LogsPage from "../pages/logs/LogsPage";
@@ -106,6 +108,8 @@ export function AppRouter() {
         <Route element={<AppShellRoute />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/acquisition" element={<AcquisitionListPage />} />
+          <Route path="/acquisition/:rowId" element={<AcquisitionDetailPage />} />
           <Route path="/suppliers" element={<SuppliersListPage />} />
           <Route path="/suppliers/new" element={<NewSupplierPage />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />

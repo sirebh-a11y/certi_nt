@@ -2,7 +2,11 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 
 export async function apiRequest(path, options = {}, token = null) {
   const headers = new Headers(options.headers || {});
-  headers.set("Content-Type", "application/json");
+  if (options.body instanceof FormData) {
+    headers.delete("Content-Type");
+  } else if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -22,6 +26,37 @@ export async function apiRequest(path, options = {}, token = null) {
     throw new Error(detail);
   }
   return data;
+}
+
+export function resolveApiAssetUrl(path) {
+  if (!path) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return new URL(path, API_BASE_URL).toString();
+}
+
+export async function fetchApiBlob(path, token) {
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(resolveApiAssetUrl(path), { headers });
+  if (!response.ok) {
+    let detail = "Request failed";
+    try {
+      const data = await response.json();
+      detail = formatErrorDetail(data?.detail);
+    } catch {
+      detail = response.statusText || detail;
+    }
+    throw new Error(detail);
+  }
+
+  return response.blob();
 }
 
 function formatErrorDetail(detail) {

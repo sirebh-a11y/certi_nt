@@ -59,6 +59,7 @@ def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
         testo_estratto=page.testo_estratto,
         ocr_text=page.ocr_text,
         immagine_pagina_storage_key=page.immagine_pagina_storage_key,
+        image_url=_document_page_image_url(page) if page.immagine_pagina_storage_key else None,
         stato_estrazione=page.stato_estrazione,
         hash_render=page.hash_render,
     )
@@ -71,6 +72,7 @@ def serialize_document(document: Document) -> DocumentResponse:
         fornitore_id=document.fornitore_id,
         nome_file_originale=document.nome_file_originale,
         storage_key=document.storage_key,
+        file_url=_document_file_url(document),
         hash_file=document.hash_file,
         mime_type=document.mime_type,
         numero_pagine=document.numero_pagine,
@@ -93,6 +95,7 @@ def serialize_document_summary(document: Document) -> DocumentSummaryResponse:
         tipo_documento=document.tipo_documento,
         nome_file_originale=document.nome_file_originale,
         storage_key=document.storage_key,
+        file_url=_document_file_url(document),
     )
 
 
@@ -208,6 +211,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         stato_workflow=row.stato_workflow,
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
+        block_states=_compute_block_states(row),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -250,6 +254,23 @@ def get_document(db: Session, document_id: int) -> Document:
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     return document
+
+
+def get_document_page(db: Session, page_id: int) -> DocumentPage:
+    page = db.get(DocumentPage, page_id)
+    if page is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page not found")
+    return page
+
+
+def get_document_file_path(document: Document) -> Path:
+    return _resolve_storage_path(document.storage_key)
+
+
+def get_document_page_image_path(page: DocumentPage) -> Path:
+    if not page.immagine_pagina_storage_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
+    return _resolve_storage_path(page.immagine_pagina_storage_key)
 
 
 def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, actor_email: str) -> DocumentResponse:
@@ -364,7 +385,11 @@ def list_acquisition_rows(
     fornitore_id: int | None = None,
     has_certificate: bool | None = None,
 ) -> list[AcquisitionRowListItemResponse]:
-    query = db.query(AcquisitionRow).order_by(AcquisitionRow.updated_at.desc(), AcquisitionRow.id.desc())
+    query = (
+        db.query(AcquisitionRow)
+        .options(selectinload(AcquisitionRow.values), joinedload(AcquisitionRow.certificate_match))
+        .order_by(AcquisitionRow.updated_at.desc(), AcquisitionRow.id.desc())
+    )
     if stato_tecnico is not None:
         query = query.filter(AcquisitionRow.stato_tecnico == stato_tecnico)
     if stato_workflow is not None:
@@ -868,6 +893,58 @@ def _record_history_event(
 
 def _document_storage_root() -> Path:
     return Path(settings.document_storage_root)
+
+
+def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
+    values_by_block: dict[str, list[ReadValue]] = {}
+    for value in row.values:
+        values_by_block.setdefault(value.blocco, []).append(value)
+
+    return {
+        "ddt": _compute_value_block_state(values_by_block.get("ddt", []), fallback="giallo" if row.document_ddt_id else "rosso"),
+        "match": _compute_match_block_state(row),
+        "chimica": _compute_value_block_state(values_by_block.get("chimica", [])),
+        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", [])),
+        "note": _compute_value_block_state(values_by_block.get("note", [])),
+    }
+
+
+def _compute_match_block_state(row: AcquisitionRow) -> str:
+    if row.certificate_match is not None:
+        if row.certificate_match.stato == "confermato":
+            return "verde"
+        return "giallo"
+    if row.document_certificato_id is not None:
+        return "giallo"
+    return "rosso"
+
+
+def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso") -> str:
+    if not values:
+        return fallback
+    if all(value.stato == "confermato" for value in values):
+        return "verde"
+    return "giallo"
+
+
+def _document_file_url(document: Document) -> str:
+    return f"/api/acquisition/documents/{document.id}/file"
+
+
+def _document_page_image_url(page: DocumentPage) -> str:
+    return f"/api/acquisition/document-pages/{page.id}/image"
+
+
+def _resolve_storage_path(storage_key: str) -> Path:
+    root = _document_storage_root().resolve()
+    resolved = (root / Path(storage_key)).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path") from exc
+    if not resolved.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored file not found")
+    return resolved
 
 
 def _index_document_from_path(db: Session, document: Document) -> Document:

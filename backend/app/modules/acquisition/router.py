@@ -1,4 +1,5 @@
 from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
 from app.modules.acquisition.schemas import (
@@ -28,6 +29,9 @@ from app.modules.acquisition.service import (
     extract_core_fields,
     get_acquisition_row,
     get_document,
+    get_document_file_path,
+    get_document_page,
+    get_document_page_image_path,
     index_document,
     list_acquisition_rows,
     list_documents,
@@ -85,6 +89,14 @@ def get_document_route(document_id: int, _: CurrentUser, db: DbSession) -> Docum
     return serialize_document_detail(get_document(db, document_id))
 
 
+@router.get("/documents/{document_id}/file")
+def get_document_file_route(document_id: int, _: CurrentUser, db: DbSession) -> FileResponse:
+    document = get_document(db, document_id)
+    file_path = get_document_file_path(document)
+    media_type = document.mime_type or "application/octet-stream"
+    return FileResponse(path=file_path, media_type=media_type, filename=document.nome_file_originale)
+
+
 @router.post("/documents/{document_id}/index", response_model=DocumentDetailResponse)
 def index_document_route(document_id: int, current_user: CurrentUser, db: DbSession) -> DocumentDetailResponse:
     document = get_document(db, document_id)
@@ -100,6 +112,14 @@ def create_document_page_route(
 ) -> DocumentPageResponse:
     document = get_document(db, document_id)
     return create_document_page(db=db, document=document, payload=payload)
+
+
+@router.get("/document-pages/{page_id}/image")
+def get_document_page_image_route(page_id: int, _: CurrentUser, db: DbSession) -> FileResponse:
+    page = get_document_page(db, page_id)
+    image_path = get_document_page_image_path(page)
+    filename = image_path.name
+    return FileResponse(path=image_path, media_type="image/png", filename=filename)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)

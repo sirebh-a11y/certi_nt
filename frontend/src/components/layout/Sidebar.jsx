@@ -5,6 +5,7 @@ import { useAuth } from "../../app/auth";
 const navItems = [
   { label: "Dashboard", to: "/dashboard", roles: ["user", "manager", "admin"] },
   { type: "divider" },
+  { label: "Incoming Quality", to: "/acquisition", roles: ["user", "manager", "admin"] },
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
   { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
   { label: "Reparti", to: "/departments", roles: ["admin"] },
