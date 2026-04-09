@@ -25,11 +25,13 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_evidence,
     detect_standard_notes,
+    extract_core_fields,
     get_acquisition_row,
     get_document,
     index_document,
     list_acquisition_rows,
     list_documents,
+    process_row_minimal,
     serialize_acquisition_row_detail,
     serialize_document_detail,
     upload_document,
@@ -188,3 +190,23 @@ def detect_standard_notes_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return detect_standard_notes(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/extract-core-fields", response_model=AcquisitionRowDetailResponse)
+def extract_core_fields_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return extract_core_fields(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/process-minimal", response_model=AcquisitionRowDetailResponse)
+def process_row_minimal_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return process_row_minimal(db=db, row=row, actor_id=current_user.id)

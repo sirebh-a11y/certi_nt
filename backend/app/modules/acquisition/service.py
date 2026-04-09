@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 from datetime import UTC, datetime
 
+import fitz
 from fastapi import UploadFile
 from fastapi import HTTPException, status
 from pypdf import PdfReader
@@ -711,6 +712,106 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    ddt_document = get_document(db, row.document_ddt_id)
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+
+    extracted_count = 0
+    ddt_matches = _detect_ddt_core_matches(ddt_document.pages)
+    for field_name, match in ddt_matches.items():
+        evidence = _create_text_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=ddt_document.id,
+            document_page_id=match["page_id"],
+            blocco="ddt",
+            snippet=match["snippet"],
+            actor_id=actor_id,
+            confidence=0.85,
+        )
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=match["snippet"],
+            valore_standardizzato=match["standardized"],
+            valore_finale=match["final"],
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="regex",
+            fonte_documentale="ddt",
+            confidenza=0.85,
+            actor_id=actor_id,
+        )
+        extracted_count += 1
+
+    if row.cdq is None:
+        if "cdq" in ddt_matches:
+            row.cdq = _string_or_none(ddt_matches["cdq"]["final"])
+        elif "numero_certificato_ddt" in ddt_matches:
+            row.cdq = _string_or_none(ddt_matches["numero_certificato_ddt"]["final"])
+    if row.colata is None and "colata" in ddt_matches:
+        row.colata = _string_or_none(ddt_matches["colata"]["final"])
+    if row.peso is None and "peso" in ddt_matches:
+        row.peso = _string_or_none(ddt_matches["peso"]["final"])
+
+    if row.document_certificato_id is not None:
+        certificate_document = get_document(db, row.document_certificato_id)
+        if not certificate_document.pages:
+            certificate_document = _index_document_from_path(db, certificate_document)
+        certificate_matches = _detect_certificate_core_matches(certificate_document.pages)
+        for field_name, match in certificate_matches.items():
+            evidence = _create_text_evidence(
+                db=db,
+                row_id=row.id,
+                document_id=certificate_document.id,
+                document_page_id=match["page_id"],
+                blocco="match",
+                snippet=match["snippet"],
+                actor_id=actor_id,
+                confidence=0.82,
+            )
+            _upsert_read_value_model(
+                db=db,
+                acquisition_row_id=row.id,
+                blocco="match",
+                campo=field_name,
+                valore_grezzo=match["snippet"],
+                valore_standardizzato=match["standardized"],
+                valore_finale=match["final"],
+                stato="proposto",
+                document_evidence_id=evidence.id,
+                metodo_lettura="regex",
+                fonte_documentale="certificato",
+                confidenza=0.82,
+                actor_id=actor_id,
+            )
+            extracted_count += 1
+
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="campi_core_rilevati" if extracted_count else "campi_core_non_rilevati",
+        user_id=actor_id,
+        nota_breve=str(extracted_count) if extracted_count else None,
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def process_row_minimal(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    extract_core_fields(db=db, row=row, actor_id=actor_id)
+    refreshed_row = get_acquisition_row(db, row.id)
+    if refreshed_row.document_certificato_id is not None:
+        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id)
+        refreshed_row = get_acquisition_row(db, row.id)
+    return serialize_acquisition_row_detail(refreshed_row)
+
+
 def _get_supplier(db: Session, supplier_id: int) -> Supplier:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
@@ -774,38 +875,33 @@ def _index_document_from_path(db: Session, document: Document) -> Document:
     if not storage_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored document file not found")
 
-    db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete()
+    db.query(DocumentPage).filter(DocumentPage.document_id == document.id).delete(synchronize_session=False)
+    document.pages = []
 
     try:
-        reader = PdfReader(str(storage_path))
-        for index, page in enumerate(reader.pages, start=1):
-            try:
-                extracted_text = page.extract_text()
-            except Exception:
-                extracted_text = None
-
+        page_payloads = _extract_pdf_page_payloads(document, storage_path)
+        for payload in page_payloads:
             db.add(
                 DocumentPage(
                     document_id=document.id,
-                    numero_pagina=index,
-                    larghezza=float(page.mediabox.width) if page.mediabox.width is not None else None,
-                    altezza=float(page.mediabox.height) if page.mediabox.height is not None else None,
-                    rotazione=None,
-                    testo_estratto=normalize_extracted_text(extracted_text),
+                    numero_pagina=payload["numero_pagina"],
+                    larghezza=payload["larghezza"],
+                    altezza=payload["altezza"],
+                    rotazione=payload["rotazione"],
+                    testo_estratto=payload["testo_estratto"],
                     ocr_text=None,
-                    immagine_pagina_storage_key=None,
-                    stato_estrazione="testo_pdf" if normalize_extracted_text(extracted_text) else "non_elaborata",
+                    immagine_pagina_storage_key=payload["immagine_pagina_storage_key"],
+                    stato_estrazione=payload["stato_estrazione"],
                     hash_render=None,
                 )
             )
 
-        document.numero_pagine = len(reader.pages)
+        document.numero_pagine = len(page_payloads)
         document.stato_elaborazione = "indicizzato"
     except Exception:
         document.numero_pagine = None
         document.stato_elaborazione = "errore"
 
-    db.add(document)
     db.commit()
     return get_document(db, document.id)
 
@@ -818,6 +914,54 @@ def _is_pdf_document(document: Document, mime_type: str | None) -> bool:
 
 def normalize_extracted_text(value: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
+
+
+def _extract_pdf_page_payloads(document: Document, storage_path: Path) -> list[dict[str, object]]:
+    reader = PdfReader(str(storage_path))
+    fitz_doc = fitz.open(str(storage_path))
+    page_payloads: list[dict[str, object]] = []
+
+    try:
+        for index, page in enumerate(reader.pages, start=1):
+            try:
+                pypdf_text = normalize_extracted_text(page.extract_text())
+            except Exception:
+                pypdf_text = None
+
+            fitz_page = fitz_doc.load_page(index - 1)
+            fitz_text = normalize_extracted_text(fitz_page.get_text("text"))
+            extracted_text = fitz_text or pypdf_text
+            page_image_storage_key = None
+            extraction_state = "testo_pdf" if extracted_text else "immagine_pronta"
+            if extracted_text is None:
+                page_image_storage_key = _render_page_image(document.storage_key, fitz_page, index)
+
+            page_payloads.append(
+                {
+                    "numero_pagina": index,
+                    "larghezza": float(page.mediabox.width) if page.mediabox.width is not None else float(fitz_page.rect.width),
+                    "altezza": float(page.mediabox.height) if page.mediabox.height is not None else float(fitz_page.rect.height),
+                    "rotazione": int(fitz_page.rotation),
+                    "testo_estratto": extracted_text,
+                    "immagine_pagina_storage_key": page_image_storage_key,
+                    "stato_estrazione": extraction_state,
+                }
+            )
+    finally:
+        fitz_doc.close()
+
+    return page_payloads
+
+
+def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> str:
+    relative_pdf_path = Path(storage_key)
+    image_relative_path = Path("renders") / relative_pdf_path.parent / f"{relative_pdf_path.stem}_page_{page_number}.png"
+    absolute_image_path = _document_storage_root() / image_relative_path
+    absolute_image_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pixmap = page.get_pixmap(dpi=150, alpha=False)
+    pixmap.save(str(absolute_image_path))
+    return image_relative_path.as_posix()
 
 
 def _upsert_read_value_model(
@@ -890,6 +1034,140 @@ def _upsert_read_value_model(
         nota_breve=campo,
     )
     return existing
+
+
+def _create_text_evidence(
+    db: Session,
+    *,
+    row_id: int,
+    document_id: int,
+    document_page_id: int,
+    blocco: str,
+    snippet: str,
+    actor_id: int,
+    confidence: float,
+) -> DocumentEvidence:
+    evidence = DocumentEvidence(
+        document_id=document_id,
+        document_page_id=document_page_id,
+        acquisition_row_id=row_id,
+        blocco=blocco,
+        tipo_evidenza="testo",
+        bbox=None,
+        testo_grezzo=snippet,
+        storage_key_derivato=None,
+        metodo_estrazione="regex",
+        mascherato=False,
+        confidenza=confidence,
+        utente_creazione_id=actor_id,
+    )
+    db.add(evidence)
+    db.flush()
+    return evidence
+
+
+def _detect_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        for line in lines:
+            normalized_line = line.lower()
+            if "numero_certificato_ddt" not in matches:
+                cert_number = _extract_certificate_number(normalized_line)
+                if cert_number is not None:
+                    matches["numero_certificato_ddt"] = _build_match(page.id, line, cert_number)
+            if "cdq" not in matches:
+                explicit_cdq = _extract_by_keywords(normalized_line, ("cdq",))
+                if explicit_cdq is not None:
+                    matches["cdq"] = _build_match(page.id, line, explicit_cdq)
+            if "colata" not in matches:
+                colata = _extract_by_keywords(normalized_line, ("colata", "col.", "col "))
+                if colata is not None:
+                    matches["colata"] = _build_match(page.id, line, colata)
+            if "peso" not in matches:
+                weight = _extract_weight_from_line(normalized_line)
+                if weight is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(weight))
+    return matches
+
+
+def _detect_certificate_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        for line in lines:
+            normalized_line = line.lower()
+            if "numero_certificato_certificato" not in matches:
+                cert_number = _extract_certificate_number(normalized_line)
+                if cert_number is not None:
+                    matches["numero_certificato_certificato"] = _build_match(page.id, line, cert_number)
+            if "colata_certificato" not in matches:
+                colata = _extract_by_keywords(normalized_line, ("cast", "charge", "batch", "colata", "heat"))
+                if colata is not None:
+                    matches["colata_certificato"] = _build_match(page.id, line, colata)
+            if "peso_certificato" not in matches:
+                weight = _extract_weight_from_line(normalized_line)
+                if weight is not None:
+                    matches["peso_certificato"] = _build_match(page.id, line, _normalize_weight(weight))
+    return matches
+
+
+def _page_lines(page: DocumentPage) -> list[str]:
+    page_text = page.testo_estratto or page.ocr_text or ""
+    return [line.strip() for line in page_text.splitlines() if line.strip()]
+
+
+def _build_match(page_id: int, snippet: str, value: str) -> dict[str, str | int]:
+    return {
+        "page_id": page_id,
+        "snippet": snippet,
+        "standardized": value,
+        "final": value,
+    }
+
+
+def _extract_certificate_number(line: str) -> str | None:
+    pattern = re.compile(r"(?:cert(?:ificate)?|cdq)[^\w]{0,6}(?:n|no|nr|n°)?[^\w]{0,6}([a-z0-9][a-z0-9/-]{2,})")
+    match = pattern.search(line)
+    if match is None:
+        return None
+    return match.group(1).upper()
+
+
+def _extract_by_keywords(line: str, keywords: tuple[str, ...]) -> str | None:
+    if not any(keyword in line for keyword in keywords):
+        return None
+    pattern = re.compile(r"(?:[:=\-]|\b)([a-z0-9][a-z0-9/-]{2,})\s*$")
+    tail_match = pattern.search(line)
+    if tail_match is not None:
+        return tail_match.group(1).upper()
+
+    token_pattern = re.compile(r"([a-z0-9][a-z0-9/-]{2,})")
+    tokens = token_pattern.findall(line)
+    for token in reversed(tokens):
+        if token not in {"cast", "charge", "batch", "colata", "heat", "cdq", "cert", "certificate"}:
+            return token.upper()
+    return None
+
+
+def _extract_weight_from_line(line: str) -> str | None:
+    if not any(keyword in line for keyword in ("net weight", "peso netto", "peso net", "netto", "kg")):
+        return None
+    matches = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?", line)
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def _normalize_weight(value: str) -> str:
+    return value.replace(",", ".")
+
+
+def _string_or_none(value: str | int | None) -> str | None:
+    if value is None:
+        return None
+    string_value = str(value).strip()
+    return string_value or None
 
 
 def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
