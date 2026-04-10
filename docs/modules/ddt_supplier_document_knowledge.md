@@ -23,10 +23,10 @@ Questo modulo deve essere coerente con:
 
 In particolare:
 
-* `cdq` è la chiave principale del sistema
-* `cdq` può essere presente sul DDT, anche scritto a mano
+* `cdq` è un campo documentale critico di tracciabilità e collegamento
 * `colata` è un identificativo materiale critico
-* il DDT non è solo documento del fornitore, ma anche documento arricchito internamente dall’incoming
+* il modulo di acquisition è centrato sulla riga materiale, non sul `cdq` isolato
+* i DDT futuri caricati nell'app devono essere pensati prima di tutto come documenti originali del fornitore, non come documenti arricchiti a mano
 
 Questo modulo NON definisce la struttura finale dei dati acquisiti.
 Definisce la conoscenza necessaria per capire come riconoscerli nei DDT reali.
@@ -57,12 +57,14 @@ Regola operativa obbligatoria:
 
 per:
 
+* leggere e comprendere l'intero dataset reale dei DDT presenti
 * comprendere la struttura reale dei DDT dei fornitori
 * identificare pattern ricorrenti per fornitore
 * distinguere dati stampati e dati aggiunti manualmente
 * capire dove si trovano i dati chiave
 * definire regole documentali di riconoscimento
 * costruire una base di conoscenza documentale strutturata
+* costruire lo standard di ricerca corretto per fornitore/template
 * contribuire al corretto collegamento tra riga DDT e certificato corretto
 * contribuire alla raccolta dati finale del modulo `ddt_certificates_data_acquisition`
 
@@ -84,7 +86,9 @@ Questo modulo serve a far sì che Codex capisca:
 
 * come sono fatti i DDT
 * come cambiano tra fornitori
+* come cambiano tra template dello stesso fornitore
 * dove stanno i campi importanti
+* come va costruito lo standard di ricerca dei campi per fornitore/template
 * come collegare i DDT ai certificati
 
 ---
@@ -103,6 +107,13 @@ Per ogni PDF deve:
 6. riconoscere pattern ricorrenti
 7. formalizzare la conoscenza in regole strutturate
 8. preparare una base di conoscenza riutilizzabile in futuro
+
+Regola metodologica obbligatoria:
+
+* prima si leggono davvero i DDT del dataset reale
+* poi si capisce come sono fatti per fornitore/template
+* poi si formalizza lo standard di ricerca
+* solo dopo si può pensare al codice
 
 Codex NON deve:
 
@@ -242,11 +253,19 @@ Campi critici da comprendere:
 
 ---
 
-## 7. ⚠️ Dati aggiunti manualmente (CRITICI)
+## 7. ⚠️ Dati aggiunti manualmente (CONTESTO STORICO)
 
 Nei DDT reali, l’ufficio incoming aggiunge spesso a mano informazioni fondamentali.
 
-Questi dati NON fanno parte del documento originale del fornitore, ma sono essenziali per il sistema.
+Questi dati NON fanno parte del documento originale del fornitore.
+
+Servono come contesto storico utile per capire:
+
+* come l'incoming ha lavorato sui documenti nel passato
+* quali campi erano ritenuti importanti
+* come venivano collegati DDT e certificati
+
+Ma NON devono diventare l'assunzione di base del sistema futuro.
 
 Esempi:
 
@@ -259,15 +278,21 @@ Questi dati devono essere trattati come:
 
 * validi
 * significativi
-* centrali per la tracciabilità
+* utili alla comprensione del processo storico
 
 NON devono essere trattati come rumore OCR.
+
+Ma regola fondamentale:
+
+* i DDT futuri caricati nell'app NON devono essere pensati come DDT arricchiti a mano
+* lo standard di ricerca e il futuro codice devono basarsi prima sui campi originali del documento fornitore
+* le annotazioni manuali restano materiale di conoscenza, non presupposto del runtime
 
 ---
 
 ## 8. ⚠️ CDQ — CASO PIÙ IMPORTANTE
 
-Il `cdq` scritto a mano NON deve essere trattato come campo globale del documento.
+Il `cdq` osservato nei DDT storici, anche quando scritto a mano, NON deve essere trattato come campo globale del documento.
 
 Nel caso reale, il `cdq` può essere:
 
@@ -304,6 +329,7 @@ Codex deve capire che:
 * NON va interpretato come metadato unico del DDT
 * deve essere associato alla singola riga materiale corretta
 * il riferimento spaziale/visivo vicino al peso è fondamentale
+* questa osservazione nasce dal dataset storico, ma non autorizza ad assumere che i DDT futuri avranno `cdq` scritto a mano
 
 ### Conseguenza per il sistema
 
@@ -327,7 +353,7 @@ La `colata` è un identificativo materiale fondamentale.
 Può essere:
 
 * stampata
-* scritta a mano
+* scritta a mano nei casi storici
 * rappresentata con sinonimi:
 
   * lot
@@ -340,6 +366,7 @@ Codex deve:
 * capire se la colata è per documento o per riga
 * distinguere i casi in cui è associata alla riga materiale
 * formalizzare il legame con il certificato
+* distinguere ciò che appartiene al documento originale da ciò che appartiene alle annotazioni storiche dell'incoming
 
 La `colata`, insieme al `cdq`, è una delle chiavi più importanti di collegamento reale tra DDT e certificato.
 
