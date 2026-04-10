@@ -15,18 +15,18 @@ esempi_locali/4-ddt/Metalba
 * `fornitore_master`: `Metalba Aluminium S.p.A.`
 * `alias_osservati`: `Metalba`, `Metalba Aluminium`
 * `template_id`: `metalba_ddt_round_bar_v1`
-* `stato_analisi`: `bozza`
+* `stato_analisi`: `avanzata`
 
 ---
 
 ## 2. Dataset Letto
 
 * `pdf_letti`: `26-00957.pdf`, `26-00958.pdf`, `26-00959.pdf`, `26-00960.pdf`, `26-00961.pdf`, `26-00962.pdf`
-* `documenti_rappresentativi`: `26-00957.pdf`, `26-00961.pdf`
+* `documenti_rappresentativi`: `26-00957.pdf`, `26-00961.pdf`, `26-00962.pdf`
 
 Osservazione:
 
-* il dataset certificati `Metalba Aluminium` esiste, ma sui DDT letti non e' ancora fissato un match documentale forte e verificato
+* il dataset certificati `Metalba Aluminium` consente ora un match documentale forte e verificato su tutti i 6 DDT letti
 
 Nota metodologica:
 
@@ -68,6 +68,14 @@ Il template si riconosce da:
 * lunghezza
 * peso netto
 
+Campi ponte forti osservati verso il certificato:
+
+* `Rif. Ord.`
+* `Vs. Rif.`
+* alloy / temper
+* diametro
+* peso netto
+
 ### 4.2 Contesto Storico Da NON Usare Nel Runtime
 
 * scritte a mano tipo `CdQ` e colata
@@ -94,6 +102,7 @@ Il template si riconosce da:
   * customer code
   * lunghezza
   * peso netto
+* `Rif. Ord.` e `Vs. Rif.` sono i due campi piu' forti per il match col certificato
 
 ---
 
@@ -105,10 +114,34 @@ Il template si riconosce da:
 * diametro
 * lunghezza
 * peso netto
+* `Rif. Ord.`
+* `Vs. Rif.`
+
+Casi gia' verificati:
+
+* `26-00957.pdf` -> `Nr.26-0743`
+  * DDT: `Vs. Rif. 27/26`, `Rif. Ord. 26/0173`, `6082F F`, `diam 38`, `Kg 2.233`
+  * certificato: `Ordine Cliente 27/26`, `Commessa 26/0173/1`, `6082F F`, `diam 38`, `Kg 2.233`
+* `26-00958.pdf` -> `Nr.26-0744`
+  * DDT: `11/26`, `26/0082`, `6082F F`, `diam 28`, `Kg 3.205`
+  * certificato: `Ordine Cliente 11/26`, `Commessa 26/0082/2`, `diam 28`, `Kg 3.205`
+* `26-00959.pdf` -> `Nr.26-0745`
+  * DDT: `25/26`, `26/0187`, `7003 F`, `diam 43`, `Kg 4.133`
+  * certificato: `Ordine Cliente 25/26`, `Commessa 26/0187/2`, `7003 F`, `diam 43`, `Kg 4.133`
+* `26-00960.pdf` -> `Nr.26-0746`
+  * DDT: `45/26`, `26/0310`, `6082F F`, `diam 48`, `Kg 1.334`
+  * certificato: `Ordine Cliente 45/26`, `Commessa 26/0310/4`, `diam 48`, `Kg 1.334`
+* `26-00961.pdf` -> `Nr.26-0747`
+  * DDT: `86/26`, `26/0499`, `6082F F`, `diam 90`, `Kg 2.334`
+  * certificato: `Ordine Cliente 86/26`, `Commessa 26/0499/3`, `diam 90`, `Kg 2.334`
+* `26-00962.pdf` -> `Nr.26-0748`
+  * DDT: `31/26`, `26/0179`, `6082F F`, `diam 105`, `Kg 4.870`
+  * certificato: `Ordine Cliente 31/26`, `Commessa 26/0179/1`, `diam 105`, `Kg 4.870`
 
 ---
 
 ## 7. Note Runtime
 
 * template semplice ma delicato, perche' i campi stampati sono pochi e le annotazioni manuali storiche sono fuorvianti
-* qui il runtime dovra' restare molto disciplinato sui soli campi stampati
+* il match runtime puo' essere forte anche senza colata scritta a mano, usando `Rif. Ord.` + `Vs. Rif.` + alloy/diametro/peso
+* qui il runtime dovra' restare disciplinato sui soli campi stampati

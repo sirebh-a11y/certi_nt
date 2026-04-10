@@ -17,18 +17,17 @@ esempi_locali/3-certificati/Metalba Aluminium
 * `fornitore_master`: `Metalba Aluminium S.p.A.`
 * `alias_osservati`: `Metalba`, `Metalba Aluminium`
 * `template_id`: `metalba_test_certificate_v1`
-* `stato_analisi`: `bozza`
+* `stato_analisi`: `avanzata`
 
 ---
 
 ## 2. Dataset Letto
 
-* `pdf_letti`: `CQF_14-0961_2014.pdf`, `CQF_14-1232_2014.pdf`
+* `pdf_letti`: `CQF_14-0961_2014.pdf`, `CQF_14-1232_2014.pdf`, `CQF_26-0743_608238_2026.pdf`, `CQF_26-0744_608228_2026.pdf`, `CQF_26-0745_700343_2026.pdf`, `CQF_26-0746_608248_2026.pdf`, `CQF_26-0747_608290_2026.pdf`, `CQF_26-0748_6082105_2026.pdf`
 
-Limite attuale:
+Osservazione forte:
 
-* il template certificato e' chiaro
-* ma il dataset oggi non consente ancora un match DDT↔certificato forte e contemporaneo sui DDT 2026 letti
+* il dataset 2026 consente ora un match DDT↔certificato forte e contemporaneo sui 6 DDT letti
 
 Nota metodologica:
 
@@ -65,6 +64,8 @@ Il template si riconosce da:
 * alloy
 * temper
 * casting no
+* `Commessa`
+* `Ordine Cliente`
 * mechanical values
 * chemistry values
 * note certificate
@@ -109,8 +110,25 @@ Campi forti futuri:
 * alloy / temper
 * customer code
 * dimensione
+* `Commessa`
+* `Ordine Cliente`
 
 Nota:
 
 * il template certificato e' maturo
-* ma il match con i DDT 2026 del dataset va ancora consolidato
+* il match forte osservato nasce da:
+  * `Commessa` <-> `Rif. Ord.` del DDT
+  * `Ordine Cliente` <-> `Vs. Rif.` del DDT
+  * alloy / temper
+  * dimensione
+  * peso
+* il suffisso di `Commessa` (`/1`, `/2`, `/3`, `/4`) e' dettaglio di sottoriga certificato, mentre il root coincide col valore DDT
+
+Casi gia' verificati:
+
+* `Nr.26-0743` <-> DDT `26-00957.pdf`
+* `Nr.26-0744` <-> DDT `26-00958.pdf`
+* `Nr.26-0745` <-> DDT `26-00959.pdf`
+* `Nr.26-0746` <-> DDT `26-00960.pdf`
+* `Nr.26-0747` <-> DDT `26-00961.pdf`
+* `Nr.26-0748` <-> DDT `26-00962.pdf`
