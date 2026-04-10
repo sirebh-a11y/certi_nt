@@ -55,7 +55,7 @@ Quello che manca ancora e' un file ponte che dica:
 
 * come trasformare questa conoscenza in un lettore reale dentro l'app
 * quali strumenti usare
-* quale ruolo dare a OpenAI GPT-5.2
+* quale ruolo dare a ChatGPT/OpenAI con il modello migliore adatto
 * come costruire uno storico utile per machine learning
 * come progettare una UI di correzione e validazione realmente usabile
 
@@ -172,9 +172,24 @@ Perche':
 * permette 1-to-1 reale tra campo letto e posizione
 * produce prove riusabili
 
-### 4.2 OpenAI GPT-5.2
+### 4.2 ChatGPT/OpenAI
 
-OpenAI GPT-5.2 dovrebbe essere usato come **supporto di lettura forte**, ma non come unica fonte di verita'.
+ChatGPT/OpenAI dovrebbe essere usato come **supporto di lettura forte**, ma non come unica fonte di verita'.
+
+Regola guida:
+
+* la lettura corretta del documento e' la parte piu' vitale dell'app
+* il sistema deve puntare al massimo livello realistico di precisione
+* vanno combinati tutti i sistemi utili disponibili quando necessario
+* va scelto il modello migliore adatto al tipo di lettura
+
+Regola operativa obbligatoria:
+
+* prima di ogni uso di ChatGPT/OpenAI va dichiarato:
+  * obiettivo
+  * modello scelto
+  * stima costi
+  * se si tratta di test singolo o batch
 
 Ruoli consigliati:
 
@@ -189,7 +204,7 @@ Ruolo NON consigliato:
 
 * produrre direttamente il dato finale senza prova documentale associata
 
-### 4.3 Regola obbligatoria di masking prima di OpenAI
+### 4.3 Regola obbligatoria di masking prima di ChatGPT/OpenAI
 
 Prima di qualunque invio a ChatGPT/OpenAI devono essere mascherati in modo obbligatorio:
 
@@ -615,8 +630,8 @@ Questo draft consolida anche le decisioni gia' emerse nel confronto:
 3. Il semaforico deve riflettere sia la qualita' della lettura sia la qualita' del match.
 4. La standardizzazione avviene dopo il salvataggio del grezzo con evidenza.
 5. Il primo pilota deve partire con DDT e certificati insieme, con perimetro aperto a tutti i fornitori ma focus principale sui fornitori meglio strutturati presenti in `esempi_locali/3-certificati` fuori da `Vari`.
-6. OpenAI GPT-5.2 e' un supporto forte ma non il motore unico della prima versione.
-7. Prima di qualunque invio a OpenAI i dati aziendali di `Forgialluminio 3` e dell'emittente del documento devono essere mascherati obbligatoriamente.
+6. ChatGPT/OpenAI e' un supporto forte ma non il motore unico della prima versione.
+7. Prima di qualunque invio a ChatGPT/OpenAI i dati aziendali di `Forgialluminio 3` e dell'emittente del documento devono essere mascherati obbligatoriamente.
 8. La validazione deve esistere per sezione e anche come validazione finale di riga.
 9. Il sistema deve tenere sempre distinti:
    * dato letto grezzo
@@ -1355,7 +1370,7 @@ Ordine consigliato:
 2. progettare il reader come sistema di evidenze, non come parser cieco
 3. fare nascere le righe incoming gia' dal DDT, anche senza certificato presente
 4. gestire il join DDT <-> certificato come proposta assistita, non come match cieco definitivo
-5. integrare OpenAI GPT-5.2 come supporto controllato e mascherato
+5. integrare ChatGPT/OpenAI come supporto controllato e mascherato
 6. costruire la UI di validazione/correzione
 7. salvare storico strutturato
 8. solo dopo ragionare su machine learning vero e proprio
