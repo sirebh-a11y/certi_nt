@@ -40,6 +40,10 @@ Questo draft NON sostituisce i file knowledge.
 
 Li usa come base e prova a definire la strategia complessiva del futuro lettore.
 
+Per la parte specifica di OpenAI come secondo lettore/validatore, vedere anche:
+
+* `docs/modules/document_openai_double_check_strategy.md`
+
 ---
 
 ## 1. Punto di partenza

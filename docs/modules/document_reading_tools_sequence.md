@@ -258,6 +258,19 @@ Ma viene dopo:
 Prima di qualunque uso OpenAI/ChatGPT va sempre dichiarato:
 
 * obiettivo
+* modello
+* stima costi
+* test singolo o batch
+
+Ruolo consigliato attuale:
+
+* non lettore principale
+* non OCR base
+* si' come secondo lettore / double check sui blocchi difficili
+
+Vedere anche:
+
+* `docs/modules/document_openai_double_check_strategy.md`
 * modello scelto
 * stima costi
 * test singolo o batch
