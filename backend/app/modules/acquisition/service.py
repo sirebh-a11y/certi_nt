@@ -40,6 +40,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowDetailResponse,
     AcquisitionRowListItemResponse,
     AcquisitionValueHistoryResponse,
+    DocumentSplitRowsCreateResponse,
     DocumentBatchErrorResponse,
     DocumentBatchUploadResponse,
     DocumentCreateRequest,
@@ -58,6 +59,7 @@ from app.modules.acquisition.schemas import (
     ReadValueUpsertRequest,
 )
 from app.modules.document_reader.registry import resolve_supplier_template
+from app.modules.document_reader.service import build_document_row_split_plan
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
@@ -639,6 +641,131 @@ def index_document(db: Session, document: Document, actor_email: str | None = No
     document = _index_document_from_path(db, document)
     log_service.record("acquisition", f"Document indexed: {document.nome_file_originale}", actor_email)
     return serialize_document_detail(document)
+
+
+def prepare_document_for_reader(db: Session, document: Document) -> Document:
+    if not document.pages:
+        document = _index_document_from_path(db, document)
+
+    document = _ensure_document_page_images(db, document)
+    document = _ensure_document_page_ocr(db, document)
+    return get_document(db, document.id)
+
+
+def create_rows_from_document_split_plan(
+    db: Session,
+    *,
+    document: Document,
+    actor_id: int,
+    actor_email: str,
+) -> DocumentSplitRowsCreateResponse:
+    document = prepare_document_for_reader(db, document)
+
+    existing_rows = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.document_ddt_id == document.id)
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+    if existing_rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Document already linked to {len(existing_rows)} acquisition rows",
+        )
+
+    plan = build_document_row_split_plan(document)
+    if not plan.row_split_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No split candidates available for this document",
+        )
+
+    template = resolve_supplier_template(
+        document.supplier.ragione_sociale if document.supplier is not None else None,
+        document.nome_file_originale,
+    )
+    supplier_key = template.supplier_key if template is not None else None
+    shared_matches = _detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
+
+    created_rows: list[AcquisitionRowDetailResponse] = []
+    for candidate in plan.row_split_candidates:
+        created_row = create_acquisition_row(
+            db=db,
+            payload=AcquisitionRowCreateRequest(
+                document_ddt_id=document.id,
+                fornitore_id=document.fornitore_id,
+                fornitore_raw=document.supplier.ragione_sociale if document.supplier is not None else None,
+                cdq=_split_plan_match_value(shared_matches, "cdq"),
+                lega_base=candidate.lega,
+                diametro=candidate.diametro or _split_plan_match_value(shared_matches, "diametro"),
+                colata=candidate.colata or _split_plan_match_value(shared_matches, "colata"),
+                ddt=_split_plan_match_value(shared_matches, "ddt"),
+                peso=candidate.peso_netto or _split_plan_match_value(shared_matches, "peso"),
+                ordine=candidate.customer_order_no or _split_plan_match_value(shared_matches, "ordine"),
+                stato_tecnico="rosso",
+                stato_workflow="nuova",
+                priorita_operativa="media",
+            ),
+            actor_id=actor_id,
+            actor_email=actor_email,
+        )
+        row = get_acquisition_row(db, created_row.id)
+        _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
+        created_rows.append(serialize_acquisition_row_detail(get_acquisition_row(db, row.id)))
+
+    log_service.record(
+        "acquisition",
+        f"Split rows created from document {document.id}: {len(created_rows)}",
+        actor_email,
+    )
+    return DocumentSplitRowsCreateResponse(
+        document_id=document.id,
+        created_count=len(created_rows),
+        created_rows=created_rows,
+    )
+
+
+def _split_plan_match_value(matches: dict[str, dict[str, object]], field_name: str) -> str | None:
+    field_match = matches.get(field_name) or {}
+    final_value = field_match.get("final")
+    if not isinstance(final_value, str):
+        return None
+    return _string_or_none(final_value)
+
+
+def _persist_split_candidate_values(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    candidate,
+    actor_id: int,
+) -> None:
+    candidate_values = {
+        "lot_batch_no": candidate.lot_batch_no,
+        "heat_no": candidate.heat_no,
+        "supplier_order_no": candidate.supplier_order_no,
+        "product_code": candidate.product_code,
+    }
+    for field_name, field_value in candidate_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        upsert_read_value(
+            db=db,
+            row=row,
+            payload=ReadValueUpsertRequest(
+                blocco="ddt",
+                campo=field_name,
+                valore_grezzo=normalized_value,
+                valore_standardizzato=normalized_value,
+                valore_finale=normalized_value,
+                stato="proposto",
+                metodo_lettura="sistema",
+                fonte_documentale="ddt",
+                confidenza=0.78,
+            ),
+            actor_id=actor_id,
+        )
 
 
 def create_document_page(db: Session, document: Document, payload: DocumentPageCreateRequest) -> DocumentPageResponse:
@@ -2213,20 +2340,20 @@ def _compute_ddt_block_state(row: AcquisitionRow, values: list[ReadValue]) -> st
 
 def _compute_ddt_field_summary(row: AcquisitionRow) -> dict[str, list[str]]:
     values = [value for value in row.values if value.blocco == "ddt"]
-    return _compute_ddt_field_summary_from_values(values)
+    return _compute_ddt_field_summary_from_values(values, row=row)
 
 
-def _compute_ddt_field_summary_from_values(values: list[ReadValue]) -> dict[str, list[str]]:
+def _compute_ddt_field_summary_from_values(values: list[ReadValue], *, row: AcquisitionRow | None = None) -> dict[str, list[str]]:
     by_field = {value.campo: value for value in values}
     confirmed: list[str] = []
     pending: list[str] = []
     missing: list[str] = []
 
     for field in _ddt_required_fields() + _ddt_optional_fields():
-        has_payload = _ddt_field_has_payload(by_field, field)
+        has_payload = _ddt_field_has_payload(by_field, field, row=row)
         if not has_payload:
             missing.append(field)
-        elif _ddt_field_is_confirmed(by_field, field):
+        elif _ddt_field_is_confirmed(by_field, field, row=row):
             confirmed.append(field)
         else:
             pending.append(field)
@@ -2238,7 +2365,7 @@ def _compute_ddt_field_summary_from_values(values: list[ReadValue]) -> dict[str,
     }
 
 
-def _ddt_field_has_payload(by_field: dict[str, ReadValue], field: str) -> bool:
+def _ddt_field_has_payload(by_field: dict[str, ReadValue], field: str, *, row: AcquisitionRow | None = None) -> bool:
     value = by_field.get(field)
     if value is not None and any(
         _string_or_none(candidate) is not None
@@ -2252,17 +2379,34 @@ def _ddt_field_has_payload(by_field: dict[str, ReadValue], field: str) -> bool:
             _string_or_none(candidate) is not None
             for candidate in (fallback_value.valore_finale, fallback_value.valore_standardizzato, fallback_value.valore_grezzo)
         )
+    if row is not None:
+        return _row_ddt_field_value(row, field) is not None
     return False
 
 
-def _ddt_field_is_confirmed(by_field: dict[str, ReadValue], field: str) -> bool:
+def _ddt_field_is_confirmed(by_field: dict[str, ReadValue], field: str, *, row: AcquisitionRow | None = None) -> bool:
     value = by_field.get(field)
-    if value is not None and value.stato == "confermato" and _ddt_field_has_payload(by_field, field):
+    if value is not None and value.stato == "confermato" and _ddt_field_has_payload(by_field, field, row=row):
         return True
     if field == "cdq":
         fallback_value = by_field.get("numero_certificato_ddt")
-        return fallback_value is not None and fallback_value.stato == "confermato" and _ddt_field_has_payload(by_field, field)
+        return fallback_value is not None and fallback_value.stato == "confermato" and _ddt_field_has_payload(by_field, field, row=row)
     return False
+
+
+def _row_ddt_field_value(row: AcquisitionRow, field: str) -> str | None:
+    field_map = {
+        "cdq": row.cdq,
+        "colata": row.colata,
+        "diametro": row.diametro,
+        "peso": row.peso,
+        "numero_certificato_ddt": row.cdq,
+        "ordine": row.ordine,
+    }
+    value = field_map.get(field)
+    if field in {"diametro", "peso"}:
+        return _normalize_value_for_field("ddt", field, value)
+    return _string_or_none(value)
 
 
 def _ddt_required_fields() -> tuple[str, ...]:
@@ -2377,7 +2521,7 @@ def _extract_pdf_page_payloads(document: Document, storage_path: Path) -> list[d
 
 
 def _ensure_document_page_images(db: Session, document: Document) -> Document:
-    if any(page.immagine_pagina_storage_key for page in document.pages):
+    if document.pages and all(page.immagine_pagina_storage_key for page in document.pages):
         return document
 
     storage_path = get_document_file_path(document)
@@ -2854,11 +2998,16 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
         )
     }
 
-    row.cdq = _final_value_for_row(value_map.get("cdq")) or _final_value_for_row(value_map.get("numero_certificato_ddt"))
-    row.colata = _final_value_for_row(value_map.get("colata"))
-    row.peso = _final_value_for_row(value_map.get("peso"))
-    row.diametro = _final_value_for_row(value_map.get("diametro"))
-    row.ordine = _final_value_for_row(value_map.get("ordine"))
+    if "cdq" in value_map or "numero_certificato_ddt" in value_map:
+        row.cdq = _final_value_for_row(value_map.get("cdq")) or _final_value_for_row(value_map.get("numero_certificato_ddt"))
+    if "colata" in value_map:
+        row.colata = _final_value_for_row(value_map.get("colata"))
+    if "peso" in value_map:
+        row.peso = _final_value_for_row(value_map.get("peso"))
+    if "diametro" in value_map:
+        row.diametro = _final_value_for_row(value_map.get("diametro"))
+    if "ordine" in value_map:
+        row.ordine = _final_value_for_row(value_map.get("ordine"))
 
 
 def _final_value_for_row(value: ReadValue | None) -> str | None:

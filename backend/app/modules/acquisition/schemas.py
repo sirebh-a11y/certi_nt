@@ -442,3 +442,9 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
 
 class AcquisitionRowListResponse(BaseModel):
     items: list[AcquisitionRowListItemResponse]
+
+
+class DocumentSplitRowsCreateResponse(BaseModel):
+    document_id: int
+    created_count: int
+    created_rows: list[AcquisitionRowDetailResponse]

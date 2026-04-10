@@ -21,6 +21,7 @@ from app.modules.acquisition.schemas import (
     DocumentPageCreateRequest,
     DocumentPageResponse,
     DocumentResponse,
+    DocumentSplitRowsCreateResponse,
     MatchResponse,
     MatchUpsertRequest,
     ReadValueResponse,
@@ -31,6 +32,7 @@ from app.modules.acquisition.service import (
     create_acquisition_row,
     create_document,
     create_document_page,
+    create_rows_from_document_split_plan,
     create_evidence,
     detect_chemistry,
     detect_properties,
@@ -46,6 +48,7 @@ from app.modules.acquisition.service import (
     list_acquisition_rows,
     list_documents,
     process_row_minimal,
+    prepare_document_for_reader,
     run_autonomous_processing,
     serialize_acquisition_row_detail,
     serialize_document_detail,
@@ -58,8 +61,8 @@ from app.modules.acquisition.service import (
     update_acquisition_row,
     validate_final_row,
 )
-from app.modules.document_reader.schemas import ReaderPlanResponse
-from app.modules.document_reader.service import build_reader_plan
+from app.modules.document_reader.schemas import DocumentRowSplitPlanResponse, ReaderPlanResponse
+from app.modules.document_reader.service import build_document_row_split_plan, build_reader_plan
 
 router = APIRouter()
 
@@ -161,6 +164,32 @@ def get_document_route(document_id: int, _: CurrentUser, db: DbSession) -> Docum
     return serialize_document_detail(get_document(db, document_id))
 
 
+@router.get("/documents/{document_id}/row-split-plan", response_model=DocumentRowSplitPlanResponse)
+def get_document_row_split_plan_route(
+    document_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> DocumentRowSplitPlanResponse:
+    document = get_document(db, document_id)
+    document = prepare_document_for_reader(db, document)
+    return build_document_row_split_plan(document)
+
+
+@router.post("/documents/{document_id}/split-rows", response_model=DocumentSplitRowsCreateResponse)
+def create_document_split_rows_route(
+    document_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> DocumentSplitRowsCreateResponse:
+    document = get_document(db, document_id)
+    return create_rows_from_document_split_plan(
+        db=db,
+        document=document,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+    )
+
+
 @router.get("/documents/{document_id}/file")
 def get_document_file_route(document_id: int, _: CurrentUser, db: DbSession) -> FileResponse:
     document = get_document(db, document_id)
@@ -233,6 +262,10 @@ def get_acquisition_row_route(row_id: int, _: CurrentUser, db: DbSession) -> Acq
 @router.get("/rows/{row_id}/reader-plan", response_model=ReaderPlanResponse)
 def get_reader_plan_route(row_id: int, _: CurrentUser, db: DbSession) -> ReaderPlanResponse:
     row = get_acquisition_row(db, row_id)
+    if row.ddt_document is not None:
+        row.ddt_document = prepare_document_for_reader(db, row.ddt_document)
+    if row.certificate_document is not None:
+        row.certificate_document = prepare_document_for_reader(db, row.certificate_document)
     return build_reader_plan(row)
 
 

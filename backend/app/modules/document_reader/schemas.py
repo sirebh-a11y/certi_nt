@@ -43,6 +43,21 @@ class ReaderRowSplitHintResponse(BaseModel):
     signals: list[str] = Field(default_factory=list)
 
 
+class ReaderRowSplitCandidateResponse(BaseModel):
+    candidate_index: int
+    supplier_key: str | None = None
+    lega: str | None = None
+    diametro: str | None = None
+    peso_netto: str | None = None
+    colata: str | None = None
+    lot_batch_no: str | None = None
+    heat_no: str | None = None
+    customer_order_no: str | None = None
+    supplier_order_no: str | None = None
+    product_code: str | None = None
+    snippets: list[str] = Field(default_factory=list)
+
+
 class ReaderPlanResponse(BaseModel):
     row_id: int
     template: ReaderTemplateSummaryResponse
@@ -50,6 +65,14 @@ class ReaderPlanResponse(BaseModel):
     masking_rules: list[str] = Field(default_factory=list)
     decision_policy: list[str] = Field(default_factory=list)
     row_split_hint: ReaderRowSplitHintResponse
+    row_split_candidates: list[ReaderRowSplitCandidateResponse] = Field(default_factory=list)
     ddt_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     certificate_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     openai_double_check: OpenAIDoubleCheckEstimateResponse
+
+
+class DocumentRowSplitPlanResponse(BaseModel):
+    document_id: int
+    template: ReaderTemplateSummaryResponse
+    row_split_hint: ReaderRowSplitHintResponse
+    row_split_candidates: list[ReaderRowSplitCandidateResponse] = Field(default_factory=list)
