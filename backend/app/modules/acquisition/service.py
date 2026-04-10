@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import pytesseract
 from pathlib import Path
 from uuid import uuid4
 from datetime import UTC, datetime
@@ -56,6 +57,7 @@ from app.modules.acquisition.schemas import (
     ReadValueResponse,
     ReadValueUpsertRequest,
 )
+from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
@@ -1290,7 +1292,8 @@ def detect_chemistry(
         certificate_document = _index_document_from_path(db, certificate_document)
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="chimica")
-    matches = _detect_chemistry_matches(certificate_document.pages)
+    supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
+    matches = _detect_chemistry_matches(certificate_document.pages, supplier_name=supplier_name)
     if openai_api_key and len(matches) < 4:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
@@ -1466,9 +1469,17 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
         ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_ocr(db, ddt_document)
 
     extracted_count = 0
-    ddt_matches = _detect_ddt_core_matches(ddt_document.pages)
+    template = resolve_supplier_template(
+        row.supplier.ragione_sociale if row.supplier is not None else None,
+        row.fornitore_raw,
+        ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
+    )
+    supplier_key = template.supplier_key if template is not None else None
+
+    ddt_matches = _detect_ddt_core_matches(ddt_document.pages, supplier_key=supplier_key)
     for field_name, match in ddt_matches.items():
         evidence = _create_text_evidence(
             db=db,
@@ -1497,20 +1508,24 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
         )
         extracted_count += 1
 
-    if row.cdq is None:
-        if "cdq" in ddt_matches:
-            row.cdq = _string_or_none(ddt_matches["cdq"]["final"])
-        elif "numero_certificato_ddt" in ddt_matches:
-            row.cdq = _string_or_none(ddt_matches["numero_certificato_ddt"]["final"])
+    if row.cdq is None and "cdq" in ddt_matches:
+        row.cdq = _string_or_none(ddt_matches["cdq"]["final"])
     if row.colata is None and "colata" in ddt_matches:
         row.colata = _string_or_none(ddt_matches["colata"]["final"])
+    if row.diametro is None and "diametro" in ddt_matches:
+        row.diametro = _string_or_none(ddt_matches["diametro"]["final"])
+    if row.ddt is None and "ddt" in ddt_matches:
+        row.ddt = _string_or_none(ddt_matches["ddt"]["final"])
     if row.peso is None and "peso" in ddt_matches:
         row.peso = _string_or_none(ddt_matches["peso"]["final"])
+    if row.ordine is None and "ordine" in ddt_matches:
+        row.ordine = _string_or_none(ddt_matches["ordine"]["final"])
 
     if row.document_certificato_id is not None:
         certificate_document = get_document(db, row.document_certificato_id)
         if not certificate_document.pages:
             certificate_document = _index_document_from_path(db, certificate_document)
+        certificate_document = _ensure_document_page_ocr(db, certificate_document)
         certificate_matches = _detect_certificate_core_matches(certificate_document.pages)
         for field_name, match in certificate_matches.items():
             evidence = _create_text_evidence(
@@ -1914,11 +1929,28 @@ def _score_certificate_candidate(
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
 
+    template = resolve_supplier_template(
+        row.supplier.ragione_sociale if row.supplier is not None else None,
+        row.fornitore_raw,
+        row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
+        certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
+    )
+
     matches = _detect_certificate_core_matches(certificate_document.pages)
     certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
     certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
     certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
     file_name_token = _normalize_match_token(certificate_document.nome_file_originale) or ""
+    ddt_supplier_fields = _extract_supplier_match_fields(
+        row.ddt_document.pages if row.ddt_document is not None else [],
+        template.supplier_key if template is not None else None,
+        "ddt",
+    )
+    certificate_supplier_fields = _extract_supplier_match_fields(
+        certificate_document.pages,
+        template.supplier_key if template is not None else None,
+        "certificato",
+    )
 
     score = 0
     reasons: list[str] = []
@@ -1948,7 +1980,35 @@ def _score_certificate_candidate(
         score += 10
         reasons.append("Diametro coerente (nome file)")
 
-    if score <= 0:
+    if template is not None and template.supplier_key == "metalba":
+        if _same_token(ddt_supplier_fields.get("vs_rif"), certificate_supplier_fields.get("ordine_cliente")):
+            score += 95
+            reasons.append("Vs. Rif. / Ordine Cliente coerenti")
+        if _same_token(ddt_supplier_fields.get("rif_ord_root"), certificate_supplier_fields.get("commessa_root")):
+            score += 110
+            reasons.append("Rif. Ord. / Commessa coerenti")
+    elif template is not None and template.supplier_key == "aww":
+        if _same_token(ddt_supplier_fields.get("your_part_number"), certificate_supplier_fields.get("kunden_teile_nr")):
+            score += 110
+            reasons.append("Your part number coerente")
+        if _same_token(ddt_supplier_fields.get("part_number"), certificate_supplier_fields.get("artikel_nr")):
+            score += 100
+            reasons.append("Part number / Artikel-Nr. coerenti")
+        if _same_token(ddt_supplier_fields.get("order_confirmation_root"), certificate_supplier_fields.get("auftragsbestaetigung_root")):
+            score += 95
+            reasons.append("Order confirmation root coerente")
+    elif template is not None and template.supplier_key == "aluminium_bozen":
+        if _same_token(ddt_supplier_fields.get("article"), certificate_supplier_fields.get("article")):
+            score += 100
+            reasons.append("Article coerente")
+        if _same_token(ddt_supplier_fields.get("customer_code"), certificate_supplier_fields.get("customer_code")):
+            score += 100
+            reasons.append("Codice cliente coerente")
+        if _same_token(ddt_supplier_fields.get("customer_order_normalized"), certificate_supplier_fields.get("customer_order_normalized")):
+            score += 70
+            reasons.append("Ordine cliente normalizzato coerente")
+
+    if score <= 10:
         return None
 
     return {
@@ -2304,9 +2364,82 @@ def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> s
     absolute_image_path = _document_storage_root() / image_relative_path
     absolute_image_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pixmap = page.get_pixmap(dpi=150, alpha=False)
+    pixmap = page.get_pixmap(dpi=300, alpha=False)
     pixmap.save(str(absolute_image_path))
     return image_relative_path.as_posix()
+
+
+def _ensure_document_page_ocr(db: Session, document: Document) -> Document:
+    changed = False
+    for page in document.pages:
+        if page.ocr_text or page.testo_estratto:
+            continue
+        if not page.immagine_pagina_storage_key:
+            continue
+        image_path = get_document_page_image_path(page)
+        ocr_text, extraction_state = _ocr_page_image(image_path, page_number=page.numero_pagina)
+        if not ocr_text:
+            continue
+        page.ocr_text = ocr_text
+        if page.stato_estrazione == "immagine_pronta":
+            page.stato_estrazione = extraction_state
+        elif "ocr" not in page.stato_estrazione:
+            page.stato_estrazione = f"{page.stato_estrazione}_ocr"
+        db.add(page)
+        changed = True
+    if changed:
+        db.commit()
+        return get_document(db, document.id)
+    return document
+
+
+def _ocr_page_image(image_path: Path, *, page_number: int) -> tuple[str | None, str]:
+    keyword_patterns = (
+        "delivery",
+        "documento",
+        "packing",
+        "weight",
+        "batch",
+        "order",
+        "alloy",
+        "diameter",
+        "kg",
+        "charge",
+        "part",
+        "certificate",
+    )
+    candidates = [
+        ("--psm 6", "ocr_locale_psm6"),
+        ("--psm 4", "ocr_locale_psm4"),
+    ]
+    if page_number > 1:
+        candidates = [
+            ("--psm 4", "ocr_locale_psm4"),
+            ("--psm 6", "ocr_locale_psm6"),
+        ]
+
+    best_text: str | None = None
+    best_state = "ocr_locale"
+    best_score = -1
+    with Image.open(image_path) as image:
+        for config, state in candidates:
+            try:
+                text = pytesseract.image_to_string(image, lang="eng+ita+deu", config=config)
+            except pytesseract.TesseractNotFoundError:
+                return None, "ocr_non_disponibile"
+            except Exception:
+                continue
+            cleaned = _string_or_none(text)
+            if cleaned is None:
+                continue
+            lowered = cleaned.casefold()
+            score = len(re.findall(r"\d", cleaned)) + len(cleaned.splitlines())
+            score += sum(6 for pattern in keyword_patterns if pattern in lowered)
+            if score > best_score:
+                best_text = cleaned
+                best_state = state
+                best_score = score
+    return best_text, best_state
 
 
 def _build_ddt_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
@@ -2857,25 +2990,37 @@ def _create_text_evidence(
     return evidence
 
 
-def _detect_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def _detect_ddt_core_matches(
+    pages: list[DocumentPage],
+    *,
+    supplier_key: str | None = None,
+) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+
+    if supplier_key == "leichtmetall":
+        matches.update(_detect_leichtmetall_ddt_core_matches(pages))
+    elif supplier_key == "metalba":
+        matches.update(_detect_metalba_ddt_core_matches(pages))
+    elif supplier_key == "aww":
+        matches.update(_detect_aww_ddt_core_matches(pages))
+
     for page in pages:
         lines = _page_lines(page)
         for line in lines:
             normalized_line = line.lower()
-            if "numero_certificato_ddt" not in matches:
-                cert_number = _extract_certificate_number(normalized_line)
-                if cert_number is not None:
-                    matches["numero_certificato_ddt"] = _build_match(page.id, line, cert_number)
+            if "ddt" not in matches:
+                ddt_number = _extract_ddt_number_from_line(normalized_line)
+                if ddt_number is not None:
+                    matches["ddt"] = _build_match(page.id, line, ddt_number)
             if "cdq" not in matches:
-                explicit_cdq = _extract_by_keywords(normalized_line, ("cdq",))
+                explicit_cdq = _extract_explicit_cdq_from_line(normalized_line)
                 if explicit_cdq is not None:
                     matches["cdq"] = _build_match(page.id, line, explicit_cdq)
-            if "colata" not in matches:
-                colata = _extract_by_keywords(normalized_line, ("colata", "col.", "col "))
-                if colata is not None:
-                    matches["colata"] = _build_match(page.id, line, colata)
-            if "peso" not in matches:
+            if supplier_key != "aww" and "diametro" not in matches:
+                diameter = _extract_diameter_from_line(normalized_line)
+                if diameter is not None:
+                    matches["diametro"] = _build_match(page.id, line, diameter)
+            if supplier_key != "aww" and "peso" not in matches:
                 weight = _extract_weight_from_line(normalized_line)
                 if weight is not None:
                     matches["peso"] = _build_match(page.id, line, _normalize_weight(weight))
@@ -2886,20 +3031,18 @@ def _detect_certificate_core_matches(pages: list[DocumentPage]) -> dict[str, dic
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
         lines = _page_lines(page)
-        for line in lines:
-            normalized_line = line.lower()
-            if "numero_certificato_certificato" not in matches:
-                cert_number = _extract_certificate_number(normalized_line)
-                if cert_number is not None:
-                    matches["numero_certificato_certificato"] = _build_match(page.id, line, cert_number)
-            if "colata_certificato" not in matches:
-                colata = _extract_by_keywords(normalized_line, ("cast", "charge", "batch", "colata", "heat"))
-                if colata is not None:
-                    matches["colata_certificato"] = _build_match(page.id, line, colata)
-            if "peso_certificato" not in matches:
-                weight = _extract_weight_from_line(normalized_line)
-                if weight is not None:
-                    matches["peso_certificato"] = _build_match(page.id, line, _normalize_weight(weight))
+        if "numero_certificato_certificato" not in matches:
+            cert_payload = _extract_certificate_number_payload(lines, page.id)
+            if cert_payload is not None:
+                matches["numero_certificato_certificato"] = cert_payload
+        if "colata_certificato" not in matches:
+            cast_payload = _extract_certificate_cast_payload(lines, page.id)
+            if cast_payload is not None:
+                matches["colata_certificato"] = cast_payload
+        if "peso_certificato" not in matches:
+            weight_payload = _extract_certificate_weight_payload(lines, page.id)
+            if weight_payload is not None:
+                matches["peso_certificato"] = weight_payload
     return matches
 
 
@@ -2925,6 +3068,131 @@ def _extract_certificate_number(line: str) -> str | None:
     return match.group(1).upper()
 
 
+def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    direct = _extract_anchor_value_from_lines(
+        lines,
+        anchors=("cert.no", "cert no", "n°.cert", "n° cert", "nr.cert", "nr cert", "no.cert", "no cert", "cdq"),
+        pattern=r"\b[0-9]{4,}[A-Z]?\b",
+        exclude_tokens={"10204", "31", "3", "1"},
+        lookahead=12,
+    )
+    if direct is not None:
+        snippet, value = direct
+        return _build_match(page_id, snippet, value)
+
+    for line in lines:
+        normalized_line = line.lower()
+        cert_number = _extract_certificate_number(normalized_line)
+        if cert_number is not None and cert_number not in {"IFICATE", "CERTIFICATE"}:
+            return _build_match(page_id, line, cert_number)
+    return None
+
+
+def _extract_certificate_cast_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    extracted = _extract_anchor_value_from_lines(
+        lines,
+        anchors=("charge/ cast no", "charge/cast no", "cast no", "heat no", "colata", "batch no"),
+        pattern=r"\b[A-Z0-9]{4,}[A-Z]?\b",
+        exclude_tokens={"CHARGE", "CAST", "BATCH", "HEAT", "NO"},
+        lookahead=4,
+    )
+    if extracted is None:
+        return None
+    snippet, value = extracted
+    return _build_match(page_id, snippet, value)
+
+
+def _extract_certificate_weight_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    weight_patterns = (
+        r"(?:gewicht|weight)\s*[:=]?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\s*kg",
+        r"(?:peso netto|net weight)\s*[:=]?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\s*kg",
+        r"(?:poids net|netto)\s*[:=]?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\s*kg",
+    )
+    for line in lines:
+        lowered = line.casefold()
+        if "weight" not in lowered and "peso netto" not in lowered and "net weight" not in lowered and "gewicht" not in lowered:
+            continue
+        for pattern in weight_patterns:
+            weight_match = re.search(pattern, lowered)
+            if weight_match is not None:
+                value = _normalize_weight(weight_match.group(1))
+                return _build_match(page_id, line, value)
+    return None
+
+
+def _extract_anchor_value_from_lines(
+    lines: list[str],
+    *,
+    anchors: tuple[str, ...],
+    pattern: str,
+    exclude_tokens: set[str] | None = None,
+    lookahead: int = 4,
+) -> tuple[str, str] | None:
+    compiled = re.compile(pattern, re.IGNORECASE)
+    excluded = {token.upper() for token in (exclude_tokens or set())}
+
+    def _first_candidate(value_line: str) -> str | None:
+        for match in compiled.finditer(value_line):
+            token = match.group(0).strip().upper()
+            if token in excluded:
+                continue
+            return token
+        return None
+
+    for index, line in enumerate(lines):
+        lowered = line.casefold()
+        if not any(anchor in lowered for anchor in anchors):
+            continue
+
+        same_line = _first_candidate(line)
+        if same_line is not None:
+            return line, same_line
+
+        for candidate in lines[index + 1 : min(index + 1 + lookahead, len(lines))]:
+            extracted = _first_candidate(candidate)
+            if extracted is not None:
+                return f"{line} | {candidate}", extracted
+    return None
+
+
+def _extract_ddt_number_from_line(line: str) -> str | None:
+    delivery_match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", line)
+    if delivery_match is not None:
+        return delivery_match.group(1)
+    transport_match = re.search(r"\bddt\s*([0-9]{2}[-/][0-9]{5})\b", line)
+    if transport_match is not None:
+        return transport_match.group(1).replace("/", "-").upper()
+    plain_transport_match = re.search(r"\bddt(?:\s*n[or°.]*)?[:\s-]*([0-9][0-9/-]{4,})\b", line)
+    if plain_transport_match is not None:
+        return plain_transport_match.group(1).replace("/", "-").upper()
+    return None
+
+
+def _extract_explicit_cdq_from_line(line: str) -> str | None:
+    if "cdq" not in line:
+        return None
+    explicit = _extract_by_keywords(line, ("cdq",))
+    if explicit is None:
+        return None
+    if explicit in {"3.1", "31"}:
+        return None
+    return explicit
+
+
+def _extract_diameter_from_line(line: str) -> str | None:
+    patterns = (
+        r"\bdiam(?:eter)?\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
+        r"\bouter\s+di\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
+        r"\bbarra\s+tonda\s+diam\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
+        r"\bø\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    return None
+
+
 def _extract_by_keywords(line: str, keywords: tuple[str, ...]) -> str | None:
     if not any(keyword in line for keyword in keywords):
         return None
@@ -2942,7 +3210,7 @@ def _extract_by_keywords(line: str, keywords: tuple[str, ...]) -> str | None:
 
 
 def _extract_weight_from_line(line: str) -> str | None:
-    if not any(keyword in line for keyword in ("net weight", "peso netto", "peso net", "netto", "kg")):
+    if not any(keyword in line for keyword in ("net weight", "peso netto", "peso net", "netto", "quantity", "net kg", "totali", "totali", "gross weight", "gross kg")):
         return None
     matches = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?", line)
     if not matches:
@@ -2951,7 +3219,312 @@ def _extract_weight_from_line(line: str) -> str | None:
 
 
 def _normalize_weight(value: str) -> str:
-    return value.replace(",", ".")
+    return _normalize_decimal_value(value)
+
+
+def _normalize_decimal_value(value: str) -> str:
+    normalized = value.strip().replace(" ", "")
+    if "," in normalized and "." in normalized:
+        if normalized.rfind(",") > normalized.rfind("."):
+            normalized = normalized.replace(".", "").replace(",", ".")
+        else:
+            normalized = normalized.replace(",", "")
+    else:
+        normalized = normalized.replace(",", ".")
+    return normalized
+
+
+def _detect_leichtmetall_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    batch_counts: dict[str, tuple[int, int, str]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            lowered = line.casefold()
+            if "ddt" not in matches:
+                match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", lowered)
+                if match is not None:
+                    matches["ddt"] = _build_match(page.id, line, match.group(1))
+            if "ordine" not in matches:
+                match = re.search(r"\border\s+confirmation\s+([0-9][0-9./-]{3,})\b", lowered)
+                if match is not None:
+                    matches["ordine"] = _build_match(page.id, line, match.group(1).replace("/", "-"))
+            if "diametro" not in matches:
+                match = re.search(r"\bdiameter\s+([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
+                if match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(match.group(1)))
+            if "peso" not in matches:
+                match = re.search(r"\bquantity\s*:\s*([0-9]+(?:[.,][0-9]+)?)\s*kg\b", lowered)
+                if match is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
+
+            batch_match = re.search(r"\b(\d{5})\b\s+\d+\s*$", line)
+            if batch_match is not None:
+                token = batch_match.group(1)
+                count, page_id, snippet = batch_counts.get(token, (0, page.id, line))
+                batch_counts[token] = (count + 1, page_id, snippet)
+
+    if "colata" not in matches and batch_counts:
+        token, (count, page_id, snippet) = max(batch_counts.items(), key=lambda item: item[1][0])
+        if count >= 2:
+            matches["colata"] = _build_match(page_id, snippet, token)
+    return matches
+
+
+def _detect_metalba_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    cast_counts: dict[str, tuple[int, int, str]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            lowered = line.casefold()
+            if "ddt" not in matches:
+                match = re.search(r"\bddt\s*([0-9]{2}[-/][0-9]{5})\b", lowered)
+                if match is not None:
+                    matches["ddt"] = _build_match(page.id, line, match.group(1).replace("/", "-").upper())
+            if "diametro" not in matches:
+                match = re.search(r"\bbarra\s+tonda\s+diam\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
+                if match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(match.group(1)))
+            if "peso" not in matches:
+                match = re.search(r"\bpeso\s+netto\s+kg\s*([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\b", lowered)
+                if match is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
+
+            cast_match = re.search(r"\b([0-9]{5}[a-z])\b", lowered)
+            if cast_match is not None and "colate" not in lowered and "kg" not in lowered:
+                token = cast_match.group(1).upper()
+                count, page_id, snippet = cast_counts.get(token, (0, page.id, line))
+                cast_counts[token] = (count + 1, page_id, snippet)
+
+    if "colata" not in matches and cast_counts:
+        token, (count, page_id, snippet) = max(cast_counts.items(), key=lambda item: item[1][0])
+        if count >= 2:
+            matches["colata"] = _build_match(page_id, snippet, token)
+    return matches
+
+
+def _detect_aww_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    position_count = 0
+    for page in pages:
+        for line in _page_lines(page):
+            lowered = line.casefold()
+            if re.match(r"^\d{3}\s+[a-z0-9-]{4,}", lowered):
+                position_count += 1
+            if "ddt" not in matches:
+                match = re.search(r"\bdelivery\s+note\s+([0-9]{5,})\b", lowered)
+                if match is not None:
+                    matches["ddt"] = _build_match(page.id, line, match.group(1))
+            if "ordine" not in matches:
+                match = re.search(r"\border\s+confirmation\s*:\s*([0-9][0-9-]{5,})\b", lowered)
+                if match is not None:
+                    matches["ordine"] = _build_match(page.id, line, match.group(1))
+
+    if position_count <= 1:
+        for page in pages:
+            for line in _page_lines(page):
+                lowered = line.casefold()
+                if "diametro" not in matches:
+                    match = re.search(r"\bouter\s+di\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
+                    if match is not None:
+                        matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(match.group(1)))
+                if "peso" not in matches:
+                    match = re.search(r"\bnet\s+weight\b.*?([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\b", lowered)
+                    if match is not None:
+                        matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
+    return matches
+
+
+def _same_token(left: str | None, right: str | None) -> bool:
+    return _normalize_match_token(left) is not None and _normalize_match_token(left) == _normalize_match_token(right)
+
+
+def _extract_supplier_match_fields(
+    pages: list[DocumentPage],
+    supplier_key: str | None,
+    document_type: str,
+) -> dict[str, str]:
+    if supplier_key is None:
+        return {}
+    lines: list[str] = []
+    for page in pages:
+        lines.extend(_page_lines(page))
+    if not lines:
+        return {}
+
+    if supplier_key == "metalba":
+        if document_type == "ddt":
+            vs_rif, rif_ord = _extract_metalba_ddt_reference_values(lines)
+            return {
+                "vs_rif": vs_rif,
+                "rif_ord_root": _normalize_commessa_root(rif_ord),
+            }
+        ordine_cliente, commessa = _extract_metalba_certificate_reference_values(lines)
+        return {
+            "ordine_cliente": ordine_cliente,
+            "commessa_root": _normalize_commessa_root(commessa),
+        }
+
+    if supplier_key == "aww":
+        if document_type == "ddt":
+            return {
+                "your_part_number": _extract_value_near_anchor(lines, ("your part number",)),
+                "part_number": _extract_code_pattern(lines, r"\bP3-\d{5}-\d{4}\b"),
+                "order_confirmation_root": _normalize_order_confirmation_root(
+                    _extract_value_near_anchor(lines, ("batch number (oc)", "batch number oc"))
+                ),
+            }
+        return {
+            "kunden_teile_nr": _extract_value_near_anchor(lines, ("kunden-teile-nr", "customer part number")),
+            "artikel_nr": _extract_value_near_anchor(lines, ("artikel-nr", "article no", "article number")),
+            "auftragsbestaetigung_root": _normalize_order_confirmation_root(
+                _extract_value_near_anchor(lines, ("auftragsbestätigung", "auftragsbestatigung", "order confirmation"))
+            ),
+        }
+
+    if supplier_key == "aluminium_bozen":
+        if document_type == "ddt":
+            return {
+                "article": _extract_code_pattern(lines, r"\b14BT[0-9A-Z-]+\b"),
+                "customer_code": _extract_aluminium_bozen_customer_code(lines),
+                "customer_order_normalized": _normalize_customer_order_tokens(
+                    _extract_value_near_anchor(lines, ("vs. odv", "vs odv"))
+                ),
+            }
+        return {
+            "article": _extract_value_near_anchor(lines, ("article", "profil"), pattern=r"\b14BT[0-9A-Z-]+\b"),
+            "customer_code": _extract_aluminium_bozen_customer_code(lines),
+            "customer_order_normalized": _normalize_customer_order_tokens(
+                _extract_value_near_anchor(lines, ("customer's order no", "customers order no"))
+            ),
+        }
+
+    return {}
+
+
+def _extract_value_near_anchor(
+    lines: list[str],
+    anchors: tuple[str, ...],
+    *,
+    pattern: str | None = None,
+) -> str | None:
+    compiled = re.compile(pattern) if pattern else None
+    for index, line in enumerate(lines):
+        lowered = line.casefold()
+        if not any(anchor in lowered for anchor in anchors):
+            continue
+
+        same_line_candidate = line
+        if compiled is not None:
+            match = compiled.search(same_line_candidate)
+            if match is not None:
+                return match.group(0).strip()
+        else:
+            extracted = _extract_last_code_token(same_line_candidate)
+            if extracted is not None:
+                return extracted
+
+        for candidate in lines[index + 1 : min(index + 4, len(lines))]:
+            if compiled is not None:
+                match = compiled.search(candidate)
+                if match is not None:
+                    return match.group(0).strip()
+            else:
+                extracted = _extract_last_code_token(candidate)
+                if extracted is not None:
+                    return extracted
+    return None
+
+
+def _extract_last_code_token(line: str) -> str | None:
+    tokens = re.findall(r"[A-Z0-9][A-Z0-9./-]{2,}", _normalize_mojibake_numeric_text(line).upper())
+    for token in reversed(tokens):
+        if token not in {"COMMESSA", "ORDINE", "CLIENTE", "CUSTOMER", "PART", "NUMBER", "RIF", "VS"}:
+            return token
+    return None
+
+
+def _normalize_commessa_root(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.match(r"(\d+/\d+)", cleaned)
+    if match is not None:
+        return match.group(1)
+    return cleaned.split("/", 1)[0]
+
+
+def _normalize_order_confirmation_root(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\d{6,}", cleaned)
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
+    compiled = re.compile(pattern)
+    for line in lines:
+        match = compiled.search(line.upper())
+        if match is not None:
+            return match.group(0)
+    return None
+
+
+def _extract_aluminium_bozen_customer_code(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bA[0-9L][0-9A-Z]{5,}\b", line.upper())
+        if match is not None:
+            return match.group(0)
+    return None
+
+
+def _normalize_customer_order_tokens(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
+    if not tokens:
+        return None
+    date_token = next((token for token in tokens if re.fullmatch(r"20\d{2}", token) is None and re.fullmatch(r"\d{4}", token) is None and "-" in cleaned and re.search(r"20\d{2}", cleaned)), None)
+    if re.search(r"20\d{2}-\d{2}-\d{2}", cleaned):
+        date_match = re.search(r"20\d{2}-\d{2}-\d{2}", cleaned)
+        date_value = date_match.group(0) if date_match else None
+        other_tokens = [token for token in tokens if token not in set(re.findall(r"\d+", date_value or ""))]
+        if date_value:
+            prefix = "".join(other_tokens)
+            return f"{date_value}|{prefix}" if prefix else date_value
+    if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
+        date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
+        prefix = tokens[0]
+        return f"{date_value}|{prefix}"
+    return "".join(tokens)
+
+
+def _extract_metalba_ddt_reference_values(lines: list[str]) -> tuple[str | None, str | None]:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line.upper())
+        if "DDT" not in normalized:
+            continue
+        tokens = re.findall(r"\d{2}/\d{2,5}", normalized)
+        if len(tokens) >= 2:
+            return tokens[0], tokens[1]
+    return None, None
+
+
+def _extract_metalba_certificate_reference_values(lines: list[str]) -> tuple[str | None, str | None]:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line.upper())
+        if "BARRA TONDA" not in normalized and "ESTRUSO" not in normalized:
+            continue
+        matches = re.findall(r"\d{2}/\d{4}(?:/\d+)?|\d{2}/\d{2}", normalized)
+        if len(matches) >= 2:
+            commessa = next((value for value in matches if value.count("/") >= 2 or re.fullmatch(r"\d{2}/\d{4}", value)), None)
+            ordine_cliente = next((value for value in matches if re.fullmatch(r"\d{2}/\d{2}", value)), None)
+            if ordine_cliente or commessa:
+                return ordine_cliente, commessa
+    return None, None
 
 
 def _normalize_match_token(value: str | None) -> str | None:
@@ -3079,7 +3652,8 @@ def _extract_numeric_token(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    match = re.search(r"-?\d+(?:[.,]\d+)?", cleaned.replace("−", "-"))
+    normalized_text = _normalize_mojibake_numeric_text(cleaned).replace("−", "-")
+    match = re.search(r"-?\d+(?:[.,]\d+)?", normalized_text)
     if match is None:
         return None
     return match.group(0)
@@ -3092,6 +3666,37 @@ def _normalize_numeric_value(value: str | None) -> str | None:
     return token.replace(",", ".")
 
 
+def _safe_float(value: str | None) -> float | None:
+    normalized = _normalize_numeric_value(value)
+    if normalized is None:
+        return None
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
+def _normalize_mojibake_numeric_text(value: str) -> str:
+    translation = str.maketrans(
+        {
+            "ð": "0",
+            "ï": "1",
+            "î": "2",
+            "í": "3",
+            "ì": "4",
+            "ë": "5",
+            "ê": "6",
+            "é": "7",
+            "è": "8",
+            "ç": "9",
+            "ò": ".",
+            "ô": ",",
+            "ó": "-",
+        }
+    )
+    return value.translate(translation)
+
+
 def _normalize_value_for_field(blocco: str, campo: str, value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
@@ -3101,14 +3706,21 @@ def _normalize_value_for_field(blocco: str, campo: str, value: str | None) -> st
     return _normalize_numeric_value(cleaned) or cleaned
 
 
-def _detect_chemistry_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def _detect_chemistry_matches(
+    pages: list[DocumentPage],
+    *,
+    supplier_name: str | None = None,
+) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
     for page in pages:
         page_text = page.testo_estratto or page.ocr_text or ""
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
         page_matches = _parse_chemistry_from_lines(lines, page.id)
+        if template is not None and template.supplier_key == "aluminium_bozen" and not page_matches:
+            page_matches = _parse_aluminium_bozen_chemistry_from_lines(lines, page.id)
         for field_name, payload in page_matches.items():
             matches.setdefault(field_name, payload)
     return matches
@@ -3124,8 +3736,9 @@ def _detect_property_matches(pages: list[DocumentPage]) -> dict[str, dict[str, s
 
         spec_matches = _parse_properties_from_spec_lines(lines, page.id)
         compact_matches = _parse_properties_from_compact_lines(lines, page.id)
+        cluster_matches = _parse_properties_from_numeric_cluster(lines, page.id)
 
-        for field_name, payload in {**compact_matches, **spec_matches}.items():
+        for field_name, payload in {**cluster_matches, **compact_matches, **spec_matches}.items():
             matches.setdefault(field_name, payload)
 
     return matches
@@ -3258,10 +3871,14 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
             break
 
     if candidate_line is None:
+        for field_name, payload in _parse_vertical_properties_from_lines(window, page_id).items():
+            matches.setdefault(field_name, payload)
         return matches
 
     numbers = re.findall(r"\d+(?:[.,]\d+)?", candidate_line)
     if len(numbers) < 4:
+        for field_name, payload in _parse_vertical_properties_from_lines(window, page_id).items():
+            matches.setdefault(field_name, payload)
         return matches
 
     mapping = {
@@ -3286,6 +3903,158 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
             },
         )
 
+    for field_name, payload in _parse_vertical_properties_from_lines(window, page_id).items():
+        matches.setdefault(field_name, payload)
+    return matches
+
+
+def _parse_vertical_properties_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    value_lines: list[str] = []
+    labels_found = {
+        "Rm": False,
+        "Rp0.2": False,
+        "A%": False,
+        "HB": False,
+        "IACS%": False,
+    }
+
+    for line in lines:
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("norma", "norm", "limit", "min.", "max.", "na custom")):
+            break
+        cleaned = line.strip()
+        if re.fullmatch(r"\d+(?:[.,]\d+)?", cleaned):
+            value_lines.append(cleaned)
+
+    for line in lines:
+        lowered = line.lower()
+        if "rp0" in lowered:
+            labels_found["Rp0.2"] = True
+        elif re.search(r"\brm\b", lowered):
+            labels_found["Rm"] = True
+        elif "hard" in lowered or "brinell" in lowered or "hbw" in lowered:
+            labels_found["HB"] = True
+        elif "iacs" in lowered or "ms/m" in lowered:
+            labels_found["IACS%"] = True
+        elif "a%" in lowered or re.search(r"\baû\b", lowered) or re.search(r"\b[aA][%Ã]\b", line):
+            labels_found["A%"] = True
+
+    if len(value_lines) < 4:
+        return {}
+
+    normalized_values = [_normalize_numeric_value(value) or value for value in value_lines]
+    if len(normalized_values) >= 5 and re.fullmatch(r"\d+", value_lines[0] or ""):
+        try:
+            first_value = float(normalized_values[0])
+        except ValueError:
+            first_value = -1
+        if 0 <= first_value <= 10:
+            normalized_values = normalized_values[1:]
+
+    ordered_fields = ["Rm", "Rp0.2", "A%", "HB"]
+    if labels_found["IACS%"] and len(normalized_values) >= 5:
+        ordered_fields.append("IACS%")
+
+    if len(normalized_values) < len(ordered_fields):
+        return {}
+
+    matches: dict[str, dict[str, str | int]] = {}
+    chosen_values = normalized_values[: len(ordered_fields)]
+    snippet = " | ".join(chosen_values)
+    for field_name, raw_value in zip(ordered_fields, chosen_values):
+        matches.setdefault(
+            field_name,
+            {
+                "page_id": page_id,
+                "snippet": snippet,
+                "raw": raw_value,
+                "standardized": raw_value,
+                "final": raw_value,
+            },
+        )
+    return matches
+
+
+def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    for index in range(len(lines)):
+        normalized_line = _normalize_mojibake_numeric_text(lines[index])
+        inline_values = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+        if len(inline_values) >= 4:
+            candidate_values = [_normalize_numeric_value(value) or value for value in inline_values[:5]]
+            if len(candidate_values) >= 5 and re.fullmatch(r"\d+", inline_values[0] or ""):
+                try:
+                    first_value = float(candidate_values[0])
+                except ValueError:
+                    first_value = -1
+                if 0 <= first_value <= 10:
+                    candidate_values = candidate_values[1:]
+            inline_match = _build_property_match_from_candidate_values(candidate_values, page_id)
+            if inline_match:
+                return inline_match
+
+        cluster: list[str] = []
+        cursor = index
+        while cursor < len(lines):
+            normalized = _normalize_numeric_value(lines[cursor])
+            if normalized is None:
+                break
+            cluster.append(normalized)
+            cursor += 1
+
+        if len(cluster) < 4:
+            continue
+
+        candidate_values = cluster[:5]
+        if len(candidate_values) >= 5 and re.fullmatch(r"\d+", candidate_values[0] or ""):
+            try:
+                first_value = float(candidate_values[0])
+            except ValueError:
+                first_value = -1
+            if 0 <= first_value <= 10:
+                candidate_values = candidate_values[1:]
+
+        cluster_match = _build_property_match_from_candidate_values(candidate_values, page_id)
+        if cluster_match:
+            return cluster_match
+
+    return {}
+
+
+def _build_property_match_from_candidate_values(
+    candidate_values: list[str],
+    page_id: int,
+) -> dict[str, dict[str, str | int]]:
+    if len(candidate_values) < 4:
+        return {}
+
+    rm = _safe_float(candidate_values[0])
+    rp02 = _safe_float(candidate_values[1])
+    a_pct = _safe_float(candidate_values[2])
+    hb = _safe_float(candidate_values[3])
+    if None in (rm, rp02, a_pct, hb):
+        return {}
+    if not (rm >= 100 and rp02 >= 80 and 0 < a_pct <= 60 and 20 <= hb <= 250):
+        return {}
+
+    ordered_fields = ["Rm", "Rp0.2", "A%", "HB"]
+    if len(candidate_values) >= 5:
+        iacs = _safe_float(candidate_values[4])
+        if iacs is not None and 0 < iacs <= 100:
+            ordered_fields.append("IACS%")
+
+    snippet = " | ".join(candidate_values[: len(ordered_fields)])
+    matches: dict[str, dict[str, str | int]] = {}
+    for field_name, raw_value in zip(ordered_fields, candidate_values):
+        matches.setdefault(
+            field_name,
+            {
+                "page_id": page_id,
+                "snippet": snippet,
+                "raw": raw_value,
+                "standardized": raw_value,
+                "final": raw_value,
+            },
+        )
     return matches
 
 
@@ -3387,9 +4156,130 @@ def _extract_vertical_chemistry_element(line: str) -> str | None:
         return None
     if token.lower().startswith("andere") or token.lower().startswith("other"):
         return None
+    mojibake_token = token.lstrip("û")
+    mojibake_map = {
+        "Í·": "Si",
+        "Ú»": "Fe",
+        "Ý«": "Cu",
+        "Ó²": "Mn",
+        "Ó¹": "Mg",
+        "Ý®": "Cr",
+        "Ò·": "Ni",
+        "Æ²": "Zn",
+        "Ê": "V",
+        "Ì·": "Ti",
+        "Ð¾": "Pb",
+        "Æ®": "Zr",
+        "Þ·": "Bi",
+        "Í²": "Sn",
+        "Þ»": "Be",
+    }
+    if mojibake_token in mojibake_map:
+        return mojibake_map[mojibake_token]
     if token in CHEMISTRY_FIELD_SET:
         return token
     return None
+
+
+def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    anchor_index = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if "chemical analysis" in lowered or "analisi chimica" in lowered or "chemische analyse" in lowered or "ÝÑÓÐÑÍ" in line:
+            anchor_index = index
+            break
+    if anchor_index is None:
+        return {}
+
+    window = lines[anchor_index + 1 : min(anchor_index + 42, len(lines))]
+    elements: list[str] = []
+    element_slots: list[str | None] = []
+    for line in window:
+        if not elements:
+            inline_slots = _extract_aluminium_bozen_chemistry_slots_from_line(line)
+            inline_elements = [slot for slot in inline_slots if slot is not None]
+            if len(inline_elements) >= 8:
+                element_slots = inline_slots
+                elements.extend(inline_elements)
+                continue
+        element = _extract_vertical_chemistry_element(line)
+        if element is not None:
+            elements.append(element)
+            element_slots.append(element)
+            continue
+        if elements:
+            normalized_line = _normalize_mojibake_numeric_text(line)
+            normalized_numbers = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+            segment_values = re.findall(r"\d,\d{3}", normalized_line)
+            value_source = segment_values if len(segment_values) >= len(element_slots or elements) else normalized_numbers
+            if len(value_source) >= max(8, len(element_slots or elements) - 2):
+                snippet = line
+                matches: dict[str, dict[str, str | int]] = {}
+                if element_slots:
+                    slot_values = value_source[: len(element_slots)]
+                    for element_name, raw_value in zip(element_slots, slot_values):
+                        if element_name is None:
+                            continue
+                        standardized = _normalize_numeric_value(raw_value) or raw_value
+                        matches.setdefault(
+                            element_name,
+                            {
+                                "page_id": page_id,
+                                "snippet": snippet,
+                                "raw": raw_value,
+                                "standardized": standardized,
+                                "final": standardized,
+                            },
+                        )
+                    return matches
+
+                measured_values = value_source[: len(elements)]
+                for element_name, raw_value in zip(elements, measured_values):
+                    standardized = _normalize_numeric_value(raw_value) or raw_value
+                    matches.setdefault(
+                        element_name,
+                        {
+                            "page_id": page_id,
+                            "snippet": snippet,
+                            "raw": raw_value,
+                            "standardized": standardized,
+                            "final": standardized,
+                        },
+                    )
+                return matches
+    return {}
+
+
+def _extract_aluminium_bozen_chemistry_elements_from_line(line: str) -> list[str]:
+    return [slot for slot in _extract_aluminium_bozen_chemistry_slots_from_line(line) if slot is not None]
+
+
+def _extract_aluminium_bozen_chemistry_slots_from_line(line: str) -> list[str | None]:
+    mojibake_map = {
+        "Í·": "Si",
+        "Ú»": "Fe",
+        "Ý«": "Cu",
+        "Ó²": "Mn",
+        "Ó¹": "Mg",
+        "Ý®": "Cr",
+        "Ò·": "Ni",
+        "Æ²": "Zn",
+        "Ê": "V",
+        "Ì·": "Ti",
+        "Ð¾": "Pb",
+        "Æ®": "Zr",
+        "Þ·": "Bi",
+        "Í²": "Sn",
+        "Þ»": "Be",
+    }
+    tokens = [token.lstrip("û") for token in line.replace("%", " ").split()]
+    slots: list[str | None] = []
+    for token in tokens:
+        if token in mojibake_map:
+            slots.append(mojibake_map[token])
+        elif re.fullmatch(r"[A-Za-z¿®Ù]+", token):
+            slots.append(None)
+    return slots
 
 
 def _find_chemistry_measurement_line(lines: list[str], start_index: int, expected_count: int) -> str | None:
