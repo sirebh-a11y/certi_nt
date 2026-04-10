@@ -321,11 +321,14 @@ Osservazione confermata:
 * la tabella e' orizzontale
 * una riga porta la colata reale misurata
 * sotto compaiono righe `Min.` e `Max.`
+* in questo template il software deve quindi leggere la riga misurata e non le righe di limite
 
 Regola:
 
 * la riga con `CAST BATCH Nr` e' la riga dei valori misurati
 * le righe `Min.` e `Max.` sono limiti normativi/template, non misurati
+* il software deve riconoscere prima l'orientamento della tabella e poi scegliere la riga corretta
+* in template futuri la tabella potrebbe anche essere verticale, quindi questa regola non va generalizzata oltre il template
 
 Elementi osservati nel template:
 
@@ -372,6 +375,8 @@ Regola:
 
 * le righe numerate `1`, `2`, ecc. sono prove reali
 * `NORMA Min.` e `NORM EN 755-2` sono limiti/riferimenti, non prove
+* anche qui il software deve riconoscere prima l'orientamento della tabella e poi capire quale riga/colonna contiene la prova misurata
+* in generale nelle proprieta' il `max` puo' anche mancare
 
 Nota:
 

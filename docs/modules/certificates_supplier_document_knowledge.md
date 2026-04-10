@@ -469,6 +469,17 @@ Osservazione già confermata:
 * contiene anche righe di riferimento `min` / `max`
 * questa distinzione va sempre registrata
 
+Regola strutturale obbligatoria:
+
+* il software deve capire se la tabella chimica e' `orizzontale` o `verticale`
+* poi deve capire quale riga o colonna contiene il `valore misurato`
+* le righe o colonne `min` e `max` possono stare:
+  * prima
+  * dopo
+  * oppure avvolgere la riga/colonna del valore misurato
+* quindi non basta cercare un numero vicino al nome dell'elemento
+* va capita la struttura della tabella e la posizione relativa di `misurato / min / max`
+
 ---
 
 ### 6.7 Proprietà certificate
@@ -514,6 +525,14 @@ Osservazioni già confermate:
 * nei template letti le proprietà certificate sono presentate in vere tabelle
 * possono esserci più righe prova / specimen
 * possono comparire anche colonne aggiuntive oltre alle sole proprietà meccaniche standard
+
+Regola strutturale obbligatoria:
+
+* anche per le proprieta' il software deve capire se la tabella e' `orizzontale` o `verticale`
+* poi deve identificare dove stanno i valori misurati veri
+* nelle proprieta' spesso c'e' il `min`, ma non necessariamente il `max`
+* anche qui i limiti o riferimenti normativi possono stare prima, dopo o attorno alla riga/colonna misurata
+* il software deve quindi riconoscere la struttura della tabella prima di scegliere quale riga o colonna leggere
 
 ---
 
