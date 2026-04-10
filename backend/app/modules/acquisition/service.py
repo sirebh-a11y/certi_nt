@@ -1953,68 +1953,115 @@ def _score_certificate_candidate(
     )
 
     score = 0
-    reasons: list[str] = []
+    reasons: list[tuple[int, str]] = []
+
+    def add_reason(points: int, label: str) -> None:
+        nonlocal score
+        score += points
+        reasons.append((points, label))
 
     if _normalize_match_token(ddt_certificate_number) and _normalize_match_token(ddt_certificate_number) == _normalize_match_token(certificate_number):
-        score += 120
-        reasons.append("Numero certificato coerente")
+        add_reason(120, "Numero certificato coerente")
     elif _normalize_match_token(ddt_certificate_number) and _normalize_match_token(ddt_certificate_number) in file_name_token:
-        score += 85
-        reasons.append("Numero certificato coerente (nome file)")
+        add_reason(85, "Numero certificato coerente (nome file)")
     if _normalize_match_token(row.colata) and _normalize_match_token(row.colata) == _normalize_match_token(certificate_cast):
-        score += 80
-        reasons.append("Colata coerente")
+        add_reason(80, "Colata coerente")
     elif _normalize_match_token(row.colata) and _normalize_match_token(row.colata) in file_name_token:
-        score += 55
-        reasons.append("Colata coerente (nome file)")
+        add_reason(55, "Colata coerente (nome file)")
     if _weights_are_compatible(row.peso, certificate_weight):
-        score += 20
-        reasons.append("Peso coerente")
+        add_reason(20, "Peso coerente")
     if row.ordine and _document_contains_token(certificate_document.pages, row.ordine):
-        score += 25
-        reasons.append("Ordine coerente")
+        add_reason(25, "Ordine coerente")
     if row.diametro and _document_contains_token(certificate_document.pages, row.diametro):
-        score += 10
-        reasons.append("Diametro coerente")
+        add_reason(10, "Diametro coerente")
     elif _normalize_match_token(row.diametro) and _normalize_match_token(row.diametro) in file_name_token:
-        score += 10
-        reasons.append("Diametro coerente (nome file)")
+        add_reason(10, "Diametro coerente (nome file)")
 
     if template is not None and template.supplier_key == "metalba":
         if _same_token(ddt_supplier_fields.get("vs_rif"), certificate_supplier_fields.get("ordine_cliente")):
-            score += 95
-            reasons.append("Vs. Rif. / Ordine Cliente coerenti")
+            add_reason(95, "Vs. Rif. / Ordine Cliente coerenti")
         if _same_token(ddt_supplier_fields.get("rif_ord_root"), certificate_supplier_fields.get("commessa_root")):
-            score += 110
-            reasons.append("Rif. Ord. / Commessa coerenti")
+            add_reason(110, "Rif. Ord. / Commessa coerenti")
     elif template is not None and template.supplier_key == "aww":
         if _same_token(ddt_supplier_fields.get("your_part_number"), certificate_supplier_fields.get("kunden_teile_nr")):
-            score += 110
-            reasons.append("Your part number coerente")
+            add_reason(110, "Your part number coerente")
         if _same_token(ddt_supplier_fields.get("part_number"), certificate_supplier_fields.get("artikel_nr")):
-            score += 100
-            reasons.append("Part number / Artikel-Nr. coerenti")
+            add_reason(100, "Part number / Artikel-Nr. coerenti")
         if _same_token(ddt_supplier_fields.get("order_confirmation_root"), certificate_supplier_fields.get("auftragsbestaetigung_root")):
-            score += 95
-            reasons.append("Order confirmation root coerente")
+            add_reason(95, "Order confirmation root coerente")
     elif template is not None and template.supplier_key == "aluminium_bozen":
         if _same_token(ddt_supplier_fields.get("article"), certificate_supplier_fields.get("article")):
-            score += 100
-            reasons.append("Article coerente")
+            add_reason(100, "Article coerente")
         if _same_token(ddt_supplier_fields.get("customer_code"), certificate_supplier_fields.get("customer_code")):
-            score += 100
-            reasons.append("Codice cliente coerente")
+            add_reason(100, "Codice cliente coerente")
         if _same_token(ddt_supplier_fields.get("customer_order_normalized"), certificate_supplier_fields.get("customer_order_normalized")):
-            score += 70
-            reasons.append("Ordine cliente normalizzato coerente")
+            add_reason(70, "Ordine cliente normalizzato coerente")
+    elif template is not None and template.supplier_key == "zalco":
+        if _same_token(ddt_supplier_fields.get("tally_sheet_no"), certificate_supplier_fields.get("tally_sheet_no")):
+            add_reason(120, "Tally sheet coerente")
+        if _same_token(ddt_supplier_fields.get("cast_no"), certificate_supplier_fields.get("cast_no")):
+            add_reason(85, "Cast coerente")
+        if _same_token(ddt_supplier_fields.get("symbol"), certificate_supplier_fields.get("symbol")):
+            add_reason(85, "Symbole coerente")
+        if _same_token(ddt_supplier_fields.get("code_art"), certificate_supplier_fields.get("code_art")):
+            add_reason(85, "Code art coerente")
+    elif template is not None and template.supplier_key == "arconic_hannover":
+        if _same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
+            add_reason(120, "Delivery note coerente")
+        if _same_token(ddt_supplier_fields.get("sales_order_number"), certificate_supplier_fields.get("sales_order_number")):
+            add_reason(95, "Sales order coerente")
+        if _same_token(ddt_supplier_fields.get("customer_po"), certificate_supplier_fields.get("customer_po")):
+            add_reason(95, "Customer P/O coerente")
+        if _same_token(ddt_supplier_fields.get("arconic_item_number"), certificate_supplier_fields.get("arconic_item_number")):
+            add_reason(100, "Arconic item coerente")
+        if _same_token(ddt_supplier_fields.get("cast_job_number"), certificate_supplier_fields.get("cast_job_number")):
+            add_reason(110, "Cast/Job coerente")
+    elif template is not None and template.supplier_key == "neuman":
+        if _same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
+            add_reason(120, "Delivery note coerente")
+        if _same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
+            add_reason(110, "Lot coerente")
+        if _same_token(ddt_supplier_fields.get("customer_material_number"), certificate_supplier_fields.get("customer_material_number")):
+            add_reason(110, "Customer material number coerente")
+        if _same_token(ddt_supplier_fields.get("customer_order_number"), certificate_supplier_fields.get("customer_order_number")):
+            add_reason(80, "Customer order number coerente")
+    elif template is not None and template.supplier_key == "grupa_kety":
+        if _same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
+            add_reason(120, "Delivery note coerente")
+        if _same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
+            add_reason(120, "Lot coerente")
+        if _same_token(ddt_supplier_fields.get("order_no"), certificate_supplier_fields.get("order_no")):
+            add_reason(90, "Order no coerente")
+        if _same_token(ddt_supplier_fields.get("heat"), certificate_supplier_fields.get("heat")):
+            add_reason(100, "Heat coerente")
+        if _same_token(ddt_supplier_fields.get("customer_part_number"), certificate_supplier_fields.get("customer_part_number")):
+            add_reason(90, "Customer part coerente")
+    elif template is not None and template.supplier_key == "impol":
+        row_packing_list_root = _normalize_impol_packing_list_root(row.ddt) or ddt_supplier_fields.get("packing_list_no")
+        if _same_token(row_packing_list_root, certificate_supplier_fields.get("packing_list_no")):
+            add_reason(120, "Packing list coerente")
+        if _same_token(row.ordine, certificate_supplier_fields.get("customer_order_no")):
+            add_reason(100, "Customer order coerente")
+        elif _same_token(ddt_supplier_fields.get("customer_order_no"), certificate_supplier_fields.get("customer_order_no")):
+            add_reason(100, "Customer order coerente")
+        if _same_token(ddt_supplier_fields.get("supplier_order_no"), certificate_supplier_fields.get("supplier_order_no")):
+            add_reason(95, "Supplier order coerente")
+        if _same_token(ddt_supplier_fields.get("product_code"), certificate_supplier_fields.get("product_code")):
+            add_reason(100, "Product code coerente")
+        if _same_token(row.colata, certificate_supplier_fields.get("charge")):
+            add_reason(110, "Charge coerente")
+        elif _same_token(ddt_supplier_fields.get("charge"), certificate_supplier_fields.get("charge")):
+            add_reason(110, "Charge coerente")
 
     if score <= 10:
         return None
 
+    ranked_reasons = [label for _, label in sorted(reasons, key=lambda item: item[0], reverse=True)]
+
     return {
         "document": certificate_document,
         "score": score,
-        "reason": ", ".join(reasons[:2]) or "Certificato plausibile",
+        "reason": ", ".join(ranked_reasons[:3]) or "Certificato plausibile",
     }
 
 
@@ -3003,6 +3050,18 @@ def _detect_ddt_core_matches(
         matches.update(_detect_metalba_ddt_core_matches(pages))
     elif supplier_key == "aww":
         matches.update(_detect_aww_ddt_core_matches(pages))
+    elif supplier_key == "aluminium_bozen":
+        matches.update(_detect_aluminium_bozen_ddt_core_matches(pages))
+    elif supplier_key == "zalco":
+        matches.update(_detect_zalco_ddt_core_matches(pages))
+    elif supplier_key == "arconic_hannover":
+        matches.update(_detect_arconic_hannover_ddt_core_matches(pages))
+    elif supplier_key == "neuman":
+        matches.update(_detect_neuman_ddt_core_matches(pages))
+    elif supplier_key == "grupa_kety":
+        matches.update(_detect_grupa_kety_ddt_core_matches(pages))
+    elif supplier_key == "impol":
+        matches.update(_detect_impol_ddt_core_matches(pages))
 
     for page in pages:
         lines = _page_lines(page)
@@ -3069,9 +3128,23 @@ def _extract_certificate_number(line: str) -> str | None:
 
 
 def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    tally_sheet_payload = _extract_tally_sheet_number_payload(lines, page_id)
+    if tally_sheet_payload is not None:
+        return tally_sheet_payload
+
     direct = _extract_anchor_value_from_lines(
         lines,
-        anchors=("cert.no", "cert no", "n°.cert", "n° cert", "nr.cert", "nr cert", "no.cert", "no cert", "cdq"),
+        anchors=(
+            "cert.no",
+            "cert no",
+            "n°.cert",
+            "n° cert",
+            "nr.cert",
+            "nr cert",
+            "no.cert",
+            "no cert",
+            "cdq",
+        ),
         pattern=r"\b[0-9]{4,}[A-Z]?\b",
         exclude_tokens={"10204", "31", "3", "1"},
         lookahead=12,
@@ -3089,11 +3162,15 @@ def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[
 
 
 def _extract_certificate_cast_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    explicit_cast = _extract_explicit_cast_number_payload(lines, page_id)
+    if explicit_cast is not None:
+        return explicit_cast
+
     extracted = _extract_anchor_value_from_lines(
         lines,
-        anchors=("charge/ cast no", "charge/cast no", "cast no", "heat no", "colata", "batch no"),
+        anchors=("charge/ cast no", "charge/cast no", "cast no", "cast nr", "heat no", "colata", "batch no", "coulee"),
         pattern=r"\b[A-Z0-9]{4,}[A-Z]?\b",
-        exclude_tokens={"CHARGE", "CAST", "BATCH", "HEAT", "NO"},
+        exclude_tokens={"CHARGE", "CAST", "BATCH", "HEAT", "NO", "COULEE"},
         lookahead=4,
     )
     if extracted is None:
@@ -3110,7 +3187,13 @@ def _extract_certificate_weight_payload(lines: list[str], page_id: int) -> dict[
     )
     for line in lines:
         lowered = line.casefold()
-        if "weight" not in lowered and "peso netto" not in lowered and "net weight" not in lowered and "gewicht" not in lowered:
+        if (
+            "weight" not in lowered
+            and "peso netto" not in lowered
+            and "net weight" not in lowered
+            and "gewicht" not in lowered
+            and "poids net" not in lowered
+        ):
             continue
         for pattern in weight_patterns:
             weight_match = re.search(pattern, lowered)
@@ -3155,10 +3238,50 @@ def _extract_anchor_value_from_lines(
     return None
 
 
+def _extract_tally_sheet_number_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    for index, line in enumerate(lines):
+        lowered = line.casefold()
+        if "tally sheet" not in lowered and "no. avis" not in lowered and "no. ais" not in lowered:
+            continue
+
+        same_line_match = re.search(r"\b(0{0,4}\d{5})\b", line)
+        if same_line_match is not None:
+            value = str(int(same_line_match.group(1)))
+            return _build_match(page_id, line, value)
+
+        for candidate in lines[index + 1 : min(index + 5, len(lines))]:
+            candidate_match = re.search(r"\b(0{0,4}\d{5})\b", candidate)
+            if candidate_match is not None:
+                value = str(int(candidate_match.group(1)))
+                return _build_match(page_id, f"{line} | {candidate}", value)
+    return None
+
+
+def _extract_explicit_cast_number_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
+    for index, line in enumerate(lines):
+        lowered = line.casefold()
+        if "cast nr" not in lowered and "cast no" not in lowered and "coulee" not in lowered and "colata" not in lowered:
+            continue
+
+        same_line_match = re.search(r"\b(\d{5,}[A-Z]?)\b", _normalize_mojibake_numeric_text(line).upper())
+        if same_line_match is not None:
+            return _build_match(page_id, line, same_line_match.group(1))
+
+        for candidate in lines[index + 1 : min(index + 5, len(lines))]:
+            normalized_candidate = _normalize_mojibake_numeric_text(candidate).upper()
+            candidate_match = re.search(r"^\s*(?:\d{4}\s+)?(\d{5,}[A-Z]?)\b", normalized_candidate)
+            if candidate_match is not None:
+                return _build_match(page_id, f"{line} | {candidate}", candidate_match.group(1))
+    return None
+
+
 def _extract_ddt_number_from_line(line: str) -> str | None:
     delivery_match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", line)
     if delivery_match is not None:
         return delivery_match.group(1)
+    delivery_num_match = re.search(r"(?:delivery\s+note|documento\s+di\s+trasporto).*?\bnum\.?\s*([0-9]{2,})\b", line)
+    if delivery_num_match is not None:
+        return delivery_num_match.group(1)
     transport_match = re.search(r"\bddt\s*([0-9]{2}[-/][0-9]{5})\b", line)
     if transport_match is not None:
         return transport_match.group(1).replace("/", "-").upper()
@@ -3334,6 +3457,254 @@ def _detect_aww_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[st
     return matches
 
 
+def _detect_aluminium_bozen_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    packing_section_active = False
+    current_cert_number: str | None = None
+
+    for page in pages:
+        for line in _page_lines(page):
+            normalized = _normalize_mojibake_numeric_text(line)
+            lowered = normalized.casefold()
+
+            if "ddt" not in matches:
+                ddt_match = _extract_ddt_number_from_line(lowered)
+                if ddt_match is not None:
+                    matches["ddt"] = _build_match(page.id, line, ddt_match)
+
+            if "ordine" not in matches:
+                order_match = re.search(r"\brif\.\s*ns\.\s*odv\s*n\.?\s*([0-9]+(?:[./][0-9]+)?)", lowered)
+                if order_match is not None:
+                    matches["ordine"] = _build_match(page.id, line, order_match.group(1).replace("/", "."))
+
+            if "diametro" not in matches:
+                diameter_match = re.search(r"\bbarra\s+tonda\s+([0-9]+(?:[.,][0-9]+)?)\b", lowered)
+                if diameter_match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+
+            if "colata" not in matches:
+                cast_match = re.search(r"\bcast\s+nr\.?\s*([0-9]{6,}[A-Z0-9])\b", normalized, re.IGNORECASE)
+                if cast_match is not None:
+                    matches["colata"] = _build_match(page.id, line, cast_match.group(1).upper())
+
+            cert_match = re.search(r"\bcert\.\s*n[°o.]?\s*([0-9]{4,})\b", lowered)
+            if cert_match is not None:
+                current_cert_number = cert_match.group(1)
+                if "numero_certificato_ddt" not in matches:
+                    matches["numero_certificato_ddt"] = _build_match(page.id, line, current_cert_number)
+                packing_section_active = True
+                continue
+
+            if packing_section_active:
+                if current_cert_number and "numero_certificato_ddt" not in matches and current_cert_number in lowered:
+                    matches["numero_certificato_ddt"] = _build_match(page.id, line, current_cert_number)
+                if "rif. ordine cliente" in lowered or "articolo" in lowered or "lega stato fisico" in lowered:
+                    continue
+                if "totali" in lowered:
+                    packing_section_active = False
+                    continue
+                row_match = re.search(
+                    r"\b\d{4}-\d{6,}\s+\d+\s+([0-9]+(?:[.,][0-9]+)?)\s+([0-9]+(?:[.,][0-9]+)?)\s+\d+\s+([0-9]{6,}[A-Z0-9]?)\b",
+                    normalized,
+                    re.IGNORECASE,
+                )
+                if row_match is not None:
+                    if "peso" not in matches:
+                        matches["peso"] = _build_match(page.id, line, _normalize_weight(row_match.group(2)))
+                    if "colata" not in matches:
+                        matches["colata"] = _build_match(page.id, line, row_match.group(3).upper())
+                    continue
+
+            if "peso" not in matches:
+                inline_weight_match = re.search(r"\bbarra\s+tonda\s+\d+(?:[.,]\d+)?\b.*?\b(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\)?\s*$", lowered)
+                if inline_weight_match is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(inline_weight_match.group(1)))
+
+    return matches
+
+
+def _detect_zalco_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            normalized = _normalize_mojibake_numeric_text(line)
+            lowered = normalized.casefold()
+
+            if "ddt" not in matches:
+                order_line_match = re.search(r"\border\b.*?\b(\d{8})\b.*?\b(0{0,4}\d{5})\b", lowered)
+                if order_line_match is not None:
+                    matches["ddt"] = _build_match(page.id, line, str(int(order_line_match.group(2))))
+            if "ordine" not in matches:
+                order_match = re.search(r"\border\b.*?\b(\d{8})\b", lowered)
+                if order_match is not None:
+                    matches["ordine"] = _build_match(page.id, line, order_match.group(1))
+            if "diametro" not in matches:
+                diameter_match = re.search(r"\bformat\s*:\s*([0-9]+(?:[.,][0-9]+)?)\b", lowered)
+                if diameter_match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+            if "peso" not in matches:
+                weight_match = re.search(r"\bpoids\s*net\s*:\s*([0-9]+(?:[.,][0-9]+)?)\b", lowered)
+                if weight_match is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(weight_match.group(1)))
+            if "colata" not in matches:
+                cast_match = re.search(r"^\s*(?:\d{4}\s+)?(\d{5})\s+\d{3}\s+\d+\s+[0-9]+", normalized)
+                if cast_match is not None:
+                    matches["colata"] = _build_match(page.id, line, cast_match.group(1))
+    return matches
+
+
+def _detect_arconic_hannover_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            normalized = _normalize_mojibake_numeric_text(line)
+            lowered = normalized.casefold()
+
+            if "ddt" not in matches:
+                delivery_match = re.search(r"\bdelivery\s+note\s+(\d{6,})\b", lowered)
+                if delivery_match is not None:
+                    matches["ddt"] = _build_match(page.id, line, delivery_match.group(1))
+
+            if "ordine" not in matches:
+                customer_po_match = re.search(r"\bcustomer\s+purchase\s+order\s+([0-9][0-9A-Z/-]{1,})\b", normalized, re.IGNORECASE)
+                if customer_po_match is not None:
+                    matches["ordine"] = _build_match(page.id, line, customer_po_match.group(1).upper())
+
+            if "diametro" not in matches:
+                diameter_match = re.search(r"\b(?:die\s*/\s*dimension|die\s*dimension)\s*RD\s*([0-9]+(?:[.,][0-9]+)?)\b", normalized, re.IGNORECASE)
+                if diameter_match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+
+            if "colata" not in matches:
+                cast_match = re.search(r"\b(C\d{9,})\b", normalized, re.IGNORECASE)
+                if cast_match is not None:
+                    matches["colata"] = _build_match(page.id, line, cast_match.group(1).upper())
+
+            if "peso" not in matches and "line total" in lowered:
+                total_match = re.search(
+                    r"\bline\s+total\b.*?\b\d+\s+([0-9]+(?:[.,][0-9]+)?)\s+([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s+([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s+\d+\b",
+                    normalized,
+                    re.IGNORECASE,
+                )
+                if total_match is not None:
+                    matches["peso"] = _build_match(page.id, line, _normalize_weight(total_match.group(2)))
+
+    return matches
+
+
+def _detect_neuman_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            normalized = _normalize_mojibake_numeric_text(line)
+            lowered = normalized.casefold()
+
+            if "ddt" not in matches:
+                delivery_match = re.search(r"\bdelivery\s+note\s+(\d{6,})\b", lowered)
+                if delivery_match is not None:
+                    matches["ddt"] = _build_match(page.id, line, delivery_match.group(1))
+
+            if "ordine" not in matches:
+                order_match = re.search(r"\bcustomer\s+order\s+number\s*:\s*([0-9]{1,6})\b", normalized, re.IGNORECASE)
+                if order_match is not None:
+                    matches["ordine"] = _build_match(page.id, line, order_match.group(1))
+
+            if "diametro" not in matches:
+                diameter_match = re.search(r"\brundstangen\s*:\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
+                if diameter_match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+
+    return matches
+
+
+def _detect_grupa_kety_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    heat_candidates: set[str] = set()
+
+    for page in pages:
+        for line in _page_lines(page):
+            normalized = _normalize_mojibake_numeric_text(line)
+            lowered = normalized.casefold()
+
+            if "ddt" not in matches:
+                delivery_match = re.search(r"\bdelivery\s+note\s*:?\s*(\d{4,})\b", lowered)
+                if delivery_match is not None:
+                    matches["ddt"] = _build_match(page.id, line, delivery_match.group(1))
+
+            if "ordine" not in matches:
+                order_match = re.search(r"\bpo\s+number\s+([0-9]{1,6})\b", normalized, re.IGNORECASE)
+                if order_match is not None:
+                    matches["ordine"] = _build_match(page.id, line, order_match.group(1))
+
+            if "diametro" not in matches:
+                diameter_match = re.search(r"\bextruded\s+round\s+bar\s+([0-9]+(?:[.,][0-9]+)?)\b", lowered)
+                if diameter_match is not None:
+                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+
+            heat_matches = re.findall(r"\b\d{2}[A-Z]-\d{4}\b", normalized, re.IGNORECASE)
+            for token in heat_matches:
+                heat_candidates.add(token.upper())
+
+    if "colata" not in matches and len(heat_candidates) == 1:
+        token = next(iter(heat_candidates))
+        page = pages[0]
+        matches["colata"] = _build_match(page.id, token, token)
+
+    return matches
+
+
+def _detect_impol_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    lines: list[str] = []
+    first_page_id = pages[0].id if pages else 0
+
+    for page in pages:
+        page_lines = _page_lines(page)
+        lines.extend(page_lines)
+        for line in page_lines:
+            normalized = _normalize_mojibake_numeric_text(line).upper()
+            if "ddt" in matches:
+                continue
+            match = re.search(r"\bPACKING\s+LIST(?:[\s_]+)?(\d{1,6})\s*[-/]\s*(\d{1,2})\b", normalized)
+            if match is not None:
+                document_number = f"{int(match.group(1))}-{int(match.group(2))}"
+                matches["ddt"] = _build_match(page.id, line, document_number)
+
+    impol_fields = _extract_impol_match_fields(lines, document_type="ddt")
+
+    if "ordine" not in matches and impol_fields.get("customer_order_no"):
+        snippet = _find_impol_field_snippet(lines, "ordine", impol_fields["customer_order_no"])
+        matches["ordine"] = _build_match(first_page_id, snippet, impol_fields["customer_order_no"])
+    if "colata" not in matches and impol_fields.get("charge"):
+        snippet = _find_impol_field_snippet(lines, "colata", impol_fields["charge"])
+        matches["colata"] = _build_match(first_page_id, snippet, impol_fields["charge"])
+    if "diametro" not in matches and impol_fields.get("diameter"):
+        snippet = _find_impol_field_snippet(lines, "diametro", impol_fields["diameter"])
+        matches["diametro"] = _build_match(first_page_id, snippet, impol_fields["diameter"])
+    if "peso" not in matches and impol_fields.get("net_weight"):
+        snippet = _find_impol_field_snippet(lines, "peso", impol_fields["net_weight"])
+        matches["peso"] = _build_match(first_page_id, snippet, impol_fields["net_weight"])
+
+    return matches
+
+
+def _find_impol_field_snippet(lines: list[str], field_name: str, value: str) -> str:
+    normalized_value = _normalize_mojibake_numeric_text(value).upper()
+
+    for line in lines:
+        normalized_line = _normalize_mojibake_numeric_text(line).upper()
+        if field_name == "diametro" and "DIA" in normalized_line and normalized_value in normalized_line:
+            return line
+        if field_name == "peso" and "POS. TOTAL" in normalized_line:
+            return line
+        if field_name == "colata" and normalized_value in normalized_line:
+            return line
+        if field_name == "ordine" and normalized_value in normalized_line:
+            return line
+
+    return value
+
+
 def _same_token(left: str | None, right: str | None) -> bool:
     return _normalize_match_token(left) is not None and _normalize_match_token(left) == _normalize_match_token(right)
 
@@ -3386,17 +3757,28 @@ def _extract_supplier_match_fields(
             return {
                 "article": _extract_code_pattern(lines, r"\b14BT[0-9A-Z-]+\b"),
                 "customer_code": _extract_aluminium_bozen_customer_code(lines),
-                "customer_order_normalized": _normalize_customer_order_tokens(
-                    _extract_value_near_anchor(lines, ("vs. odv", "vs odv"))
-                ),
+                "customer_order_normalized": _extract_aluminium_bozen_customer_order(lines, document_type="ddt"),
             }
         return {
-            "article": _extract_value_near_anchor(lines, ("article", "profil"), pattern=r"\b14BT[0-9A-Z-]+\b"),
+            "article": _extract_code_pattern(lines, r"\b14BT[0-9A-Z-]+\b"),
             "customer_code": _extract_aluminium_bozen_customer_code(lines),
-            "customer_order_normalized": _normalize_customer_order_tokens(
-                _extract_value_near_anchor(lines, ("customer's order no", "customers order no"))
-            ),
+            "customer_order_normalized": _extract_aluminium_bozen_customer_order(lines, document_type="certificato"),
         }
+
+    if supplier_key == "zalco":
+        return _extract_zalco_match_fields(lines, document_type=document_type)
+
+    if supplier_key == "arconic_hannover":
+        return _extract_arconic_hannover_match_fields(lines)
+
+    if supplier_key == "neuman":
+        return _extract_neuman_match_fields(lines)
+
+    if supplier_key == "grupa_kety":
+        return _extract_grupa_kety_match_fields(lines, document_type=document_type)
+
+    if supplier_key == "impol":
+        return _extract_impol_match_fields(lines, document_type=document_type)
 
     return {}
 
@@ -3463,6 +3845,19 @@ def _normalize_order_confirmation_root(value: str | None) -> str | None:
     return match.group(0)
 
 
+def _normalize_impol_packing_list_root(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{1,6})\s*[-/]\s*\d{1,2}\b", cleaned)
+    if match is not None:
+        return str(int(match.group(1)))
+    match = re.search(r"\b(\d{1,6})\b", cleaned)
+    if match is not None:
+        return str(int(match.group(1)))
+    return None
+
+
 def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
     compiled = re.compile(pattern)
     for line in lines:
@@ -3474,9 +3869,489 @@ def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
 
 def _extract_aluminium_bozen_customer_code(lines: list[str]) -> str | None:
     for line in lines:
-        match = re.search(r"\bA[0-9L][0-9A-Z]{5,}\b", line.upper())
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bA\d[0-9A-Z]{4,}\b", normalized)
         if match is not None:
             return match.group(0)
+    return None
+
+
+def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "ddt":
+        for line in normalized_lines:
+            if "VS. ODV" not in line and "VS ODV" not in line and "RIF. ORDINE CLIENTE" not in line:
+                continue
+            normalized = _normalize_customer_order_tokens(line)
+            if normalized is not None and "|" in normalized:
+                return normalized
+        return None
+
+    for index, line in enumerate(normalized_lines):
+        if "CUSTOMER" in line and "ORDER" in line:
+            for candidate in normalized_lines[index + 1 : min(index + 5, len(normalized_lines))]:
+                normalized = _normalize_customer_order_tokens(candidate)
+                if normalized is not None and "|" in normalized:
+                    return normalized
+
+    for line in normalized_lines:
+        normalized = _normalize_customer_order_tokens(line)
+        if normalized is not None and "|" in normalized:
+            return normalized
+    return None
+
+
+def _extract_zalco_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
+    return {
+        "tally_sheet_no": _extract_zalco_tally_sheet_number(lines, document_type=document_type),
+        "cast_no": _extract_zalco_cast_number(lines),
+        "symbol": _extract_zalco_symbol(lines),
+        "code_art": _extract_zalco_code_art(lines),
+    }
+
+
+def _extract_zalco_tally_sheet_number(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "ddt":
+        for line in normalized_lines:
+            match = re.search(r"\bORDER\b.*?\b\d{8}\b.*?\b(0{0,4}\d{5})\b", line)
+            if match is not None:
+                return str(int(match.group(1)))
+
+    for index, line in enumerate(normalized_lines):
+        if "TALLY SHEET" not in line and "NO. AVIS" not in line and "NO. AIS" not in line:
+            continue
+        match = re.search(r"\b(0{0,4}\d{5})\b", line)
+        if match is not None:
+            return str(int(match.group(1)))
+        for candidate in normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]:
+            candidate_match = re.search(r"\b(0{0,4}\d{5})\b", candidate)
+            if candidate_match is not None:
+                return str(int(candidate_match.group(1)))
+    return None
+
+
+def _extract_zalco_cast_number(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for index, line in enumerate(normalized_lines):
+        if "CAST NR" not in line and "COULEE" not in line:
+            continue
+        match = re.search(r"\b(\d{5})\b", line)
+        if match is not None:
+            return match.group(1)
+        for candidate in normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]:
+            candidate_match = re.search(r"^\s*(?:\d{4}\s+)?(\d{5})\b", candidate)
+            if candidate_match is not None:
+                return candidate_match.group(1)
+    return None
+
+
+def _extract_zalco_symbol(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for index, line in enumerate(normalized_lines):
+        if "SYMBOLE" in line:
+            same_line_match = re.search(r"\bSYMBOLE\s+([0-9]{5,})\b", line)
+            if same_line_match is not None:
+                return same_line_match.group(1)
+            for candidate in normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]:
+                candidate_match = re.search(r"\b([0-9]{5,})\b", candidate)
+                if candidate_match is not None:
+                    return candidate_match.group(1)
+
+    for index, line in enumerate(normalized_lines):
+        if "CUSTOMER ALLOY CODE" not in line:
+            continue
+        for candidate in normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]:
+            candidate_match = re.search(r"\b([0-9]{5,})\b", candidate)
+            if candidate_match is not None:
+                return candidate_match.group(1)
+    return None
+
+
+def _extract_zalco_code_art(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for line in normalized_lines:
+        match = re.search(r"\bCO(?:DE|PE)(?:\s+ART)?\s*:?\s*([0-9]{4,})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_arconic_hannover_match_fields(lines: list[str]) -> dict[str, str]:
+    return {
+        "delivery_note_no": _extract_arconic_delivery_note(lines),
+        "sales_order_number": _extract_value_near_anchor(lines, ("sales order number",), pattern=r"\b\d{6,}\b"),
+        "customer_po": _extract_value_near_anchor(lines, ("customer purchase order", "customer p/o"), pattern=r"\b[0-9][0-9A-Z/-]{1,}\b"),
+        "arconic_item_number": _extract_value_near_anchor(lines, ("arconic item number", "item no."), pattern=r"\bBG[0-9A-Z]+\b"),
+        "cast_job_number": _extract_arconic_cast_job_number(lines),
+    }
+
+
+def _extract_arconic_delivery_note(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(
+            r"\bdelivery\s+note(?:\s+no\.?)?\s+(\d{6,})\b",
+            _normalize_mojibake_numeric_text(line),
+            re.IGNORECASE,
+        )
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_arconic_cast_job_number(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    for index, line in enumerate(normalized_lines):
+        if "CAST/JOB NUMBER" in line:
+            window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
+            normalized = _normalize_arconic_cast_job_tokens(window)
+            if normalized is not None:
+                return normalized
+
+    for line in normalized_lines:
+        if "CAST NUMBER" in line or "PACKAGE" in line or "LINE TOTAL" in line:
+            normalized = _normalize_arconic_cast_job_tokens([line])
+            if normalized is not None:
+                return normalized
+
+    for line in normalized_lines:
+        normalized = _normalize_arconic_cast_job_tokens([line])
+        if normalized is not None and "|" in normalized:
+            return normalized
+    return None
+
+
+def _normalize_arconic_cast_job_tokens(lines: list[str]) -> str | None:
+    cast_token: str | None = None
+    job_token: str | None = None
+    for line in lines:
+        if cast_token is None:
+            cast_match = re.search(r"\b(C\d{9,})\b", line)
+            if cast_match is not None:
+                cast_token = cast_match.group(1)
+        if job_token is None:
+            job_match = re.search(r"\b(\d{8})\b", line)
+            if job_match is not None:
+                job_token = job_match.group(1)
+    if cast_token and job_token:
+        return f"{cast_token}|{job_token}"
+    return cast_token or job_token
+
+
+def _extract_neuman_match_fields(lines: list[str]) -> dict[str, str]:
+    return {
+        "delivery_note_no": _extract_neuman_delivery_note(lines),
+        "lot_number": _extract_neuman_lot_number(lines),
+        "customer_material_number": _extract_value_near_anchor(
+            lines,
+            ("customer material number", "art-nr."),
+            pattern=r"\bA[0-9A-Z]{5,}\b",
+        ),
+        "customer_order_number": _extract_value_near_anchor(
+            lines,
+            ("customer order number",),
+            pattern=r"\b[0-9]{1,6}\b",
+        ),
+    }
+
+
+def _extract_neuman_delivery_note(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bdelivery\s+note(?:\s*:)?\s*(\d{6,})\b", _normalize_mojibake_numeric_text(line), re.IGNORECASE)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_neuman_lot_number(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    lot_candidates: list[str] = []
+    for index, line in enumerate(normalized_lines):
+        if "LOT" not in line:
+            continue
+        lot_candidates.extend(re.findall(r"\b(\d{5})\b", line))
+        for candidate in normalized_lines[index + 1 : min(index + 3, len(normalized_lines))]:
+            lot_candidates.extend(re.findall(r"\b(\d{5})\b", candidate))
+    unique_candidates = sorted(set(lot_candidates))
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+    return None
+
+
+def _extract_grupa_kety_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
+    return {
+        "delivery_note_no": _extract_grupa_kety_delivery_note(lines, document_type=document_type),
+        "lot_number": _extract_grupa_kety_lot_number(lines, document_type=document_type),
+        "order_no": _extract_grupa_kety_order_no(lines),
+        "heat": _extract_grupa_kety_heat(lines),
+        "customer_part_number": _extract_grupa_kety_customer_part_number(lines),
+    }
+
+
+def _extract_impol_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
+    return {
+        "packing_list_no": _extract_impol_packing_list_number(lines, document_type=document_type),
+        "customer_order_no": _extract_impol_customer_order_number(lines, document_type=document_type),
+        "supplier_order_no": _extract_impol_supplier_order_number(lines, document_type=document_type),
+        "product_code": _extract_impol_product_code(lines, document_type=document_type),
+        "charge": _extract_impol_charge(lines, document_type=document_type),
+        "diameter": _extract_impol_diameter(lines),
+        "net_weight": _extract_impol_net_weight(lines, document_type=document_type),
+    }
+
+
+def _extract_impol_packing_list_number(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "ddt":
+        for line in normalized_lines:
+            match = re.search(r"\bPACKING\s+LIST(?:[\s_]+)?(\d{1,6})\s*[-/]\s*(\d{1,2})\b", line)
+            if match is not None:
+                return str(int(match.group(1)))
+
+    for line in normalized_lines:
+        match = re.search(r"\bPACKING\s+LIST\s+NO\.?\s*:?\s*(\d{1,6})\b", line)
+        if match is not None:
+            return str(int(match.group(1)))
+    return None
+
+
+def _extract_impol_customer_order_number(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "certificato":
+        return _extract_value_near_anchor(lines, ("customer order no.", "customer order no", "customer order"), pattern=r"\b\d{1,6}\b")
+
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        if "YOUR ORDER NO" in line:
+            for token in re.findall(r"\b\d{1,6}\b", line):
+                candidates.add(token)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_impol_supplier_order_number(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "certificato":
+        return _extract_value_near_anchor(
+            lines,
+            ("supplier order no.", "supplier order no", "supplier order"),
+            pattern=r"\b\d{3,6}/\d{1,2}\b",
+        )
+
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        if "PRODUCT CODE" in line or "PRODUCT DESCRIPTION" in line or "YOUR ORDER NO" in line:
+            continue
+        for token in re.findall(r"\b\d{3,6}/\d{1,2}\b", line):
+            candidates.add(token)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_impol_product_code(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "certificato":
+        return _extract_value_near_anchor(
+            lines,
+            ("impol product code",),
+            pattern=r"\b\d{6}\b",
+        )
+
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        if "PRODUCT CODE" in line:
+            continue
+        for match in re.findall(r"\b(\d{6})/\d\b", line):
+            candidates.add(match)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_impol_charge(lines: list[str], *, document_type: str) -> str | None:
+    candidates = _collect_impol_charge_candidates(lines, document_type=document_type)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _collect_impol_charge_candidates(lines: list[str], *, document_type: str) -> set[str]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    candidates: set[str] = set()
+
+    for line in normalized_lines:
+        if "CHEMICAL COMPOSITION" in line or "MECHANICAL PROPERTIES" in line:
+            continue
+
+        if document_type == "ddt":
+            for match in re.findall(r"\b(\d{6})\s*\(\d+/\d+\)", line):
+                candidates.add(match)
+            weight_row_match = re.match(
+                r"\s*\d+\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+(\d{6})\b",
+                line,
+            )
+            if weight_row_match is not None:
+                candidates.add(weight_row_match.group(1))
+        else:
+            match = re.match(r"\s*(\d{6})(?:\(\d+/\d+\))?\b", line)
+            if match is not None:
+                candidates.add(match.group(1))
+
+    return candidates
+
+
+def _extract_impol_diameter(lines: list[str]) -> str | None:
+    candidates = _collect_impol_diameter_candidates(lines)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _collect_impol_diameter_candidates(lines: list[str]) -> set[str]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        for match in re.findall(r"\bDIA\s*([0-9]+(?:[.,][0-9]+)?)\s*[X×]\s*\d+\s*MM\b", line):
+            normalized = _normalize_decimal_value(match)
+            if normalized is not None:
+                candidates.add(normalized)
+    return candidates
+
+
+def _extract_impol_net_weight(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "certificato":
+        for line in normalized_lines:
+            match = re.search(r"\bNETTO\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*KG\b", line)
+            if match is not None:
+                return _normalize_weight(match.group(1))
+        return None
+
+    diameter_candidates = _collect_impol_diameter_candidates(lines)
+    charge_candidates = _collect_impol_charge_candidates(lines, document_type=document_type)
+    if len(diameter_candidates) > 1 or len(charge_candidates) > 1:
+        return None
+
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        if "POS. TOTAL" not in line:
+            continue
+        numbers = re.findall(r"([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)", line)
+        if not numbers:
+            continue
+        normalized = _normalize_weight(numbers[-1])
+        if normalized is not None:
+            candidates.add(normalized)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_grupa_kety_delivery_note(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+    if document_type == "ddt":
+        for line in normalized_lines:
+            match = re.search(r"\bDELIVERY\s+NOTE\s*:?\s*(\d{4,})\b", line)
+            if match is not None:
+                return match.group(1)
+
+    for index, line in enumerate(normalized_lines):
+        if "PACKING SLIP" not in line and "LOT" not in line and "DOWOD WYSYLKOWY" not in line:
+            continue
+        window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
+        pair = _extract_grupa_kety_packing_slip_lot_pair(window)
+        if pair is not None:
+            return pair[0]
+    return None
+
+
+def _extract_grupa_kety_lot_number(lines: list[str], document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    candidates: set[str] = set()
+
+    if document_type == "ddt":
+        for line in normalized_lines:
+            for token in re.findall(r"\b100\d{5}(?:/\d{2})?\b", line):
+                candidates.add(token.split("/", 1)[0])
+    else:
+        for index, line in enumerate(normalized_lines):
+            if "PACKING SLIP" not in line and "LOT" not in line and "DOWOD WYSYLKOWY" not in line:
+                continue
+            window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
+            pair = _extract_grupa_kety_packing_slip_lot_pair(window)
+            if pair is not None:
+                candidates.add(pair[1])
+            for candidate in window:
+                for token in re.findall(r"\b100\d{5}(?:/\d{2})?\b", candidate):
+                    candidates.add(token.split("/", 1)[0])
+
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_grupa_kety_order_no(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for line in normalized_lines:
+        if "PO NUMBER" in line:
+            match = re.search(r"\bPO\s+NUMBER\s+([0-9]{1,6})\b", line)
+            if match is not None:
+                return match.group(1)
+        if "ORDER NO" in line and "SALES ORDER" not in line:
+            match = re.search(r"\bORDER\s+NO\s+([0-9]{1,6})\b", line)
+            if match is not None:
+                return match.group(1)
+    for index, line in enumerate(normalized_lines):
+        if "ORDER NO" not in line and "NR ZAMOWIENIA KLIENTA" not in line:
+            continue
+        for candidate in normalized_lines[index + 1 : min(index + 3, len(normalized_lines))]:
+            match = re.match(r"\s*([0-9]{1,6})\b", candidate)
+            if match is not None:
+                return match.group(1)
+    return None
+
+
+def _extract_grupa_kety_heat(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    candidates: set[str] = set()
+    for line in normalized_lines:
+        for token in re.findall(r"\b\d{2}[A-Z]-\d{4}\b", line):
+            candidates.add(token)
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _extract_grupa_kety_customer_part_number(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for line in normalized_lines:
+        if "CUSTOMER PART" in line:
+            match = re.search(r"\b(PP[0-9A-Z ./:-]+?)\s+PO\s+NUMBER\b", line)
+            if match is not None:
+                return re.sub(r"\s+", " ", match.group(1).strip())
+        if "NR ZAMOWIENIA KLIENTA" in line or "ORDER NO" in line:
+            match = re.search(r"\b(PP[0-9A-Z ./:-]+?)\s+E\d{6,}", line)
+            if match is not None:
+                return re.sub(r"\s+", " ", match.group(1).strip())
+    return None
+
+
+def _extract_grupa_kety_packing_slip_lot_pair(lines: list[str]) -> tuple[str, str] | None:
+    for line in lines:
+        match = re.search(r"\b(\d{4,6})\s*/\s*(100\d{5})\b", line)
+        if match is not None:
+            return match.group(1), match.group(2)
     return None
 
 
@@ -3484,20 +4359,33 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
+    cleaned_upper = cleaned.upper()
+    leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", cleaned_upper)
+    if leading_date_match is not None:
+        return f"{leading_date_match.group(1)}|{leading_date_match.group(2)}"
+
+    trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", cleaned_upper)
+    if trailing_date_match is not None:
+        return f"{trailing_date_match.group(2)}|{trailing_date_match.group(1)}"
+
     tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
     if not tokens:
         return None
-    date_token = next((token for token in tokens if re.fullmatch(r"20\d{2}", token) is None and re.fullmatch(r"\d{4}", token) is None and "-" in cleaned and re.search(r"20\d{2}", cleaned)), None)
     if re.search(r"20\d{2}-\d{2}-\d{2}", cleaned):
         date_match = re.search(r"20\d{2}-\d{2}-\d{2}", cleaned)
         date_value = date_match.group(0) if date_match else None
-        other_tokens = [token for token in tokens if token not in set(re.findall(r"\d+", date_value or ""))]
+        other_tokens = [
+            token
+            for token in tokens
+            if token not in {"VS", "ODV", "RIF", "ORDINE", "CLIENTE", "CUSTOMER", "ORDER", "NO", "N"}
+            and token not in set(re.findall(r"\d+", date_value or ""))
+        ]
         if date_value:
-            prefix = "".join(other_tokens)
+            prefix = next((token for token in other_tokens if re.fullmatch(r"\d{1,4}", token)), "".join(other_tokens))
             return f"{date_value}|{prefix}" if prefix else date_value
     if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
-        prefix = tokens[0]
+        prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
         return f"{date_value}|{prefix}"
     return "".join(tokens)
 

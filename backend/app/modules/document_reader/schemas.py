@@ -36,12 +36,20 @@ class OpenAIDoubleCheckEstimateResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ReaderRowSplitHintResponse(BaseModel):
+    needed: bool
+    estimated_rows: int | None = None
+    reason: str | None = None
+    signals: list[str] = Field(default_factory=list)
+
+
 class ReaderPlanResponse(BaseModel):
     row_id: int
     template: ReaderTemplateSummaryResponse
     local_pipeline: list[str] = Field(default_factory=list)
     masking_rules: list[str] = Field(default_factory=list)
     decision_policy: list[str] = Field(default_factory=list)
+    row_split_hint: ReaderRowSplitHintResponse
     ddt_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     certificate_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     openai_double_check: OpenAIDoubleCheckEstimateResponse

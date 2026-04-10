@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.core.config import settings
 from app.modules.acquisition.models import AcquisitionRow, Document
 from app.modules.document_reader.decision_engine import build_default_decision_rules
@@ -7,6 +9,7 @@ from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.schemas import (
     OpenAIDoubleCheckEstimateResponse,
     ReaderPlanResponse,
+    ReaderRowSplitHintResponse,
     ReaderTableInsightResponse,
     ReaderTemplateSummaryResponse,
 )
@@ -27,6 +30,7 @@ def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
     ddt_insights = _build_document_table_insights(row.ddt_document, "ddt")
     certificate_insights = _build_document_table_insights(row.certificate_document, "certificato")
     planned_crops = _estimate_planned_crops(template, row)
+    row_split_hint = _build_row_split_hint(row.ddt_document, template)
 
     return ReaderPlanResponse(
         row_id=row.id,
@@ -54,6 +58,7 @@ def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
             "Inviare a OpenAI solo crop/blocchi tecnici utili",
         ],
         decision_policy=[rule.description for rule in build_default_decision_rules()],
+        row_split_hint=row_split_hint,
         ddt_table_insights=ddt_insights,
         certificate_table_insights=certificate_insights,
         openai_double_check=_build_openai_estimate(template, planned_crops),
@@ -131,3 +136,99 @@ def _build_openai_estimate(template, planned_crops: int) -> OpenAIDoubleCheckEst
         estimated_input_cost_usd=estimated_input_cost_usd,
         notes=notes,
     )
+
+
+def _build_row_split_hint(document: Document | None, template) -> ReaderRowSplitHintResponse:
+    if document is None or template is None:
+        return ReaderRowSplitHintResponse(needed=False, signals=[])
+
+    lines: list[str] = []
+    for page in document.pages:
+        lines.extend(_page_lines(page))
+    if not lines:
+        return ReaderRowSplitHintResponse(needed=False, signals=[])
+
+    if template.supplier_key == "impol":
+        return _build_impol_row_split_hint(lines)
+    if template.supplier_key == "grupa_kety":
+        return _build_grupa_kety_row_split_hint(lines)
+
+    return ReaderRowSplitHintResponse(needed=False, signals=[])
+
+
+def _build_impol_row_split_hint(lines: list[str]) -> ReaderRowSplitHintResponse:
+    normalized_lines = [line.upper() for line in lines]
+    product_codes = {
+        match
+        for line in normalized_lines
+        for match in re.findall(r"\b(\d{6})/\d\b", line)
+    }
+    diameters = {
+        _normalize_decimal_value(match) or match
+        for line in normalized_lines
+        for match in re.findall(r"\bDIA\s*([0-9]+(?:[.,][0-9]+)?)\s*[X×]\s*\d+\s*MM\b", line)
+    }
+    charges = {
+        match
+        for line in normalized_lines
+        for match in re.findall(r"\b(\d{6})\s*\(\d+/\d+\)", line)
+    }
+    signals: list[str] = []
+    if len(product_codes) > 1:
+        signals.append(f"product_code={len(product_codes)}")
+    if len(diameters) > 1:
+        signals.append(f"diameter={len(diameters)}")
+    if len(charges) > 1:
+        signals.append(f"charge={len(charges)}")
+
+    estimated_rows = max([len(product_codes), len(diameters), len(charges), 1])
+    if signals:
+        return ReaderRowSplitHintResponse(
+            needed=True,
+            estimated_rows=estimated_rows,
+            reason="Il packing list contiene piu posizioni materiale e va scisso in righe acquisition.",
+            signals=signals,
+        )
+    return ReaderRowSplitHintResponse(needed=False, estimated_rows=1, signals=[])
+
+
+def _build_grupa_kety_row_split_hint(lines: list[str]) -> ReaderRowSplitHintResponse:
+    normalized_lines = [line.upper() for line in lines]
+    lots = {
+        token.split("/", 1)[0]
+        for line in normalized_lines
+        for token in re.findall(r"\b100\d{5}(?:/\d{2})?\b", line)
+    }
+    heats = {
+        token
+        for line in normalized_lines
+        for token in re.findall(r"\b\d{2}[A-Z]-\d{4}\b", line)
+    }
+    signals: list[str] = []
+    if len(lots) > 1:
+        signals.append(f"lot={len(lots)}")
+    if len(heats) > 1:
+        signals.append(f"heat={len(heats)}")
+
+    estimated_rows = max([len(lots), len(heats), 1])
+    if signals:
+        return ReaderRowSplitHintResponse(
+            needed=True,
+            estimated_rows=estimated_rows,
+            reason="Il documento contiene piu lotti o heat e puo richiedere piu righe acquisition.",
+            signals=signals,
+        )
+    return ReaderRowSplitHintResponse(needed=False, estimated_rows=1, signals=[])
+
+
+def _normalize_decimal_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip().replace(" ", "")
+    if not cleaned:
+        return None
+    normalized = cleaned.replace(",", ".")
+    if normalized.count(".") > 1:
+        integer, decimal = normalized.rsplit(".", 1)
+        normalized = integer.replace(".", "") + "." + decimal
+    return normalized
