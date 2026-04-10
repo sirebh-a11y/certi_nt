@@ -58,6 +58,8 @@ from app.modules.acquisition.service import (
     update_acquisition_row,
     validate_final_row,
 )
+from app.modules.document_reader.schemas import ReaderPlanResponse
+from app.modules.document_reader.service import build_reader_plan
 
 router = APIRouter()
 
@@ -226,6 +228,12 @@ def create_acquisition_row_route(
 @router.get("/rows/{row_id}", response_model=AcquisitionRowDetailResponse)
 def get_acquisition_row_route(row_id: int, _: CurrentUser, db: DbSession) -> AcquisitionRowDetailResponse:
     return serialize_acquisition_row_detail(get_acquisition_row(db, row_id))
+
+
+@router.get("/rows/{row_id}/reader-plan", response_model=ReaderPlanResponse)
+def get_reader_plan_route(row_id: int, _: CurrentUser, db: DbSession) -> ReaderPlanResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_reader_plan(row)
 
 
 @router.patch("/rows/{row_id}", response_model=AcquisitionRowDetailResponse)

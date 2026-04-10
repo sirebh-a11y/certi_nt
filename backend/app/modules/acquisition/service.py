@@ -56,6 +56,7 @@ from app.modules.acquisition.schemas import (
     ReadValueResponse,
     ReadValueUpsertRequest,
 )
+from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
 
@@ -3247,7 +3248,7 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
 
     window = lines[mechanical_anchor : min(mechanical_anchor + 12, len(lines))]
     candidate_line = None
-    for line in window:
+    for line in choose_measured_lines(window):
         lowered = line.lower()
         if lowered.startswith("spec."):
             continue
@@ -3317,6 +3318,56 @@ def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dic
                     "final": standardized,
                 },
             )
+    for field_name, payload in _parse_vertical_chemistry_from_lines(lines, page_id).items():
+        matches.setdefault(field_name, payload)
+    return matches
+
+
+def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    anchor_index = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if "chemical analysis" in lowered or "analisi chimica" in lowered or "chemische analyse" in lowered:
+            anchor_index = index
+            break
+    if anchor_index is None:
+        return {}
+
+    window = lines[anchor_index + 1 : min(anchor_index + 48, len(lines))]
+    elements: list[str] = []
+    measured_index: int | None = None
+
+    for index, line in enumerate(window):
+        element = _extract_vertical_chemistry_element(line)
+        if element is not None:
+            elements.append(element)
+            continue
+        lowered = line.lower()
+        if "ist/act" in lowered or lowered == "value" or lowered == "valeur":
+            measured_index = index
+            break
+
+    if not elements or measured_index is None:
+        return {}
+
+    measured_values = _collect_vertical_numeric_values(window, measured_index + 1, len(elements))
+    if len(measured_values) < len(elements):
+        return {}
+
+    snippet_parts = [window[measured_index], *measured_values[: len(elements)]]
+    matches: dict[str, dict[str, str | int]] = {}
+    for element, raw_value in zip(elements, measured_values):
+        standardized = raw_value.replace(",", ".")
+        matches.setdefault(
+            element,
+            {
+                "page_id": page_id,
+                "snippet": " | ".join(snippet_parts),
+                "raw": raw_value,
+                "standardized": standardized,
+                "final": standardized,
+            },
+        )
     return matches
 
 
@@ -3330,17 +3381,38 @@ def _extract_chemistry_header(line: str) -> list[str]:
     return elements
 
 
+def _extract_vertical_chemistry_element(line: str) -> str | None:
+    token = line.strip().replace(" ", "")
+    if token == "%":
+        return None
+    if token.lower().startswith("andere") or token.lower().startswith("other"):
+        return None
+    if token in CHEMISTRY_FIELD_SET:
+        return token
+    return None
+
+
 def _find_chemistry_measurement_line(lines: list[str], start_index: int, expected_count: int) -> str | None:
-    for candidate in lines[start_index : min(start_index + 4, len(lines))]:
+    window = lines[start_index : min(start_index + 6, len(lines))]
+    for candidate in choose_measured_lines(window):
         lowered = candidate.lower()
-        if lowered.startswith("min") or lowered.startswith("max"):
-            continue
         if any(marker in lowered for marker in ("spec.", "norm", "alloy", "charge", "notes", "mechanical")):
             continue
         values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
         if len(values) >= min(expected_count, 3):
             return candidate
     return None
+
+
+def _collect_vertical_numeric_values(lines: list[str], start_index: int, expected_count: int) -> list[str]:
+    values: list[str] = []
+    for candidate in lines[start_index : min(start_index + expected_count + 8, len(lines))]:
+        cleaned = candidate.strip()
+        if re.fullmatch(r"<?\d+(?:[.,]\d+)?", cleaned):
+            values.append(cleaned)
+        if len(values) >= expected_count:
+            break
+    return values
 
 
 def _detect_us_control_class(line: str) -> str | None:
