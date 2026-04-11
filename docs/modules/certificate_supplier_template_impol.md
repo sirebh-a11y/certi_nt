@@ -23,14 +23,17 @@ esempi_locali/3-certificati/Impol
 
 ## 2. Dataset Letto
 
-* `pdf_letti`: `CQF_1505_a_608232_2026.pdf`, `CQF_1505_b_6005A33_2026.pdf`, `CQF_1505_c_6005A35_2026.pdf`, `CQF_28691_a_608232_2025.pdf`, `CQF_3078_a_608224_2026.pdf`, `CQF_3078_b_6005A35_2026.pdf`
-* `pagine_totali_lette`: `12`
+* `pdf_letti`: `CQF_1505_a_608232_2026.pdf`, `CQF_1505_b_6005A33_2026.pdf`, `CQF_1505_c_6005A35_2026.pdf`, `CQF_28691_a_608232_2025.pdf`, `CQF_28691_b_608232_2025.pdf`, `CQF_29289#a_6005A35_2025.pdf`, `CQF_29289#b_618236_2025.pdf`, `CQF_3078_a_608224_2026.pdf`, `CQF_3078_b_6005A35_2026.pdf`, `CQF_5445_a_6005A33_2026.pdf`, `CQF_5445_b_6005A35_2026.pdf`, `CQF_5445_c_6005A36_2026.pdf`, `CQF_5445_d_6005A35_2026.pdf`, `CQF_636_a_608224_2026.pdf`, `CQF_636_b_6005A36_2026.pdf`
+* `pagine_totali_lette`: `30`
 
 Match forti verificati:
 
 * `1505-11.pdf` -> serie `1505/a`, `1505/b`, `1505/c`
-* `28691-11.pdf` -> `28691/a`
+* `28691-11.pdf` -> `28691/a`, `28691/b`
+* `29289-11.pdf` -> `29289#a`, `29289#b`
 * `3078-11.pdf` -> `3078/a`, `3078/b`
+* `5445-11.pdf` -> `5445/a`, `5445/b`, `5445/c`, `5445/d`
+* `636-11.pdf` -> `636/a`, `636/b`
 
 Nota metodologica:
 
@@ -153,6 +156,7 @@ Regola:
 ## 7. Note Runtime
 
 * `Impol` e' importante perche' le tabelle chimiche e meccaniche sono ricche ma pulite
+* il dataset storico conferma gruppi certificato completi anche per `29289`, `5445` e `636`
 * e' anche il caso piu' evidente in cui:
   * un DDT puo' generare piu' righe
   * e ogni riga puo' avere il suo certificato con suffisso lettera

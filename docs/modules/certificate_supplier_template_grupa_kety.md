@@ -23,12 +23,18 @@ esempi_locali/3-certificati/Grupa Kety
 
 ## 2. Dataset Letto
 
-* `pdf_letti`: `CQF_10033541_25_715044_2025.pdf`, `CQF_10033543_25_715044_2025.pdf`
+* `pdf_letti`: `CQF_10033539_25_715044_2025.pdf`, `CQF_10033541_25_715044_2025.pdf`, `CQF_10033543_25_715044_2025.pdf`, `CQF_740083448_23_715035_2023.pdf`, `CQF_750027615_23_715044_2023.pdf`, `CQF_750027617_23_715044_2023.pdf`, `CQF_750030118_715044_2023.pdf`, `CQF_740087696_24_715044_2024.pdf`
 
 Match forti verificati:
 
+* `12594.pdf` -> `10033539/25`
 * `12594.pdf` -> `10033541/25`
 * `12594.pdf` -> `10033543/25`
+* `201138817.pdf` -> `740083448/23`
+* `201144562.pdf` -> `750027615/23`
+* `201149900.pdf` -> `750027617/23`
+* `201154858.pdf` -> `750030118`
+* `201177772.pdf` -> `740087696/24`
 
 Nota metodologica:
 
@@ -119,3 +125,4 @@ Campi forti:
 Nota:
 
 * `Grupa Kety` e' forte e coerente su DDT e certificato
+* il gruppo storico letto mostra piu' famiglie reali, con lotto come ponte documentale stabile

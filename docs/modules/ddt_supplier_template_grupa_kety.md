@@ -24,15 +24,21 @@ esempi_locali/4-ddt/Grupa Kety
 * `pdf_letti`: `12594.pdf`, `201138817.pdf`, `201144562.pdf`, `201149900.pdf`, `201154858.pdf`, `201177772.pdf`
 * `documenti_rappresentativi`: `12594.pdf`, `201149900.pdf`
 
-Match forte gia' verificato:
+Match forti verificati sul dataset storico:
 
-* `12594.pdf` -> certificato `10033541/25` con stessi campi documentali
+* `12594.pdf` -> certificati lotto `10033539/25`, `10033541/25`, `10033543/25`
+* `201138817.pdf` -> certificato lotto `740083448/23`
+* `201144562.pdf` -> certificato lotto `750027615/23`
+* `201149900.pdf` -> certificato lotto `750027617/23`
+* `201154858.pdf` -> certificato lotto `750030118`
+* `201177772.pdf` -> certificato lotto `740087696/24`
 
 Nota metodologica:
 
 * i nomi file aiutano solo l'analisi del dataset storico
 * il match runtime futuro non deve usare il nome file
 * il match runtime deve usare solo i campi letti dal DDT e dal certificato
+* in alcuni OCR storici il lotto DDT puo' avere prefissi rumorosi (`1017...`), ma il root lotto utile resta coerente col certificato
 
 ---
 
@@ -109,5 +115,6 @@ Il template si riconosce da:
 
 ## 7. Note Runtime
 
-* `Grupa Kety` e' forte perche' il lotto compare in modo pulito sia nel DDT sia nel certificato
+* `Grupa Kety` e' forte perche' il lotto compare sia nel DDT sia nel certificato
 * la chimica e le proprieta' certificate sembrano poi agganciarsi al lotto, non al documento intero
+* il dataset storico conferma piu' coppie reali oltre a `12594`, quindi il template e' piu' ricco di quanto apparisse all'inizio
