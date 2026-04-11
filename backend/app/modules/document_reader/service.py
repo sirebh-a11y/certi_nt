@@ -21,6 +21,28 @@ GPT54_INPUT_USD_PER_1M = 2.50
 LOW_DETAIL_IMAGE_TOKENS = 85
 
 
+def _normalize_text(value: str | None) -> str | None:
+    return value.strip() if value and value.strip() else None
+
+
+def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return True
+
+    ascii_alnum_count = len(re.findall(r"[A-Za-z0-9]", normalized))
+    extended_latin_count = len(re.findall(r"[À-ÿ]", normalized))
+    word_count = len(normalized.split())
+
+    if ascii_alnum_count == 0 and extended_latin_count >= 4:
+        return True
+    if extended_latin_count >= 6 and ascii_alnum_count < 12:
+        return True
+    if word_count <= 3 and extended_latin_count > ascii_alnum_count:
+        return True
+    return False
+
+
 def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
     template = resolve_supplier_template(
         row.supplier.ragione_sociale if row.supplier is not None else None,
@@ -131,7 +153,9 @@ def _select_table_window(lines: list[str]) -> list[str]:
 
 
 def _page_lines(page) -> list[str]:
-    text = page.testo_estratto or page.ocr_text or ""
+    pdf_text = _normalize_text(page.testo_estratto)
+    ocr_text = _normalize_text(page.ocr_text)
+    text = ocr_text if (ocr_text and _pdf_text_needs_ocr_fallback(pdf_text)) else (pdf_text or ocr_text or "")
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
@@ -405,12 +429,9 @@ def _extract_impol_candidate_charge(lines: list[str]) -> str | None:
     for line in lines:
         for match in re.findall(r"\b(\d{6})\s*\(\d+/\d+\)", line):
             candidates.add(match)
-        row_match = re.match(
-            r"\s*\d+\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+(\d{6})\b",
-            line,
-        )
-        if row_match is not None:
-            candidates.add(row_match.group(1))
+        row_components = _extract_impol_weight_row_components(line)
+        if row_components is not None:
+            candidates.add(row_components[2])
     if len(candidates) == 1:
         return next(iter(candidates))
     return None
@@ -420,12 +441,9 @@ def _extract_impol_candidate_net_weight(lines: list[str]) -> str | None:
     total = 0.0
     found = False
     for line in lines:
-        row_match = re.match(
-            r"\s*\d+\s+([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\s+([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\s+\d{6}\b",
-            line,
-        )
-        if row_match is not None:
-            net = _parse_decimal_number(row_match.group(2))
+        row_components = _extract_impol_weight_row_components(line)
+        if row_components is not None:
+            net = _parse_decimal_number(row_components[1])
             if net is not None:
                 total += net
                 found = True
@@ -471,10 +489,17 @@ def _extract_impol_candidate_product_code(lines: list[str]) -> str | None:
 
 
 def _looks_like_impol_weight_row(line: str) -> bool:
-    return re.match(
-        r"\s*\d+\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?\s+\d{6}\b",
+    return _extract_impol_weight_row_components(line) is not None
+
+
+def _extract_impol_weight_row_components(line: str) -> tuple[str, str, str] | None:
+    match = re.search(
+        r"\b\d+\s+([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\s+([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\s+(\d{6})(?:\s*\(\d+/\d+\))?\b",
         line,
-    ) is not None
+    )
+    if match is None:
+        return None
+    return match.group(1), match.group(2), match.group(3)
 
 
 def _extract_grupa_kety_lega(lines: list[str]) -> str | None:

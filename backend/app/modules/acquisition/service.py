@@ -567,7 +567,7 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
 def _document_identity_text(document: Document) -> str:
     chunks = [document.nome_file_originale]
     for page in document.pages[:2]:
-        page_text = page.testo_estratto or page.ocr_text or ""
+        page_text = _best_page_text(page)
         if page_text:
             chunks.append(page_text[:4000])
     return "\n".join(chunk for chunk in chunks if chunk)
@@ -1987,6 +1987,7 @@ def _auto_propose_certificate_match(
             row=row,
             certificate_document=certificate_document,
             ddt_certificate_number=ddt_certificate_number,
+            row_ddt_values=ddt_values,
         )
         if candidate is not None:
             scored_candidates.append(candidate)
@@ -2049,6 +2050,7 @@ def _score_certificate_candidate(
     row: AcquisitionRow,
     certificate_document: Document,
     ddt_certificate_number: str | None,
+    row_ddt_values: dict[str, str | None],
 ) -> dict[str, object] | None:
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None and row.fornitore_id != certificate_document.fornitore_id:
         return None
@@ -2073,6 +2075,12 @@ def _score_certificate_candidate(
         template.supplier_key if template is not None else None,
         "ddt",
     )
+    row_supplier_fields = _extract_row_supplier_match_fields(
+        row=row,
+        ddt_values=row_ddt_values,
+        supplier_key=template.supplier_key if template is not None else None,
+    )
+    ddt_supplier_fields = _merge_row_supplier_fields(ddt_supplier_fields, row_supplier_fields)
     certificate_supplier_fields = _extract_supplier_match_fields(
         certificate_document.pages,
         template.supplier_key if template is not None else None,
@@ -2190,6 +2198,47 @@ def _score_certificate_candidate(
         "score": score,
         "reason": ", ".join(ranked_reasons[:3]) or "Certificato plausibile",
     }
+
+
+def _merge_row_supplier_fields(
+    document_fields: dict[str, str | None],
+    row_fields: dict[str, str | None],
+) -> dict[str, str | None]:
+    merged = dict(document_fields)
+    for field_name, field_value in row_fields.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is not None:
+            merged[field_name] = normalized_value
+    return merged
+
+
+def _extract_row_supplier_match_fields(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    supplier_key: str | None,
+) -> dict[str, str | None]:
+    if supplier_key == "grupa_kety":
+        return {
+            "delivery_note_no": _string_or_none(row.ddt),
+            "lot_number": _string_or_none(ddt_values.get("lot_batch_no")),
+            "order_no": _string_or_none(row.ordine) or _string_or_none(ddt_values.get("ordine")),
+            "heat": _string_or_none(ddt_values.get("heat_no")),
+            "customer_part_number": _string_or_none(ddt_values.get("product_code")),
+        }
+
+    if supplier_key == "impol":
+        return {
+            "packing_list_no": _normalize_impol_packing_list_root(row.ddt) or _string_or_none(ddt_values.get("ddt")),
+            "customer_order_no": _string_or_none(row.ordine) or _string_or_none(ddt_values.get("ordine")),
+            "supplier_order_no": _string_or_none(ddt_values.get("supplier_order_no")),
+            "product_code": _string_or_none(ddt_values.get("product_code")),
+            "charge": _string_or_none(row.colata) or _string_or_none(ddt_values.get("colata")),
+            "diameter": _string_or_none(row.diametro) or _string_or_none(ddt_values.get("diametro")),
+            "net_weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
+        }
+
+    return {}
 
 
 def _record_history_event(
@@ -2483,6 +2532,32 @@ def normalize_extracted_text(value: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
+def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
+    normalized = normalize_extracted_text(value)
+    if normalized is None:
+        return True
+
+    ascii_alnum_count = len(re.findall(r"[A-Za-z0-9]", normalized))
+    extended_latin_count = len(re.findall(r"[À-ÿ]", normalized))
+    word_count = len(normalized.split())
+
+    if ascii_alnum_count == 0 and extended_latin_count >= 4:
+        return True
+    if extended_latin_count >= 6 and ascii_alnum_count < 12:
+        return True
+    if word_count <= 3 and extended_latin_count > ascii_alnum_count:
+        return True
+    return False
+
+
+def _best_page_text(page: DocumentPage) -> str:
+    pdf_text = normalize_extracted_text(page.testo_estratto)
+    ocr_text = normalize_extracted_text(page.ocr_text)
+    if ocr_text and _pdf_text_needs_ocr_fallback(pdf_text):
+        return ocr_text
+    return pdf_text or ocr_text or ""
+
+
 def _extract_pdf_page_payloads(document: Document, storage_path: Path) -> list[dict[str, object]]:
     reader = PdfReader(str(storage_path))
     fitz_doc = fitz.open(str(storage_path))
@@ -2563,7 +2638,9 @@ def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> s
 def _ensure_document_page_ocr(db: Session, document: Document) -> Document:
     changed = False
     for page in document.pages:
-        if page.ocr_text or page.testo_estratto:
+        if page.ocr_text:
+            continue
+        if page.testo_estratto and not _pdf_text_needs_ocr_fallback(page.testo_estratto):
             continue
         if not page.immagine_pagina_storage_key:
             continue
@@ -3255,7 +3332,7 @@ def _detect_certificate_core_matches(pages: list[DocumentPage]) -> dict[str, dic
 
 
 def _page_lines(page: DocumentPage) -> list[str]:
-    page_text = page.testo_estratto or page.ocr_text or ""
+    page_text = _best_page_text(page)
     return [line.strip() for line in page_text.splitlines() if line.strip()]
 
 
@@ -4599,7 +4676,7 @@ def _document_contains_token(pages: list[DocumentPage], token: str | None) -> bo
     if cleaned_token is None:
         return False
     for page in pages:
-        haystack = _normalize_match_token(page.testo_estratto or page.ocr_text or "")
+        haystack = _normalize_match_token(_best_page_text(page))
         if haystack and cleaned_token in haystack:
             return True
     return False
@@ -4615,7 +4692,7 @@ def _string_or_none(value: str | int | None) -> str | None:
 def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
-        page_text = page.testo_estratto or page.ocr_text or ""
+        page_text = _best_page_text(page)
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
@@ -4751,7 +4828,7 @@ def _detect_chemistry_matches(
     matches: dict[str, dict[str, str | int]] = {}
     template = resolve_supplier_template(supplier_name) if supplier_name else None
     for page in pages:
-        page_text = page.testo_estratto or page.ocr_text or ""
+        page_text = _best_page_text(page)
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
@@ -4766,7 +4843,7 @@ def _detect_chemistry_matches(
 def _detect_property_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
-        page_text = page.testo_estratto or page.ocr_text or ""
+        page_text = _best_page_text(page)
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
