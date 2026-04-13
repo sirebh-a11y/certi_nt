@@ -1528,6 +1528,8 @@ def detect_chemistry(
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
+    _prune_unconfirmed_block_values(db=db, row_id=row.id, block="chimica", keep_fields=set(matches.keys()))
+
     for field_name, match in matches.items():
         extraction_method = str(match.get("method") or "pdf_text")
         confidence = 0.76 if extraction_method == "chatgpt" else 0.88
@@ -1585,7 +1587,8 @@ def detect_properties(
         certificate_document = _index_document_from_path(db, certificate_document)
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="proprieta")
-    matches = _detect_property_matches(certificate_document.pages)
+    supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
+    matches = _detect_property_matches(certificate_document.pages, supplier_name=supplier_name)
     if openai_api_key and len(matches) < 3:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
@@ -1607,6 +1610,8 @@ def detect_properties(
         _sync_row_statuses(db, row)
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+    _prune_unconfirmed_block_values(db=db, row_id=row.id, block="proprieta", keep_fields=set(matches.keys()))
 
     for field_name, match in matches.items():
         extraction_method = str(match.get("method") or "pdf_text")
@@ -3117,6 +3122,33 @@ def _read_value_has_payload(value: ReadValue) -> bool:
     )
 
 
+def _prune_unconfirmed_block_values(
+    db: Session,
+    *,
+    row_id: int,
+    block: str,
+    keep_fields: set[str],
+) -> None:
+    stale_values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row_id,
+            ReadValue.blocco == block,
+            ReadValue.stato != "confermato",
+        )
+        .all()
+    )
+    for value in stale_values:
+        if value.campo in keep_fields:
+            continue
+        value.valore_grezzo = None
+        value.valore_standardizzato = None
+        value.valore_finale = None
+        value.stato = "scartato"
+        value.document_evidence_id = None
+        value.confidenza = None
+
+
 def _upsert_read_value_model(
     db: Session,
     *,
@@ -4464,21 +4496,36 @@ def _detect_chemistry_matches(
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-        page_matches = _parse_chemistry_from_lines(lines, page.id)
-        if template is not None and template.supplier_key == "aluminium_bozen" and not page_matches:
+        if template is not None and template.supplier_key == "aluminium_bozen":
             page_matches = _parse_aluminium_bozen_chemistry_from_lines(lines, page.id)
+            if not page_matches:
+                page_matches = _parse_chemistry_from_lines(lines, page.id)
+        else:
+            page_matches = _parse_chemistry_from_lines(lines, page.id)
         for field_name, payload in page_matches.items():
             matches.setdefault(field_name, payload)
     return matches
 
 
-def _detect_property_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def _detect_property_matches(
+    pages: list[DocumentPage],
+    *,
+    supplier_name: str | None = None,
+) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
     for page in pages:
         page_text = _best_page_text(page)
         if not page_text:
             continue
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+
+        if template is not None and template.supplier_key == "aluminium_bozen":
+            page_matches = _parse_aluminium_bozen_properties_from_lines(lines, page.id)
+            if page_matches:
+                for field_name, payload in page_matches.items():
+                    matches.setdefault(field_name, payload)
+                continue
 
         spec_matches = _parse_properties_from_spec_lines(lines, page.id)
         compact_matches = _parse_properties_from_compact_lines(lines, page.id)
@@ -4721,6 +4768,53 @@ def _parse_vertical_properties_from_lines(lines: list[str], page_id: int) -> dic
     return matches
 
 
+def _parse_aluminium_bozen_properties_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    anchor_index = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if "mechanical properties" in lowered or "caratteristiche meccaniche" in lowered:
+            anchor_index = index
+            break
+    if anchor_index is None:
+        return {}
+
+    window = lines[anchor_index : min(anchor_index + 24, len(lines))]
+    for line in window:
+        lowered = line.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "mechanical properties",
+                "caratteristiche meccaniche",
+                "sample no",
+                "provetta",
+                "norma",
+                "norm ",
+                "limit",
+                "na custom",
+                "minimum values",
+            )
+        ):
+            continue
+        numbers = re.findall(r"\d+(?:[.,]\d+)?", line)
+        if len(numbers) < 4:
+            continue
+        if len(numbers) >= 5:
+            try:
+                first_value = float(numbers[0].replace(",", "."))
+            except ValueError:
+                first_value = -1
+            if 0 <= first_value <= 10:
+                numbers = numbers[1:]
+        candidate_values = [_normalize_numeric_value(value) or value for value in numbers[:5]]
+        candidate_match = _build_property_match_from_candidate_values(candidate_values, page_id)
+        if candidate_match:
+            for payload in candidate_match.values():
+                payload["snippet"] = line
+            return candidate_match
+    return {}
+
+
 def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
     for index in range(len(lines)):
         normalized_line = _normalize_mojibake_numeric_text(lines[index])
@@ -4931,13 +5025,52 @@ def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) 
     anchor_index = None
     for index, line in enumerate(lines):
         lowered = line.lower()
-        if "chemical analysis" in lowered or "analisi chimica" in lowered or "chemische analyse" in lowered or "ÝÑÓÐÑÍ" in line:
+        if (
+            "chemical analysis" in lowered
+            or "analisi chimica" in lowered
+            or "chemische analyse" in lowered
+            or "chemical composition" in lowered
+            or "composizione chimica" in lowered
+            or "zusammensetzung" in lowered
+            or "composition chimique" in lowered
+            or "ÝÑÓÐÑÍ" in line
+        ):
             anchor_index = index
             break
     if anchor_index is None:
         return {}
 
     window = lines[anchor_index + 1 : min(anchor_index + 42, len(lines))]
+    fixed_slots: list[str | None] = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "V", "Ti", "Pb", "Zr", "Bi", "Sn", None]
+    for line in window:
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("norma", "norm", "limit", "max.", "min.")):
+            continue
+        if not re.match(r"^\s*\d{5,}[a-z0-9]?", line, re.IGNORECASE):
+            continue
+        normalized_line = _normalize_mojibake_numeric_text(line)
+        value_source = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+        if len(value_source) < 12:
+            continue
+        numeric_values = value_source[1:]
+        matches: dict[str, dict[str, str | int]] = {}
+        for element_name, raw_value in zip(fixed_slots, numeric_values):
+            if element_name is None:
+                continue
+            standardized = _normalize_numeric_value(raw_value) or raw_value
+            matches.setdefault(
+                element_name,
+                {
+                    "page_id": page_id,
+                    "snippet": line,
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+        if matches:
+            return matches
+
     elements: list[str] = []
     element_slots: list[str | None] = []
     for line in window:
@@ -5023,6 +5156,8 @@ def _extract_aluminium_bozen_chemistry_slots_from_line(line: str) -> list[str | 
     for token in tokens:
         if token in mojibake_map:
             slots.append(mojibake_map[token])
+        elif token in CHEMISTRY_FIELD_SET:
+            slots.append(None if token == "Al" else token)
         elif re.fullmatch(r"[A-Za-z¿®Ù]+", token):
             slots.append(None)
     return slots
