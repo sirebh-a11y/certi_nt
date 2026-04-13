@@ -416,21 +416,24 @@ def _build_aluminium_bozen_row_split_candidates(
         if not _is_aluminium_bozen_material_line(normalized_line):
             continue
 
-        diametro = _extract_aluminium_bozen_diameter_from_line(normalized_line)
+        diametro = _extract_aluminium_bozen_diameter_from_line(normalized_line) or _extract_aluminium_bozen_diameter_from_window(normalized_lines, index)
         peso_netto = _extract_aluminium_bozen_weight_from_line(normalized_line)
         colata = _extract_aluminium_bozen_cast_from_window(normalized_lines, index)
         lega = _extract_aluminium_bozen_lega_from_window(normalized_lines, index) or current_lega
+        order = _extract_aluminium_bozen_order_from_window(normalized_lines, index) or current_order
 
         snippets = [snippet for snippet in _collect_aluminium_bozen_snippets(lines, index) if snippet.strip()][:6]
         candidate = ReaderRowSplitCandidateResponse(
             candidate_index=len(raw_candidates) + 1,
             supplier_key=supplier_key,
             ddt_number=ddt_number,
+            customer_code=_extract_aluminium_bozen_customer_code_from_line(normalized_line),
+            article_code=_extract_aluminium_bozen_article_from_line(normalized_line),
             lega=lega,
             diametro=diametro,
             peso_netto=peso_netto,
             colata=colata,
-            supplier_order_no=current_order,
+            supplier_order_no=order,
             snippets=snippets,
         )
 
@@ -443,12 +446,21 @@ def _build_aluminium_bozen_row_split_candidates(
 def _is_aluminium_bozen_material_line(line: str) -> bool:
     if any(marker in line for marker in ("DES. ART. CLIENTE", "LEGA STATO FISICO", "RIF. ORDINE AB ODV", "COD. COLATA")):
         return False
-    has_article = re.search(r"\([0-9A-Z-]{6,}\)", line) is not None
-    has_customer_code = re.search(r"\b[A0-9][0-9A-Z]{5,}\b", line) is not None
-    has_material_anchor = "BARRA TONDA" in line or ("ALL. AND PHYSICAL STATUS" not in line and has_article)
-    if has_material_anchor and has_article:
+    article = _extract_aluminium_bozen_article_from_line(line)
+    customer_code = _extract_aluminium_bozen_customer_code_from_line(line)
+    material_label = _extract_aluminium_bozen_material_label_from_line(line)
+    diameter = _extract_aluminium_bozen_diameter_from_line(line)
+    weight = _extract_aluminium_bozen_weight_from_line(line)
+    lega = _extract_aluminium_bozen_lega_from_line(line)
+    explicit_anchor = "BARRA TONDA" in line
+
+    if explicit_anchor and diameter is not None:
         return True
-    if has_material_anchor and has_customer_code:
+    if explicit_anchor and (article is not None or customer_code is not None):
+        return True
+    if material_label is not None and customer_code is not None and article is not None and diameter is not None:
+        return True
+    if article is not None and customer_code is not None and diameter is not None and (weight is not None or lega is not None):
         return True
     return False
 
@@ -803,6 +815,53 @@ def _extract_aluminium_bozen_order(line: str) -> str | None:
     return None
 
 
+def _extract_aluminium_bozen_order_from_window(lines: list[str], index: int) -> str | None:
+    preferred_indices = list(range(index, max(-1, index - 6), -1)) + list(range(index + 1, min(len(lines), index + 4)))
+    for candidate_index in preferred_indices:
+        if candidate_index < 0 or candidate_index >= len(lines):
+            continue
+        order = _extract_aluminium_bozen_order(lines[candidate_index])
+        if order is not None:
+            return order
+    return None
+
+
+def _extract_aluminium_bozen_customer_code_from_line(line: str) -> str | None:
+    match = re.match(r"^\s*([A-Z0-9][A-Z0-9]{5,})\b", line)
+    if match is not None:
+        token = match.group(1)
+        if not token.startswith(("CAST", "NUM", "RIF")):
+            return token
+    return None
+
+
+def _extract_aluminium_bozen_article_from_line(line: str) -> str | None:
+    match = re.search(r"\(([0-9A-Z-]{6,})\)", line)
+    if match is not None:
+        return match.group(1)
+    return None
+
+
+def _extract_aluminium_bozen_material_label_from_line(line: str) -> str | None:
+    compact_line = " ".join(line.split())
+    customer_code = _extract_aluminium_bozen_customer_code_from_line(compact_line)
+    if customer_code is None:
+        return None
+    without_code = compact_line[len(customer_code) :].strip()
+    article_match = re.search(r"\([0-9A-Z-]{6,}\)", without_code)
+    if article_match is not None:
+        without_code = without_code[: article_match.start()].strip()
+    without_code = re.sub(r"\b[0-9]+(?:[.,][0-9]+)?\b.*$", "", without_code).strip()
+    if not without_code:
+        return None
+    word_count = len(re.findall(r"[A-Z]+", without_code))
+    if word_count < 2:
+        return None
+    if without_code in {"ALL. AND PHYSICAL STATUS", "DES. ART. CLIENTE"}:
+        return None
+    return without_code
+
+
 def _extract_aluminium_bozen_lega_from_line(line: str) -> str | None:
     match = re.search(r"\b([0-9]{4}[A-Z]*)\s*(?:HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF\b|HF\b|/F\b|F\b)", line)
     if match is not None:
@@ -824,9 +883,24 @@ def _extract_aluminium_bozen_diameter_from_line(line: str) -> str | None:
     match = re.search(r"\bBARRA TONDA\s+([0-9]+(?:[.,][0-9]+)?)\b", line)
     if match is not None:
         return _normalize_decimal_value(match.group(1))
+    structural = re.search(
+        r"^\s*[A-Z0-9][A-Z0-9]{5,}\s+[A-Z][A-Z\s]+?\s+([0-9]+(?:[.,][0-9]+)?)\s+\([0-9A-Z-]{6,}\)",
+        line,
+    )
+    if structural is not None:
+        return _normalize_decimal_value(structural.group(1))
     fallback = re.search(r"\b([0-9]+(?:[.,][0-9]+)?)\s*\([0-9A-Z-]{6,}\)", line)
     if fallback is not None:
         return _normalize_decimal_value(fallback.group(1))
+    return None
+
+
+def _extract_aluminium_bozen_diameter_from_window(lines: list[str], index: int) -> str | None:
+    preferred_indices = [index, *range(max(0, index - 2), index), *range(index + 1, min(len(lines), index + 3))]
+    for candidate_index in preferred_indices:
+        diameter = _extract_aluminium_bozen_diameter_from_line(lines[candidate_index])
+        if diameter is not None:
+            return diameter
     return None
 
 
@@ -869,7 +943,7 @@ def _merge_aluminium_bozen_candidates(
 
     for candidate in candidates:
         key = (
-            candidate.supplier_order_no or "",
+            candidate.article_code or candidate.customer_code or candidate.supplier_order_no or "",
             candidate.lega or "",
             candidate.diametro or "",
         )
@@ -880,6 +954,8 @@ def _merge_aluminium_bozen_candidates(
                     candidate_index=0,
                     supplier_key=supplier_key,
                     ddt_number=ddt_number or candidate.ddt_number,
+                    customer_code=candidate.customer_code,
+                    article_code=candidate.article_code,
                     lega=candidate.lega,
                     diametro=candidate.diametro,
                     peso_netto=None,
@@ -891,6 +967,8 @@ def _merge_aluminium_bozen_candidates(
                 "weight_count": 0,
                 "snippets": [],
                 "casts": [],
+                "orders": [],
+                "customer_codes": [],
             },
         )
 
@@ -901,6 +979,10 @@ def _merge_aluminium_bozen_candidates(
         entry["snippets"] = _merge_snippets(entry["snippets"], candidate.snippets)
         if candidate.colata:
             entry["casts"].append(candidate.colata)
+        if candidate.supplier_order_no:
+            entry["orders"].append(candidate.supplier_order_no)
+        if candidate.customer_code:
+            entry["customer_codes"].append(candidate.customer_code)
 
     merged: list[ReaderRowSplitCandidateResponse] = []
     for index, (_, entry) in enumerate(grouped.items(), start=1):
@@ -911,6 +993,8 @@ def _merge_aluminium_bozen_candidates(
         elif packed_weight is not None:
             candidate.peso_netto = packed_weight
         candidate.colata = _choose_best_aluminium_bozen_cast(entry["casts"], candidate.colata)
+        candidate.supplier_order_no = _choose_best_aluminium_bozen_order(entry["orders"], candidate.supplier_order_no)
+        candidate.customer_code = _choose_best_aluminium_bozen_customer_code(entry["customer_codes"], candidate.customer_code)
         candidate.snippets = list(entry["snippets"])[:6]
         candidate.candidate_index = index
         merged.append(candidate)
@@ -1027,6 +1111,24 @@ def _choose_best_aluminium_bozen_cast(casts: list[str], fallback: str | None) ->
             preferred_by_key[normalized] = cast
     best_key = max(normalized_counts.items(), key=lambda item: (item[1], _cast_quality_score(preferred_by_key[item[0]])))[0]
     return preferred_by_key[best_key]
+
+
+def _choose_best_aluminium_bozen_order(orders: list[str], fallback: str | None) -> str | None:
+    if not orders:
+        return fallback
+    counts: dict[str, int] = {}
+    for order in orders:
+        counts[order] = counts.get(order, 0) + 1
+    return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+
+
+def _choose_best_aluminium_bozen_customer_code(customer_codes: list[str], fallback: str | None) -> str | None:
+    if not customer_codes:
+        return fallback
+    counts: dict[str, int] = {}
+    for customer_code in customer_codes:
+        counts[customer_code] = counts.get(customer_code, 0) + 1
+    return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
 
 
 def _cast_quality_score(value: str) -> tuple[int, int]:
