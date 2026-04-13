@@ -60,12 +60,14 @@ from app.modules.acquisition.schemas import (
 )
 from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.matching import (
+    detect_ddt_core_matches as reader_detect_ddt_core_matches,
     detect_certificate_core_matches as reader_detect_certificate_core_matches,
     document_contains_token as reader_document_contains_token,
+    extract_supplier_match_fields as reader_extract_supplier_match_fields,
     extract_row_supplier_match_fields as reader_extract_row_supplier_match_fields,
     merge_row_supplier_fields as reader_merge_row_supplier_fields,
-    normalize_impol_packing_list_root as reader_normalize_impol_packing_list_root,
     normalize_match_token as reader_normalize_match_token,
+    score_supplier_field_matches as reader_score_supplier_field_matches,
     same_token as reader_same_token,
     weights_are_compatible as reader_weights_are_compatible,
 )
@@ -695,7 +697,7 @@ def create_rows_from_document_split_plan(
         document.nome_file_originale,
     )
     supplier_key = template.supplier_key if template is not None else None
-    shared_matches = _detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
+    shared_matches = reader_detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
 
     created_rows: list[AcquisitionRowDetailResponse] = []
     for candidate in plan.row_split_candidates:
@@ -1616,7 +1618,7 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
     )
     supplier_key = template.supplier_key if template is not None else None
 
-    ddt_matches = _detect_ddt_core_matches(ddt_document.pages, supplier_key=supplier_key)
+    ddt_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key=supplier_key)
     for field_name, match in ddt_matches.items():
         evidence = _create_text_evidence(
             db=db,
@@ -2079,7 +2081,7 @@ def _score_certificate_candidate(
     certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
     certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
     certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
-    ddt_supplier_fields = _extract_supplier_match_fields(
+    ddt_supplier_fields = reader_extract_supplier_match_fields(
         row.ddt_document.pages if row.ddt_document is not None else [],
         template.supplier_key if template is not None else None,
         "ddt",
@@ -2090,7 +2092,7 @@ def _score_certificate_candidate(
         supplier_key=template.supplier_key if template is not None else None,
     )
     ddt_supplier_fields = reader_merge_row_supplier_fields(ddt_supplier_fields, row_supplier_fields)
-    certificate_supplier_fields = _extract_supplier_match_fields(
+    certificate_supplier_fields = reader_extract_supplier_match_fields(
         certificate_document.pages,
         template.supplier_key if template is not None else None,
         "certificato",
@@ -2115,81 +2117,14 @@ def _score_certificate_candidate(
     if row.diametro and reader_document_contains_token(certificate_document.pages, row.diametro):
         add_reason(10, "Diametro coerente")
 
-    if template is not None and template.supplier_key == "metalba":
-        if reader_same_token(ddt_supplier_fields.get("vs_rif"), certificate_supplier_fields.get("ordine_cliente")):
-            add_reason(95, "Vs. Rif. / Ordine Cliente coerenti")
-        if reader_same_token(ddt_supplier_fields.get("rif_ord_root"), certificate_supplier_fields.get("commessa_root")):
-            add_reason(110, "Rif. Ord. / Commessa coerenti")
-    elif template is not None and template.supplier_key == "aww":
-        if reader_same_token(ddt_supplier_fields.get("your_part_number"), certificate_supplier_fields.get("kunden_teile_nr")):
-            add_reason(110, "Your part number coerente")
-        if reader_same_token(ddt_supplier_fields.get("part_number"), certificate_supplier_fields.get("artikel_nr")):
-            add_reason(100, "Part number / Artikel-Nr. coerenti")
-        if reader_same_token(ddt_supplier_fields.get("order_confirmation_root"), certificate_supplier_fields.get("auftragsbestaetigung_root")):
-            add_reason(95, "Order confirmation root coerente")
-    elif template is not None and template.supplier_key == "aluminium_bozen":
-        if reader_same_token(ddt_supplier_fields.get("article"), certificate_supplier_fields.get("article")):
-            add_reason(100, "Article coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_code"), certificate_supplier_fields.get("customer_code")):
-            add_reason(100, "Codice cliente coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_order_normalized"), certificate_supplier_fields.get("customer_order_normalized")):
-            add_reason(70, "Ordine cliente normalizzato coerente")
-    elif template is not None and template.supplier_key == "zalco":
-        if reader_same_token(ddt_supplier_fields.get("tally_sheet_no"), certificate_supplier_fields.get("tally_sheet_no")):
-            add_reason(120, "Tally sheet coerente")
-        if reader_same_token(ddt_supplier_fields.get("cast_no"), certificate_supplier_fields.get("cast_no")):
-            add_reason(85, "Cast coerente")
-        if reader_same_token(ddt_supplier_fields.get("symbol"), certificate_supplier_fields.get("symbol")):
-            add_reason(85, "Symbole coerente")
-        if reader_same_token(ddt_supplier_fields.get("code_art"), certificate_supplier_fields.get("code_art")):
-            add_reason(85, "Code art coerente")
-    elif template is not None and template.supplier_key == "arconic_hannover":
-        if reader_same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
-            add_reason(120, "Delivery note coerente")
-        if reader_same_token(ddt_supplier_fields.get("sales_order_number"), certificate_supplier_fields.get("sales_order_number")):
-            add_reason(95, "Sales order coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_po"), certificate_supplier_fields.get("customer_po")):
-            add_reason(95, "Customer P/O coerente")
-        if reader_same_token(ddt_supplier_fields.get("arconic_item_number"), certificate_supplier_fields.get("arconic_item_number")):
-            add_reason(100, "Arconic item coerente")
-        if reader_same_token(ddt_supplier_fields.get("cast_job_number"), certificate_supplier_fields.get("cast_job_number")):
-            add_reason(110, "Cast/Job coerente")
-    elif template is not None and template.supplier_key == "neuman":
-        if reader_same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
-            add_reason(120, "Delivery note coerente")
-        if reader_same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
-            add_reason(110, "Lot coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_material_number"), certificate_supplier_fields.get("customer_material_number")):
-            add_reason(110, "Customer material number coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_order_number"), certificate_supplier_fields.get("customer_order_number")):
-            add_reason(80, "Customer order number coerente")
-    elif template is not None and template.supplier_key == "grupa_kety":
-        if reader_same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
-            add_reason(120, "Delivery note coerente")
-        if reader_same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
-            add_reason(120, "Lot coerente")
-        if reader_same_token(ddt_supplier_fields.get("order_no"), certificate_supplier_fields.get("order_no")):
-            add_reason(90, "Order no coerente")
-        if reader_same_token(ddt_supplier_fields.get("heat"), certificate_supplier_fields.get("heat")):
-            add_reason(100, "Heat coerente")
-        if reader_same_token(ddt_supplier_fields.get("customer_part_number"), certificate_supplier_fields.get("customer_part_number")):
-            add_reason(90, "Customer part coerente")
-    elif template is not None and template.supplier_key == "impol":
-        row_packing_list_root = reader_normalize_impol_packing_list_root(row.ddt) or ddt_supplier_fields.get("packing_list_no")
-        if reader_same_token(row_packing_list_root, certificate_supplier_fields.get("packing_list_no")):
-            add_reason(120, "Packing list coerente")
-        if reader_same_token(row.ordine, certificate_supplier_fields.get("customer_order_no")):
-            add_reason(100, "Customer order coerente")
-        elif reader_same_token(ddt_supplier_fields.get("customer_order_no"), certificate_supplier_fields.get("customer_order_no")):
-            add_reason(100, "Customer order coerente")
-        if reader_same_token(ddt_supplier_fields.get("supplier_order_no"), certificate_supplier_fields.get("supplier_order_no")):
-            add_reason(95, "Supplier order coerente")
-        if reader_same_token(ddt_supplier_fields.get("product_code"), certificate_supplier_fields.get("product_code")):
-            add_reason(100, "Product code coerente")
-        if reader_same_token(row.colata, certificate_supplier_fields.get("charge")):
-            add_reason(110, "Charge coerente")
-        elif reader_same_token(ddt_supplier_fields.get("charge"), certificate_supplier_fields.get("charge")):
-            add_reason(110, "Charge coerente")
+    supplier_key = template.supplier_key if template is not None else None
+    for points, label in reader_score_supplier_field_matches(
+        supplier_key=supplier_key,
+        row=row,
+        ddt_supplier_fields=ddt_supplier_fields,
+        certificate_supplier_fields=certificate_supplier_fields,
+    ):
+        add_reason(points, label)
 
     if score <= 10:
         return None
@@ -3223,130 +3158,6 @@ def _create_text_evidence(
     db.add(evidence)
     db.flush()
     return evidence
-
-
-def _detect_ddt_core_matches(
-    pages: list[DocumentPage],
-    *,
-    supplier_key: str | None = None,
-) -> dict[str, dict[str, str | int]]:
-    matches: dict[str, dict[str, str | int]] = {}
-
-    supplier_detector = {
-        "leichtmetall": _detect_leichtmetall_ddt_core_matches,
-        "metalba": _detect_metalba_ddt_core_matches,
-        "aww": _detect_aww_ddt_core_matches,
-        "aluminium_bozen": _detect_aluminium_bozen_ddt_core_matches,
-        "zalco": _detect_zalco_ddt_core_matches,
-        "arconic_hannover": _detect_arconic_hannover_ddt_core_matches,
-        "neuman": _detect_neuman_ddt_core_matches,
-        "grupa_kety": _detect_grupa_kety_ddt_core_matches,
-        "impol": _detect_impol_ddt_core_matches,
-    }.get(supplier_key)
-    if supplier_detector is not None:
-        matches.update(supplier_detector(pages))
-
-    for page in pages:
-        lines = _page_lines(page)
-        for line in lines:
-            normalized_line = line.lower()
-            if "ddt" not in matches:
-                ddt_number = _extract_ddt_number_from_line(normalized_line)
-                if ddt_number is not None:
-                    matches["ddt"] = _build_match(page.id, line, ddt_number)
-            if "cdq" not in matches:
-                explicit_cdq = _extract_explicit_cdq_from_line(normalized_line)
-                if explicit_cdq is not None:
-                    matches["cdq"] = _build_match(page.id, line, explicit_cdq)
-            if supplier_key != "aww" and "diametro" not in matches:
-                diameter = _extract_diameter_from_line(normalized_line)
-                if diameter is not None:
-                    matches["diametro"] = _build_match(page.id, line, diameter)
-            if supplier_key != "aww" and "peso" not in matches:
-                weight = _extract_weight_from_line(normalized_line)
-                if weight is not None:
-                    matches["peso"] = _build_match(page.id, line, _normalize_weight(weight))
-    return matches
-
-
-def _page_lines(page: DocumentPage) -> list[str]:
-    page_text = _best_page_text(page)
-    return [line.strip() for line in page_text.splitlines() if line.strip()]
-
-
-def _build_match(page_id: int, snippet: str, value: str) -> dict[str, str | int]:
-    return {
-        "page_id": page_id,
-        "snippet": snippet,
-        "standardized": value,
-        "final": value,
-    }
-
-
-def _extract_ddt_number_from_line(line: str) -> str | None:
-    delivery_match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", line)
-    if delivery_match is not None:
-        return delivery_match.group(1)
-    delivery_num_match = re.search(r"(?:delivery\s+note|documento\s+di\s+trasporto).*?\bnum\.?\s*([0-9]{2,})\b", line)
-    if delivery_num_match is not None:
-        return delivery_num_match.group(1)
-    transport_match = re.search(r"\bddt\s*([0-9]{2}[-/][0-9]{5})\b", line)
-    if transport_match is not None:
-        return transport_match.group(1).replace("/", "-").upper()
-    plain_transport_match = re.search(r"\bddt(?:\s*n[or°.]*)?[:\s-]*([0-9][0-9/-]{4,})\b", line)
-    if plain_transport_match is not None:
-        return plain_transport_match.group(1).replace("/", "-").upper()
-    return None
-
-
-def _extract_explicit_cdq_from_line(line: str) -> str | None:
-    if "cdq" not in line:
-        return None
-    explicit = _extract_by_keywords(line, ("cdq",))
-    if explicit is None:
-        return None
-    if explicit in {"3.1", "31"}:
-        return None
-    return explicit
-
-
-def _extract_diameter_from_line(line: str) -> str | None:
-    patterns = (
-        r"\bdiam(?:eter)?\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
-        r"\bouter\s+di\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
-        r"\bbarra\s+tonda\s+diam\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
-        r"\bø\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, line)
-        if match is not None:
-            return _normalize_decimal_value(match.group(1))
-    return None
-
-
-def _extract_by_keywords(line: str, keywords: tuple[str, ...]) -> str | None:
-    if not any(keyword in line for keyword in keywords):
-        return None
-    pattern = re.compile(r"(?:[:=\-]|\b)([a-z0-9][a-z0-9/-]{2,})\s*$")
-    tail_match = pattern.search(line)
-    if tail_match is not None:
-        return tail_match.group(1).upper()
-
-    token_pattern = re.compile(r"([a-z0-9][a-z0-9/-]{2,})")
-    tokens = token_pattern.findall(line)
-    for token in reversed(tokens):
-        if token not in {"cast", "charge", "batch", "colata", "heat", "cdq", "cert", "certificate"}:
-            return token.upper()
-    return None
-
-
-def _extract_weight_from_line(line: str) -> str | None:
-    if not any(keyword in line for keyword in ("net weight", "peso netto", "peso net", "netto", "quantity", "net kg", "totali", "totali", "gross weight", "gross kg")):
-        return None
-    matches = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?", line)
-    if not matches:
-        return None
-    return matches[-1]
 
 
 def _normalize_weight(value: str) -> str:
