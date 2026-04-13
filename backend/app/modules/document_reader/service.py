@@ -745,7 +745,13 @@ def _extract_aluminium_bozen_ddt_number(document: Document | None, lines: list[s
         if match is not None:
             return match.group(1)
     if document is not None:
-        return _extract_aluminium_bozen_ddt_number_from_header_ocr(document)
+        header_value = _extract_aluminium_bozen_ddt_number_from_header_ocr(document)
+        if header_value is not None:
+            return header_value
+        stem = Path(document.nome_file_originale).stem
+        has_delivery_header = any("DELIVERY NOTE" in line or "DOCUMENTO DI TRASPORTO" in line for line in lines)
+        if has_delivery_header and re.fullmatch(r"\d{2,6}", stem):
+            return stem
     return None
 
 
