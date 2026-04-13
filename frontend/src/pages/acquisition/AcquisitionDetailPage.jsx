@@ -219,14 +219,17 @@ export default function AcquisitionDetailPage() {
         }
         setRow(rowData);
 
-        const requests = [apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token)];
+        const requests = [];
+        if (rowData.ddt_document?.id) {
+          requests.push(apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token));
+        }
         if (rowData.certificate_document?.id) {
           requests.push(apiRequest(`/acquisition/documents/${rowData.certificate_document.id}`, {}, token));
         }
         const [ddtData, certificateData] = await Promise.all(requests);
         if (!ignore) {
-          setDdtDocument(ddtData);
-          setCertificateDocument(certificateData || null);
+          setDdtDocument(rowData.ddt_document?.id ? ddtData : null);
+          setCertificateDocument(rowData.ddt_document?.id ? certificateData || null : ddtData || null);
         }
 
         const certificatesData = await apiRequest("/acquisition/documents?tipo_documento=certificato", {}, token);
@@ -282,13 +285,16 @@ export default function AcquisitionDetailPage() {
     });
 
     if (includeDocuments) {
-      const requests = [apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token)];
+      const requests = [];
+      if (rowData.ddt_document?.id) {
+        requests.push(apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token));
+      }
       if (rowData.certificate_document?.id) {
         requests.push(apiRequest(`/acquisition/documents/${rowData.certificate_document.id}`, {}, token));
       }
       const [ddtData, certificateData] = await Promise.all(requests);
-      setDdtDocument(ddtData);
-      setCertificateDocument(certificateData || null);
+      setDdtDocument(rowData.ddt_document?.id ? ddtData : null);
+      setCertificateDocument(rowData.ddt_document?.id ? certificateData || null : ddtData || null);
     }
   }
 
@@ -652,7 +658,7 @@ export default function AcquisitionDetailPage() {
             <h2 className="mt-2 text-2xl font-semibold text-ink">Riga #{rowId}</h2>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision} onClick={handleProcessDdtVision} type="button">
+            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
               {processingVision ? "Vision..." : "Vision DDT"}
             </button>
             <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document} onClick={handleDetectChemistry} type="button">
@@ -664,7 +670,7 @@ export default function AcquisitionDetailPage() {
             <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document} onClick={handleDetectNotes} type="button">
               {processingNotes ? "Note..." : "Rileva note"}
             </button>
-            <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing} onClick={handleProcessMinimal} type="button">
+            <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document} onClick={handleProcessMinimal} type="button">
               {processing ? "Processo..." : "Processo minimo"}
             </button>
             <button className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={processingFinalValidation || !canValidateFinal} onClick={handleValidateFinal} type="button">

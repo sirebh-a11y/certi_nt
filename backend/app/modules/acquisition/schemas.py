@@ -157,7 +157,7 @@ class AutonomousRunResponse(BaseModel):
 
 
 class AcquisitionRowCreateRequest(BaseModel):
-    document_ddt_id: int
+    document_ddt_id: int | None = None
     document_certificato_id: int | None = None
     cdq: str | None = Field(default=None, max_length=128)
     fornitore_id: int | None = None
@@ -399,7 +399,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    document_ddt_id: int
+    document_ddt_id: int | None
     document_certificato_id: int | None
     cdq: str | None
     fornitore_id: int | None
@@ -431,7 +431,7 @@ class AcquisitionRowListItemResponse(BaseModel):
 
 
 class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
-    ddt_document: DocumentSummaryResponse
+    ddt_document: DocumentSummaryResponse | None
     certificate_document: DocumentSummaryResponse | None
     evidences: list[DocumentEvidenceResponse]
     values: list[ReadValueResponse]

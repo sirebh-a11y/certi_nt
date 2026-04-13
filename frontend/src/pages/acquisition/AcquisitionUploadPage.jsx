@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -10,6 +10,14 @@ function mergeUploadedDocuments(currentItems, uploadedItems) {
     map.set(item.id, item);
   });
   return [...map.values()].sort((left, right) => left.id - right.id);
+}
+
+function mergeSelectedFiles(currentFiles, incomingFiles) {
+  const map = new Map(currentFiles.map((file) => [`${file.name}|${file.size}|${file.lastModified}`, file]));
+  incomingFiles.forEach((file) => {
+    map.set(`${file.name}|${file.size}|${file.lastModified}`, file);
+  });
+  return [...map.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function runProgress(run) {
@@ -49,12 +57,10 @@ function runStateClasses(run) {
 }
 
 export default function AcquisitionUploadPage() {
-  const { token } = useAuth();
-  const [suppliers, setSuppliers] = useState([]);
+  const { token, clearAuth } = useAuth();
+  const navigate = useNavigate();
   const [ddtFiles, setDdtFiles] = useState([]);
   const [certificateFiles, setCertificateFiles] = useState([]);
-  const [ddtSupplierId, setDdtSupplierId] = useState("");
-  const [certificateSupplierId, setCertificateSupplierId] = useState("");
   const [processingDdt, setProcessingDdt] = useState(false);
   const [processingCertificates, setProcessingCertificates] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
@@ -71,36 +77,35 @@ export default function AcquisitionUploadPage() {
   const ddtCount = useMemo(() => ddtFiles.length, [ddtFiles]);
   const certificateCount = useMemo(() => certificateFiles.length, [certificateFiles]);
 
+  function addDdtFiles(incomingFiles) {
+    setDdtFiles((current) => mergeSelectedFiles(current, incomingFiles));
+  }
+
+  function addCertificateFiles(incomingFiles) {
+    setCertificateFiles((current) => mergeSelectedFiles(current, incomingFiles));
+  }
+
   const automationSignature = useMemo(() => {
     const ddtIds = sessionDdtDocuments.map((item) => item.id).join(",");
     const certificateIds = sessionCertificateDocuments.map((item) => item.id).join(",");
     return `${ddtIds}|${certificateIds}`;
   }, [sessionCertificateDocuments, sessionDdtDocuments]);
 
-  useEffect(() => {
-    let ignore = false;
-    apiRequest("/suppliers", {}, token)
-      .then((data) => {
-        if (!ignore) {
-          setSuppliers(data.items || []);
-        }
-      })
-      .catch(() => {
-        if (!ignore) {
-          setSuppliers([]);
-        }
-      });
-    return () => {
-      ignore = true;
-    };
-  }, [token]);
+  function handleRequestError(requestError) {
+    const message = requestError?.message || "Request failed";
+    if (["Invalid token", "Invalid token type", "User not available"].includes(message)) {
+      clearAuth();
+      navigate("/login", { replace: true });
+      return;
+    }
+    setError(message);
+  }
 
   async function handleBatchUpload(tipoDocumento) {
     const files = tipoDocumento === "ddt" ? ddtFiles : certificateFiles;
     const setProcessing = tipoDocumento === "ddt" ? setProcessingDdt : setProcessingCertificates;
     const setResult = tipoDocumento === "ddt" ? setDdtResult : setCertificateResult;
     const resetFiles = tipoDocumento === "ddt" ? setDdtFiles : setCertificateFiles;
-    const supplierId = tipoDocumento === "ddt" ? ddtSupplierId : certificateSupplierId;
 
     if (!files.length) {
       setError(`Seleziona almeno un file ${tipoDocumento === "ddt" ? "DDT" : "certificato"}.`);
@@ -109,9 +114,6 @@ export default function AcquisitionUploadPage() {
 
     const formData = new FormData();
     formData.append("tipo_documento", tipoDocumento);
-    if (supplierId) {
-      formData.append("fornitore_id", supplierId);
-    }
     files.forEach((file) => formData.append("files", file));
 
     setProcessing(true);
@@ -140,7 +142,7 @@ export default function AcquisitionUploadPage() {
         setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riclassificato" : "sono stati riclassificati"} automaticamente.`);
       }
     } catch (requestError) {
-      setError(requestError.message);
+      handleRequestError(requestError);
     } finally {
       setProcessing(false);
     }
@@ -170,7 +172,7 @@ export default function AcquisitionUploadPage() {
       setCurrentRun(run);
       setLastStartedSignature(signature);
     } catch (requestError) {
-      setError(requestError.message);
+      handleRequestError(requestError);
     } finally {
       setStartingRun(false);
     }
@@ -186,7 +188,7 @@ export default function AcquisitionUploadPage() {
         const refreshedRun = await apiRequest(`/acquisition/automation/runs/${currentRun.id}`, {}, token);
         setCurrentRun(refreshedRun);
       } catch (requestError) {
-        setError(requestError.message);
+        handleRequestError(requestError);
         window.clearInterval(intervalId);
       }
     }, 1500);
@@ -235,28 +237,22 @@ export default function AcquisitionUploadPage() {
             count={ddtCount}
             files={ddtFiles}
             helperText="Puoi caricare molti DDT insieme."
-            onChange={(event) => setDdtFiles(Array.from(event.target.files || []))}
+            onAddFiles={addDdtFiles}
             onSubmit={() => handleBatchUpload("ddt")}
             processing={processingDdt}
             result={ddtResult}
-            selectedSupplierId={ddtSupplierId}
-            suppliers={suppliers}
             title="1. DDT"
-            onSupplierChange={setDdtSupplierId}
           />
           <UploadSection
             buttonLabel={processingCertificates ? "Carico certificati..." : "Carica certificati"}
             count={certificateCount}
             files={certificateFiles}
             helperText="Puoi caricare molti certificati insieme."
-            onChange={(event) => setCertificateFiles(Array.from(event.target.files || []))}
+            onAddFiles={addCertificateFiles}
             onSubmit={() => handleBatchUpload("certificato")}
             processing={processingCertificates}
             result={certificateResult}
-            selectedSupplierId={certificateSupplierId}
-            suppliers={suppliers}
             title="2. Certificati"
-            onSupplierChange={setCertificateSupplierId}
           />
         </div>
 
@@ -347,58 +343,71 @@ function UploadSection({
   count,
   processing,
   buttonLabel,
-  onChange,
+  onAddFiles,
   onSubmit,
   result,
-  suppliers,
-  selectedSupplierId,
-  onSupplierChange,
 }) {
+  const inputId = `${title}-files`;
+
+  function handleIncomingFiles(fileList) {
+    const incomingFiles = Array.from(fileList || []).filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+    if (!incomingFiles.length) {
+      return;
+    }
+    onAddFiles(incomingFiles);
+  }
+
   return (
     <div className="rounded-2xl border border-border bg-white p-4">
       <h3 className="text-base font-semibold text-slate-900">{title}</h3>
       <p className="mt-1 text-sm text-slate-500">{helperText}</p>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr,auto]">
-        <div>
-          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor={`${title}-supplier`}>
-            Fornitore batch
+      <div
+        className="mt-3 min-h-64 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          handleIncomingFiles(event.dataTransfer.files);
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            accept=".pdf,application/pdf"
+            className="hidden"
+            id={inputId}
+            multiple
+            onChange={(event) => {
+              handleIncomingFiles(event.target.files);
+              event.target.value = "";
+            }}
+            type="file"
+          />
+          <label className="cursor-pointer rounded-lg border border-border bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100" htmlFor={inputId}>
+            Scegli file
           </label>
-          <select
-            className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
-            id={`${title}-supplier`}
-            onChange={(event) => onSupplierChange(event.target.value)}
-            value={selectedSupplierId}
-          >
-            <option value="">Rilevamento automatico</option>
-            {suppliers.map((supplier) => (
-              <option key={supplier.id} value={String(supplier.id)}>
-                {supplier.ragione_sociale}
-              </option>
-            ))}
-          </select>
+          <span className="text-sm text-slate-600">oppure trascina qui i PDF</span>
         </div>
+
+        <div className="mt-3 text-sm text-slate-600">{count ? `${count} file selezionati` : "Nessun file selezionato"}</div>
+        {files.length ? (
+          <ul className="mt-3 space-y-1 text-sm text-slate-700">
+            {files.slice(0, 10).map((file) => (
+              <li key={`${file.name}-${file.size}`}>{file.name}</li>
+            ))}
+            {files.length > 10 ? <li>… e altri {files.length - 10}</li> : null}
+          </ul>
+        ) : null}
+      </div>
+
+      <div className="mt-3">
         <button
-          className="self-end rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
           disabled={processing || !count}
           onClick={onSubmit}
           type="button"
         >
           {buttonLabel}
         </button>
-      </div>
-
-      <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
-        <input accept=".pdf,application/pdf" className="w-full text-sm text-slate-700" multiple onChange={onChange} type="file" />
-        <div className="mt-2 text-sm text-slate-600">{count ? `${count} file selezionati` : "Nessun file selezionato"}</div>
-        {files.length ? (
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {files.slice(0, 6).map((file) => (
-              <li key={`${file.name}-${file.size}`}>{file.name}</li>
-            ))}
-            {files.length > 6 ? <li>… e altri {files.length - 6}</li> : null}
-          </ul>
-        ) : null}
       </div>
 
       {result ? (

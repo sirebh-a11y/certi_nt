@@ -552,6 +552,7 @@ def _build_aluminium_bozen_row_split_candidates(
             candidate_index=len(raw_candidates) + 1,
             supplier_key=supplier_key,
             ddt_number=ddt_number,
+            cdq=_extract_aluminium_bozen_cdq_from_window(normalized_lines, index),
             customer_code=_extract_aluminium_bozen_customer_code_from_line(normalized_line),
             article_code=_extract_aluminium_bozen_article_from_line(normalized_line),
             lega=lega,
@@ -1086,6 +1087,7 @@ def _merge_aluminium_bozen_candidates(
         return []
 
     packing_weights = _extract_aluminium_bozen_packing_weights(lines)
+    packing_cdqs = _extract_aluminium_bozen_packing_cdqs(lines)
     grouped: dict[tuple[str, str, str], dict[str, object]] = {}
 
     for candidate in candidates:
@@ -1101,6 +1103,7 @@ def _merge_aluminium_bozen_candidates(
                     candidate_index=0,
                     supplier_key=supplier_key,
                     ddt_number=ddt_number or candidate.ddt_number,
+                    cdq=candidate.cdq,
                     customer_code=candidate.customer_code,
                     article_code=candidate.article_code,
                     lega=candidate.lega,
@@ -1115,6 +1118,7 @@ def _merge_aluminium_bozen_candidates(
                 "snippets": [],
                 "casts": [],
                 "orders": [],
+                "cdqs": [],
                 "customer_orders": [],
                 "customer_codes": [],
             },
@@ -1129,6 +1133,8 @@ def _merge_aluminium_bozen_candidates(
             entry["casts"].append(candidate.colata)
         if candidate.supplier_order_no:
             entry["orders"].append(candidate.supplier_order_no)
+        if candidate.cdq:
+            entry["cdqs"].append(candidate.cdq)
         if candidate.customer_order_no:
             entry["customer_orders"].append(candidate.customer_order_no)
         if candidate.customer_code:
@@ -1144,6 +1150,9 @@ def _merge_aluminium_bozen_candidates(
             candidate.peso_netto = packed_weight
         candidate.colata = _choose_best_aluminium_bozen_cast(entry["casts"], candidate.colata)
         candidate.supplier_order_no = _choose_best_aluminium_bozen_order(entry["orders"], candidate.supplier_order_no)
+        candidate.cdq = packing_cdqs.get(candidate.supplier_order_no or "") or _choose_best_aluminium_bozen_cdq(
+            entry["cdqs"], candidate.cdq
+        )
         candidate.customer_order_no = _choose_best_aluminium_bozen_customer_order(
             entry["customer_orders"], candidate.customer_order_no
         )
@@ -1184,6 +1193,24 @@ def _extract_aluminium_bozen_packing_weights(lines: list[str]) -> dict[str, str]
     return {order: _format_aluminium_bozen_weight(total) for order, total in weights_by_order.items()}
 
 
+def _extract_aluminium_bozen_packing_cdqs(lines: list[str]) -> dict[str, str]:
+    cdq_by_order: dict[str, str] = {}
+    current_order: str | None = None
+
+    for raw_line in lines:
+        line = _normalize_line(raw_line)
+        section_match = re.search(r"\bRIF\. ORDINE AB ODV\s+\d{4}\.([0-9]+(?:\.[0-9]+)?)\b", line)
+        if section_match is not None:
+            current_order = section_match.group(1)
+        cert_number = _extract_aluminium_bozen_cert_number_from_line(line)
+        if current_order is not None and cert_number is not None:
+            cdq_by_order[current_order] = cert_number
+        if current_order is None:
+            continue
+
+    return cdq_by_order
+
+
 def _extract_aluminium_bozen_packing_row_net(line: str) -> int | None:
     id_match = re.search(r"\b\d{4}-\d{7}\b", line)
     if id_match is None:
@@ -1199,6 +1226,25 @@ def _extract_aluminium_bozen_packing_row_net(line: str) -> int | None:
 
     net_candidate = numeric_tokens[-2]
     return _parse_aluminium_bozen_weight_token(net_candidate)
+
+
+def _extract_aluminium_bozen_cdq_from_window(lines: list[str], index: int) -> str | None:
+    for candidate_index in range(max(0, index - 4), min(len(lines), index + 5)):
+        line = lines[candidate_index]
+        cert_number = _extract_aluminium_bozen_cert_number_from_line(line)
+        if cert_number is not None:
+            return cert_number
+    return None
+
+
+def _extract_aluminium_bozen_cert_number_from_line(line: str) -> str | None:
+    anchor_match = re.search(r"\bCERT(?:\.|\s|$)", line)
+    if anchor_match is None:
+        return None
+    match = re.search(r"\b([0-9]{4,8})\b", line[anchor_match.end() :])
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def _merge_snippets(current: list[str], incoming: list[str]) -> list[str]:
@@ -1291,6 +1337,20 @@ def _choose_best_aluminium_bozen_customer_order(customer_orders: list[str], fall
     for customer_order in customer_orders:
         counts[customer_order] = counts.get(customer_order, 0) + 1
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+
+
+def _choose_best_aluminium_bozen_cdq(cdqs: list[str], fallback: str | None) -> str | None:
+    if not cdqs:
+        return fallback
+    counts: dict[str, int] = {}
+    for cdq in cdqs:
+        normalized = _normalize_text(cdq)
+        if normalized is None or not re.fullmatch(r"\d{4,8}", normalized):
+            continue
+        counts[normalized] = counts.get(normalized, 0) + 1
+    if counts:
+        return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+    return fallback
 
 
 def _cast_quality_score(value: str) -> tuple[int, int]:

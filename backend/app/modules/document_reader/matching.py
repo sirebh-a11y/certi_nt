@@ -1124,6 +1124,7 @@ def _extract_aluminium_bozen_certificate_number(
             continue
         window = normalized_lines[index : min(index + 4, len(normalized_lines))]
         raw_window = lines[index : min(index + 4, len(lines))]
+        previous_four_digit_token: str | None = None
         for offset, (raw_candidate, candidate) in enumerate(zip(raw_window, window, strict=False)):
             for source in (raw_candidate.upper(), candidate):
                 for token in re.findall(r"\b\d{5,7}[A-Z]?\b", source):
@@ -1132,6 +1133,12 @@ def _extract_aluminium_bozen_certificate_number(
                     if re.fullmatch(r"20\d{2}", token):
                         continue
                     return " | ".join(raw_window[: offset + 1]), token
+                for token in re.findall(r"\b\d{4}\b", source):
+                    if re.fullmatch(r"20\d{2}", token):
+                        continue
+                    if previous_four_digit_token is not None and token.startswith(previous_four_digit_token[1:]):
+                        return " | ".join(raw_window[: offset + 1]), f"{previous_four_digit_token[0]}{token}"
+                    previous_four_digit_token = token
     return None
 
 

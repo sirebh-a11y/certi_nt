@@ -88,7 +88,7 @@ class AcquisitionRow(Base):
     __tablename__ = "datimaterialeincoming"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    document_ddt_id: Mapped[int] = mapped_column(ForeignKey("documenti_fornitore.id"), nullable=False, index=True)
+    document_ddt_id: Mapped[int | None] = mapped_column(ForeignKey("documenti_fornitore.id"), nullable=True, index=True)
     document_certificato_id: Mapped[int | None] = mapped_column(
         ForeignKey("documenti_fornitore.id"),
         nullable=True,
