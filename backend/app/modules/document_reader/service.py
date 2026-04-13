@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
+import pytesseract
+from PIL import Image
 
 from app.core.config import settings
 from app.modules.acquisition.models import AcquisitionRow, Document
@@ -93,10 +97,7 @@ def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
 
 
 def build_document_row_split_plan(document: Document) -> DocumentRowSplitPlanResponse:
-    template = resolve_supplier_template(
-        document.supplier.ragione_sociale if document.supplier is not None else None,
-        document.nome_file_originale,
-    )
+    template = _resolve_document_template(document)
     row_split_hint = _build_row_split_hint(document, template)
     row_split_candidates = _build_row_split_candidates(document, template)
     row_split_hint = _finalize_row_split_hint(row_split_hint, row_split_candidates, template)
@@ -115,6 +116,26 @@ def build_document_row_split_plan(document: Document) -> DocumentRowSplitPlanRes
         row_split_hint=row_split_hint,
         row_split_candidates=row_split_candidates,
     )
+
+
+def _resolve_document_template(document: Document):
+    template = resolve_supplier_template(
+        document.supplier.ragione_sociale if document.supplier is not None else None,
+        document.nome_file_originale,
+    )
+    if template is not None:
+        return template
+
+    lines: list[str] = []
+    for page in document.pages[:3]:
+        lines.extend(_page_lines(page))
+    if not lines:
+        return None
+
+    if _looks_like_aluminium_bozen_document(lines):
+        return resolve_supplier_template("aluminium bozen")
+
+    return None
 
 
 def _build_document_table_insights(document: Document | None, document_type: str) -> list[ReaderTableInsightResponse]:
@@ -150,6 +171,20 @@ def _select_table_window(lines: list[str]) -> list[str]:
         if any(marker in lowered for marker in ("chemical", "chimica", "mechanical", "meccan", "charge no", "charge nr", "soll min", "set value max")):
             return lines[index : min(index + 14, len(lines))]
     return []
+
+
+def _looks_like_aluminium_bozen_document(lines: list[str]) -> bool:
+    normalized_lines = [_normalize_line(line) for line in lines]
+    joined = "\n".join(normalized_lines)
+    has_delivery_header = "DELIVERY NOTE" in joined or "DOCUMENTO DI TRASPORTO" in joined
+    has_material_row = any("BARRA TONDA" in line for line in normalized_lines)
+    has_cast = "CAST NR." in joined or "CAST NR" in joined
+    has_internal_order = "RIF. NS. ODV" in joined
+    has_packing_signals = any(
+        marker in joined
+        for marker in ("RIF. ORDINE AB ODV", "COD. COLATA", "COD. ART. CLIENTE", "LEGA STATO FISICO")
+    )
+    return (has_delivery_header and has_material_row and (has_cast or has_internal_order)) or has_packing_signals
 
 
 def _page_lines(page) -> list[str]:
@@ -206,6 +241,8 @@ def _build_row_split_hint(document: Document | None, template) -> ReaderRowSplit
         return _build_impol_row_split_hint(lines)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_hint(lines)
+    if template.supplier_key == "aluminium_bozen":
+        return _build_aluminium_bozen_row_split_hint(document, lines)
 
     return ReaderRowSplitHintResponse(needed=False, signals=[])
 
@@ -260,6 +297,8 @@ def _build_row_split_candidates(document: Document | None, template) -> list[Rea
         return _build_impol_row_split_candidates(lines, template.supplier_key)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_candidates(lines, template.supplier_key)
+    if template.supplier_key == "aluminium_bozen":
+        return _build_aluminium_bozen_row_split_candidates(document, lines, template.supplier_key)
     return []
 
 
@@ -309,6 +348,18 @@ def _build_grupa_kety_row_split_hint(lines: list[str]) -> ReaderRowSplitHintResp
     return ReaderRowSplitHintResponse(needed=False, estimated_rows=1, signals=[])
 
 
+def _build_aluminium_bozen_row_split_hint(document: Document | None, lines: list[str]) -> ReaderRowSplitHintResponse:
+    candidate_count = len(_build_aluminium_bozen_row_split_candidates(document, lines, "aluminium_bozen"))
+    if candidate_count > 1:
+        return ReaderRowSplitHintResponse(
+            needed=True,
+            estimated_rows=candidate_count,
+            reason="Il DDT Aluminium Bozen contiene piu righe materiale e va scisso per riga.",
+            signals=[f"candidate={candidate_count}"],
+        )
+    return ReaderRowSplitHintResponse(needed=False, estimated_rows=max(candidate_count, 1), signals=[])
+
+
 def _build_grupa_kety_row_split_candidates(lines: list[str], supplier_key: str) -> list[ReaderRowSplitCandidateResponse]:
     normalized_lines = [_normalize_line(line) for line in lines]
     lega = _extract_grupa_kety_lega(normalized_lines)
@@ -340,6 +391,65 @@ def _build_grupa_kety_row_split_candidates(lines: list[str], supplier_key: str) 
         )
 
     return candidates
+
+
+def _build_aluminium_bozen_row_split_candidates(
+    document: Document | None,
+    lines: list[str],
+    supplier_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    normalized_lines = [_normalize_line(line) for line in lines]
+    ddt_number = _extract_aluminium_bozen_ddt_number(document, normalized_lines)
+    current_order: str | None = None
+    current_lega: str | None = None
+    candidates: list[ReaderRowSplitCandidateResponse] = []
+
+    for index, (original_line, normalized_line) in enumerate(zip(lines, normalized_lines)):
+        order_value = _extract_aluminium_bozen_order(normalized_line)
+        if order_value is not None:
+            current_order = order_value
+
+        lega_value = _extract_aluminium_bozen_lega_from_line(normalized_line)
+        if lega_value is not None:
+            current_lega = lega_value
+
+        if not _is_aluminium_bozen_material_line(normalized_line):
+            continue
+
+        diametro = _extract_aluminium_bozen_diameter_from_line(normalized_line)
+        peso_netto = _extract_aluminium_bozen_weight_from_line(normalized_line)
+        colata = _extract_aluminium_bozen_cast_from_window(normalized_lines, index)
+        lega = current_lega or _extract_aluminium_bozen_lega_from_window(normalized_lines, index)
+
+        snippets = [snippet for snippet in _collect_aluminium_bozen_snippets(lines, index) if snippet.strip()][:6]
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=len(candidates) + 1,
+            supplier_key=supplier_key,
+            ddt_number=ddt_number,
+            lega=lega,
+            diametro=diametro,
+            peso_netto=peso_netto,
+            colata=colata,
+            supplier_order_no=current_order,
+            snippets=snippets,
+        )
+
+        if any(getattr(candidate, field) is not None for field in ("ddt_number", "lega", "diametro", "peso_netto", "colata", "supplier_order_no")):
+            candidates.append(candidate)
+
+    return candidates
+
+
+def _is_aluminium_bozen_material_line(line: str) -> bool:
+    if "BARRA TONDA" not in line:
+        return False
+    if any(marker in line for marker in ("DES. ART. CLIENTE", "LEGA STATO FISICO", "RIF. ORDINE AB ODV", "COD. COLATA")):
+        return False
+    if re.search(r"\([0-9A-Z-]{6,}\)", line) is not None:
+        return True
+    if re.search(r"\bA[0-9A-Z]{5,}\b", line) is not None:
+        return True
+    return False
 
 
 def _build_impol_row_split_candidates(lines: list[str], supplier_key: str) -> list[ReaderRowSplitCandidateResponse]:
@@ -622,6 +732,112 @@ def _collect_grupa_kety_snippets(lines: list[str], candidate_line: str) -> list[
 
 def _normalize_line(line: str) -> str:
     return " ".join(line.upper().replace("_", " ").split())
+
+
+def _extract_aluminium_bozen_ddt_number(document: Document | None, lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bNUM\.\s*([0-9]{2,6})\b", line)
+        if match is not None and "DELIVERY NOTE" in line:
+            return match.group(1)
+    for line in lines:
+        match = re.search(r"\bDELIVERY NOTE.*?\bNUM\.\s*([0-9]{2,6})\b", line)
+        if match is not None:
+            return match.group(1)
+    if document is not None:
+        return _extract_aluminium_bozen_ddt_number_from_header_ocr(document)
+    return None
+
+
+def _extract_aluminium_bozen_ddt_number_from_header_ocr(document: Document) -> str | None:
+    first_page = next((page for page in document.pages if page.numero_pagina == 1 and page.immagine_pagina_storage_key), None)
+    if first_page is None or not first_page.immagine_pagina_storage_key:
+        return None
+
+    image_path = Path(settings.document_storage_root) / Path(first_page.immagine_pagina_storage_key)
+    if not image_path.exists():
+        return None
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            crop_specs = (
+                ((0, int(height * 0.30), width, int(height * 0.40)), "--psm 6"),
+                ((int(width * 0.45), int(height * 0.30), width, int(height * 0.40)), "--psm 11"),
+            )
+    except (OSError, pytesseract.TesseractNotFoundError):
+        return None
+
+    for crop_box, config in crop_specs:
+        try:
+            with Image.open(image_path) as image:
+                crop = image.crop(crop_box)
+                text = pytesseract.image_to_string(crop, lang="eng+ita", config=config)
+        except (OSError, pytesseract.TesseractNotFoundError):
+            continue
+
+        normalized_text = _normalize_line(text)
+        direct = re.search(r"\bNUM\.?\s*([0-9]{2,6})\b", normalized_text)
+        if direct is not None:
+            return direct.group(1)
+
+        delivery_line = re.search(r"\bDELIVERY NOTE\b.*?\b([0-9]{2,6})\b", normalized_text)
+        if delivery_line is not None:
+            return delivery_line.group(1)
+    return None
+
+
+def _extract_aluminium_bozen_order(line: str) -> str | None:
+    match = re.search(r"\bRIF\.\s*NS\.\s*ODV\s*N\.?\s*([0-9]+(?:[./][0-9]+)?)\b", line)
+    if match is not None:
+        return match.group(1).replace("/", ".")
+    return None
+
+
+def _extract_aluminium_bozen_lega_from_line(line: str) -> str | None:
+    match = re.search(r"\b([0-9]{4}[A-Z]*)\s*/\s*F\b", line)
+    if match is not None:
+        return f"{match.group(1)} F"
+    return None
+
+
+def _extract_aluminium_bozen_lega_from_window(lines: list[str], index: int) -> str | None:
+    start_index = max(0, index - 3)
+    end_index = min(len(lines), index + 4)
+    for line in lines[start_index:end_index]:
+        lega = _extract_aluminium_bozen_lega_from_line(line)
+        if lega is not None:
+            return lega
+    return None
+
+
+def _extract_aluminium_bozen_diameter_from_line(line: str) -> str | None:
+    match = re.search(r"\bBARRA TONDA\s+([0-9]+(?:[.,][0-9]+)?)\b", line)
+    if match is not None:
+        return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_aluminium_bozen_weight_from_line(line: str) -> str | None:
+    match = re.search(r"\b(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\)?\s*$", line)
+    if match is not None:
+        return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_aluminium_bozen_cast_from_window(lines: list[str], index: int) -> str | None:
+    start_index = max(0, index - 4)
+    end_index = min(len(lines), index + 5)
+    for line in lines[start_index:end_index]:
+        match = re.search(r"\bCAST\s+NR\.?\s*([0-9]{5,}[A-Z0-9]*)\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _collect_aluminium_bozen_snippets(lines: list[str], index: int) -> list[str]:
+    start_index = max(0, index - 3)
+    end_index = min(len(lines), index + 3)
+    return lines[start_index:end_index]
 
 
 def _parse_decimal_number(value: str | None) -> float | None:

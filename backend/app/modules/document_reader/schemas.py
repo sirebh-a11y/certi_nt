@@ -46,6 +46,7 @@ class ReaderRowSplitHintResponse(BaseModel):
 class ReaderRowSplitCandidateResponse(BaseModel):
     candidate_index: int
     supplier_key: str | None = None
+    ddt_number: str | None = None
     lega: str | None = None
     diametro: str | None = None
     peso_netto: str | None = None

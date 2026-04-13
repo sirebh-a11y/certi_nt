@@ -414,7 +414,7 @@ def upload_document(
     db.commit()
     db.refresh(document)
     if _is_pdf_document(document, uploaded_file.content_type):
-        document = _index_document_from_path(db, document)
+        document = prepare_document_for_reader(db, document)
     document = _apply_document_identity_detection(db, document)
     log_service.record("acquisition", f"Document uploaded: {document.nome_file_originale}", actor_email)
     return serialize_document(document)
@@ -542,8 +542,9 @@ def _detect_document_type(document: Document) -> str | None:
 
 
 def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
-    search_text = _normalize_identity_text(_document_identity_text(document))
-    if not search_text:
+    raw_identity_text = _document_identity_text(document)
+    search_variants = _build_identity_search_variants(raw_identity_text)
+    if not search_variants:
         return None
 
     suppliers = db.query(Supplier).options(joinedload(Supplier.aliases)).filter(Supplier.attivo.is_(True)).all()
@@ -558,8 +559,9 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
             normalized_alias = _normalize_identity_text(alias)
             if not normalized_alias or len(normalized_alias) < 4:
                 continue
-            if normalized_alias in search_text:
-                score = max(score, min(80, 12 + len(normalized_alias)))
+            for search_text in search_variants:
+                if normalized_alias in search_text:
+                    score = max(score, min(80, 12 + len(normalized_alias)))
         if score > best_score:
             second_score = best_score
             best_score = score
@@ -582,6 +584,9 @@ def _document_identity_text(document: Document) -> str:
         page_text = _best_page_text(page)
         if page_text:
             chunks.append(page_text[:4000])
+            mojibake_normalized = _normalize_mojibake_numeric_text(page_text)
+            if mojibake_normalized != page_text:
+                chunks.append(mojibake_normalized[:4000])
     return "\n".join(chunk for chunk in chunks if chunk)
 
 
@@ -591,6 +596,22 @@ def _normalize_identity_text(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9àèéìòóùüöäßç.\s]+", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return f" {normalized} "
+
+
+def _build_identity_search_variants(value: str | None) -> list[str]:
+    raw_text = _string_or_none(value)
+    if raw_text is None:
+        return []
+
+    variants = [
+        _normalize_identity_text(raw_text),
+        _normalize_identity_text(_normalize_mojibake_numeric_text(raw_text)),
+    ]
+    deduped: list[str] = []
+    for variant in variants:
+        if variant.strip() and variant not in deduped:
+            deduped.append(variant)
+    return deduped
 
 
 def _find_supplier_from_text(db: Session, raw_text: str | None) -> Supplier | None:
