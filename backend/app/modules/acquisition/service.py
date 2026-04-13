@@ -709,7 +709,10 @@ def create_rows_from_document_split_plan(
     shared_matches = reader_detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
     existing_rows = (
         db.query(AcquisitionRow)
-        .filter(AcquisitionRow.document_ddt_id == document.id)
+        .filter(
+            AcquisitionRow.fornitore_id == document.fornitore_id,
+            AcquisitionRow.document_certificato_id.is_(None),
+        )
         .order_by(AcquisitionRow.id.asc())
         .all()
     )
