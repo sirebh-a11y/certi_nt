@@ -2121,7 +2121,7 @@ def _ensure_certificate_first_rows(
         certificate_signature = _certificate_first_signature(
             fornitore_id=certificate_document.fornitore_id,
             cdq=_string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final")),
-            ordine=_string_or_none(supplier_fields.get("customer_order")),
+            ordine=_string_or_none(supplier_fields.get("customer_order_normalized")),
             lega=_string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final")),
             diametro=_string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final")),
             colata=_string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final")),
@@ -2160,7 +2160,7 @@ def _ensure_certificate_first_rows(
                 diametro=_string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final")),
                 colata=_string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final")),
                 peso=_string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final")),
-                ordine=_string_or_none(supplier_fields.get("customer_order")),
+                ordine=_string_or_none(supplier_fields.get("customer_order_normalized")),
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -2412,12 +2412,39 @@ def _score_certificate_candidate(
             and reader_normalize_match_token(ddt_supplier_fields.get("customer_code"))
             == reader_normalize_match_token(certificate_supplier_fields.get("customer_code"))
         )
+        customer_order_match = (
+            reader_normalize_match_token(ddt_supplier_fields.get("customer_order_normalized"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("customer_order_normalized"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_order_normalized"))
+        )
         cast_match = (
             reader_normalize_match_token(row.colata)
             and reader_normalize_match_token(row.colata) == reader_normalize_match_token(certificate_cast)
         )
+        certificate_number_match = (
+            reader_normalize_match_token(ddt_certificate_number)
+            and reader_normalize_match_token(ddt_certificate_number) == reader_normalize_match_token(certificate_number)
+        )
         weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
-        has_strong_row_link = bool(customer_code_match or cast_match or (article_match and (customer_code_match or cast_match or weight_match)))
+        alloy_match = (
+            reader_normalize_match_token(row.lega_base)
+            and reader_normalize_match_token(row.lega_base)
+            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
+        )
+        diameter_match = (
+            reader_normalize_match_token(row.diametro)
+            and reader_normalize_match_token(row.diametro)
+            == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
+        )
+        has_full_structural_match = bool(
+            article_match and customer_code_match and customer_order_match and alloy_match and diameter_match
+        )
+        has_row_match_with_cast_support = bool(
+            cast_match and article_match and (customer_code_match or customer_order_match or diameter_match)
+        )
+        has_strong_row_link = bool(
+            certificate_number_match or has_full_structural_match or has_row_match_with_cast_support
+        )
         if not has_strong_row_link:
             return None
 
