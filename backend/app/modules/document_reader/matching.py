@@ -1748,11 +1748,11 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
     cleaned_upper = cleaned.upper()
     leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", cleaned_upper)
     if leading_date_match is not None:
-        return f"{leading_date_match.group(1)}|{leading_date_match.group(2)}"
+        return f"{leading_date_match.group(2)}|{leading_date_match.group(1)}"
 
     trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", cleaned_upper)
     if trailing_date_match is not None:
-        return f"{trailing_date_match.group(2)}|{trailing_date_match.group(1)}"
+        return f"{trailing_date_match.group(1)}|{trailing_date_match.group(2)}"
 
     tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
     if not tokens:
@@ -1768,11 +1768,11 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
         ]
         if date_value:
             prefix = next((token for token in other_tokens if re.fullmatch(r"\d{1,4}", token)), "".join(other_tokens))
-            return f"{date_value}|{prefix}" if prefix else date_value
+            return f"{prefix}|{date_value}" if prefix else date_value
     if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
         prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
-        return f"{date_value}|{prefix}"
+        return f"{prefix}|{date_value}"
     return "".join(tokens)
 
 
