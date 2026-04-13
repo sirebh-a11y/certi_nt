@@ -24,12 +24,15 @@ def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
     ascii_alnum_count = len(re.findall(r"[A-Za-z0-9]", normalized))
     extended_latin_count = len(re.findall(r"[À-ÿ]", normalized))
     word_count = len(normalized.split())
+    mojibake_markers = len(re.findall(r"[ßÝÛÒÑÞÔ×ØÐ]", normalized))
 
     if ascii_alnum_count == 0 and extended_latin_count >= 4:
         return True
     if extended_latin_count >= 6 and ascii_alnum_count < 12:
         return True
     if word_count <= 3 and extended_latin_count > ascii_alnum_count:
+        return True
+    if mojibake_markers >= 12 and mojibake_markers * 3 >= max(ascii_alnum_count, 1):
         return True
     return False
 
@@ -560,8 +563,18 @@ def merge_row_supplier_fields(
     return merged
 
 
-def detect_certificate_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def detect_certificate_core_matches(
+    pages: list[DocumentPage],
+    *,
+    supplier_key: str | None = None,
+) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+    supplier_detector = {
+        "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
+    }.get(supplier_key)
+    if supplier_detector is not None:
+        matches.update(supplier_detector(pages))
+
     for page in pages:
         lines = [line.strip() for line in _best_page_text(page).splitlines() if line.strip()]
         if "numero_certificato_certificato" not in matches:
@@ -576,6 +589,53 @@ def detect_certificate_core_matches(pages: list[DocumentPage]) -> dict[str, dict
             weight_payload = _extract_certificate_weight_payload(lines, page.id)
             if weight_payload is not None:
                 matches["peso_certificato"] = weight_payload
+    return matches
+
+
+def _detect_aluminium_bozen_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+
+        if "articolo_certificato" not in matches:
+            article = _extract_value_near_anchor(lines, ("article",), pattern=r"\b14BT[0-9A-Z-]+\b")
+            if article is not None:
+                matches["articolo_certificato"] = _build_match(page.id, f"ARTICLE | {article}", article)
+
+        if "codice_cliente_certificato" not in matches:
+            customer_code = _extract_aluminium_bozen_customer_code(lines)
+            if customer_code is not None:
+                matches["codice_cliente_certificato"] = _build_match(page.id, customer_code, customer_code)
+
+        if "ordine_cliente_certificato" not in matches:
+            customer_order = _extract_aluminium_bozen_customer_order(lines, document_type="certificato")
+            if customer_order is not None:
+                snippet = _find_line_containing_token(lines, "CUSTOMER") or customer_order
+                matches["ordine_cliente_certificato"] = _build_match(page.id, snippet, customer_order)
+
+        if "lega_certificato" not in matches:
+            alloy_payload = _extract_aluminium_bozen_certificate_alloy(lines, normalized_lines)
+            if alloy_payload is not None:
+                matches["lega_certificato"] = _build_match(page.id, alloy_payload[0], alloy_payload[1])
+
+        if "diametro_certificato" not in matches:
+            diameter_payload = _extract_aluminium_bozen_certificate_diameter(lines, normalized_lines)
+            if diameter_payload is not None:
+                matches["diametro_certificato"] = _build_match(page.id, diameter_payload[0], diameter_payload[1])
+
+        if "colata_certificato" not in matches:
+            cast_payload = _extract_aluminium_bozen_certificate_cast(lines, normalized_lines)
+            if cast_payload is not None:
+                matches["colata_certificato"] = _build_match(page.id, cast_payload[0], cast_payload[1])
+
+        if "peso_certificato" not in matches:
+            weight_payload = _extract_aluminium_bozen_certificate_weight(lines, normalized_lines)
+            if weight_payload is not None:
+                matches["peso_certificato"] = _build_match(page.id, weight_payload[0], weight_payload[1])
+
     return matches
 
 
@@ -770,6 +830,21 @@ def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[
     if tally_sheet_payload is not None:
         return tally_sheet_payload
 
+    anchored_patterns = (
+        r"\bCERT\.?\s*NO\.?\s*([0-9]{4,}[A-Z]?)\b",
+        r"\bNO\.?\s*CERT\.?\s*([0-9]{4,}[A-Z]?)\b",
+        r"\bNR\.?\s*CERT\.?\s*([0-9]{4,}[A-Z]?)\b",
+        r"\bCDQ\b[^\dA-Z]{0,6}([0-9]{4,}[A-Z]?)\b",
+    )
+    for line in lines:
+        normalized_line = _normalize_mojibake_numeric_text(line).upper()
+        for pattern in anchored_patterns:
+            match = re.search(pattern, normalized_line)
+            if match is not None:
+                value = match.group(1)
+                if value not in {"10204", "0000"}:
+                    return {"page_id": page_id, "snippet": line, "standardized": value, "final": value}
+
     direct = _extract_anchor_value_from_lines(
         lines,
         anchors=(
@@ -806,7 +881,7 @@ def _extract_certificate_cast_payload(lines: list[str], page_id: int) -> dict[st
 
     extracted = _extract_anchor_value_from_lines(
         lines,
-        anchors=("charge/ cast no", "charge/cast no", "cast no", "cast nr", "heat no", "colata", "batch no", "coulee"),
+        anchors=("charge/ cast no", "charge/cast no", "cast no", "cast nr", "cast batch nr", "cast batch no", "heat no", "colata", "batch no", "batch nr", "coulee"),
         pattern=r"\b[A-Z0-9]{4,}[A-Z]?\b",
         exclude_tokens={"CHARGE", "CAST", "BATCH", "HEAT", "NO", "COULEE"},
         lookahead=4,
@@ -1017,6 +1092,106 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
         normalized = _normalize_customer_order_tokens(line)
         if normalized is not None and "|" in normalized:
             return normalized
+    return None
+
+
+def _extract_aluminium_bozen_certificate_alloy(
+    lines: list[str],
+    normalized_lines: list[str],
+) -> tuple[str, str] | None:
+    for index, line in enumerate(normalized_lines):
+        if "ALLOY" not in line and "PHYS.STATE" not in line and "PHYS.STATE" not in line:
+            continue
+        window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
+        for candidate in window:
+            match = re.search(r"\b([1-9][0-9]{3}[A-Z]{0,3})\s+(HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF|HF|F|T\d+[A-Z0-9/-]*)\b", candidate)
+            if match is not None:
+                value = f"{match.group(1)} {match.group(2).replace(' / ', ' ').replace('/', ' ')}"
+                value = re.sub(r"\s+", " ", value).strip()
+                snippet = lines[index]
+                if candidate != line:
+                    snippet = f"{lines[index]} | {lines[index + 1 + window[1:].index(candidate)]}"
+                return snippet, value
+    return None
+
+
+def _extract_aluminium_bozen_certificate_diameter(
+    lines: list[str],
+    normalized_lines: list[str],
+) -> tuple[str, str] | None:
+    for index, line in enumerate(normalized_lines):
+        if "PROFIL CLIENT" in line or "SECTION DESC" in line:
+            same_line = re.search(r"\b([0-9]{2,3}(?:[.,][0-9]+)?)\b", line)
+            if same_line is not None:
+                normalized = _normalize_decimal_value(same_line.group(1))
+                if normalized is not None:
+                    return lines[index], normalized
+            for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+                isolated_match = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*", candidate)
+                if isolated_match is not None:
+                    normalized = _normalize_decimal_value(isolated_match.group(1))
+                    if normalized is not None:
+                        return f"{lines[index]} | {lines[index + offset]}", normalized
+
+    for index, line in enumerate(normalized_lines):
+        customer_code_match = re.search(r"\bA\d[0-9A-Z]{4,}\b", line)
+        if customer_code_match is None:
+            continue
+        for offset, candidate in enumerate(normalized_lines[index : min(index + 5, len(normalized_lines))]):
+            isolated_match = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*", candidate)
+            if isolated_match is not None:
+                normalized = _normalize_decimal_value(isolated_match.group(1))
+                if normalized is not None:
+                    raw_snippet = lines[index]
+                    if offset:
+                        raw_snippet = f"{lines[index]} | {lines[index + offset]}"
+                    return raw_snippet, normalized
+    return None
+
+
+def _extract_aluminium_bozen_certificate_cast(
+    lines: list[str],
+    normalized_lines: list[str],
+) -> tuple[str, str] | None:
+    for index, line in enumerate(normalized_lines):
+        if "CAST BATCH" not in line and "CHARGE" not in line and "COLATA" not in line:
+            continue
+        same_line = re.search(r"\b([0-9]{5,}[A-Z]?)\b", line)
+        if same_line is not None:
+            return lines[index], same_line.group(1)
+        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+            candidate_match = re.search(r"\b([0-9]{5,}[A-Z]?)\b", candidate)
+            if candidate_match is not None:
+                return f"{lines[index]} | {lines[index + offset]}", candidate_match.group(1)
+    return None
+
+
+def _extract_aluminium_bozen_certificate_weight(
+    lines: list[str],
+    normalized_lines: list[str],
+) -> tuple[str, str] | None:
+    for index, line in enumerate(normalized_lines):
+        if "NET WEIGHT" not in line and "NETGEWICHT" not in line and "POIDS NET" not in line:
+            continue
+        same_line = re.search(r"\b([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\b", line)
+        if same_line is not None:
+            normalized = _normalize_weight(same_line.group(1))
+            if normalized is not None:
+                return lines[index], normalized
+        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+            candidate_match = re.search(r"\b([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\b", candidate)
+            if candidate_match is not None:
+                normalized = _normalize_weight(candidate_match.group(1))
+                if normalized is not None:
+                    return f"{lines[index]} | {lines[index + offset]}", normalized
+    return None
+
+
+def _find_line_containing_token(lines: list[str], token: str) -> str | None:
+    normalized_token = token.upper()
+    for line in lines:
+        if normalized_token in _normalize_mojibake_numeric_text(line).upper():
+            return line
     return None
 
 

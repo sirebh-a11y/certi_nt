@@ -1735,7 +1735,16 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
         if not certificate_document.pages:
             certificate_document = _index_document_from_path(db, certificate_document)
         certificate_document = _ensure_document_page_ocr(db, certificate_document)
-        certificate_matches = reader_detect_certificate_core_matches(certificate_document.pages)
+        certificate_template = resolve_supplier_template(
+            row.supplier.ragione_sociale if row.supplier is not None else None,
+            row.fornitore_raw,
+            row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
+            certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
+        )
+        certificate_matches = reader_detect_certificate_core_matches(
+            certificate_document.pages,
+            supplier_key=certificate_template.supplier_key if certificate_template is not None else None,
+        )
         for field_name, match in certificate_matches.items():
             evidence = _create_text_evidence(
                 db=db,
@@ -2518,12 +2527,15 @@ def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
     ascii_alnum_count = len(re.findall(r"[A-Za-z0-9]", normalized))
     extended_latin_count = len(re.findall(r"[À-ÿ]", normalized))
     word_count = len(normalized.split())
+    mojibake_markers = len(re.findall(r"[ßÝÛÒÑÞÔ×ØÐ]", normalized))
 
     if ascii_alnum_count == 0 and extended_latin_count >= 4:
         return True
     if extended_latin_count >= 6 and ascii_alnum_count < 12:
         return True
     if word_count <= 3 and extended_latin_count > ascii_alnum_count:
+        return True
+    if mojibake_markers >= 12 and mojibake_markers * 3 >= max(ascii_alnum_count, 1):
         return True
     return False
 

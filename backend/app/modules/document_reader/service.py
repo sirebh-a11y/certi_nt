@@ -37,12 +37,15 @@ def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
     ascii_alnum_count = len(re.findall(r"[A-Za-z0-9]", normalized))
     extended_latin_count = len(re.findall(r"[À-ÿ]", normalized))
     word_count = len(normalized.split())
+    mojibake_markers = len(re.findall(r"[ßÝÛÒÑÞÔ×ØÐ]", normalized))
 
     if ascii_alnum_count == 0 and extended_latin_count >= 4:
         return True
     if extended_latin_count >= 6 and ascii_alnum_count < 12:
         return True
     if word_count <= 3 and extended_latin_count > ascii_alnum_count:
+        return True
+    if mojibake_markers >= 12 and mojibake_markers * 3 >= max(ascii_alnum_count, 1):
         return True
     return False
 
