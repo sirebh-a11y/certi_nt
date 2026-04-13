@@ -11,6 +11,7 @@ from app.modules.acquisition.models import AcquisitionRow, Document
 from app.modules.document_reader.decision_engine import build_default_decision_rules
 from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.schemas import (
+    ReaderDocumentPartResponse,
     DocumentRowSplitPlanResponse,
     OpenAIDoubleCheckEstimateResponse,
     ReaderPlanResponse,
@@ -60,6 +61,8 @@ def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
 
     ddt_insights = _build_document_table_insights(row.ddt_document, "ddt")
     certificate_insights = _build_document_table_insights(row.certificate_document, "certificato")
+    ddt_part_hints = _build_document_part_hints(row.ddt_document, template, "ddt")
+    certificate_part_hints = _build_document_part_hints(row.certificate_document, template, "certificato")
     planned_crops = _estimate_planned_crops(template, row)
     row_split_hint = _build_row_split_hint(row.ddt_document, template)
     row_split_candidates = _build_row_split_candidates(row.ddt_document, template)
@@ -93,6 +96,8 @@ def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
         decision_policy=[rule.description for rule in build_default_decision_rules()],
         row_split_hint=row_split_hint,
         row_split_candidates=row_split_candidates,
+        ddt_part_hints=ddt_part_hints,
+        certificate_part_hints=certificate_part_hints,
         ddt_table_insights=ddt_insights,
         certificate_table_insights=certificate_insights,
         openai_double_check=_build_openai_estimate(template, planned_crops),
@@ -118,6 +123,7 @@ def build_document_row_split_plan(document: Document) -> DocumentRowSplitPlanRes
         ),
         row_split_hint=row_split_hint,
         row_split_candidates=row_split_candidates,
+        document_part_hints=_build_document_part_hints(document, template, "ddt"),
     )
 
 
@@ -166,6 +172,121 @@ def _build_document_table_insights(document: Document | None, document_type: str
             )
         )
     return insights
+
+
+def _build_document_part_hints(document: Document | None, template, document_type: str) -> list[ReaderDocumentPartResponse]:
+    if document is None or template is None:
+        return []
+
+    if template.supplier_key == "aluminium_bozen":
+        if document_type == "ddt":
+            return _build_aluminium_bozen_ddt_part_hints(document)
+        if document_type == "certificato":
+            return _build_aluminium_bozen_certificate_part_hints(document)
+
+    return []
+
+
+def _build_aluminium_bozen_ddt_part_hints(document: Document) -> list[ReaderDocumentPartResponse]:
+    first_page = document.pages[0] if document.pages else None
+    lines = _page_lines(first_page) if first_page is not None else []
+    return [
+        ReaderDocumentPartResponse(
+            document_type="ddt",
+            part_key="header_num",
+            label="Header DDT / Num.",
+            kind="header",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("DELIVERY NOTE", "DOCUMENTO DI TRASPORTO", "NUM.")),
+            bbox_hint=[0.0, 0.0, 1.0, 0.20],
+            notes=["Qui si trova il numero DDT e l'identita del documento."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="ddt",
+            part_key="material_rows",
+            label="Righe materiale",
+            kind="material_rows",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("BARRA TONDA", "CAST NR.", "RIF. NS. ODV")),
+            bbox_hint=[0.0, 0.18, 1.0, 0.72],
+            notes=["Da qui leggiamo ordine, articolo, lega, diametro, colata e peso di riga."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="ddt",
+            part_key="packing_list",
+            label="Packing list / colli",
+            kind="packing_list",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("COD. COLATA", "COD. ART. CLIENTE", "LEGA STATO FISICO")),
+            bbox_hint=[0.0, 0.58, 1.0, 1.0],
+            notes=["Usato come supporto per pesi e colli quando la riga materiale e' spezzata."],
+        ),
+    ]
+
+
+def _build_aluminium_bozen_certificate_part_hints(document: Document) -> list[ReaderDocumentPartResponse]:
+    first_page = document.pages[0] if document.pages else None
+    lines = _page_lines(first_page) if first_page is not None else []
+    return [
+        ReaderDocumentPartResponse(
+            document_type="certificato",
+            part_key="certificate_header",
+            label="Header certificato",
+            kind="header",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("CERT.NO.", "CERT NO.", "INSPECTION CERTIFICATE")),
+            bbox_hint=[0.0, 0.0, 1.0, 0.18],
+            notes=["Qui si trovano numero certificato e data certificato."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="certificato",
+            part_key="identity_block",
+            label="Dati articolo / cliente / materiale",
+            kind="identity",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("CUSTOMER ARTICLE", "SECTION DESC", "CAST BATCH", "CUSTOMER'S ORDER")),
+            bbox_hint=[0.0, 0.16, 1.0, 0.46],
+            notes=["Qui si trovano articolo, customer code, ordine cliente, diametro, lega e colata."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="certificato",
+            part_key="chemistry_table",
+            label="Tabella chimica",
+            kind="table",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("CHEMICAL ANALYSIS", "CHEMICAL COMPOSITION", "ANALISI CHIMICA", "COMPOSIZIONE CHIMICA")),
+            bbox_hint=[0.0, 0.40, 1.0, 0.68],
+            notes=["Da qui leggiamo solo i valori misurati, non min/max."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="certificato",
+            part_key="properties_table",
+            label="Tabella proprieta meccaniche",
+            kind="table",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("MECHANICAL PROPERTIES", "CARATTERISTICHE MECCANICHE")),
+            bbox_hint=[0.0, 0.60, 1.0, 0.84],
+            notes=["Da qui leggiamo la riga misurata, escludendo norme e min/max."],
+        ),
+        ReaderDocumentPartResponse(
+            document_type="certificato",
+            part_key="notes_block",
+            label="Note e conformita",
+            kind="notes",
+            page_id=first_page.id if first_page else None,
+            snippet=_find_first_matching_line(lines, ("RADIOACTIVE", "ROHS", "ASTM", "AMS", "UNLESS OTHERWISE AGREED")),
+            bbox_hint=[0.0, 0.80, 1.0, 1.0],
+            notes=["Qui leggiamo note qualitative e note normative utili."],
+        ),
+    ]
+
+
+def _find_first_matching_line(lines: list[str], tokens: tuple[str, ...]) -> str | None:
+    for line in lines:
+        normalized_line = _normalize_line(line)
+        if any(token in normalized_line for token in tokens):
+            return line
+    return lines[0] if lines else None
 
 
 def _select_table_window(lines: list[str]) -> list[str]:

@@ -25,6 +25,17 @@ class ReaderTableInsightResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class ReaderDocumentPartResponse(BaseModel):
+    document_type: Literal["ddt", "certificato"]
+    part_key: str
+    label: str
+    kind: Literal["header", "identity", "table", "notes", "material_rows", "packing_list", "unknown"]
+    page_id: int | None = None
+    snippet: str | None = None
+    bbox_hint: list[float] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class OpenAIDoubleCheckEstimateResponse(BaseModel):
     model_default: str
     escalation_model: str
@@ -69,6 +80,8 @@ class ReaderPlanResponse(BaseModel):
     decision_policy: list[str] = Field(default_factory=list)
     row_split_hint: ReaderRowSplitHintResponse
     row_split_candidates: list[ReaderRowSplitCandidateResponse] = Field(default_factory=list)
+    ddt_part_hints: list[ReaderDocumentPartResponse] = Field(default_factory=list)
+    certificate_part_hints: list[ReaderDocumentPartResponse] = Field(default_factory=list)
     ddt_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     certificate_table_insights: list[ReaderTableInsightResponse] = Field(default_factory=list)
     openai_double_check: OpenAIDoubleCheckEstimateResponse
@@ -79,3 +92,4 @@ class DocumentRowSplitPlanResponse(BaseModel):
     template: ReaderTemplateSummaryResponse
     row_split_hint: ReaderRowSplitHintResponse
     row_split_candidates: list[ReaderRowSplitCandidateResponse] = Field(default_factory=list)
+    document_part_hints: list[ReaderDocumentPartResponse] = Field(default_factory=list)
