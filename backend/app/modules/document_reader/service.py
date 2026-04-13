@@ -402,7 +402,7 @@ def _build_aluminium_bozen_row_split_candidates(
     ddt_number = _extract_aluminium_bozen_ddt_number(document, normalized_lines)
     current_order: str | None = None
     current_lega: str | None = None
-    candidates: list[ReaderRowSplitCandidateResponse] = []
+    raw_candidates: list[ReaderRowSplitCandidateResponse] = []
 
     for index, (original_line, normalized_line) in enumerate(zip(lines, normalized_lines)):
         order_value = _extract_aluminium_bozen_order(normalized_line)
@@ -419,11 +419,11 @@ def _build_aluminium_bozen_row_split_candidates(
         diametro = _extract_aluminium_bozen_diameter_from_line(normalized_line)
         peso_netto = _extract_aluminium_bozen_weight_from_line(normalized_line)
         colata = _extract_aluminium_bozen_cast_from_window(normalized_lines, index)
-        lega = current_lega or _extract_aluminium_bozen_lega_from_window(normalized_lines, index)
+        lega = _extract_aluminium_bozen_lega_from_window(normalized_lines, index) or current_lega
 
         snippets = [snippet for snippet in _collect_aluminium_bozen_snippets(lines, index) if snippet.strip()][:6]
         candidate = ReaderRowSplitCandidateResponse(
-            candidate_index=len(candidates) + 1,
+            candidate_index=len(raw_candidates) + 1,
             supplier_key=supplier_key,
             ddt_number=ddt_number,
             lega=lega,
@@ -435,19 +435,20 @@ def _build_aluminium_bozen_row_split_candidates(
         )
 
         if any(getattr(candidate, field) is not None for field in ("ddt_number", "lega", "diametro", "peso_netto", "colata", "supplier_order_no")):
-            candidates.append(candidate)
+            raw_candidates.append(candidate)
 
-    return candidates
+    return _merge_aluminium_bozen_candidates(raw_candidates, lines, ddt_number, supplier_key)
 
 
 def _is_aluminium_bozen_material_line(line: str) -> bool:
-    if "BARRA TONDA" not in line:
-        return False
     if any(marker in line for marker in ("DES. ART. CLIENTE", "LEGA STATO FISICO", "RIF. ORDINE AB ODV", "COD. COLATA")):
         return False
-    if re.search(r"\([0-9A-Z-]{6,}\)", line) is not None:
+    has_article = re.search(r"\([0-9A-Z-]{6,}\)", line) is not None
+    has_customer_code = re.search(r"\b[A0-9][0-9A-Z]{5,}\b", line) is not None
+    has_material_anchor = "BARRA TONDA" in line or ("ALL. AND PHYSICAL STATUS" not in line and has_article)
+    if has_material_anchor and has_article:
         return True
-    if re.search(r"\bA[0-9A-Z]{5,}\b", line) is not None:
+    if has_material_anchor and has_customer_code:
         return True
     return False
 
@@ -767,6 +768,7 @@ def _extract_aluminium_bozen_ddt_number_from_header_ocr(document: Document) -> s
     except (OSError, pytesseract.TesseractNotFoundError):
         return None
 
+    saw_delivery_header = False
     for crop_box, config in crop_specs:
         try:
             with Image.open(image_path) as image:
@@ -776,13 +778,15 @@ def _extract_aluminium_bozen_ddt_number_from_header_ocr(document: Document) -> s
             continue
 
         normalized_text = _normalize_line(text)
+        if "DELIVERY NOTE" in normalized_text or "DOCUMENTO DI TRASPORTO" in normalized_text:
+            saw_delivery_header = True
         direct = re.search(r"\bNUM\.?\s*([0-9]{2,6})\b", normalized_text)
         if direct is not None:
             return direct.group(1)
-
-        delivery_line = re.search(r"\bDELIVERY NOTE\b.*?\b([0-9]{2,6})\b", normalized_text)
-        if delivery_line is not None:
-            return delivery_line.group(1)
+    if saw_delivery_header:
+        stem = Path(document.nome_file_originale).stem
+        if re.fullmatch(r"\d{2,6}", stem):
+            return stem
     return None
 
 
@@ -794,16 +798,16 @@ def _extract_aluminium_bozen_order(line: str) -> str | None:
 
 
 def _extract_aluminium_bozen_lega_from_line(line: str) -> str | None:
-    match = re.search(r"\b([0-9]{4}[A-Z]*)\s*/\s*F\b", line)
+    match = re.search(r"\b([0-9]{4}[A-Z]*)\s*(?:HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF\b|HF\b|/F\b|F\b)", line)
     if match is not None:
         return f"{match.group(1)} F"
     return None
 
 
 def _extract_aluminium_bozen_lega_from_window(lines: list[str], index: int) -> str | None:
-    start_index = max(0, index - 3)
-    end_index = min(len(lines), index + 4)
-    for line in lines[start_index:end_index]:
+    preferred_indices = list(range(index, min(len(lines), index + 4))) + list(range(max(0, index - 3), index))
+    for candidate_index in preferred_indices:
+        line = lines[candidate_index]
         lega = _extract_aluminium_bozen_lega_from_line(line)
         if lega is not None:
             return lega
@@ -814,20 +818,25 @@ def _extract_aluminium_bozen_diameter_from_line(line: str) -> str | None:
     match = re.search(r"\bBARRA TONDA\s+([0-9]+(?:[.,][0-9]+)?)\b", line)
     if match is not None:
         return _normalize_decimal_value(match.group(1))
+    fallback = re.search(r"\b([0-9]+(?:[.,][0-9]+)?)\s*\([0-9A-Z-]{6,}\)", line)
+    if fallback is not None:
+        return _normalize_decimal_value(fallback.group(1))
     return None
 
 
 def _extract_aluminium_bozen_weight_from_line(line: str) -> str | None:
     match = re.search(r"\b(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\)?\s*$", line)
     if match is not None:
-        return _normalize_decimal_value(match.group(1))
+        parsed = _parse_aluminium_bozen_weight_token(match.group(1))
+        if parsed is not None:
+            return _format_aluminium_bozen_weight(parsed)
     return None
 
 
 def _extract_aluminium_bozen_cast_from_window(lines: list[str], index: int) -> str | None:
-    start_index = max(0, index - 4)
-    end_index = min(len(lines), index + 5)
-    for line in lines[start_index:end_index]:
+    preferred_indices = list(range(index, min(len(lines), index + 5))) + list(range(max(0, index - 4), index))
+    for candidate_index in preferred_indices:
+        line = lines[candidate_index]
         match = re.search(r"\bCAST\s+NR\.?\s*([0-9]{5,}[A-Z0-9]*)\b", line)
         if match is not None:
             return match.group(1)
@@ -838,6 +847,210 @@ def _collect_aluminium_bozen_snippets(lines: list[str], index: int) -> list[str]
     start_index = max(0, index - 3)
     end_index = min(len(lines), index + 3)
     return lines[start_index:end_index]
+
+
+def _merge_aluminium_bozen_candidates(
+    candidates: list[ReaderRowSplitCandidateResponse],
+    lines: list[str],
+    ddt_number: str | None,
+    supplier_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not candidates:
+        return []
+
+    packing_weights = _extract_aluminium_bozen_packing_weights(lines)
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+
+    for candidate in candidates:
+        key = (
+            candidate.supplier_order_no or "",
+            candidate.lega or "",
+            candidate.diametro or "",
+        )
+        entry = grouped.setdefault(
+            key,
+            {
+                "candidate": ReaderRowSplitCandidateResponse(
+                    candidate_index=0,
+                    supplier_key=supplier_key,
+                    ddt_number=ddt_number or candidate.ddt_number,
+                    lega=candidate.lega,
+                    diametro=candidate.diametro,
+                    peso_netto=None,
+                    colata=candidate.colata,
+                    supplier_order_no=candidate.supplier_order_no,
+                    snippets=[],
+                ),
+                "weight_total": 0,
+                "weight_count": 0,
+                "snippets": [],
+                "casts": [],
+            },
+        )
+
+        weight_value = _parse_aluminium_bozen_weight(candidate.peso_netto)
+        if weight_value is not None:
+            entry["weight_total"] = int(entry["weight_total"]) + weight_value
+            entry["weight_count"] = int(entry["weight_count"]) + 1
+        entry["snippets"] = _merge_snippets(entry["snippets"], candidate.snippets)
+        if candidate.colata:
+            entry["casts"].append(candidate.colata)
+
+    merged: list[ReaderRowSplitCandidateResponse] = []
+    for index, (_, entry) in enumerate(grouped.items(), start=1):
+        candidate = entry["candidate"]
+        packed_weight = packing_weights.get(candidate.supplier_order_no or "")
+        if int(entry["weight_count"]) > 0:
+            candidate.peso_netto = _format_aluminium_bozen_weight(int(entry["weight_total"]))
+        elif packed_weight is not None:
+            candidate.peso_netto = packed_weight
+        candidate.colata = _choose_best_aluminium_bozen_cast(entry["casts"], candidate.colata)
+        candidate.snippets = list(entry["snippets"])[:6]
+        candidate.candidate_index = index
+        merged.append(candidate)
+    return _drop_weaker_aluminium_bozen_candidates(merged)
+
+
+def _extract_aluminium_bozen_packing_weights(lines: list[str]) -> dict[str, str]:
+    weights_by_order: dict[str, int] = {}
+    current_order: str | None = None
+    in_section = False
+
+    for raw_line in lines:
+        line = _normalize_line(raw_line)
+        section_match = re.search(r"\bRIF\. ORDINE AB ODV\s+\d{4}\.([0-9]+(?:\.[0-9]+)?)\b", line)
+        if section_match is not None:
+            current_order = section_match.group(1)
+            in_section = False
+            continue
+        if current_order is None:
+            continue
+        if "COLLO" in line and "P.NETTO KG" in line:
+            in_section = True
+            continue
+        if "RIF. ORDINE AB ODV" in line:
+            in_section = False
+            continue
+        if not in_section:
+            continue
+        net_weight = _extract_aluminium_bozen_packing_row_net(line)
+        if net_weight is None:
+            continue
+        weights_by_order[current_order] = weights_by_order.get(current_order, 0) + net_weight
+
+    return {order: _format_aluminium_bozen_weight(total) for order, total in weights_by_order.items()}
+
+
+def _extract_aluminium_bozen_packing_row_net(line: str) -> int | None:
+    id_match = re.search(r"\b\d{4}-\d{7}\b", line)
+    if id_match is None:
+        return None
+    cast_match = re.search(r"\b([0-9A-Z]{5,})\b\s*$", line)
+    if cast_match is None:
+        return None
+
+    prefix = line[id_match.end() : cast_match.start()]
+    numeric_tokens = re.findall(r"\d+(?:[.,]\d+)?", prefix)
+    if len(numeric_tokens) < 3:
+        return None
+
+    net_candidate = numeric_tokens[-2]
+    return _parse_aluminium_bozen_weight_token(net_candidate)
+
+
+def _merge_snippets(current: list[str], incoming: list[str]) -> list[str]:
+    merged = list(current)
+    seen = {snippet.strip() for snippet in merged if snippet.strip()}
+    for snippet in incoming:
+        key = snippet.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(snippet)
+    return merged
+
+
+def _parse_aluminium_bozen_weight(value: str | None) -> int | None:
+    cleaned = _normalize_text(value)
+    if cleaned is None:
+        return None
+    return _parse_aluminium_bozen_weight_token(cleaned)
+
+
+def _parse_aluminium_bozen_weight_token(value: str | None) -> int | None:
+    if value is None:
+        return None
+    token = value.strip().replace(" ", "")
+    if not token:
+        return None
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token):
+        return int(re.sub(r"[.,]", "", token))
+    if re.fullmatch(r"\d+", token):
+        return int(token)
+    if re.fullmatch(r"\d+[.,]\d+", token):
+        normalized = token.replace(",", ".")
+        try:
+            return int(round(float(normalized) * 1000))
+        except ValueError:
+            return None
+    return None
+
+
+def _format_aluminium_bozen_weight(value: int) -> str:
+    if value < 1000:
+        return str(value)
+    chunks: list[str] = []
+    remaining = value
+    while remaining >= 1000:
+        chunks.append(f"{remaining % 1000:03d}")
+        remaining //= 1000
+    chunks.append(str(remaining))
+    return ".".join(reversed(chunks))
+
+
+def _choose_best_aluminium_bozen_cast(casts: list[str], fallback: str | None) -> str | None:
+    if not casts:
+        return fallback
+    normalized_counts: dict[str, int] = {}
+    preferred_by_key: dict[str, str] = {}
+    for cast in casts:
+        normalized = cast.replace("0", "O")
+        normalized_counts[normalized] = normalized_counts.get(normalized, 0) + 1
+        current = preferred_by_key.get(normalized)
+        if current is None or _cast_quality_score(cast) > _cast_quality_score(current):
+            preferred_by_key[normalized] = cast
+    best_key = max(normalized_counts.items(), key=lambda item: (item[1], _cast_quality_score(preferred_by_key[item[0]])))[0]
+    return preferred_by_key[best_key]
+
+
+def _cast_quality_score(value: str) -> tuple[int, int]:
+    alpha_count = sum(1 for char in value if char.isalpha())
+    return (alpha_count, len(value))
+
+
+def _drop_weaker_aluminium_bozen_candidates(
+    candidates: list[ReaderRowSplitCandidateResponse],
+) -> list[ReaderRowSplitCandidateResponse]:
+    filtered: list[ReaderRowSplitCandidateResponse] = []
+    for candidate in candidates:
+        if candidate.supplier_order_no:
+            stronger_same_order = next(
+                (
+                    other
+                    for other in candidates
+                    if other is not candidate
+                    and other.supplier_order_no == candidate.supplier_order_no
+                    and (other.diametro or other.colata)
+                    and not (candidate.diametro or candidate.colata)
+                ),
+                None,
+            )
+            if stronger_same_order is not None:
+                continue
+        filtered.append(candidate)
+    for index, candidate in enumerate(filtered, start=1):
+        candidate.candidate_index = index
+    return filtered
 
 
 def _parse_decimal_number(value: str | None) -> float | None:
