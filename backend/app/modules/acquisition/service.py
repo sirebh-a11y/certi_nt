@@ -817,6 +817,9 @@ def _persist_split_candidate_values(
     actor_id: int,
 ) -> None:
     candidate_values = {
+        "customer_code": candidate.customer_code,
+        "article_code": candidate.article_code,
+        "customer_order_no": candidate.customer_order_no,
         "lot_batch_no": candidate.lot_batch_no,
         "heat_no": candidate.heat_no,
         "supplier_order_no": candidate.supplier_order_no,
@@ -2167,7 +2170,8 @@ def _score_certificate_candidate(
         certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
     )
 
-    matches = reader_detect_certificate_core_matches(certificate_document.pages)
+    supplier_key = template.supplier_key if template is not None else None
+    matches = reader_detect_certificate_core_matches(certificate_document.pages, supplier_key=supplier_key)
     certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
     certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
     certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
@@ -2207,7 +2211,6 @@ def _score_certificate_candidate(
     if row.diametro and reader_document_contains_token(certificate_document.pages, row.diametro):
         add_reason(10, "Diametro coerente")
 
-    supplier_key = template.supplier_key if template is not None else None
     for points, label in reader_score_supplier_field_matches(
         supplier_key=supplier_key,
         row=row,
@@ -2215,6 +2218,22 @@ def _score_certificate_candidate(
         certificate_supplier_fields=certificate_supplier_fields,
     ):
         add_reason(points, label)
+
+    if supplier_key == "aluminium_bozen":
+        has_strong_row_link = any(
+            (
+                reader_normalize_match_token(ddt_supplier_fields.get("article"))
+                and reader_normalize_match_token(ddt_supplier_fields.get("article"))
+                == reader_normalize_match_token(certificate_supplier_fields.get("article")),
+                reader_normalize_match_token(ddt_supplier_fields.get("customer_code"))
+                and reader_normalize_match_token(ddt_supplier_fields.get("customer_code"))
+                == reader_normalize_match_token(certificate_supplier_fields.get("customer_code")),
+                reader_normalize_match_token(row.colata)
+                and reader_normalize_match_token(row.colata) == reader_normalize_match_token(certificate_cast),
+            )
+        )
+        if not has_strong_row_link:
+            return None
 
     if score <= 10:
         return None

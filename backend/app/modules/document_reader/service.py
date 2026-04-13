@@ -424,6 +424,7 @@ def _build_aluminium_bozen_row_split_candidates(
         colata = _extract_aluminium_bozen_cast_from_window(normalized_lines, index)
         lega = _extract_aluminium_bozen_lega_from_window(normalized_lines, index) or current_lega
         order = _extract_aluminium_bozen_order_from_window(normalized_lines, index) or current_order
+        customer_order = _extract_aluminium_bozen_customer_order_from_window(normalized_lines, index)
 
         snippets = [snippet for snippet in _collect_aluminium_bozen_snippets(lines, index) if snippet.strip()][:6]
         candidate = ReaderRowSplitCandidateResponse(
@@ -436,6 +437,7 @@ def _build_aluminium_bozen_row_split_candidates(
             diametro=diametro,
             peso_netto=peso_netto,
             colata=colata,
+            customer_order_no=customer_order,
             supplier_order_no=order,
             snippets=snippets,
         )
@@ -829,6 +831,27 @@ def _extract_aluminium_bozen_order_from_window(lines: list[str], index: int) -> 
     return None
 
 
+def _extract_aluminium_bozen_customer_order_from_line(line: str) -> str | None:
+    match = re.search(
+        r"\b(?:VS\.?\s*ODV|RIF\.\s*ORDINE\s*CLIENTE)\b[^0-9]*([0-9]{4}-[0-9]{2}-[0-9]{2})\s+([0-9]{1,6})\b",
+        line,
+    )
+    if match is None:
+        return None
+    return f"{match.group(1)}|{int(match.group(2))}"
+
+
+def _extract_aluminium_bozen_customer_order_from_window(lines: list[str], index: int) -> str | None:
+    preferred_indices = list(range(index, max(-1, index - 8), -1)) + list(range(index + 1, min(len(lines), index + 6)))
+    for candidate_index in preferred_indices:
+        if candidate_index < 0 or candidate_index >= len(lines):
+            continue
+        customer_order = _extract_aluminium_bozen_customer_order_from_line(lines[candidate_index])
+        if customer_order is not None:
+            return customer_order
+    return None
+
+
 def _extract_aluminium_bozen_customer_code_from_line(line: str) -> str | None:
     match = re.match(r"^\s*([A-Z0-9][A-Z0-9]{5,})\b", line)
     if match is not None:
@@ -971,6 +994,7 @@ def _merge_aluminium_bozen_candidates(
                 "snippets": [],
                 "casts": [],
                 "orders": [],
+                "customer_orders": [],
                 "customer_codes": [],
             },
         )
@@ -984,6 +1008,8 @@ def _merge_aluminium_bozen_candidates(
             entry["casts"].append(candidate.colata)
         if candidate.supplier_order_no:
             entry["orders"].append(candidate.supplier_order_no)
+        if candidate.customer_order_no:
+            entry["customer_orders"].append(candidate.customer_order_no)
         if candidate.customer_code:
             entry["customer_codes"].append(candidate.customer_code)
 
@@ -997,6 +1023,9 @@ def _merge_aluminium_bozen_candidates(
             candidate.peso_netto = packed_weight
         candidate.colata = _choose_best_aluminium_bozen_cast(entry["casts"], candidate.colata)
         candidate.supplier_order_no = _choose_best_aluminium_bozen_order(entry["orders"], candidate.supplier_order_no)
+        candidate.customer_order_no = _choose_best_aluminium_bozen_customer_order(
+            entry["customer_orders"], candidate.customer_order_no
+        )
         candidate.customer_code = _choose_best_aluminium_bozen_customer_code(entry["customer_codes"], candidate.customer_code)
         candidate.snippets = list(entry["snippets"])[:6]
         candidate.candidate_index = index
@@ -1131,6 +1160,15 @@ def _choose_best_aluminium_bozen_customer_code(customer_codes: list[str], fallba
     counts: dict[str, int] = {}
     for customer_code in customer_codes:
         counts[customer_code] = counts.get(customer_code, 0) + 1
+    return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+
+
+def _choose_best_aluminium_bozen_customer_order(customer_orders: list[str], fallback: str | None) -> str | None:
+    if not customer_orders:
+        return fallback
+    counts: dict[str, int] = {}
+    for customer_order in customer_orders:
+        counts[customer_order] = counts.get(customer_order, 0) + 1
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
 
 

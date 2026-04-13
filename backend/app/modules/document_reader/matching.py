@@ -678,6 +678,13 @@ def extract_row_supplier_match_fields(
             "net_weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
         }
 
+    if supplier_key == "aluminium_bozen":
+        return {
+            "article": _string_or_none(ddt_values.get("article_code")),
+            "customer_code": _string_or_none(ddt_values.get("customer_code")),
+            "customer_order_normalized": _string_or_none(ddt_values.get("customer_order_no")),
+        }
+
     return {}
 
 
@@ -711,7 +718,7 @@ def score_supplier_field_matches(
         if same_token(ddt_supplier_fields.get("customer_code"), certificate_supplier_fields.get("customer_code")):
             add_reason(100, "Codice cliente coerente")
         if same_token(ddt_supplier_fields.get("customer_order_normalized"), certificate_supplier_fields.get("customer_order_normalized")):
-            add_reason(70, "Ordine cliente normalizzato coerente")
+            add_reason(45, "Ordine cliente normalizzato coerente")
     elif supplier_key == "zalco":
         if same_token(ddt_supplier_fields.get("tally_sheet_no"), certificate_supplier_fields.get("tally_sheet_no")):
             add_reason(120, "Tally sheet coerente")
