@@ -694,18 +694,6 @@ def create_rows_from_document_split_plan(
 ) -> DocumentSplitRowsCreateResponse:
     document = prepare_document_for_reader(db, document)
 
-    existing_rows = (
-        db.query(AcquisitionRow)
-        .filter(AcquisitionRow.document_ddt_id == document.id)
-        .order_by(AcquisitionRow.id.asc())
-        .all()
-    )
-    if existing_rows:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Document already linked to {len(existing_rows)} acquisition rows",
-        )
-
     plan = build_document_row_split_plan(document)
     if not plan.row_split_candidates:
         raise HTTPException(
@@ -719,9 +707,24 @@ def create_rows_from_document_split_plan(
     )
     supplier_key = template.supplier_key if template is not None else None
     shared_matches = reader_detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
+    existing_rows = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.document_ddt_id == document.id)
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+    existing_signatures = {_split_candidate_signature_from_row(row): row for row in existing_rows}
 
     created_rows: list[AcquisitionRowDetailResponse] = []
     for candidate in plan.row_split_candidates:
+        candidate_signature = _split_candidate_signature_from_candidate(
+            document=document,
+            candidate=candidate,
+            fallback_ddt=_split_plan_match_value(shared_matches, "ddt"),
+        )
+        existing_row = existing_signatures.get(candidate_signature)
+        if existing_row is not None:
+            continue
         created_row = create_acquisition_row(
             db=db,
             payload=AcquisitionRowCreateRequest(
@@ -732,9 +735,9 @@ def create_rows_from_document_split_plan(
                 lega_base=candidate.lega,
                 diametro=candidate.diametro or _split_plan_match_value(shared_matches, "diametro"),
                 colata=candidate.colata or _split_plan_match_value(shared_matches, "colata"),
-                ddt=_split_plan_match_value(shared_matches, "ddt"),
+                ddt=candidate.ddt_number or _split_plan_match_value(shared_matches, "ddt"),
                 peso=candidate.peso_netto or _split_plan_match_value(shared_matches, "peso"),
-                ordine=candidate.customer_order_no or _split_plan_match_value(shared_matches, "ordine"),
+                ordine=candidate.customer_order_no or candidate.supplier_order_no or _split_plan_match_value(shared_matches, "ordine"),
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
                 priorita_operativa="media",
@@ -744,6 +747,7 @@ def create_rows_from_document_split_plan(
         )
         row = get_acquisition_row(db, created_row.id)
         _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
+        existing_signatures[candidate_signature] = row
         created_rows.append(serialize_acquisition_row_detail(get_acquisition_row(db, row.id)))
 
     log_service.record(
@@ -764,6 +768,42 @@ def _split_plan_match_value(matches: dict[str, dict[str, object]], field_name: s
     if not isinstance(final_value, str):
         return None
     return _string_or_none(final_value)
+
+
+def _normalize_row_signature_token(value: str | None) -> str:
+    normalized = _string_or_none(value)
+    if normalized is None:
+        return ""
+    return reader_normalize_match_token(normalized) or normalized.upper().strip()
+
+
+def _split_candidate_signature_from_row(row: AcquisitionRow) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        str(row.fornitore_id or ""),
+        _normalize_row_signature_token(row.ddt),
+        _normalize_row_signature_token(row.ordine),
+        _normalize_row_signature_token(row.lega_base),
+        _normalize_row_signature_token(row.diametro),
+        _normalize_row_signature_token(row.colata),
+        _normalize_row_signature_token(row.peso),
+    )
+
+
+def _split_candidate_signature_from_candidate(
+    *,
+    document: Document,
+    candidate,
+    fallback_ddt: str | None,
+) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        str(document.fornitore_id or ""),
+        _normalize_row_signature_token(candidate.ddt_number or fallback_ddt),
+        _normalize_row_signature_token(candidate.customer_order_no or candidate.supplier_order_no),
+        _normalize_row_signature_token(candidate.lega),
+        _normalize_row_signature_token(candidate.diametro),
+        _normalize_row_signature_token(candidate.colata),
+        _normalize_row_signature_token(candidate.peso_netto),
+    )
 
 
 def _persist_split_candidate_values(
@@ -898,7 +938,12 @@ def run_autonomous_processing(
             ddt_documents=ddt_documents,
             explicit_certificate_document_ids=certificate_document_ids,
         )
-        _save_run(db, run, totale_documenti_certificato=len(certificate_documents))
+        total_target_rows = 0
+        for ddt_document in ddt_documents:
+            plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
+            candidate_count = len(plan.row_split_candidates)
+            total_target_rows += candidate_count if candidate_count else 1
+        _save_run(db, run, totale_documenti_certificato=len(certificate_documents), totale_righe_target=total_target_rows)
 
         for index, ddt_document in enumerate(ddt_documents, start=1):
             _save_run(
@@ -906,121 +951,122 @@ def run_autonomous_processing(
                 run,
                 fase_corrente="riga_ddt",
                 current_document_name=ddt_document.nome_file_originale,
-                messaggio_corrente=f"Creo o recupero la riga {index}/{len(ddt_document_ids)} da {ddt_document.nome_file_originale}",
+                messaggio_corrente=f"Creo o recupero le righe {index}/{len(ddt_document_ids)} da {ddt_document.nome_file_originale}",
             )
 
-            row, created = _ensure_autonomous_row(
+            rows, created_count = _ensure_autonomous_rows(
                 db=db,
                 ddt_document=ddt_document,
                 actor_id=actor_id,
                 actor_email=actor_email,
             )
-            row = get_acquisition_row(db, row.id)
-            if created:
-                _save_run(db, run, righe_create=run.righe_create + 1)
+            if created_count:
+                _save_run(db, run, righe_create=run.righe_create + created_count)
 
-            _save_run(db, run, current_row_id=row.id)
-
-            try:
-                _save_run(
-                    db,
-                    run,
-                    fase_corrente="lettura_ddt",
-                    messaggio_corrente=f"Leggo i campi DDT della riga #{row.id}",
-                )
-                extract_core_fields(db=db, row=row, actor_id=actor_id)
+            for row in rows:
                 row = get_acquisition_row(db, row.id)
+                _save_run(db, run, current_row_id=row.id)
 
-                if use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
+                try:
                     _save_run(
                         db,
                         run,
-                        fase_corrente="vision_ddt",
-                        messaggio_corrente=f"Uso Vision DDT sulla riga #{row.id}",
+                        fase_corrente="lettura_ddt",
+                        messaggio_corrente=f"Leggo i campi DDT della riga #{row.id}",
                     )
-                    try:
-                        extract_ddt_fields_with_vision(
-                            db=db,
-                            row=row,
-                            actor_id=actor_id,
-                            openai_api_key=openai_api_key,
-                        )
-                        row = get_acquisition_row(db, row.id)
-                    except HTTPException as exc:
-                        _save_run(
-                            db,
-                            run,
-                            ultimo_errore=str(exc.detail),
-                            messaggio_corrente=f"Vision DDT non riuscita su riga #{row.id}, continuo con il resto",
-                        )
-
-                _save_run(
-                    db,
-                    run,
-                    fase_corrente="match_certificato",
-                    messaggio_corrente=f"Cerco il certificato piu coerente per la riga #{row.id}",
-                )
-                matched = _auto_propose_certificate_match(
-                    db=db,
-                    row=row,
-                    certificate_documents=certificate_documents,
-                    actor_id=actor_id,
-                )
-                if matched:
-                    _save_run(db, run, match_proposti=run.match_proposti + 1)
+                    extract_core_fields(db=db, row=row, actor_id=actor_id)
                     row = get_acquisition_row(db, row.id)
 
-                if row.document_certificato_id is not None:
-                    if not _block_has_confirmed_values(db, row.id, "chimica"):
+                    if use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
                         _save_run(
                             db,
                             run,
-                            fase_corrente="chimica",
-                            messaggio_corrente=f"Leggo la chimica del certificato per la riga #{row.id}",
+                            fase_corrente="vision_ddt",
+                            messaggio_corrente=f"Uso Vision DDT sulla riga #{row.id}",
                         )
-                        detect_chemistry(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
-                        row = get_acquisition_row(db, row.id)
-                        if _block_has_values(db, row.id, "chimica"):
-                            _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
+                        try:
+                            extract_ddt_fields_with_vision(
+                                db=db,
+                                row=row,
+                                actor_id=actor_id,
+                                openai_api_key=openai_api_key,
+                            )
+                            row = get_acquisition_row(db, row.id)
+                        except HTTPException as exc:
+                            _save_run(
+                                db,
+                                run,
+                                ultimo_errore=str(exc.detail),
+                                messaggio_corrente=f"Vision DDT non riuscita su riga #{row.id}, continuo con il resto",
+                            )
 
-                    if not _block_has_confirmed_values(db, row.id, "proprieta"):
-                        _save_run(
-                            db,
-                            run,
-                            fase_corrente="proprieta",
-                            messaggio_corrente=f"Leggo le proprieta del certificato per la riga #{row.id}",
-                        )
-                        detect_properties(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
+                    _save_run(
+                        db,
+                        run,
+                        fase_corrente="match_certificato",
+                        messaggio_corrente=f"Cerco il certificato piu coerente per la riga #{row.id}",
+                    )
+                    matched = _auto_propose_certificate_match(
+                        db=db,
+                        row=row,
+                        certificate_documents=certificate_documents,
+                        actor_id=actor_id,
+                    )
+                    if matched:
+                        _save_run(db, run, match_proposti=run.match_proposti + 1)
                         row = get_acquisition_row(db, row.id)
-                        if _block_has_values(db, row.id, "proprieta"):
-                            _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
 
-                    if not _block_has_confirmed_values(db, row.id, "note"):
-                        _save_run(
-                            db,
-                            run,
-                            fase_corrente="note",
-                            messaggio_corrente=f"Leggo le note standard del certificato per la riga #{row.id}",
-                        )
-                        detect_standard_notes(db=db, row=row, actor_id=actor_id)
-                        row = get_acquisition_row(db, row.id)
-                        if _block_has_values(db, row.id, "note"):
-                            _save_run(db, run, note_rilevate=run.note_rilevate + 1)
-            except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
-                db.rollback()
-                _save_run(
-                    db,
-                    run,
-                    ultimo_errore=str(exc),
-                    messaggio_corrente=f"Errore sulla riga #{row.id}: continuo con il resto",
-                )
-            finally:
-                _save_run(
-                    db,
-                    run,
-                    righe_processate=run.righe_processate + 1,
-                    current_row_id=row.id,
-                )
+                    if row.document_certificato_id is not None:
+                        if not _block_has_confirmed_values(db, row.id, "chimica"):
+                            _save_run(
+                                db,
+                                run,
+                                fase_corrente="chimica",
+                                messaggio_corrente=f"Leggo la chimica del certificato per la riga #{row.id}",
+                            )
+                            detect_chemistry(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
+                            row = get_acquisition_row(db, row.id)
+                            if _block_has_values(db, row.id, "chimica"):
+                                _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
+
+                        if not _block_has_confirmed_values(db, row.id, "proprieta"):
+                            _save_run(
+                                db,
+                                run,
+                                fase_corrente="proprieta",
+                                messaggio_corrente=f"Leggo le proprieta del certificato per la riga #{row.id}",
+                            )
+                            detect_properties(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
+                            row = get_acquisition_row(db, row.id)
+                            if _block_has_values(db, row.id, "proprieta"):
+                                _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
+
+                        if not _block_has_confirmed_values(db, row.id, "note"):
+                            _save_run(
+                                db,
+                                run,
+                                fase_corrente="note",
+                                messaggio_corrente=f"Leggo le note standard del certificato per la riga #{row.id}",
+                            )
+                            detect_standard_notes(db=db, row=row, actor_id=actor_id)
+                            row = get_acquisition_row(db, row.id)
+                            if _block_has_values(db, row.id, "note"):
+                                _save_run(db, run, note_rilevate=run.note_rilevate + 1)
+                except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
+                    db.rollback()
+                    _save_run(
+                        db,
+                        run,
+                        ultimo_errore=str(exc),
+                        messaggio_corrente=f"Errore sulla riga #{row.id}: continuo con il resto",
+                    )
+                finally:
+                    _save_run(
+                        db,
+                        run,
+                        righe_processate=run.righe_processate + 1,
+                        current_row_id=row.id,
+                    )
 
         _save_run(
             db,
@@ -1929,21 +1975,32 @@ def _resolve_certificate_documents_for_automation(
     return list(documents_by_id.values())
 
 
-def _ensure_autonomous_row(
+def _ensure_autonomous_rows(
     db: Session,
     *,
     ddt_document: Document,
     actor_id: int,
     actor_email: str,
-) -> tuple[AcquisitionRow, bool]:
-    existing_row = (
+) -> tuple[list[AcquisitionRow], int]:
+    existing_rows = (
         db.query(AcquisitionRow)
         .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
         .order_by(AcquisitionRow.id.asc())
-        .first()
+        .all()
     )
-    if existing_row is not None:
-        return get_acquisition_row(db, existing_row.id), False
+    if existing_rows:
+        return [get_acquisition_row(db, row.id) for row in existing_rows], 0
+
+    document = prepare_document_for_reader(db, ddt_document)
+    plan = build_document_row_split_plan(document)
+    if plan.row_split_candidates:
+        split_result = create_rows_from_document_split_plan(
+            db=db,
+            document=document,
+            actor_id=actor_id,
+            actor_email=actor_email,
+        )
+        return [get_acquisition_row(db, item.id) for item in split_result.created_rows], split_result.created_count
 
     supplier_name = ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None
     created = create_acquisition_row(
@@ -1956,7 +2013,7 @@ def _ensure_autonomous_row(
         actor_id=actor_id,
         actor_email=actor_email,
     )
-    return get_acquisition_row(db, created.id), True
+    return [get_acquisition_row(db, created.id)], 1
 
 
 def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
