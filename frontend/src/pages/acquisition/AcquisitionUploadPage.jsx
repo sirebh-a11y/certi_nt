@@ -90,6 +90,7 @@ export default function AcquisitionUploadPage() {
     const certificateIds = sessionCertificateDocuments.map((item) => item.id).join(",");
     return `${ddtIds}|${certificateIds}`;
   }, [sessionCertificateDocuments, sessionDdtDocuments]);
+  const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
 
   function handleRequestError(requestError) {
     const message = requestError?.message || "Request failed";
@@ -149,8 +150,8 @@ export default function AcquisitionUploadPage() {
   }
 
   async function startAutomationRun(signature = automationSignature) {
-    if (!sessionDdtDocuments.length) {
-      setError("Carica almeno un DDT per avviare la lavorazione.");
+    if (!hasAutomationDocuments) {
+      setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
       return;
     }
 
@@ -203,14 +204,14 @@ export default function AcquisitionUploadPage() {
     if (!autoStartEnabled || hasRunningRun || startingRun) {
       return;
     }
-    if (!sessionDdtDocuments.length) {
+    if (!hasAutomationDocuments) {
       return;
     }
     if (!automationSignature || automationSignature === lastStartedSignature) {
       return;
     }
     startAutomationRun(automationSignature);
-  }, [autoStartEnabled, automationSignature, currentRun, lastStartedSignature, sessionDdtDocuments.length, startingRun]);
+  }, [autoStartEnabled, automationSignature, currentRun, hasAutomationDocuments, lastStartedSignature, startingRun]);
 
   return (
     <section className="space-y-4">
@@ -291,7 +292,7 @@ export default function AcquisitionUploadPage() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-                disabled={startingRun || !sessionDdtDocuments.length || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
+                disabled={startingRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
                 onClick={() => startAutomationRun(automationSignature)}
                 type="button"
               >

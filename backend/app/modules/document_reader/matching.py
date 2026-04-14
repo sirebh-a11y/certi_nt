@@ -1165,17 +1165,22 @@ def _extract_aluminium_bozen_certificate_alloy(
     normalized_lines: list[str],
 ) -> tuple[str, str] | None:
     for index, line in enumerate(normalized_lines):
-        if "ALLOY" not in line and "PHYS.STATE" not in line and "PHYS.STATE" not in line:
+        if (
+            "ALLOY" not in line
+            and "PHYS.STATE" not in line
+            and "SECTION DESC" not in line
+            and "DESCRIZIONE PROFILO CLIENTE" not in line
+            and "LEGIERUNG" not in line
+        ):
             continue
-        window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
-        for candidate in window:
+        window = [line, *normalized_lines[index + 1 : min(index + 12, len(normalized_lines))]]
+        raw_window = [lines[index], *lines[index + 1 : min(index + 12, len(lines))]]
+        for offset, candidate in enumerate(window):
             match = re.search(r"\b([1-9][0-9]{3}[A-Z]{0,3})\s+(HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF|HF|F|T\d+[A-Z0-9/-]*)\b", candidate)
             if match is not None:
                 value = f"{match.group(1)} {match.group(2).replace(' / ', ' ').replace('/', ' ')}"
                 value = re.sub(r"\s+", " ", value).strip()
-                snippet = lines[index]
-                if candidate != line:
-                    snippet = f"{lines[index]} | {lines[index + 1 + window[1:].index(candidate)]}"
+                snippet = " | ".join(raw_window[: offset + 1])
                 return snippet, value
     return None
 
@@ -1198,12 +1203,27 @@ def _extract_aluminium_bozen_certificate_diameter(
 
     for index, line in enumerate(normalized_lines):
         if "PROFIL CLIENT" in line or "SECTION DESC" in line:
+            same_line_profile_match = re.search(r"\bBARRA\s+TONDA\s+([0-9]{2,3}(?:[.,][0-9]+)?)\b", line)
+            if same_line_profile_match is not None:
+                normalized = _normalize_diameter_candidate(same_line_profile_match.group(1))
+                if normalized is not None:
+                    return lines[index], normalized
             same_line = re.search(r"\b([0-9]{2,3}(?:[.,][0-9]+)?)\b", line)
             if same_line is not None:
                 normalized = _normalize_diameter_candidate(same_line.group(1))
                 if normalized is not None:
                     return lines[index], normalized
-            for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+            for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 12, len(normalized_lines))], start=1):
+                profile_match = re.search(r"\bBARRA\s+TONDA\s+([0-9]{2,3}(?:[.,][0-9]+)?)\b", candidate)
+                if profile_match is not None:
+                    normalized = _normalize_diameter_candidate(profile_match.group(1))
+                    if normalized is not None:
+                        return f"{lines[index]} | {lines[index + offset]}", normalized
+                profile_nr_match = re.search(r"\b([0-9]{2,3}(?:[.,][0-9]+)?)\s+LEGIERUNG\b", candidate)
+                if profile_nr_match is not None:
+                    normalized = _normalize_diameter_candidate(profile_nr_match.group(1))
+                    if normalized is not None:
+                        return f"{lines[index]} | {lines[index + offset]}", normalized
                 isolated_match = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*", candidate)
                 if isolated_match is not None:
                     normalized = _normalize_diameter_candidate(isolated_match.group(1))
@@ -1232,6 +1252,7 @@ def _extract_aluminium_bozen_certificate_cast(
 ) -> tuple[str, str] | None:
     def _extract_cast_candidate(source: str) -> str | None:
         for pattern in (
+            r"\b([A-Z]\d{5,}[A-Z]?)\b",
             r"\b(\d{5,}[A-Z]\d)\b",
             r"\b(\d{5,}[A-Z])\b",
             r"\b(\d{5,})\b",
@@ -1251,7 +1272,7 @@ def _extract_aluminium_bozen_certificate_cast(
         same_line = _extract_cast_candidate(line)
         if same_line is not None:
             return lines[index], same_line
-        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 8, len(normalized_lines))], start=1):
             raw_candidate = lines[index + offset]
             candidate_match = _extract_cast_candidate(raw_candidate) or _extract_cast_candidate(candidate)
             if candidate_match is not None:
