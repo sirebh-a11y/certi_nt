@@ -1710,80 +1710,92 @@ def validate_final_row(db: Session, row: AcquisitionRow, actor_id: int) -> Acqui
 
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="campi_core")
-    ddt_document = get_document(db, row.document_ddt_id)
-    if not ddt_document.pages:
-        ddt_document = _index_document_from_path(db, ddt_document)
-    ddt_document = _ensure_document_page_ocr(db, ddt_document)
-
     extracted_count = 0
-    template = resolve_supplier_template(
+    supplier_candidates = [
         row.supplier.ragione_sociale if row.supplier is not None else None,
         row.fornitore_raw,
-        ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
-    )
-    supplier_key = template.supplier_key if template is not None else None
+    ]
 
-    ddt_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key=supplier_key)
-    for field_name, match in ddt_matches.items():
-        existing_row_value = _row_ddt_core_field_value(row, field_name)
-        if existing_row_value is not None:
-            matched_value = _string_or_none(match.get("final"))
-            if reader_normalize_match_token(existing_row_value) != reader_normalize_match_token(matched_value):
-                continue
-        evidence = _create_text_evidence(
-            db=db,
-            row_id=row.id,
-            document_id=ddt_document.id,
-            document_page_id=match["page_id"],
-            blocco="ddt",
-            snippet=match["snippet"],
-            actor_id=actor_id,
-            confidence=0.85,
-        )
-        _upsert_read_value_model(
-            db=db,
-            acquisition_row_id=row.id,
-            blocco="ddt",
-            campo=field_name,
-            valore_grezzo=match["snippet"],
-            valore_standardizzato=match["standardized"],
-            valore_finale=match["final"],
-            stato="proposto",
-            document_evidence_id=evidence.id,
-            metodo_lettura="regex",
-            fonte_documentale="ddt",
-            confidenza=0.85,
-            actor_id=actor_id,
-            )
-        extracted_count += 1
+    ddt_document: Document | None = None
+    ddt_matches: dict[str, dict[str, object]] = {}
+    if row.document_ddt_id is not None:
+        ddt_document = get_document(db, row.document_ddt_id)
+        if not ddt_document.pages:
+            ddt_document = _index_document_from_path(db, ddt_document)
+        ddt_document = _ensure_document_page_ocr(db, ddt_document)
+        supplier_candidates.append(ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None)
 
-    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
-    _sync_row_from_ddt_values(db, row)
-
-    if row.cdq is None and "cdq" in ddt_matches:
-        row.cdq = _string_or_none(ddt_matches["cdq"]["final"])
-    if row.cdq is None and "numero_certificato_ddt" in ddt_matches:
-        row.cdq = _string_or_none(ddt_matches["numero_certificato_ddt"]["final"])
-    if row.colata is None and "colata" in ddt_matches:
-        row.colata = _string_or_none(ddt_matches["colata"]["final"])
-    if row.diametro is None and "diametro" in ddt_matches:
-        row.diametro = _string_or_none(ddt_matches["diametro"]["final"])
-    if row.ddt is None and "ddt" in ddt_matches:
-        row.ddt = _string_or_none(ddt_matches["ddt"]["final"])
-    if row.peso is None and "peso" in ddt_matches:
-        row.peso = _string_or_none(ddt_matches["peso"]["final"])
-    if row.ordine is None and "ordine" in ddt_matches:
-        row.ordine = _string_or_none(ddt_matches["ordine"]["final"])
-
+    certificate_document: Document | None = None
     if row.document_certificato_id is not None:
         certificate_document = get_document(db, row.document_certificato_id)
         if not certificate_document.pages:
             certificate_document = _index_document_from_path(db, certificate_document)
         certificate_document = _ensure_document_page_ocr(db, certificate_document)
+        supplier_candidates.append(
+            certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None
+        )
+
+    template = resolve_supplier_template(*supplier_candidates)
+    supplier_key = template.supplier_key if template is not None else None
+
+    if ddt_document is not None:
+        ddt_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key=supplier_key)
+        for field_name, match in ddt_matches.items():
+            existing_row_value = _row_ddt_core_field_value(row, field_name)
+            if existing_row_value is not None:
+                matched_value = _string_or_none(match.get("final"))
+                if reader_normalize_match_token(existing_row_value) != reader_normalize_match_token(matched_value):
+                    continue
+            evidence = _create_text_evidence(
+                db=db,
+                row_id=row.id,
+                document_id=ddt_document.id,
+                document_page_id=match["page_id"],
+                blocco="ddt",
+                snippet=match["snippet"],
+                actor_id=actor_id,
+                confidence=0.85,
+            )
+            _upsert_read_value_model(
+                db=db,
+                acquisition_row_id=row.id,
+                blocco="ddt",
+                campo=field_name,
+                valore_grezzo=match["snippet"],
+                valore_standardizzato=match["standardized"],
+                valore_finale=match["final"],
+                stato="proposto",
+                document_evidence_id=evidence.id,
+                metodo_lettura="regex",
+                fonte_documentale="ddt",
+                confidenza=0.85,
+                actor_id=actor_id,
+                )
+            extracted_count += 1
+
+        _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+        _sync_row_from_ddt_values(db, row)
+
+        if row.cdq is None and "cdq" in ddt_matches:
+            row.cdq = _string_or_none(ddt_matches["cdq"]["final"])
+        if row.cdq is None and "numero_certificato_ddt" in ddt_matches:
+            row.cdq = _string_or_none(ddt_matches["numero_certificato_ddt"]["final"])
+        if row.colata is None and "colata" in ddt_matches:
+            row.colata = _string_or_none(ddt_matches["colata"]["final"])
+        if row.diametro is None and "diametro" in ddt_matches:
+            row.diametro = _string_or_none(ddt_matches["diametro"]["final"])
+        if row.ddt is None and "ddt" in ddt_matches:
+            row.ddt = _string_or_none(ddt_matches["ddt"]["final"])
+        if row.peso is None and "peso" in ddt_matches:
+            row.peso = _string_or_none(ddt_matches["peso"]["final"])
+        if row.ordine is None and "ordine" in ddt_matches:
+            row.ordine = _string_or_none(ddt_matches["ordine"]["final"])
+
+    if certificate_document is not None:
         certificate_template = resolve_supplier_template(
             row.supplier.ragione_sociale if row.supplier is not None else None,
             row.fornitore_raw,
-            row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
+            ddt_document.supplier.ragione_sociale if ddt_document and ddt_document.supplier else None,
             certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
         )
         certificate_matches = reader_detect_certificate_core_matches(
@@ -2118,15 +2130,44 @@ def _ensure_certificate_first_rows(
             supplier_key,
             "certificato",
         )
+        certificate_number = _string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final"))
+        certificate_alloy = _string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final"))
+        certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
+        certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
+        certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
+        certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized"))
         certificate_signature = _certificate_first_signature(
             fornitore_id=certificate_document.fornitore_id,
-            cdq=_string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final")),
-            ordine=_string_or_none(supplier_fields.get("customer_order_normalized")),
-            lega=_string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final")),
-            diametro=_string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final")),
-            colata=_string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final")),
-            peso=_string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final")),
+            cdq=certificate_number,
+            ordine=certificate_customer_order,
+            lega=certificate_alloy,
+            diametro=certificate_diameter,
+            colata=certificate_cast,
+            peso=certificate_weight,
         )
+        linked_row = _find_existing_aluminium_bozen_row_for_certificate(
+            db=db,
+            supplier_id=certificate_document.fornitore_id,
+            certificate_number=certificate_number,
+            alloy=certificate_alloy,
+            diameter=certificate_diameter,
+            cast=certificate_cast,
+            weight=certificate_weight,
+        )
+        if linked_row is not None:
+            if linked_row.document_certificato_id is None:
+                linked_row.document_certificato_id = certificate_document.id
+                _sync_row_cdq_from_certificate_document(db, linked_row, certificate_document)
+                _sync_row_statuses(db, linked_row)
+                db.commit()
+                extract_core_fields(db=db, row=get_acquisition_row(db, linked_row.id), actor_id=actor_id)
+                linked_row = get_acquisition_row(db, linked_row.id)
+                detect_chemistry(db=db, row=linked_row, actor_id=actor_id, openai_api_key=None)
+                linked_row = get_acquisition_row(db, linked_row.id)
+                detect_properties(db=db, row=linked_row, actor_id=actor_id, openai_api_key=None)
+                linked_row = get_acquisition_row(db, linked_row.id)
+                detect_standard_notes(db=db, row=linked_row, actor_id=actor_id)
+            continue
         duplicate_row = next(
             (
                 row
@@ -2146,6 +2187,13 @@ def _ensure_certificate_first_rows(
                 _sync_row_cdq_from_certificate_document(db, duplicate_row, certificate_document)
                 _sync_row_statuses(db, duplicate_row)
                 db.commit()
+                extract_core_fields(db=db, row=get_acquisition_row(db, duplicate_row.id), actor_id=actor_id)
+                duplicate_row = get_acquisition_row(db, duplicate_row.id)
+                detect_chemistry(db=db, row=duplicate_row, actor_id=actor_id, openai_api_key=None)
+                duplicate_row = get_acquisition_row(db, duplicate_row.id)
+                detect_properties(db=db, row=duplicate_row, actor_id=actor_id, openai_api_key=None)
+                duplicate_row = get_acquisition_row(db, duplicate_row.id)
+                detect_standard_notes(db=db, row=duplicate_row, actor_id=actor_id)
             continue
 
         created_row = create_acquisition_row(
@@ -2155,12 +2203,12 @@ def _ensure_certificate_first_rows(
                 document_certificato_id=certificate_document.id,
                 fornitore_id=certificate_document.fornitore_id,
                 fornitore_raw=certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
-                cdq=_string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final")),
-                lega_base=_string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final")),
-                diametro=_string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final")),
-                colata=_string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final")),
-                peso=_string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final")),
-                ordine=_string_or_none(supplier_fields.get("customer_order_normalized")),
+                cdq=certificate_number,
+                lega_base=certificate_alloy,
+                diametro=certificate_diameter,
+                colata=certificate_cast,
+                peso=certificate_weight,
+                ordine=None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -2170,6 +2218,8 @@ def _ensure_certificate_first_rows(
             actor_email=actor_email,
         )
         created_row_model = get_acquisition_row(db, created_row.id)
+        extract_core_fields(db=db, row=created_row_model, actor_id=actor_id)
+        created_row_model = get_acquisition_row(db, created_row.id)
         detect_chemistry(db=db, row=created_row_model, actor_id=actor_id, openai_api_key=None)
         created_row_model = get_acquisition_row(db, created_row.id)
         detect_properties(db=db, row=created_row_model, actor_id=actor_id, openai_api_key=None)
@@ -2178,6 +2228,54 @@ def _ensure_certificate_first_rows(
         created_count += 1
 
     return created_count
+
+
+def _find_existing_aluminium_bozen_row_for_certificate(
+    db: Session,
+    *,
+    supplier_id: int | None,
+    certificate_number: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    cast: str | None,
+    weight: str | None,
+) -> AcquisitionRow | None:
+    if supplier_id is None:
+        return None
+
+    rows = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.fornitore_id == supplier_id)
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+
+    normalized_cdq = reader_normalize_match_token(certificate_number)
+    normalized_cast = reader_normalize_match_token(cast)
+    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_diameter = reader_normalize_match_token(diameter)
+    normalized_weight = reader_normalize_match_token(weight)
+
+    def score(row: AcquisitionRow) -> int:
+        total = 0
+        if normalized_cdq and reader_normalize_match_token(row.cdq) == normalized_cdq:
+            total += 200
+        if normalized_cast and reader_normalize_match_token(row.colata) == normalized_cast:
+            total += 80
+        if normalized_alloy and reader_normalize_match_token(row.lega_base) == normalized_alloy:
+            total += 40
+        if normalized_diameter and reader_normalize_match_token(row.diametro) == normalized_diameter:
+            total += 40
+        if normalized_weight and reader_normalize_match_token(row.peso) == normalized_weight:
+            total += 20
+        return total
+
+    scored = [(score(row), row) for row in rows]
+    scored = [item for item in scored if item[0] >= 200]
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1].id))
+    return scored[0][1]
 
 
 def _certificate_first_signature(
@@ -2193,7 +2291,6 @@ def _certificate_first_signature(
     return (
         fornitore_id,
         reader_normalize_match_token(cdq),
-        reader_normalize_match_token(ordine),
         reader_normalize_match_token(lega),
         reader_normalize_match_token(diametro),
         reader_normalize_match_token(colata),
