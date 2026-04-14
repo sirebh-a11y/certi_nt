@@ -3250,6 +3250,10 @@ def _best_page_text(page: DocumentPage) -> str:
     return pdf_text or ocr_text or ""
 
 
+def _page_lines(page: DocumentPage) -> list[str]:
+    return [line.strip() for line in _best_page_text(page).splitlines() if line.strip()]
+
+
 def _extract_pdf_page_payloads(document: Document, storage_path: Path) -> list[dict[str, object]]:
     reader = PdfReader(str(storage_path))
     fitz_doc = fitz.open(str(storage_path))
