@@ -4989,6 +4989,12 @@ def _detect_property_matches(
 
         if template is not None and template.supplier_key == "aluminium_bozen":
             page_matches = _parse_aluminium_bozen_properties_from_lines(lines, page.id)
+            if not _has_complete_measured_properties(page_matches):
+                crop_lines = _extract_aluminium_bozen_mechanical_crop_lines(page)
+                if crop_lines:
+                    crop_matches = _parse_aluminium_bozen_properties_from_lines(crop_lines, page.id)
+                    if _has_complete_measured_properties(crop_matches):
+                        page_matches = crop_matches
             if page_matches:
                 for field_name, payload in page_matches.items():
                     matches.setdefault(field_name, payload)
@@ -5002,6 +5008,48 @@ def _detect_property_matches(
             matches.setdefault(field_name, payload)
 
     return matches
+
+
+def _has_complete_measured_properties(matches: dict[str, dict[str, str | int]]) -> bool:
+    return all(field_name in matches for field_name in ("Rm", "Rp0.2", "A%", "HB"))
+
+
+def _extract_aluminium_bozen_mechanical_crop_lines(page: DocumentPage) -> list[str]:
+    if not page.immagine_pagina_storage_key:
+        return []
+
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        return []
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            crop = image.crop(
+                (
+                    int(width * 0.08),
+                    int(height * 0.48),
+                    int(width * 0.92),
+                    int(height * 0.82),
+                )
+            )
+    except OSError:
+        return []
+
+    seen_lines: set[str] = set()
+    merged_lines: list[str] = []
+    for config in ("--psm 4", "--psm 6", "--psm 11"):
+        try:
+            text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config=config)
+        except (OSError, pytesseract.TesseractNotFoundError):
+            continue
+        for line in text.splitlines():
+            cleaned = line.strip()
+            if not cleaned or cleaned in seen_lines:
+                continue
+            seen_lines.add(cleaned)
+            merged_lines.append(cleaned)
+    return merged_lines
 
 
 def _detect_chemistry_matches_with_vision(
@@ -5246,6 +5294,7 @@ def _parse_aluminium_bozen_properties_from_lines(lines: list[str], page_id: int)
         return {}
 
     window = lines[anchor_index : min(anchor_index + 24, len(lines))]
+    measured_candidates: list[tuple[str, dict[str, dict[str, str | int]]]] = []
     for line in window:
         lowered = line.lower()
         if any(
@@ -5278,7 +5327,11 @@ def _parse_aluminium_bozen_properties_from_lines(lines: list[str], page_id: int)
         if candidate_match:
             for payload in candidate_match.values():
                 payload["snippet"] = line
-            return candidate_match
+            measured_candidates.append((line, candidate_match))
+
+    aggregated = _aggregate_measured_property_candidates(measured_candidates, page_id)
+    if aggregated:
+        return aggregated
 
     # Older Aluminium Bozen certificates may expose only hardness/conductivity
     # around the mechanical-properties block. We keep them as partial measured values
@@ -5318,6 +5371,45 @@ def _parse_aluminium_bozen_properties_from_lines(lines: list[str], page_id: int)
                 },
             }
     return {}
+
+
+def _aggregate_measured_property_candidates(
+    measured_candidates: list[tuple[str, dict[str, dict[str, str | int]]]],
+    page_id: int,
+) -> dict[str, dict[str, str | int]]:
+    if not measured_candidates:
+        return {}
+
+    aggregated: dict[str, tuple[float, str, str]] = {}
+    for line, candidate in measured_candidates:
+        for field_name, payload in candidate.items():
+            raw_value = _string_or_none(cast(dict[str, object], payload).get("final"))
+            numeric_value = _safe_float(raw_value)
+            if numeric_value is None:
+                continue
+            current = aggregated.get(field_name)
+            if current is None or numeric_value < current[0]:
+                standardized = _normalize_numeric_value(raw_value) or raw_value
+                aggregated[field_name] = (numeric_value, standardized, line)
+
+    if not aggregated:
+        return {}
+
+    ordered_fields = ["Rm", "Rp0.2", "A%", "HB", "IACS%"]
+    result: dict[str, dict[str, str | int]] = {}
+    for field_name in ordered_fields:
+        payload = aggregated.get(field_name)
+        if payload is None:
+            continue
+        _, standardized, line = payload
+        result[field_name] = {
+            "page_id": page_id,
+            "snippet": line,
+            "raw": standardized,
+            "standardized": standardized,
+            "final": standardized,
+        }
+    return result
 
 
 def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
