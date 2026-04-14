@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+import pytesseract
+from PIL import Image
+
+from app.core.config import settings
 from app.modules.acquisition.models import AcquisitionRow, DocumentPage
 
 
@@ -596,6 +601,7 @@ def _detect_aluminium_bozen_certificate_core_matches(
     pages: list[DocumentPage],
 ) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+    crop_cache: dict[tuple[int, str], list[str]] = {}
     for page in pages:
         lines = _page_lines(page)
         normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
@@ -641,7 +647,100 @@ def _detect_aluminium_bozen_certificate_core_matches(
             if weight_payload is not None:
                 matches["peso_certificato"] = _build_match(page.id, weight_payload[0], weight_payload[1])
 
+        identity_crop_lines = _extract_aluminium_bozen_certificate_crop_lines(page, "identity", crop_cache)
+        if identity_crop_lines:
+            identity_normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in identity_crop_lines]
+
+            if "codice_cliente_certificato" not in matches:
+                customer_code = _extract_aluminium_bozen_customer_code(identity_crop_lines)
+                if customer_code is not None:
+                    matches["codice_cliente_certificato"] = _build_match(page.id, customer_code, customer_code)
+
+            if "diametro_certificato" not in matches:
+                diameter_payload = _extract_aluminium_bozen_certificate_diameter(identity_crop_lines, identity_normalized_lines)
+                if diameter_payload is not None:
+                    matches["diametro_certificato"] = _build_match(page.id, diameter_payload[0], diameter_payload[1])
+
+            if "peso_certificato" not in matches:
+                weight_payload = _extract_aluminium_bozen_certificate_weight(identity_crop_lines, identity_normalized_lines)
+                if weight_payload is not None:
+                    matches["peso_certificato"] = _build_match(page.id, weight_payload[0], weight_payload[1])
+
+        chemistry_crop_lines = _extract_aluminium_bozen_certificate_crop_lines(page, "chemistry", crop_cache)
+        if chemistry_crop_lines:
+            chemistry_normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in chemistry_crop_lines]
+
+            if "colata_certificato" not in matches:
+                cast_payload = _extract_aluminium_bozen_certificate_cast(chemistry_crop_lines, chemistry_normalized_lines)
+                if cast_payload is not None:
+                    matches["colata_certificato"] = _build_match(page.id, cast_payload[0], cast_payload[1])
+
     return matches
+
+
+def _extract_aluminium_bozen_certificate_crop_lines(
+    page: DocumentPage,
+    crop_name: str,
+    cache: dict[tuple[int, str], list[str]],
+) -> list[str]:
+    cache_key = (page.id, crop_name)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    storage_key = getattr(page, "immagine_pagina_storage_key", None)
+    if not storage_key:
+        cache[cache_key] = []
+        return []
+
+    image_path = Path(settings.document_storage_root) / Path(str(storage_key))
+    if not image_path.exists():
+        cache[cache_key] = []
+        return []
+
+    crop_specs: dict[str, tuple[tuple[float, float, float, float], tuple[str, ...]]] = {
+        "identity": ((0.08, 0.10, 0.92, 0.40), ("--psm 4", "--psm 6")),
+        "chemistry": ((0.08, 0.38, 0.92, 0.62), ("--psm 4", "--psm 11")),
+    }
+    spec = crop_specs.get(crop_name)
+    if spec is None:
+        cache[cache_key] = []
+        return []
+
+    (left_ratio, top_ratio, right_ratio, bottom_ratio), psm_modes = spec
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            left = int(width * left_ratio)
+            top = int(height * top_ratio)
+            right = int(width * right_ratio)
+            bottom = int(height * bottom_ratio)
+            if right <= left or bottom <= top:
+                cache[cache_key] = []
+                return []
+            crop = image.crop((left, top, right, bottom))
+    except OSError:
+        cache[cache_key] = []
+        return []
+
+    seen_lines: set[str] = set()
+    merged_lines: list[str] = []
+    for config in psm_modes:
+        try:
+            text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config=config)
+        except (OSError, pytesseract.TesseractNotFoundError):
+            continue
+        for line in text.splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            if cleaned in seen_lines:
+                continue
+            seen_lines.add(cleaned)
+            merged_lines.append(cleaned)
+
+    cache[cache_key] = merged_lines
+    return merged_lines
 
 
 def normalize_impol_packing_list_root(value: str | None) -> str | None:
@@ -1081,11 +1180,29 @@ def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
 
 
 def _extract_aluminium_bozen_customer_code(lines: list[str]) -> str | None:
-    for line in lines:
+    def _candidate_from_text(source: str) -> str | None:
+        for match in re.finditer(r"\bA[0-9A-Z]{5,}\b", source):
+            token = _normalize_aluminium_bozen_customer_code(match.group(0))
+            if len(re.findall(r"\d", token)) < 5:
+                continue
+            if len(token) < 7:
+                continue
+            return token
+        return None
+
+    for index, line in enumerate(lines):
         normalized = _normalize_mojibake_numeric_text(line).upper()
-        match = re.search(r"\bA\d[0-9A-Z]{4,}\b", normalized)
-        if match is not None:
-            return _normalize_aluminium_bozen_customer_code(match.group(0))
+        if (
+            "SECTION DESC" not in normalized
+            and "DESCRIZIONE PROFILO CLIENTE" not in normalized
+            and "PROFIL NR" not in normalized
+        ):
+            continue
+        window = [normalized, *(_normalize_mojibake_numeric_text(candidate).upper() for candidate in lines[index + 1 : min(index + 12, len(lines))])]
+        for candidate in window:
+            extracted = _candidate_from_text(candidate)
+            if extracted is not None:
+                return extracted
     return None
 
 
@@ -1243,6 +1360,13 @@ def _extract_aluminium_bozen_certificate_diameter(
                     if offset:
                         raw_snippet = f"{lines[index]} | {lines[index + offset]}"
                     return raw_snippet, normalized
+
+    for index, line in enumerate(normalized_lines):
+        profile_match = re.search(r"\bBARRA\s+TONDA\s+([0-9]{2,3}(?:[.,][0-9]+)?)\b", line)
+        if profile_match is not None:
+            normalized = _normalize_diameter_candidate(profile_match.group(1))
+            if normalized is not None:
+                return lines[index], normalized
     return None
 
 
@@ -1292,7 +1416,9 @@ def _extract_aluminium_bozen_certificate_weight(
             normalized = _normalize_weight(same_line.group(1))
             if normalized is not None:
                 return lines[index], normalized
-        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 4, len(normalized_lines))], start=1):
+        for offset, candidate in enumerate(normalized_lines[index + 1 : min(index + 16, len(normalized_lines))], start=1):
+            if any(token in candidate for token in ("COMPOSIZIONE CHIMICA", "CHEMICAL COMPOSITION", "CARATTERISTICHE MECCANICHE", "MECHANICAL PROPERTIES")):
+                break
             candidate_match = re.search(r"\b([0-9]{1,3}(?:[.,][0-9]{3})|[0-9]+[.,][0-9]{3})\b", candidate)
             if candidate_match is not None:
                 normalized = _normalize_weight(candidate_match.group(1))
