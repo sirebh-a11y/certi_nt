@@ -28,6 +28,7 @@ from app.modules.acquisition.schemas import (
     ReadValueUpsertRequest,
 )
 from app.modules.acquisition.service import (
+    get_active_autonomous_run,
     get_autonomous_run,
     create_acquisition_row,
     create_document,
@@ -49,6 +50,7 @@ from app.modules.acquisition.service import (
     list_documents,
     process_row_minimal,
     prepare_document_for_reader,
+    run_ai_intervention,
     run_autonomous_processing,
     serialize_acquisition_row_detail,
     serialize_document_detail,
@@ -82,6 +84,8 @@ def start_automation_run_route(
 ) -> AutonomousRunResponse:
     run = start_autonomous_run(db=db, payload=payload, actor_id=current_user.id)
     openai_api_key = _resolve_openai_api_key(current_user)
+    if payload.usa_intervento_ai and not openai_api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
     background_tasks.add_task(
         run_autonomous_processing,
         run_id=run.id,
@@ -91,8 +95,15 @@ def start_automation_run_route(
         actor_email=current_user.email,
         openai_api_key=openai_api_key,
         use_ddt_vision=payload.usa_ddt_vision,
+        use_ai_intervention=payload.usa_intervento_ai,
     )
     return run
+
+
+@router.get("/automation/runs/active", response_model=AutonomousRunResponse | None)
+def get_active_automation_run_route(current_user: CurrentUser, db: DbSession) -> AutonomousRunResponse | None:
+    run = get_active_autonomous_run(db, actor_id=current_user.id)
+    return serialize_autonomous_run(run) if run is not None else None
 
 
 @router.get("/automation/runs/{run_id}", response_model=AutonomousRunResponse)
@@ -374,6 +385,19 @@ def process_row_minimal_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return process_row_minimal(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/intervento-ai", response_model=AcquisitionRowDetailResponse)
+def run_ai_intervention_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    openai_api_key = _resolve_openai_api_key(current_user)
+    if not openai_api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
+    row = get_acquisition_row(db, row_id)
+    return run_ai_intervention(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
 @router.post("/rows/{row_id}/validate-final", response_model=AcquisitionRowDetailResponse)

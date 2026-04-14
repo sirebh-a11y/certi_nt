@@ -127,6 +127,7 @@ class AutonomousRunStartRequest(BaseModel):
     ddt_document_ids: list[int] = Field(default_factory=list)
     certificate_document_ids: list[int] = Field(default_factory=list)
     usa_ddt_vision: bool = True
+    usa_intervento_ai: bool = False
 
 
 class AutonomousRunResponse(BaseModel):

@@ -64,6 +64,7 @@ export default function AcquisitionUploadPage() {
   const [processingDdt, setProcessingDdt] = useState(false);
   const [processingCertificates, setProcessingCertificates] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
+  const [startingAiRun, setStartingAiRun] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [ddtResult, setDdtResult] = useState(null);
@@ -73,6 +74,7 @@ export default function AcquisitionUploadPage() {
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
   const [currentRun, setCurrentRun] = useState(null);
   const [lastStartedSignature, setLastStartedSignature] = useState("");
+  const [activeRunChecked, setActiveRunChecked] = useState(false);
 
   const ddtCount = useMemo(() => ddtFiles.length, [ddtFiles]);
   const certificateCount = useMemo(() => certificateFiles.length, [certificateFiles]);
@@ -100,6 +102,22 @@ export default function AcquisitionUploadPage() {
       return;
     }
     setError(message);
+  }
+
+  async function loadActiveRun() {
+    try {
+      const run = await apiRequest("/acquisition/automation/runs/active", {}, token);
+      setCurrentRun(run);
+      if (run) {
+        setError("");
+      }
+      return run;
+    } catch (requestError) {
+      handleRequestError(requestError);
+      return null;
+    } finally {
+      setActiveRunChecked(true);
+    }
   }
 
   async function handleBatchUpload(tipoDocumento) {
@@ -149,13 +167,14 @@ export default function AcquisitionUploadPage() {
     }
   }
 
-  async function startAutomationRun(signature = automationSignature) {
+  async function startAutomationRun(signature = automationSignature, useAiIntervention = false) {
     if (!hasAutomationDocuments) {
       setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
       return;
     }
 
-    setStartingRun(true);
+    const setStarting = useAiIntervention ? setStartingAiRun : setStartingRun;
+    setStarting(true);
     setError("");
     try {
       const run = await apiRequest(
@@ -166,6 +185,7 @@ export default function AcquisitionUploadPage() {
             ddt_document_ids: sessionDdtDocuments.map((item) => item.id),
             certificate_document_ids: sessionCertificateDocuments.map((item) => item.id),
             usa_ddt_vision: true,
+            usa_intervento_ai: useAiIntervention,
           }),
         },
         token,
@@ -173,11 +193,49 @@ export default function AcquisitionUploadPage() {
       setCurrentRun(run);
       setLastStartedSignature(signature);
     } catch (requestError) {
+      const message = requestError?.message || "Request failed";
+      if (message === "There is already an autonomous processing run in progress") {
+        setError("");
+        setNotice("C'è già una lavorazione automatica in corso: mi aggancio a quel run.");
+        await loadActiveRun();
+        return;
+      }
       handleRequestError(requestError);
     } finally {
-      setStartingRun(false);
+      setStarting(false);
     }
   }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function initializeActiveRun() {
+      setActiveRunChecked(false);
+      try {
+        const run = await apiRequest("/acquisition/automation/runs/active", {}, token);
+        if (cancelled) {
+          return;
+        }
+        setCurrentRun(run);
+        if (run) {
+          setError("");
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          handleRequestError(requestError);
+        }
+      } finally {
+        if (!cancelled) {
+          setActiveRunChecked(true);
+        }
+      }
+    }
+
+    initializeActiveRun();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     if (!currentRun || !["in_coda", "in_esecuzione"].includes(currentRun.stato)) {
@@ -201,7 +259,7 @@ export default function AcquisitionUploadPage() {
 
   useEffect(() => {
     const hasRunningRun = currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato);
-    if (!autoStartEnabled || hasRunningRun || startingRun) {
+    if (!activeRunChecked || !autoStartEnabled || hasRunningRun || startingRun || startingAiRun) {
       return;
     }
     if (!hasAutomationDocuments) {
@@ -211,7 +269,7 @@ export default function AcquisitionUploadPage() {
       return;
     }
     startAutomationRun(automationSignature);
-  }, [autoStartEnabled, automationSignature, currentRun, hasAutomationDocuments, lastStartedSignature, startingRun]);
+  }, [activeRunChecked, autoStartEnabled, automationSignature, currentRun, hasAutomationDocuments, lastStartedSignature, startingAiRun, startingRun]);
 
   return (
     <section className="space-y-4">
@@ -292,11 +350,19 @@ export default function AcquisitionUploadPage() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-                disabled={startingRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
+                disabled={startingRun || startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
                 onClick={() => startAutomationRun(automationSignature)}
                 type="button"
               >
                 {startingRun ? "Avvio..." : "Avvia lavorazione"}
+              </button>
+              <button
+                className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                disabled={startingRun || startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
+                onClick={() => startAutomationRun(automationSignature, true)}
+                type="button"
+              >
+                {startingAiRun ? "Intervento AI..." : "Intervento AI"}
               </button>
               <span className="self-center text-xs text-slate-500">Vision DDT viene usata quando disponibile.</span>
             </div>

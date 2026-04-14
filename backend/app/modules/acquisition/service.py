@@ -941,6 +941,18 @@ def get_autonomous_run(db: Session, run_id: int) -> AutonomousProcessingRun:
     return run
 
 
+def get_active_autonomous_run(db: Session, *, actor_id: int) -> AutonomousProcessingRun | None:
+    return (
+        db.query(AutonomousProcessingRun)
+        .filter(
+            AutonomousProcessingRun.triggered_by_user_id == actor_id,
+            AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")),
+        )
+        .order_by(AutonomousProcessingRun.created_at.desc(), AutonomousProcessingRun.id.desc())
+        .first()
+    )
+
+
 def start_autonomous_run(
     db: Session,
     *,
@@ -955,15 +967,7 @@ def start_autonomous_run(
     _ensure_documents_type(db, ddt_document_ids, "ddt")
     _ensure_documents_type(db, certificate_document_ids, "certificato")
 
-    active_run = (
-        db.query(AutonomousProcessingRun)
-        .filter(
-            AutonomousProcessingRun.triggered_by_user_id == actor_id,
-            AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")),
-        )
-        .order_by(AutonomousProcessingRun.created_at.desc(), AutonomousProcessingRun.id.desc())
-        .first()
-    )
+    active_run = get_active_autonomous_run(db, actor_id=actor_id)
     if active_run is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -995,6 +999,7 @@ def run_autonomous_processing(
     actor_email: str,
     openai_api_key: str | None,
     use_ddt_vision: bool,
+    use_ai_intervention: bool,
 ) -> None:
     db = SessionLocal()
     try:
@@ -1058,7 +1063,29 @@ def run_autonomous_processing(
                     extract_core_fields(db=db, row=row, actor_id=actor_id)
                     row = get_acquisition_row(db, row.id)
 
-                    if use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
+                    if use_ai_intervention and openai_api_key and _resolve_row_supplier_key(row) == "aluminium_bozen":
+                        _save_run(
+                            db,
+                            run,
+                            fase_corrente="intervento_ai",
+                            messaggio_corrente=f"Uso Intervento AI sulla riga #{row.id}",
+                        )
+                        try:
+                            run_ai_intervention(
+                                db=db,
+                                row=row,
+                                actor_id=actor_id,
+                                openai_api_key=openai_api_key,
+                            )
+                            row = get_acquisition_row(db, row.id)
+                        except HTTPException as exc:
+                            _save_run(
+                                db,
+                                run,
+                                ultimo_errore=str(exc.detail),
+                                messaggio_corrente=f"Intervento AI non riuscito su riga #{row.id}, continuo con il resto",
+                            )
+                    elif use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
                         _save_run(
                             db,
                             run,
@@ -1105,11 +1132,6 @@ def run_autonomous_processing(
                                 fase_corrente="chimica",
                                 messaggio_corrente=f"Leggo la chimica del certificato per la riga #{row.id}",
                             )
-                            detect_chemistry(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
-                            row = get_acquisition_row(db, row.id)
-                            if _block_has_values(db, row.id, "chimica"):
-                                _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
-
                         if not _block_has_confirmed_values(db, row.id, "proprieta"):
                             _save_run(
                                 db,
@@ -1117,11 +1139,6 @@ def run_autonomous_processing(
                                 fase_corrente="proprieta",
                                 messaggio_corrente=f"Leggo le proprieta del certificato per la riga #{row.id}",
                             )
-                            detect_properties(db=db, row=row, actor_id=actor_id, openai_api_key=openai_api_key)
-                            row = get_acquisition_row(db, row.id)
-                            if _block_has_values(db, row.id, "proprieta"):
-                                _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
-
                         if not _block_has_confirmed_values(db, row.id, "note"):
                             _save_run(
                                 db,
@@ -1129,10 +1146,23 @@ def run_autonomous_processing(
                                 fase_corrente="note",
                                 messaggio_corrente=f"Leggo le note standard del certificato per la riga #{row.id}",
                             )
-                            detect_standard_notes(db=db, row=row, actor_id=actor_id)
-                            row = get_acquisition_row(db, row.id)
-                            if _block_has_values(db, row.id, "note"):
-                                _save_run(db, run, note_rilevate=run.note_rilevate + 1)
+
+                        had_chemistry = _block_has_values(db, row.id, "chimica")
+                        had_properties = _block_has_values(db, row.id, "proprieta")
+                        had_notes = _block_has_values(db, row.id, "note")
+                        row = _process_certificate_side_blocks(
+                            db=db,
+                            row=row,
+                            actor_id=actor_id,
+                            openai_api_key=openai_api_key,
+                            use_ai_intervention=use_ai_intervention,
+                        )
+                        if not had_chemistry and _block_has_values(db, row.id, "chimica"):
+                            _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
+                        if not had_properties and _block_has_values(db, row.id, "proprieta"):
+                            _save_run(db, run, proprieta_rilevate=run.proprieta_rilevate + 1)
+                        if not had_notes and _block_has_values(db, row.id, "note"):
+                            _save_run(db, run, note_rilevate=run.note_rilevate + 1)
                 except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
                     db.rollback()
                     _save_run(
@@ -1161,6 +1191,8 @@ def run_autonomous_processing(
                 certificate_documents=explicit_certificate_documents,
                 actor_id=actor_id,
                 actor_email=actor_email,
+                openai_api_key=openai_api_key,
+                use_ai_intervention=use_ai_intervention,
             )
             if created_certificate_rows:
                 _save_run(db, run, righe_create=run.righe_create + created_certificate_rows)
@@ -1605,9 +1637,11 @@ def detect_chemistry(
     if openai_api_key and len(matches) < 4:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
+            template = resolve_supplier_template(supplier_name) if supplier_name else None
             vision_matches = _detect_chemistry_matches_with_vision(
                 certificate_document.pages,
                 openai_api_key=openai_api_key,
+                supplier_key=template.supplier_key if template is not None else None,
             )
             if vision_matches:
                 for field_name, match in vision_matches.items():
@@ -1688,9 +1722,11 @@ def detect_properties(
     if openai_api_key and len(matches) < 3:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
+            template = resolve_supplier_template(supplier_name) if supplier_name else None
             vision_matches = _detect_property_matches_with_vision(
                 certificate_document.pages,
                 openai_api_key=openai_api_key,
+                supplier_key=template.supplier_key if template is not None else None,
             )
             if vision_matches:
                 for field_name, match in vision_matches.items():
@@ -1944,7 +1980,22 @@ def extract_ddt_fields_with_vision(
     if not image_pages:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
-    crop_definitions = _build_ddt_safe_crops(image_pages)
+    supplier_key = _resolve_row_supplier_key(row)
+    ddt_values = {
+        value.campo: _final_value_for_row(value)
+        for value in (
+            db.query(ReadValue)
+            .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+            .all()
+        )
+    }
+
+    crop_definitions = _build_ddt_safe_crops(
+        image_pages,
+        row=row,
+        supplier_key=supplier_key,
+        ddt_values=ddt_values,
+    )
     if not crop_definitions:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to prepare DDT image crops for vision")
 
@@ -2018,6 +2069,238 @@ def extract_ddt_fields_with_vision(
         acquisition_row_id=row.id,
         blocco="ddt",
         azione="campi_core_vision_rilevati" if extracted_count else "campi_core_vision_non_rilevati",
+        user_id=actor_id,
+        nota_breve=str(extracted_count) if extracted_count else None,
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def run_ai_intervention(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    openai_api_key: str,
+) -> AcquisitionRowDetailResponse:
+    supplier_key = _resolve_row_supplier_key(row)
+    if supplier_key != "aluminium_bozen":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Intervento AI disponibile solo per Aluminium Bozen in questa fase",
+        )
+    if row.document_ddt_id is None and row.document_certificato_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Acquisition row has no DDT or certificate document",
+        )
+
+    extract_core_fields(db=db, row=row, actor_id=actor_id)
+    refreshed_row = get_acquisition_row(db, row.id)
+
+    if refreshed_row.document_ddt_id is not None:
+        extract_ddt_fields_with_vision(
+            db=db,
+            row=refreshed_row,
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+        )
+        refreshed_row = get_acquisition_row(db, row.id)
+
+    if refreshed_row.document_certificato_id is not None:
+        _extract_certificate_core_fields_with_vision(
+            db=db,
+            row=refreshed_row,
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+        )
+        refreshed_row = get_acquisition_row(db, row.id)
+        detect_chemistry(
+            db=db,
+            row=refreshed_row,
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+        )
+        refreshed_row = get_acquisition_row(db, row.id)
+        detect_properties(
+            db=db,
+            row=refreshed_row,
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+        )
+        refreshed_row = get_acquisition_row(db, row.id)
+        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id)
+        refreshed_row = get_acquisition_row(db, row.id)
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=refreshed_row.id,
+        blocco="workflow",
+        azione="intervento_ai_eseguito",
+        user_id=actor_id,
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def _resolve_row_supplier_key(row: AcquisitionRow) -> str | None:
+    template = resolve_supplier_template(
+        row.supplier.ragione_sociale if row.supplier is not None else None,
+        row.fornitore_raw,
+        row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
+        row.certificate_document.supplier.ragione_sociale if row.certificate_document and row.certificate_document.supplier else None,
+    )
+    return template.supplier_key if template is not None else None
+
+
+def _process_certificate_side_blocks(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    actor_id: int,
+    openai_api_key: str | None,
+    use_ai_intervention: bool,
+) -> AcquisitionRow:
+    current_row = get_acquisition_row(db, row.id)
+    if current_row.document_certificato_id is None:
+        return current_row
+
+    if use_ai_intervention and openai_api_key and _resolve_row_supplier_key(current_row) == "aluminium_bozen":
+        _extract_certificate_core_fields_with_vision(
+            db=db,
+            row=current_row,
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+        )
+        current_row = get_acquisition_row(db, row.id)
+
+    if not _block_has_confirmed_values(db, current_row.id, "chimica"):
+        detect_chemistry(db=db, row=current_row, actor_id=actor_id, openai_api_key=openai_api_key)
+        current_row = get_acquisition_row(db, row.id)
+
+    if not _block_has_confirmed_values(db, current_row.id, "proprieta"):
+        detect_properties(db=db, row=current_row, actor_id=actor_id, openai_api_key=openai_api_key)
+        current_row = get_acquisition_row(db, row.id)
+
+    if not _block_has_confirmed_values(db, current_row.id, "note"):
+        detect_standard_notes(db=db, row=current_row, actor_id=actor_id)
+        current_row = get_acquisition_row(db, row.id)
+
+    return current_row
+
+
+def _extract_certificate_core_fields_with_vision(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    openai_api_key: str,
+) -> AcquisitionRowDetailResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="certificato_vision")
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+
+    image_pages = [page for page in certificate_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Certificate has no image pages available for vision",
+        )
+
+    supplier_key = _resolve_row_supplier_key(row)
+    crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
+    if supplier_key == "aluminium_bozen":
+        crop_definitions = {
+            label: crop
+            for label, crop in crop_definitions.items()
+            if str(crop.get("role")) in {"certificate_header", "identity_block", "certificate_continuation"}
+            or str(crop.get("label", "")).endswith("identity_context")
+        }
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare certificate image crops for vision",
+        )
+
+    field_names = [
+        "numero_certificato_certificato",
+        "articolo_certificato",
+        "codice_cliente_certificato",
+        "ordine_cliente_certificato",
+        "lega_certificato",
+        "diametro_certificato",
+        "colata_certificato",
+        "peso_certificato",
+    ]
+    extracted = _extract_certificate_fields_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+        field_names=field_names,
+        instruction=(
+            "Leggi solo i ritagli mascherati del blocco identita e dei blocchi tecnici vicini di un certificato materiale. "
+            "Estrai solo i campi core chiaramente leggibili senza inventare. "
+            "I codici articolo possono apparire come 14BT..., i codici cliente come token tecnici che iniziano con A, "
+            "l'ordine cliente puo apparire come numero con data o data con numero."
+        ),
+    )
+    extracted_count = 0
+
+    for field_name, payload in extracted.items():
+        field_value = _string_or_none(payload.get("value"))
+        if field_value is None:
+            continue
+        source_crop = payload.get("source_crop")
+        evidence_text = _string_or_none(payload.get("evidence")) or field_value
+        crop_definition = crop_definitions.get(source_crop) if source_crop else None
+
+        evidence = DocumentEvidence(
+            document_id=certificate_document.id,
+            document_page_id=crop_definition["page_id"] if crop_definition else None,
+            acquisition_row_id=row.id,
+            blocco="match",
+            tipo_evidenza="crop",
+            bbox=crop_definition["bbox"] if crop_definition else None,
+            testo_grezzo=evidence_text,
+            storage_key_derivato=crop_definition["storage_key"] if crop_definition else None,
+            metodo_estrazione="chatgpt",
+            mascherato=True,
+            confidenza=0.72,
+            utente_creazione_id=actor_id,
+        )
+        db.add(evidence)
+        db.flush()
+
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="match",
+            campo=field_name,
+            valore_grezzo=evidence_text,
+            valore_standardizzato=field_value,
+            valore_finale=field_value,
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="chatgpt",
+            fonte_documentale="certificato",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        extracted_count += 1
+
+    _sync_row_from_match_values(db, row)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="match",
+        azione="campi_core_certificato_vision_rilevati" if extracted_count else "campi_core_certificato_vision_non_rilevati",
         user_id=actor_id,
         nota_breve=str(extracted_count) if extracted_count else None,
     )
@@ -2167,6 +2450,8 @@ def _ensure_certificate_first_rows(
     certificate_documents: list[Document],
     actor_id: int,
     actor_email: str,
+    openai_api_key: str | None,
+    use_ai_intervention: bool,
 ) -> int:
     created_count = 0
     for certificate_document in certificate_documents:
@@ -2230,12 +2515,13 @@ def _ensure_certificate_first_rows(
                 _sync_row_statuses(db, linked_row)
                 db.commit()
                 extract_core_fields(db=db, row=get_acquisition_row(db, linked_row.id), actor_id=actor_id)
-                linked_row = get_acquisition_row(db, linked_row.id)
-                detect_chemistry(db=db, row=linked_row, actor_id=actor_id, openai_api_key=None)
-                linked_row = get_acquisition_row(db, linked_row.id)
-                detect_properties(db=db, row=linked_row, actor_id=actor_id, openai_api_key=None)
-                linked_row = get_acquisition_row(db, linked_row.id)
-                detect_standard_notes(db=db, row=linked_row, actor_id=actor_id)
+                linked_row = _process_certificate_side_blocks(
+                    db=db,
+                    row=get_acquisition_row(db, linked_row.id),
+                    actor_id=actor_id,
+                    openai_api_key=openai_api_key,
+                    use_ai_intervention=use_ai_intervention,
+                )
             continue
         duplicate_row = next(
             (
@@ -2257,12 +2543,13 @@ def _ensure_certificate_first_rows(
                 _sync_row_statuses(db, duplicate_row)
                 db.commit()
                 extract_core_fields(db=db, row=get_acquisition_row(db, duplicate_row.id), actor_id=actor_id)
-                duplicate_row = get_acquisition_row(db, duplicate_row.id)
-                detect_chemistry(db=db, row=duplicate_row, actor_id=actor_id, openai_api_key=None)
-                duplicate_row = get_acquisition_row(db, duplicate_row.id)
-                detect_properties(db=db, row=duplicate_row, actor_id=actor_id, openai_api_key=None)
-                duplicate_row = get_acquisition_row(db, duplicate_row.id)
-                detect_standard_notes(db=db, row=duplicate_row, actor_id=actor_id)
+                duplicate_row = _process_certificate_side_blocks(
+                    db=db,
+                    row=get_acquisition_row(db, duplicate_row.id),
+                    actor_id=actor_id,
+                    openai_api_key=openai_api_key,
+                    use_ai_intervention=use_ai_intervention,
+                )
             continue
 
         created_row = create_acquisition_row(
@@ -2288,12 +2575,13 @@ def _ensure_certificate_first_rows(
         )
         created_row_model = get_acquisition_row(db, created_row.id)
         extract_core_fields(db=db, row=created_row_model, actor_id=actor_id)
-        created_row_model = get_acquisition_row(db, created_row.id)
-        detect_chemistry(db=db, row=created_row_model, actor_id=actor_id, openai_api_key=None)
-        created_row_model = get_acquisition_row(db, created_row.id)
-        detect_properties(db=db, row=created_row_model, actor_id=actor_id, openai_api_key=None)
-        created_row_model = get_acquisition_row(db, created_row.id)
-        detect_standard_notes(db=db, row=created_row_model, actor_id=actor_id)
+        created_row_model = _process_certificate_side_blocks(
+            db=db,
+            row=get_acquisition_row(db, created_row.id),
+            actor_id=actor_id,
+            openai_api_key=openai_api_key,
+            use_ai_intervention=use_ai_intervention,
+        )
         created_count += 1
 
     return created_count
@@ -3114,32 +3402,35 @@ def _ocr_page_image(image_path: Path, *, page_number: int) -> tuple[str | None, 
     return best_text, best_state
 
 
-def _build_ddt_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def _build_ddt_safe_crops(
+    pages: list[DocumentPage],
+    *,
+    row: AcquisitionRow | None = None,
+    supplier_key: str | None = None,
+    ddt_values: dict[str, str | None] | None = None,
+) -> dict[str, dict[str, str | int]]:
+    if supplier_key == "aluminium_bozen" and row is not None:
+        specialized = _build_aluminium_bozen_ddt_safe_crops(
+            pages,
+            row=row,
+            ddt_values=ddt_values or {},
+        )
+        if specialized:
+            return specialized
+
     crops: dict[str, dict[str, str | int]] = {}
     for page in pages:
         image_path = get_document_page_image_path(page)
         with Image.open(image_path) as image:
-            width, height = image.size
             crop_specs = [
-                ("upper", (0.08, 0.18, 0.92, 0.56)),
-                ("lower", (0.08, 0.54, 0.92, 0.90)),
+                ("upper", (0.08, 0.18, 0.92, 0.56), "generic_ddt"),
+                ("lower", (0.08, 0.54, 0.92, 0.90), "generic_ddt"),
             ]
-            for suffix, (left_ratio, top_ratio, right_ratio, bottom_ratio) in crop_specs:
-                left = int(width * left_ratio)
-                top = int(height * top_ratio)
-                right = int(width * right_ratio)
-                bottom = int(height * bottom_ratio)
-                if right <= left or bottom <= top:
+            for suffix, ratios, role in crop_specs:
+                crop_definition = _create_ddt_crop_definition(page, image, suffix=suffix, role=role, ratios=ratios)
+                if crop_definition is None:
                     continue
-                crop = image.crop((left, top, right, bottom))
-                storage_key = _save_ddt_crop(page, crop, suffix)
-                crop_label = f"page{page.numero_pagina}_{suffix}"
-                crops[crop_label] = {
-                    "page_id": page.id,
-                    "page_number": page.numero_pagina,
-                    "storage_key": storage_key,
-                    "bbox": f"{left},{top},{right},{bottom}",
-                }
+                crops[crop_definition["label"]] = crop_definition
     return crops
 
 
@@ -3156,35 +3447,32 @@ def _document_has_image_pages(document: Document) -> bool:
     return any(page.immagine_pagina_storage_key for page in document.pages)
 
 
-def _build_certificate_safe_crops(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
+def _build_certificate_safe_crops(
+    pages: list[DocumentPage],
+    *,
+    supplier_key: str | None = None,
+) -> dict[str, dict[str, str | int]]:
+    if supplier_key == "aluminium_bozen":
+        specialized = _build_aluminium_bozen_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
+
     crops: dict[str, dict[str, str | int]] = {}
     for page in pages:
         if not page.immagine_pagina_storage_key:
             continue
         image_path = get_document_page_image_path(page)
         with Image.open(image_path) as image:
-            width, height = image.size
             crop_specs = [
-                ("body_upper", (0.10, 0.16, 0.92, 0.48)),
-                ("body_middle", (0.10, 0.34, 0.92, 0.70)),
-                ("body_lower", (0.10, 0.56, 0.92, 0.90)),
+                ("body_upper", (0.10, 0.16, 0.92, 0.48), "certificate_body"),
+                ("body_middle", (0.10, 0.34, 0.92, 0.70), "certificate_body"),
+                ("body_lower", (0.10, 0.56, 0.92, 0.90), "certificate_body"),
             ]
-            for suffix, (left_ratio, top_ratio, right_ratio, bottom_ratio) in crop_specs:
-                left = int(width * left_ratio)
-                top = int(height * top_ratio)
-                right = int(width * right_ratio)
-                bottom = int(height * bottom_ratio)
-                if right <= left or bottom <= top:
+            for suffix, ratios, role in crop_specs:
+                crop_definition = _create_certificate_crop_definition(page, image, suffix=suffix, role=role, ratios=ratios)
+                if crop_definition is None:
                     continue
-                crop = image.crop((left, top, right, bottom))
-                storage_key = _save_certificate_crop(page, crop, suffix)
-                crop_label = f"page{page.numero_pagina}_{suffix}"
-                crops[crop_label] = {
-                    "page_id": page.id,
-                    "page_number": page.numero_pagina,
-                    "storage_key": storage_key,
-                    "bbox": f"{left},{top},{right},{bottom}",
-                }
+                crops[crop_definition["label"]] = crop_definition
     return crops
 
 
@@ -3197,27 +3485,394 @@ def _save_certificate_crop(page: DocumentPage, image: Image.Image, suffix: str) 
     return relative_path.as_posix()
 
 
+def _build_aluminium_bozen_ddt_safe_crops(
+    pages: list[DocumentPage],
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    if not pages:
+        return crops
+
+    sorted_pages = sorted(pages, key=lambda item: item.numero_pagina)
+    first_page = sorted_pages[0]
+    header_crop = _create_dynamic_page_crop(
+        first_page,
+        suffix="header_num",
+        role="header_num",
+        top_ratio=0.04,
+        bottom_ratio=0.22,
+        left_ratio=0.05,
+        right_ratio=0.95,
+        save_crop=_save_ddt_crop,
+    )
+    if header_crop is not None:
+        crops[header_crop["label"]] = header_crop
+
+    material_tokens = [
+        _string_or_none(ddt_values.get("article_code")),
+        _string_or_none(ddt_values.get("customer_code")),
+        _string_or_none(row.diametro),
+        _string_or_none(row.lega_base),
+        "BARRA TONDA",
+    ]
+    material_index = _find_best_page_line_index(
+        first_page,
+        required_tokens=material_tokens,
+        preferred_tokens=["BARRA TONDA"],
+    )
+    if material_index is not None:
+        material_crop = _create_line_band_crop(
+            first_page,
+            suffix="material_row",
+            role="material_row",
+            line_index=material_index,
+            before_lines=2,
+            after_lines=3,
+            save_crop=_save_ddt_crop,
+            left_ratio=0.04,
+            right_ratio=0.96,
+        )
+        if material_crop is not None:
+            crops[material_crop["label"]] = material_crop
+        material_context_crop = _create_line_band_crop(
+            first_page,
+            suffix="material_context",
+            role="material_context",
+            line_index=material_index,
+            before_lines=4,
+            after_lines=6,
+            save_crop=_save_ddt_crop,
+            left_ratio=0.03,
+            right_ratio=0.97,
+        )
+        if material_context_crop is not None:
+            crops[material_context_crop["label"]] = material_context_crop
+    else:
+        fallback_material = _create_dynamic_page_crop(
+            first_page,
+            suffix="material_rows",
+            role="material_rows",
+            top_ratio=0.18,
+            bottom_ratio=0.72,
+            left_ratio=0.04,
+            right_ratio=0.96,
+            save_crop=_save_ddt_crop,
+        )
+        if fallback_material is not None:
+            crops[fallback_material["label"]] = fallback_material
+
+    packing_page, packing_index = _find_best_aluminium_bozen_packing_location(sorted_pages, row=row, ddt_values=ddt_values)
+    if packing_page is not None and packing_index is not None:
+        packing_crop = _create_line_band_crop(
+            packing_page,
+            suffix="packing_group",
+            role="packing_group",
+            line_index=packing_index,
+            before_lines=3,
+            after_lines=10,
+            save_crop=_save_ddt_crop,
+            left_ratio=0.03,
+            right_ratio=0.97,
+        )
+        if packing_crop is not None:
+            crops[packing_crop["label"]] = packing_crop
+        packing_context_crop = _create_line_band_crop(
+            packing_page,
+            suffix="packing_context",
+            role="packing_context",
+            line_index=packing_index,
+            before_lines=6,
+            after_lines=16,
+            save_crop=_save_ddt_crop,
+            left_ratio=0.02,
+            right_ratio=0.98,
+        )
+        if packing_context_crop is not None:
+            crops[packing_context_crop["label"]] = packing_context_crop
+    elif len(sorted_pages) > 1:
+        fallback_page = sorted_pages[-1]
+        fallback_packing = _create_dynamic_page_crop(
+            fallback_page,
+            suffix="packing_group",
+            role="packing_group",
+            top_ratio=0.24,
+            bottom_ratio=0.94,
+            left_ratio=0.03,
+            right_ratio=0.97,
+            save_crop=_save_ddt_crop,
+        )
+        if fallback_packing is not None:
+            crops[fallback_packing["label"]] = fallback_packing
+
+    return crops
+
+
+def _build_aluminium_bozen_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    first_page = image_pages[0]
+    image_path = get_document_page_image_path(first_page)
+    with Image.open(image_path) as image:
+        crop_specs = [
+            ("certificate_header", (0.05, 0.04, 0.95, 0.20), "certificate_header"),
+            ("identity_block", (0.06, 0.16, 0.95, 0.46), "identity_block"),
+            ("identity_context", (0.04, 0.12, 0.97, 0.54), "identity_block"),
+            ("chemistry_table", (0.05, 0.38, 0.95, 0.68), "chemistry_table"),
+            ("chemistry_context", (0.03, 0.34, 0.97, 0.72), "chemistry_table"),
+            ("properties_table", (0.05, 0.56, 0.95, 0.84), "properties_table"),
+            ("properties_context", (0.03, 0.50, 0.97, 0.90), "properties_table"),
+            ("notes_block", (0.05, 0.80, 0.95, 0.98), "notes_block"),
+        ]
+        for suffix, ratios, role in crop_specs:
+            crop_definition = _create_certificate_crop_definition(first_page, image, suffix=suffix, role=role, ratios=ratios)
+            if crop_definition is not None:
+                crops[crop_definition["label"]] = crop_definition
+
+    for page in image_pages[1:]:
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            for suffix, ratios, role in (
+                ("continuation_upper", (0.05, 0.08, 0.95, 0.52), "certificate_continuation"),
+                ("continuation_lower", (0.05, 0.48, 0.95, 0.96), "notes_block"),
+            ):
+                crop_definition = _create_certificate_crop_definition(page, image, suffix=suffix, role=role, ratios=ratios)
+                if crop_definition is not None:
+                    crops[crop_definition["label"]] = crop_definition
+    return crops
+
+
+def _create_ddt_crop_definition(
+    page: DocumentPage,
+    image: Image.Image,
+    *,
+    suffix: str,
+    role: str,
+    ratios: tuple[float, float, float, float],
+) -> dict[str, str | int] | None:
+    return _create_image_crop_definition(
+        page,
+        image,
+        suffix=suffix,
+        role=role,
+        ratios=ratios,
+        save_crop=_save_ddt_crop,
+    )
+
+
+def _create_certificate_crop_definition(
+    page: DocumentPage,
+    image: Image.Image,
+    *,
+    suffix: str,
+    role: str,
+    ratios: tuple[float, float, float, float],
+) -> dict[str, str | int] | None:
+    return _create_image_crop_definition(
+        page,
+        image,
+        suffix=suffix,
+        role=role,
+        ratios=ratios,
+        save_crop=_save_certificate_crop,
+    )
+
+
+def _create_dynamic_page_crop(
+    page: DocumentPage,
+    *,
+    suffix: str,
+    role: str,
+    top_ratio: float,
+    bottom_ratio: float,
+    left_ratio: float,
+    right_ratio: float,
+    save_crop,
+) -> dict[str, str | int] | None:
+    image_path = get_document_page_image_path(page)
+    with Image.open(image_path) as image:
+        return _create_image_crop_definition(
+            page,
+            image,
+            suffix=suffix,
+            role=role,
+            ratios=(left_ratio, top_ratio, right_ratio, bottom_ratio),
+            save_crop=save_crop,
+        )
+
+
+def _create_line_band_crop(
+    page: DocumentPage,
+    *,
+    suffix: str,
+    role: str,
+    line_index: int,
+    before_lines: int,
+    after_lines: int,
+    save_crop,
+    left_ratio: float,
+    right_ratio: float,
+) -> dict[str, str | int] | None:
+    lines = _page_lines(page)
+    if not lines:
+        return None
+    total_lines = max(len(lines), 1)
+    top_ratio = max(0.04, (line_index - before_lines) / total_lines)
+    bottom_ratio = min(0.96, (line_index + after_lines + 1) / total_lines)
+    if bottom_ratio - top_ratio < 0.08:
+        center = (line_index + 0.5) / total_lines
+        top_ratio = max(0.04, center - 0.06)
+        bottom_ratio = min(0.96, center + 0.10)
+    return _create_dynamic_page_crop(
+        page,
+        suffix=suffix,
+        role=role,
+        top_ratio=top_ratio,
+        bottom_ratio=bottom_ratio,
+        left_ratio=left_ratio,
+        right_ratio=right_ratio,
+        save_crop=save_crop,
+    )
+
+
+def _create_image_crop_definition(
+    page: DocumentPage,
+    image: Image.Image,
+    *,
+    suffix: str,
+    role: str,
+    ratios: tuple[float, float, float, float],
+    save_crop,
+) -> dict[str, str | int] | None:
+    width, height = image.size
+    left_ratio, top_ratio, right_ratio, bottom_ratio = ratios
+    left = int(width * left_ratio)
+    top = int(height * top_ratio)
+    right = int(width * right_ratio)
+    bottom = int(height * bottom_ratio)
+    if right <= left or bottom <= top:
+        return None
+    crop = image.crop((left, top, right, bottom))
+    storage_key = save_crop(page, crop, suffix)
+    crop_label = f"page{page.numero_pagina}_{suffix}"
+    return {
+        "label": crop_label,
+        "role": role,
+        "page_id": page.id,
+        "page_number": page.numero_pagina,
+        "storage_key": storage_key,
+        "bbox": f"{left},{top},{right},{bottom}",
+    }
+
+
+def _find_best_page_line_index(
+    page: DocumentPage,
+    *,
+    required_tokens: list[str | None],
+    preferred_tokens: list[str | None] | None = None,
+) -> int | None:
+    lines = _page_lines(page)
+    if not lines:
+        return None
+    normalized_tokens = [_normalize_mojibake_numeric_text(token).upper() for token in required_tokens if _string_or_none(token)]
+    preferred = [_normalize_mojibake_numeric_text(token).upper() for token in (preferred_tokens or []) if _string_or_none(token)]
+    best_index: int | None = None
+    best_score = 0
+    for index, line in enumerate(lines):
+        normalized_line = _normalize_mojibake_numeric_text(line).upper()
+        score = sum(8 for token in normalized_tokens if token in normalized_line)
+        score += sum(3 for token in preferred if token in normalized_line)
+        if score > best_score:
+            best_score = score
+            best_index = index
+    return best_index if best_score > 0 else None
+
+
+def _find_best_aluminium_bozen_packing_location(
+    pages: list[DocumentPage],
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+) -> tuple[DocumentPage | None, int | None]:
+    search_tokens = [
+        _string_or_none(row.ordine),
+        _string_or_none(ddt_values.get("customer_order_no")),
+        _string_or_none(row.cdq),
+        _string_or_none(row.colata),
+        "RIF. ORDINE AB ODV",
+        "CERT. N",
+        "COD. COLATA",
+    ]
+    ranked_pages = sorted(pages, key=lambda page: (0 if page.numero_pagina > 1 else 1, page.numero_pagina))
+    best_page: DocumentPage | None = None
+    best_index: int | None = None
+    best_score = 0
+    for page in ranked_pages:
+        lines = _page_lines(page)
+        if not lines:
+            continue
+        normalized_tokens = [_normalize_mojibake_numeric_text(token).upper() for token in search_tokens if _string_or_none(token)]
+        for index, line in enumerate(lines):
+            normalized_line = _normalize_mojibake_numeric_text(line).upper()
+            score = sum(10 for token in normalized_tokens if token in normalized_line)
+            if "RIF. ORDINE AB ODV" in normalized_line:
+                score += 6
+            if "CERT" in normalized_line:
+                score += 3
+            if score > best_score:
+                best_score = score
+                best_page = page
+                best_index = index
+    return best_page, best_index
+
+
 def _extract_ddt_fields_from_openai(
     crops: dict[str, dict[str, str | int]],
     *,
     openai_api_key: str,
 ) -> dict[str, dict[str, str | None]]:
     client = OpenAI(api_key=openai_api_key)
+    field_names = [
+        "ddt",
+        "numero_certificato_ddt",
+        "cdq",
+        "colata",
+        "peso",
+        "diametro",
+        "ordine",
+        "customer_order_no",
+        "customer_code",
+        "article_code",
+        "lega",
+    ]
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
             "text": (
-                "Leggi solo i ritagli del corpo di un DDT metallurgico. "
-                "Non inferire dati assenti. Restituisci JSON puro con queste chiavi: "
-                "numero_certificato_ddt, cdq, colata, peso, diametro, ordine. "
+                "Leggi solo i ritagli mascherati di un documento tecnico di trasporto. "
+                "I ritagli possono avere ruoli come header_num, material_row, material_context, packing_group, packing_context. "
+                "Usa esclusivamente il testo visibile nei ritagli. Non inventare dati assenti. "
+                f"Restituisci JSON puro con sole queste chiavi: {', '.join(field_names)}. "
                 "Ogni chiave deve essere un oggetto con campi value, evidence, source_crop. "
                 "Usa null se il dato non e' leggibile o se sei incerto. "
-                "Se trovi 'Cert.' o 'Certificato' sul DDT, popolalo in numero_certificato_ddt. "
-                "Popola cdq solo se trovi una sigla o valore esplicitamente etichettato come CdQ/C.d.Q.; "
+                "ddt = numero del documento di trasporto letto dal ritaglio header_num. "
+                "numero_certificato_ddt = numero certificato letto da etichette tipo Cert. N o Certificato; "
                 "non usare stringhe normative come EN 10204 3.1, Inspection Certificate o riferimenti ASTM/AMS. "
-                "Per il peso, usa solo il peso netto della singola riga materiale; "
-                "non usare totali o riepiloghi di packing list. "
-                "Per il diametro, usa il valore associato alla riga materiale, ad esempio BARRA TONDA 75 -> 75. "
+                "cdq = popolalo solo se il DDT riporta davvero una sigla esplicita CdQ/C.d.Q.; se sul DDT c'e' solo Cert. N lascia cdq null. "
+                "customer_order_no = riferimento ordine cliente della riga, anche se visibile come numero e data o data e numero; "
+                "riporta il valore leggibile senza inventarlo. "
+                "customer_code = codice cliente/materiale come token tecnico, ad esempio codici che iniziano con A. "
+                "article_code = codice articolo tecnico, ad esempio token come 14BT.... "
+                "lega = lega/stato metallurgico della riga materiale. "
+                "diametro = valore associato alla riga materiale, non norme o altri riferimenti. "
+                "colata = cast/lot/charge della stessa riga materiale. "
+                "peso = solo il peso netto della singola riga materiale; non usare totali o riepiloghi di packing list. "
                 "Usa source_crop esattamente come il label del ritaglio fornito."
             ),
         }
@@ -3227,7 +3882,16 @@ def _extract_ddt_fields_from_openai(
         crop_path = _resolve_storage_path(str(crop["storage_key"]))
         mime_type = "image/png"
         encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
-        content.append({"type": "input_text", "text": f"Crop label: {crop_label}"})
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
         content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
 
     try:
@@ -3243,7 +3907,7 @@ def _extract_ddt_fields_from_openai(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Vision extraction request failed") from exc
 
-    return _parse_openai_json_payload(response.output_text)
+    return _parse_openai_json_payload_for_fields(response.output_text, field_names)
 
 
 def _extract_certificate_fields_from_openai(
@@ -3273,7 +3937,16 @@ def _extract_certificate_fields_from_openai(
         crop_path = _resolve_storage_path(str(crop["storage_key"]))
         mime_type = "image/png"
         encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
-        content.append({"type": "input_text", "text": f"Crop label: {crop_label}"})
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
         content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
 
     try:
@@ -3356,6 +4029,13 @@ def _sanitize_vision_ddt_fields(
 ) -> dict[str, dict[str, str | None]]:
     normalized = {field: value.copy() for field, value in extracted.items()}
 
+    ddt_value = _sanitize_ddt_number_candidate(
+        _string_or_none(normalized.get("ddt", {}).get("value")),
+        _string_or_none(normalized.get("ddt", {}).get("evidence")),
+    )
+    if "ddt" in normalized:
+        normalized["ddt"]["value"] = ddt_value
+
     cdq_value = _string_or_none(normalized.get("cdq", {}).get("value"))
     cdq_evidence = _string_or_none(normalized.get("cdq", {}).get("evidence"))
     if cdq_value is not None and _looks_like_invalid_cdq(cdq_value, cdq_evidence):
@@ -3363,6 +4043,25 @@ def _sanitize_vision_ddt_fields(
             "value": None,
             "evidence": cdq_evidence,
             "source_crop": _string_or_none(normalized.get("cdq", {}).get("source_crop")),
+        }
+
+    cert_value = _string_or_none(normalized.get("numero_certificato_ddt", {}).get("value"))
+    cert_evidence = _string_or_none(normalized.get("numero_certificato_ddt", {}).get("evidence"))
+    cert_source_crop = _string_or_none(normalized.get("numero_certificato_ddt", {}).get("source_crop"))
+    if cert_value is not None:
+        cert_value = _extract_token_from_value_or_evidence(
+            cert_value,
+            cert_evidence,
+            r"\b\d{4,7}[A-Z]?\b",
+            disallow={"10204"},
+        )
+        if cert_value is not None and _looks_like_invalid_cdq(cert_value, cert_evidence):
+            cert_value = None
+    if "numero_certificato_ddt" in normalized:
+        normalized["numero_certificato_ddt"] = {
+            "value": cert_value,
+            "evidence": cert_evidence,
+            "source_crop": cert_source_crop,
         }
 
     peso_value = _string_or_none(normalized.get("peso", {}).get("value"))
@@ -3387,7 +4086,110 @@ def _sanitize_vision_ddt_fields(
             "source_crop": _string_or_none(normalized.get("ordine", {}).get("source_crop")),
         }
 
+    customer_order_value = _string_or_none(normalized.get("customer_order_no", {}).get("value"))
+    customer_order_evidence = _string_or_none(normalized.get("customer_order_no", {}).get("evidence"))
+    customer_order_source_crop = _string_or_none(normalized.get("customer_order_no", {}).get("source_crop"))
+    if customer_order_value is not None:
+        customer_order_value = _normalize_customer_order_tokens(customer_order_value) or _normalize_customer_order_tokens(customer_order_evidence)
+        if customer_order_value is not None and "|" not in customer_order_value:
+            customer_order_value = None
+    if "customer_order_no" in normalized:
+        normalized["customer_order_no"] = {
+            "value": customer_order_value,
+            "evidence": customer_order_evidence,
+            "source_crop": customer_order_source_crop,
+        }
+
+    customer_code_value = _string_or_none(normalized.get("customer_code", {}).get("value"))
+    customer_code_evidence = _string_or_none(normalized.get("customer_code", {}).get("evidence"))
+    customer_code_source_crop = _string_or_none(normalized.get("customer_code", {}).get("source_crop"))
+    if customer_code_value is not None:
+        customer_code_value = _extract_token_from_value_or_evidence(
+            customer_code_value,
+            customer_code_evidence,
+            r"\bA\d[0-9A-Z]{4,}\b",
+        )
+    if "customer_code" in normalized:
+        normalized["customer_code"] = {
+            "value": customer_code_value,
+            "evidence": customer_code_evidence,
+            "source_crop": customer_code_source_crop,
+        }
+
+    article_code_value = _string_or_none(normalized.get("article_code", {}).get("value"))
+    article_code_evidence = _string_or_none(normalized.get("article_code", {}).get("evidence"))
+    article_code_source_crop = _string_or_none(normalized.get("article_code", {}).get("source_crop"))
+    if article_code_value is not None:
+        article_code_value = _extract_token_from_value_or_evidence(
+            article_code_value,
+            article_code_evidence,
+            r"\b14BT[0-9A-Z-]+\b",
+        )
+    if "article_code" in normalized:
+        normalized["article_code"] = {
+            "value": article_code_value,
+            "evidence": article_code_evidence,
+            "source_crop": article_code_source_crop,
+        }
+
+    colata_value = _string_or_none(normalized.get("colata", {}).get("value"))
+    colata_evidence = _string_or_none(normalized.get("colata", {}).get("evidence"))
+    colata_source_crop = _string_or_none(normalized.get("colata", {}).get("source_crop"))
+    if colata_value is not None:
+        colata_value = _extract_token_from_value_or_evidence(
+            colata_value,
+            colata_evidence,
+            r"\b(?:[A-Z]\d{5,}[A-Z]?|\d{5,}[A-Z]\d|\d{5,}[A-Z]|\d{5,})\b",
+            disallow={"10204"},
+        )
+    if "colata" in normalized:
+        normalized["colata"] = {
+            "value": colata_value,
+            "evidence": colata_evidence,
+            "source_crop": colata_source_crop,
+        }
+
     return normalized
+
+
+def _extract_token_with_regex(
+    text: str,
+    pattern: str,
+    *,
+    disallow: set[str] | None = None,
+) -> str | None:
+    disallow_set = {token.upper() for token in (disallow or set())}
+    for match in re.finditer(pattern, text.upper()):
+        token = match.group(0).strip().upper()
+        if token in disallow_set:
+            continue
+        return token
+    return None
+
+
+def _extract_token_from_value_or_evidence(
+    value: str | None,
+    evidence: str | None,
+    pattern: str,
+    *,
+    disallow: set[str] | None = None,
+) -> str | None:
+    if value:
+        token = _extract_token_with_regex(value, pattern, disallow=disallow)
+        if token is not None:
+            return token
+    if evidence:
+        return _extract_token_with_regex(evidence, pattern, disallow=disallow)
+    return None
+
+
+def _sanitize_ddt_number_candidate(value: str | None, evidence: str | None) -> str | None:
+    token = _extract_token_from_value_or_evidence(value, evidence, r"\b\d{1,6}\b")
+    if token is None:
+        return None
+    if token in {"0", "10204"}:
+        return None
+    return token
 
 
 def _looks_like_invalid_cdq(value: str, evidence: str | None) -> bool:
@@ -3489,6 +4291,10 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
         row.diametro = _final_value_for_row(value_map.get("diametro"))
     if "ordine" in value_map:
         row.ordine = _final_value_for_row(value_map.get("ordine"))
+    if "ddt" in value_map and row.ddt is None:
+        row.ddt = _final_value_for_row(value_map.get("ddt"))
+    if "lega" in value_map and row.lega_base is None:
+        row.lega_base = _final_value_for_row(value_map.get("lega"))
 
 
 def _row_ddt_core_field_value(row: AcquisitionRow, field_name: str) -> str | None:
@@ -4760,11 +5566,11 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
     cleaned_upper = cleaned.upper()
     leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", cleaned_upper)
     if leading_date_match is not None:
-        return f"{leading_date_match.group(1)}|{leading_date_match.group(2)}"
+        return f"{leading_date_match.group(2)}|{leading_date_match.group(1)}"
 
     trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", cleaned_upper)
     if trailing_date_match is not None:
-        return f"{trailing_date_match.group(2)}|{trailing_date_match.group(1)}"
+        return f"{trailing_date_match.group(1)}|{trailing_date_match.group(2)}"
 
     tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
     if not tokens:
@@ -4780,11 +5586,11 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
         ]
         if date_value:
             prefix = next((token for token in other_tokens if re.fullmatch(r"\d{1,4}", token)), "".join(other_tokens))
-            return f"{date_value}|{prefix}" if prefix else date_value
+            return f"{prefix}|{date_value}" if prefix else date_value
     if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
         prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
-        return f"{date_value}|{prefix}"
+        return f"{prefix}|{date_value}"
     return "".join(tokens)
 
 
@@ -5055,17 +5861,29 @@ def _detect_chemistry_matches_with_vision(
     pages: list[DocumentPage],
     *,
     openai_api_key: str,
+    supplier_key: str | None = None,
 ) -> dict[str, dict[str, str | int]]:
-    crops = _build_certificate_safe_crops(pages)
+    crops = _build_certificate_safe_crops(pages, supplier_key=supplier_key)
+    if supplier_key == "aluminium_bozen":
+        crops = {
+            label: crop
+            for label, crop in crops.items()
+            if str(crop.get("role")) in {"chemistry_table", "certificate_continuation"}
+            or str(crop.get("label", "")).endswith("chemistry_context")
+        }
     if not crops:
         return {}
+    chemistry_fields = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb"]
     extracted = _extract_certificate_fields_from_openai(
         crops,
         openai_api_key=openai_api_key,
-        field_names=sorted(CHEMISTRY_FIELD_SET),
+        field_names=chemistry_fields,
         instruction=(
-            "Leggi solo i ritagli del corpo di un certificato materiale. "
-            "Cerca la tabella di composizione chimica e riporta solo gli elementi chiaramente leggibili."
+            "Leggi solo i ritagli mascherati della tabella di composizione chimica di un certificato materiale. "
+            "La tabella puo essere orizzontale o verticale. "
+            "Usa solo questi elementi: Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb. "
+            "Ignora righe o colonne Min e Max. "
+            "Riporta solo i valori misurati chiaramente leggibili."
         ),
     )
     return _normalize_vision_numeric_matches(extracted, crops)
@@ -5075,8 +5893,16 @@ def _detect_property_matches_with_vision(
     pages: list[DocumentPage],
     *,
     openai_api_key: str,
+    supplier_key: str | None = None,
 ) -> dict[str, dict[str, str | int]]:
-    crops = _build_certificate_safe_crops(pages)
+    crops = _build_certificate_safe_crops(pages, supplier_key=supplier_key)
+    if supplier_key == "aluminium_bozen":
+        crops = {
+            label: crop
+            for label, crop in crops.items()
+            if str(crop.get("role")) in {"properties_table", "certificate_continuation"}
+            or str(crop.get("label", "")).endswith("properties_context")
+        }
     if not crops:
         return {}
     extracted = _extract_certificate_fields_from_openai(
@@ -5084,8 +5910,10 @@ def _detect_property_matches_with_vision(
         openai_api_key=openai_api_key,
         field_names=sorted(PROPERTY_FIELD_SET),
         instruction=(
-            "Leggi solo i ritagli del corpo di un certificato materiale. "
-            "Cerca la tabella delle proprieta meccaniche o fisiche e riporta solo i valori chiaramente leggibili."
+            "Leggi solo i ritagli mascherati della tabella delle proprieta meccaniche o fisiche di un certificato materiale. "
+            "La tabella puo essere orizzontale o verticale. "
+            "Ignora righe o colonne Min e Max. "
+            "Se ci sono piu righe misurate vere, per ogni campo restituisci il valore misurato reale piu basso chiaramente leggibile."
         ),
     )
     return _normalize_vision_numeric_matches(extracted, crops)
