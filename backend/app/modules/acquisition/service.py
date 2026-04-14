@@ -712,12 +712,15 @@ def create_rows_from_document_split_plan(
         db.query(AcquisitionRow)
         .filter(
             AcquisitionRow.fornitore_id == document.fornitore_id,
-            AcquisitionRow.document_certificato_id.is_(None),
         )
         .order_by(AcquisitionRow.id.asc())
         .all()
     )
-    existing_signatures = {_split_candidate_signature_from_row(row): row for row in existing_rows}
+    existing_signatures = {
+        _split_candidate_signature_from_row(row): row
+        for row in existing_rows
+        if row.document_ddt_id is not None
+    }
 
     created_rows: list[AcquisitionRowDetailResponse] = []
     for candidate in plan.row_split_candidates:
@@ -728,6 +731,32 @@ def create_rows_from_document_split_plan(
         )
         existing_row = existing_signatures.get(candidate_signature)
         if existing_row is not None:
+            continue
+        certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+            rows=existing_rows,
+            document=document,
+            candidate=candidate,
+            fallback_ddt=_split_plan_match_value(shared_matches, "ddt"),
+            supplier_key=supplier_key,
+        )
+        if certificate_first_row is not None:
+            certificate_first_row.document_ddt_id = document.id
+            certificate_first_row.fornitore_id = document.fornitore_id
+            certificate_first_row.fornitore_raw = document.supplier.ragione_sociale if document.supplier is not None else None
+            certificate_first_row.ddt = candidate.ddt_number or _split_plan_match_value(shared_matches, "ddt")
+            certificate_first_row.ordine = candidate.supplier_order_no or _split_plan_match_value(shared_matches, "ordine")
+            certificate_first_row.lega_base = candidate.lega or certificate_first_row.lega_base
+            certificate_first_row.diametro = candidate.diametro or certificate_first_row.diametro or _split_plan_match_value(shared_matches, "diametro")
+            certificate_first_row.colata = candidate.colata or certificate_first_row.colata or _split_plan_match_value(shared_matches, "colata")
+            certificate_first_row.peso = candidate.peso_netto or certificate_first_row.peso or _split_plan_match_value(shared_matches, "peso")
+            if candidate.cdq:
+                certificate_first_row.cdq = candidate.cdq
+            db.add(certificate_first_row)
+            db.commit()
+            db.refresh(certificate_first_row)
+            _persist_split_candidate_values(db=db, row=certificate_first_row, candidate=candidate, actor_id=actor_id)
+            existing_signatures[candidate_signature] = certificate_first_row
+            created_rows.append(serialize_acquisition_row_detail(get_acquisition_row(db, certificate_first_row.id)))
             continue
         created_row = create_acquisition_row(
             db=db,
@@ -847,6 +876,46 @@ def _persist_split_candidate_values(
             ),
             actor_id=actor_id,
         )
+
+
+def _find_existing_certificate_first_row_for_split_candidate(
+    *,
+    rows: list[AcquisitionRow],
+    document: Document,
+    candidate,
+    fallback_ddt: str | None,
+    supplier_key: str | None,
+) -> AcquisitionRow | None:
+    if supplier_key != "aluminium_bozen":
+        return None
+
+    normalized_cdq = _normalize_row_signature_token(candidate.cdq)
+    if not normalized_cdq:
+        return None
+
+    normalized_lega = _normalize_row_signature_token(candidate.lega)
+    normalized_diameter = _normalize_row_signature_token(candidate.diametro)
+    normalized_colata = _normalize_row_signature_token(candidate.colata)
+    normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
+
+    for row in rows:
+        if row.document_ddt_id is not None:
+            continue
+        if row.fornitore_id != document.fornitore_id:
+            continue
+        if _normalize_row_signature_token(row.cdq) != normalized_cdq:
+            continue
+        if normalized_lega and _normalize_row_signature_token(row.lega_base) and _normalize_row_signature_token(row.lega_base) != normalized_lega:
+            continue
+        if normalized_diameter and _normalize_row_signature_token(row.diametro) and _normalize_row_signature_token(row.diametro) != normalized_diameter:
+            continue
+        if normalized_colata and _normalize_row_signature_token(row.colata) and _normalize_row_signature_token(row.colata) != normalized_colata:
+            continue
+        if normalized_peso and _normalize_row_signature_token(row.peso) and _normalize_row_signature_token(row.peso) != normalized_peso:
+            continue
+        return row
+
+    return None
 
 
 def create_document_page(db: Session, document: Document, payload: DocumentPageCreateRequest) -> DocumentPageResponse:
@@ -5194,6 +5263,44 @@ def _parse_aluminium_bozen_properties_from_lines(lines: list[str], page_id: int)
             for payload in candidate_match.values():
                 payload["snippet"] = line
             return candidate_match
+
+    # Older Aluminium Bozen certificates may expose only hardness/conductivity
+    # around the mechanical-properties block. We keep them as partial measured values
+    # instead of inventing a full Rm/Rp0.2/A row.
+    labels_text = " ".join(window).lower()
+    if ("hardness" in labels_text or "brinell" in labels_text or "hbw" in labels_text) and (
+        "conduc" in labels_text or "condutt" in labels_text or "ms/m" in labels_text or "iacs" in labels_text
+    ):
+        for line in window:
+            numbers = [_safe_float(value) for value in re.findall(r"\d+(?:[.,]\d+)?", line)]
+            numbers = [value for value in numbers if value is not None]
+            if len(numbers) < 2:
+                continue
+            meaningful = sorted((value for value in numbers if value > 0), reverse=True)
+            if len(meaningful) < 2:
+                continue
+            hb_candidate = next((value for value in meaningful if 50 <= value <= 250), None)
+            iacs_candidate = next((value for value in meaningful if 0 < value <= 30), None)
+            if hb_candidate is None or iacs_candidate is None:
+                continue
+            hb_value = _normalize_numeric_value(str(hb_candidate)) or str(hb_candidate)
+            iacs_value = _normalize_numeric_value(str(iacs_candidate)) or str(iacs_candidate)
+            return {
+                "HB": {
+                    "page_id": page_id,
+                    "snippet": line,
+                    "raw": hb_value,
+                    "standardized": hb_value,
+                    "final": hb_value,
+                },
+                "IACS%": {
+                    "page_id": page_id,
+                    "snippet": line,
+                    "raw": iacs_value,
+                    "standardized": iacs_value,
+                    "final": iacs_value,
+                },
+            }
     return {}
 
 
@@ -5445,6 +5552,38 @@ def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) 
                 {
                     "page_id": page_id,
                     "snippet": line,
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+        if matches:
+            return matches
+
+    pending_cast_line: str | None = None
+    for index, line in enumerate(window):
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("norma", "norm", "limit", "max.", "min.")):
+            continue
+        if pending_cast_line is None and re.match(r"^\s*[A-Z]?\d{5,}[A-Z0-9]?\s*$", line, re.IGNORECASE):
+            pending_cast_line = line.strip()
+            continue
+        if pending_cast_line is None:
+            continue
+        normalized_line = _normalize_mojibake_numeric_text(line)
+        value_source = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+        if len(value_source) < 12:
+            continue
+        matches = {}
+        for element_name, raw_value in zip(fixed_slots, value_source):
+            if element_name is None:
+                continue
+            standardized = _normalize_numeric_value(raw_value) or raw_value
+            matches.setdefault(
+                element_name,
+                {
+                    "page_id": page_id,
+                    "snippet": f"{pending_cast_line} | {line}",
                     "raw": raw_value,
                     "standardized": standardized,
                     "final": standardized,
