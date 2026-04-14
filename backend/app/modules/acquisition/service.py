@@ -4871,7 +4871,6 @@ CHEMISTRY_FIELD_SET = {
     "Sn",
     "Zr",
     "Be",
-    "Al",
     "Zr+Ti",
     "Mn+Cr",
     "Bi+Pb",
@@ -5786,7 +5785,7 @@ def _extract_aluminium_bozen_chemistry_slots_from_line(line: str) -> list[str | 
         if token in mojibake_map:
             slots.append(mojibake_map[token])
         elif token in CHEMISTRY_FIELD_SET:
-            slots.append(None if token == "Al" else token)
+            slots.append(token)
         elif re.fullmatch(r"[A-Za-z¿®Ù]+", token):
             slots.append(None)
     return slots
