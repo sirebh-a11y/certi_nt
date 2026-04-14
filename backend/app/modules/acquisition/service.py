@@ -2327,15 +2327,31 @@ def _find_existing_aluminium_bozen_row_for_certificate(
 
     def score(row: AcquisitionRow) -> int:
         total = 0
-        if normalized_cdq and reader_normalize_match_token(row.cdq) == normalized_cdq:
+        row_cdq = reader_normalize_match_token(row.cdq)
+        row_cast = reader_normalize_match_token(row.colata)
+        row_alloy = reader_normalize_match_token(row.lega_base)
+        row_diameter = reader_normalize_match_token(row.diametro)
+        row_weight = reader_normalize_match_token(row.peso)
+
+        if normalized_cdq:
+            if row_cdq != normalized_cdq:
+                return -1
             total += 200
-        if normalized_cast and reader_normalize_match_token(row.colata) == normalized_cast:
+        if normalized_cast and row_cast:
+            if row_cast != normalized_cast:
+                return -1
             total += 80
-        if normalized_alloy and reader_normalize_match_token(row.lega_base) == normalized_alloy:
+        if normalized_alloy and row_alloy:
+            if row_alloy != normalized_alloy:
+                return -1
             total += 40
-        if normalized_diameter and reader_normalize_match_token(row.diametro) == normalized_diameter:
+        if normalized_diameter and row_diameter:
+            if row_diameter != normalized_diameter:
+                return -1
             total += 40
-        if normalized_weight and reader_normalize_match_token(row.peso) == normalized_weight:
+        if normalized_weight and row_weight:
+            if row_weight != normalized_weight:
+                return -1
             total += 20
         return total
 
