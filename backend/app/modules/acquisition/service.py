@@ -2094,13 +2094,14 @@ def _extract_aluminium_bozen_ddt_row_groups_with_vision(
         local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="aluminium_bozen")
         fallback_ddt = _split_plan_match_value(local_matches, "ddt")
 
-    ddt_number_raw, raw_rows = _extract_aluminium_bozen_ddt_row_groups_from_openai(
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_aluminium_bozen_ddt_row_groups_from_openai(
         crop_definitions,
         openai_api_key=openai_api_key,
     )
     return _sanitize_aluminium_bozen_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
     )
 
 
@@ -2155,7 +2156,7 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     crops: dict[str, dict[str, str | int]],
     *,
     openai_api_key: str,
-) -> tuple[str | None, list[dict[str, object]]]:
+) -> tuple[str | None, list[dict[str, object]], str]:
     client = OpenAI(api_key=openai_api_key)
     content: list[dict[str, str]] = [
         {
@@ -2170,6 +2171,9 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Non usare mai Rif. ordine AB o Rif. ns. Odv N. come ordine cliente. "
                 "Lo stesso ordine cliente puo comparire su piu righe diverse dello stesso DDT: se e chiaramente riferito a piu righe, riportalo in ogni riga interessata. "
                 "customer_order_raw deve contenere il testo raw completo del campo ordine cliente della riga, con numero e data; se manca la data, restituisci null. "
+                "certificate_no_raw deve essere il valore del Cert. N. della stessa riga logica, quando visibile nel packing group collegato. "
+                "Non saltare certificate_no_raw se e presente; non usare numeri di norme come EN 10204 3.1 o simili. "
+                "Se la stessa riga logica appare tra material_rows e packing_rows, unisci quei dati nello stesso elemento rows. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
@@ -2210,7 +2214,7 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="DDT row-group AI request failed") from exc
 
-    return _parse_openai_json_payload_for_row_groups(response.output_text)
+    return (*_parse_openai_json_payload_for_row_groups(response.output_text), response.output_text)
 
 
 def _parse_openai_json_payload_for_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
@@ -2275,6 +2279,7 @@ def _sanitize_aluminium_bozen_ai_row_groups(
     *,
     ddt_number_raw: str | None,
     raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
 ) -> list[ReaderRowSplitCandidateResponse]:
     sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
     normalized_ddt = _sanitize_ddt_number_candidate(ddt_number_raw, None)
@@ -2343,6 +2348,8 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             colata=cast_value,
             customer_order_no=_normalize_customer_order_tokens(customer_order_raw),
             snippets=source_crops[:6],
+            ai_row_payload_raw=json.dumps(raw_row, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
         )
 
         if any(
@@ -2538,6 +2545,18 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
 
     if changed_fields == 0:
         return False
+
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
 
     _sync_row_from_ddt_values(db, row)
     _sync_row_statuses(db, row)
@@ -3459,9 +3478,10 @@ def _find_existing_aluminium_bozen_row_for_certificate(
         row_weight = reader_normalize_match_token(row.peso)
 
         if normalized_cdq:
-            if row_cdq != normalized_cdq:
+            if row_cdq and row_cdq != normalized_cdq:
                 return -1
-            total += 200
+            if row_cdq == normalized_cdq:
+                total += 200
         if normalized_article and row_article:
             if row_article != normalized_article:
                 return -1
@@ -3493,7 +3513,7 @@ def _find_existing_aluminium_bozen_row_for_certificate(
         return total
 
     scored = [(score(row), row) for row in rows]
-    scored = [item for item in scored if item[0] >= 200]
+    scored = [item for item in scored if item[0] >= 180]
     if not scored:
         return None
     scored.sort(key=lambda item: (-item[0], item[1].id))
@@ -5323,6 +5343,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
 
@@ -5379,6 +5400,18 @@ def _apply_aluminium_bozen_certificate_ai_payload(
     actor_id: int,
 ) -> None:
     certificate_document = get_document(db, row.document_certificato_id)
+    raw_payload_text = _string_or_none(cast(dict[str, object], payload).get("debug_raw_output"))
+    if raw_payload_text:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=certificate_document.id,
+            document_page_id=certificate_document.pages[0].id if certificate_document.pages else None,
+            blocco="match",
+            payload_text=raw_payload_text,
+            actor_id=actor_id,
+            confidence=0.77,
+        )
     core_fields = cast(dict[str, dict[str, str | None]], payload.get("core_fields") or {})
     for field_name, field_payload in core_fields.items():
         field_value = _string_or_none(field_payload.get("value"))
@@ -6163,6 +6196,36 @@ def _create_text_evidence(
         storage_key_derivato=None,
         metodo_estrazione="regex",
         mascherato=False,
+        confidenza=confidence,
+        utente_creazione_id=actor_id,
+    )
+    db.add(evidence)
+    db.flush()
+    return evidence
+
+
+def _create_ai_payload_evidence(
+    db: Session,
+    *,
+    row_id: int,
+    document_id: int,
+    document_page_id: int | None,
+    blocco: str,
+    payload_text: str,
+    actor_id: int,
+    confidence: float,
+) -> DocumentEvidence:
+    evidence = DocumentEvidence(
+        document_id=document_id,
+        document_page_id=document_page_id,
+        acquisition_row_id=row_id,
+        blocco=blocco,
+        tipo_evidenza="ai_payload",
+        bbox=None,
+        testo_grezzo=payload_text,
+        storage_key_derivato=None,
+        metodo_estrazione="chatgpt",
+        mascherato=True,
         confidenza=confidence,
         utente_creazione_id=actor_id,
     )

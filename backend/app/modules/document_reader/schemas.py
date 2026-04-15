@@ -71,6 +71,8 @@ class ReaderRowSplitCandidateResponse(BaseModel):
     supplier_order_no: str | None = None
     product_code: str | None = None
     snippets: list[str] = Field(default_factory=list)
+    ai_row_payload_raw: str | None = None
+    ai_document_payload_raw: str | None = None
 
 
 class ReaderPlanResponse(BaseModel):
