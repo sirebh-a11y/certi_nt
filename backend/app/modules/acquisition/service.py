@@ -1243,7 +1243,12 @@ def run_autonomous_processing(
                 certificate_ai_cache=certificate_ai_cache,
             )
             if created_certificate_rows:
-                _save_run(db, run, righe_create=run.righe_create + created_certificate_rows)
+                _save_run(
+                    db,
+                    run,
+                    righe_create=run.righe_create + created_certificate_rows,
+                    righe_processate=run.righe_processate + created_certificate_rows,
+                )
 
         _save_run(
             db,
@@ -1251,6 +1256,8 @@ def run_autonomous_processing(
             stato="completato",
             fase_corrente="completato",
             messaggio_corrente="Compilazione automatica completata. Ora puo intervenire quality.",
+            totale_righe_target=max(run.righe_processate, run.righe_create),
+            current_row_id=None,
             finished_at=datetime.now(UTC),
         )
         log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
@@ -1587,6 +1594,7 @@ def upsert_match(
         user_id=actor_id,
         nota_breve=payload.motivo_breve,
     )
+    _sync_row_from_match_values(db, row)
     _sync_row_statuses(db, row)
     db.commit()
     updated_row = get_acquisition_row(db, row.id)
@@ -2160,6 +2168,8 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Non fare il match con nessun certificato e non normalizzare i valori. "
                 "Per l'ordine cliente usa solo il valore associato a Vs. Odv o Rif. ordine cliente. "
                 "Non usare mai Rif. ordine AB o Rif. ns. Odv N. come ordine cliente. "
+                "Lo stesso ordine cliente puo comparire su piu righe diverse dello stesso DDT: se e chiaramente riferito a piu righe, riportalo in ogni riga interessata. "
+                "customer_order_raw deve contenere il testo raw completo del campo ordine cliente della riga, con numero e data; se manca la data, restituisci null. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
@@ -4999,7 +5009,11 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
             )
             if match is None:
                 continue
-            alloy = f"{match.group(1)} {match.group(2).replace(' / ', ' ').replace('/', ' ')}"
+            alloy_base = match.group(1).strip()
+            alloy_state = match.group(2).replace(" / ", " ").replace("/", " ").strip()
+            if alloy_state == "F" and alloy_base.endswith("F") and not alloy_base.endswith(("HF", "GF")):
+                alloy_base = alloy_base[:-1]
+            alloy = f"{alloy_base} {alloy_state}"
             return re.sub(r"\s+", " ", alloy).strip()
         return None
 
@@ -5431,6 +5445,10 @@ def _apply_aluminium_bozen_certificate_ai_payload(
                 confidenza=confidence,
                 actor_id=actor_id,
             )
+
+    _sync_row_from_match_values(db, row)
+    _sync_row_statuses(db, row)
+    db.add(row)
 
 
 def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
@@ -7178,7 +7196,15 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
         prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
         return f"{int(prefix)}-{date_value}"
-    return "".join(tokens)
+    if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[0]):
+        date_value = f"{tokens[0]}-{tokens[1]}-{tokens[2]}"
+        suffix = next((token for token in reversed(tokens) if re.fullmatch(r"\d{1,4}", token)), None)
+        if suffix is not None:
+            return f"{int(suffix)}-{date_value}"
+    if len(tokens) >= 4 and re.fullmatch(r"\d{1,4}", tokens[0]) and re.fullmatch(r"20\d{2}", tokens[1]):
+        date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
+        return f"{int(tokens[0])}-{date_value}"
+    return None
 
 
 def _is_normalized_customer_order(value: str | None) -> bool:
