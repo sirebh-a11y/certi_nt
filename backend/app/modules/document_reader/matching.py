@@ -1214,7 +1214,7 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
             if "VS. ODV" not in line and "VS ODV" not in line and "RIF. ORDINE CLIENTE" not in line:
                 continue
             normalized = _normalize_customer_order_tokens(line)
-            if normalized is not None and "|" in normalized:
+            if _is_normalized_customer_order(normalized):
                 return normalized
         return None
 
@@ -1231,7 +1231,7 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
             continue
         for candidate in normalized_lines[index : min(index + 5, len(normalized_lines))]:
             normalized = _normalize_customer_order_tokens(candidate)
-            if normalized is not None and "|" in normalized:
+            if _is_normalized_customer_order(normalized):
                 return normalized
     return None
 
@@ -1896,20 +1896,25 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    cleaned_upper = cleaned.upper()
-    leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", cleaned_upper)
+
+    normalized_text = cleaned.upper()
+    normalized_text = normalized_text.replace("/", "-")
+    normalized_text = re.sub(r"(?<=\d)\.(?=\d)", "-", normalized_text)
+    normalized_text = re.sub(r"\s+", " ", normalized_text).strip()
+
+    leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", normalized_text)
     if leading_date_match is not None:
-        return f"{leading_date_match.group(2)}|{leading_date_match.group(1)}"
+        return f"{int(leading_date_match.group(2))}-{leading_date_match.group(1)}"
 
-    trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", cleaned_upper)
+    trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", normalized_text)
     if trailing_date_match is not None:
-        return f"{trailing_date_match.group(1)}|{trailing_date_match.group(2)}"
+        return f"{int(trailing_date_match.group(1))}-{trailing_date_match.group(2)}"
 
-    tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
+    tokens = re.findall(r"[A-Z0-9]+", normalized_text)
     if not tokens:
         return None
-    if re.search(r"20\d{2}-\d{2}-\d{2}", cleaned):
-        date_match = re.search(r"20\d{2}-\d{2}-\d{2}", cleaned)
+    if re.search(r"20\d{2}-\d{2}-\d{2}", normalized_text):
+        date_match = re.search(r"20\d{2}-\d{2}-\d{2}", normalized_text)
         date_value = date_match.group(0) if date_match else None
         other_tokens = [
             token
@@ -1919,12 +1924,21 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
         ]
         if date_value:
             prefix = next((token for token in other_tokens if re.fullmatch(r"\d{1,4}", token)), "".join(other_tokens))
-            return f"{prefix}|{date_value}" if prefix else date_value
+            if prefix:
+                return f"{int(prefix)}-{date_value}"
+            return None
     if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
         prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
-        return f"{prefix}|{date_value}"
+        return f"{int(prefix)}-{date_value}"
     return "".join(tokens)
+
+
+def _is_normalized_customer_order(value: str | None) -> bool:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return False
+    return re.fullmatch(r"\d{1,4}-20\d{2}-\d{2}-\d{2}", cleaned) is not None
 
 
 def _extract_metalba_ddt_reference_values(lines: list[str]) -> tuple[str | None, str | None]:

@@ -954,13 +954,23 @@ def _extract_aluminium_bozen_order_from_window(lines: list[str], index: int) -> 
 
 
 def _extract_aluminium_bozen_customer_order_from_line(line: str) -> str | None:
-    match = re.search(
-        r"\b(?:VS\.?\s*ODV|RIF\.\s*ORDINE\s*CLIENTE)\b[^0-9]*([0-9]{4}-[0-9]{2}-[0-9]{2})\s+([0-9]{1,6})\b",
-        line,
+    normalized = line.upper()
+    normalized = normalized.replace("/", "-")
+    normalized = re.sub(r"(?<=\d)\.(?=\d)", "-", normalized)
+    trailing_date_match = re.search(
+        r"\b(?:VS\.?\s*ODV|RIF\.\s*ORDINE\s*CLIENTE)\b[^0-9]*([0-9]{1,6})\D+([0-9]{4}-[0-9]{2}-[0-9]{2})\b",
+        normalized,
     )
-    if match is None:
-        return None
-    return f"{match.group(1)}|{int(match.group(2))}"
+    if trailing_date_match is not None:
+        return f"{int(trailing_date_match.group(1))}-{trailing_date_match.group(2)}"
+
+    leading_date_match = re.search(
+        r"\b(?:VS\.?\s*ODV|RIF\.\s*ORDINE\s*CLIENTE)\b[^0-9]*([0-9]{4}-[0-9]{2}-[0-9]{2})\D+([0-9]{1,6})\b",
+        normalized,
+    )
+    if leading_date_match is not None:
+        return f"{int(leading_date_match.group(2))}-{leading_date_match.group(1)}"
+    return None
 
 
 def _extract_aluminium_bozen_customer_order_from_window(lines: list[str], index: int) -> str | None:

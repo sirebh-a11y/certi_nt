@@ -14,7 +14,7 @@ import fitz
 from fastapi import UploadFile
 from fastapi import HTTPException, status
 from openai import OpenAI
-from PIL import Image
+from PIL import Image, ImageDraw
 from pypdf import PdfReader
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -72,6 +72,7 @@ from app.modules.document_reader.matching import (
     same_token as reader_same_token,
     weights_are_compatible as reader_weights_are_compatible,
 )
+from app.modules.document_reader.schemas import ReaderRowSplitCandidateResponse
 from app.modules.document_reader.service import build_document_row_split_plan
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
@@ -744,7 +745,7 @@ def create_rows_from_document_split_plan(
             certificate_first_row.fornitore_id = document.fornitore_id
             certificate_first_row.fornitore_raw = document.supplier.ragione_sociale if document.supplier is not None else None
             certificate_first_row.ddt = candidate.ddt_number or _split_plan_match_value(shared_matches, "ddt")
-            certificate_first_row.ordine = candidate.supplier_order_no or _split_plan_match_value(shared_matches, "ordine")
+            certificate_first_row.ordine = candidate.customer_order_no
             certificate_first_row.lega_base = candidate.lega or certificate_first_row.lega_base
             certificate_first_row.diametro = candidate.diametro or certificate_first_row.diametro or _split_plan_match_value(shared_matches, "diametro")
             certificate_first_row.colata = candidate.colata or certificate_first_row.colata or _split_plan_match_value(shared_matches, "colata")
@@ -770,7 +771,7 @@ def create_rows_from_document_split_plan(
                 colata=candidate.colata or _split_plan_match_value(shared_matches, "colata"),
                 ddt=candidate.ddt_number or _split_plan_match_value(shared_matches, "ddt"),
                 peso=candidate.peso_netto or _split_plan_match_value(shared_matches, "peso"),
-                ordine=candidate.supplier_order_no or candidate.customer_order_no or _split_plan_match_value(shared_matches, "ordine"),
+                ordine=candidate.customer_order_no,
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
                 priorita_operativa="media",
@@ -831,7 +832,7 @@ def _split_candidate_signature_from_candidate(
     return (
         str(document.fornitore_id or ""),
         _normalize_row_signature_token(candidate.ddt_number or fallback_ddt),
-        _normalize_row_signature_token(candidate.supplier_order_no or candidate.customer_order_no),
+        _normalize_row_signature_token(candidate.customer_order_no),
         _normalize_row_signature_token(candidate.lega),
         _normalize_row_signature_token(candidate.diametro),
         _normalize_row_signature_token(candidate.colata),
@@ -897,6 +898,7 @@ def _find_existing_certificate_first_row_for_split_candidate(
     normalized_diameter = _normalize_row_signature_token(candidate.diametro)
     normalized_colata = _normalize_row_signature_token(candidate.colata)
     normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
+    normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
 
     for row in rows:
         if row.document_ddt_id is not None:
@@ -912,6 +914,10 @@ def _find_existing_certificate_first_row_for_split_candidate(
         if normalized_colata and _normalize_row_signature_token(row.colata) and _normalize_row_signature_token(row.colata) != normalized_colata:
             continue
         if normalized_peso and _normalize_row_signature_token(row.peso) and _normalize_row_signature_token(row.peso) != normalized_peso:
+            continue
+        row_identity_fields = _certificate_first_row_identity_fields(row)
+        row_customer_order = _normalize_row_signature_token(row_identity_fields.get("customer_order"))
+        if normalized_customer_order and row_customer_order and row_customer_order != normalized_customer_order:
             continue
         return row
 
@@ -1023,6 +1029,7 @@ def run_autonomous_processing(
         explicit_certificate_documents = [
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
+        certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] = {}
         total_target_rows = 0
         for ddt_document in ddt_documents:
             plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
@@ -1049,6 +1056,42 @@ def run_autonomous_processing(
             if created_count:
                 _save_run(db, run, righe_create=run.righe_create + created_count)
 
+            ddt_template = resolve_supplier_template(
+                ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
+                ddt_document.nome_file_originale,
+            )
+            ddt_supplier_key = ddt_template.supplier_key if ddt_template is not None else None
+            if use_ai_intervention and openai_api_key and ddt_supplier_key == "aluminium_bozen":
+                _save_run(
+                    db,
+                    run,
+                    fase_corrente="intervento_ai",
+                    messaggio_corrente=f"Ricostruisco le righe DDT con AI per {ddt_document.nome_file_originale}",
+                )
+                try:
+                    ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+                        db=db,
+                        ddt_document=ddt_document,
+                        openai_api_key=openai_api_key,
+                    )
+                    _apply_aluminium_bozen_ai_row_groups_to_rows(
+                        db=db,
+                        ddt_document=ddt_document,
+                        rows=rows,
+                        ai_candidates=ai_candidates,
+                        actor_id=actor_id,
+                    )
+                    rows = [get_acquisition_row(db, row.id) for row in rows]
+                except HTTPException as exc:
+                    _save_run(
+                        db,
+                        run,
+                        ultimo_errore=str(exc.detail),
+                        messaggio_corrente=(
+                            f"Intervento AI DDT non riuscito su {ddt_document.nome_file_originale}, continuo con il parser locale"
+                        ),
+                    )
+
             for row in rows:
                 row = get_acquisition_row(db, row.id)
                 _save_run(db, run, current_row_id=row.id)
@@ -1063,29 +1106,7 @@ def run_autonomous_processing(
                     extract_core_fields(db=db, row=row, actor_id=actor_id)
                     row = get_acquisition_row(db, row.id)
 
-                    if use_ai_intervention and openai_api_key and _resolve_row_supplier_key(row) == "aluminium_bozen":
-                        _save_run(
-                            db,
-                            run,
-                            fase_corrente="intervento_ai",
-                            messaggio_corrente=f"Uso Intervento AI sulla riga #{row.id}",
-                        )
-                        try:
-                            run_ai_intervention(
-                                db=db,
-                                row=row,
-                                actor_id=actor_id,
-                                openai_api_key=openai_api_key,
-                            )
-                            row = get_acquisition_row(db, row.id)
-                        except HTTPException as exc:
-                            _save_run(
-                                db,
-                                run,
-                                ultimo_errore=str(exc.detail),
-                                messaggio_corrente=f"Intervento AI non riuscito su riga #{row.id}, continuo con il resto",
-                            )
-                    elif use_ddt_vision and openai_api_key and _row_needs_ddt_vision(db, row):
+                    if use_ddt_vision and (not use_ai_intervention) and openai_api_key and _row_needs_ddt_vision(db, row):
                         _save_run(
                             db,
                             run,
@@ -1119,6 +1140,8 @@ def run_autonomous_processing(
                         row=row,
                         certificate_documents=certificate_documents,
                         actor_id=actor_id,
+                        openai_api_key=openai_api_key if use_ai_intervention else None,
+                        certificate_ai_cache=certificate_ai_cache,
                     )
                     if matched:
                         _save_run(db, run, match_proposti=run.match_proposti + 1)
@@ -1547,7 +1570,12 @@ def upsert_match(
     return serialize_match(updated_row.certificate_match)
 
 
-def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+def detect_standard_notes(
+    db: Session,
+    row: AcquisitionRow,
+    actor_id: int,
+    openai_api_key: str | None = None,
+) -> AcquisitionRowDetailResponse:
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -1558,6 +1586,19 @@ def detect_standard_notes(db: Session, row: AcquisitionRow, actor_id: int) -> Ac
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="note")
     matches = _detect_note_matches(certificate_document.pages)
+    if not matches and openai_api_key:
+        certificate_document = _ensure_document_page_images(db, certificate_document)
+        if _document_has_image_pages(certificate_document):
+            template = resolve_supplier_template(
+                row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
+            )
+            vision_matches = _detect_note_matches_with_vision(
+                certificate_document.pages,
+                openai_api_key=openai_api_key,
+                supplier_key=template.supplier_key if template is not None else None,
+            )
+            if vision_matches:
+                matches = vision_matches
     if not matches:
         _record_history_event(
             db=db,
@@ -1893,7 +1934,7 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
             row.ddt = _string_or_none(ddt_matches["ddt"]["final"])
         if row.peso is None and "peso" in ddt_matches:
             row.peso = _string_or_none(ddt_matches["peso"]["final"])
-        if row.ordine is None and "ordine" in ddt_matches:
+        if row.ordine is None and supplier_key != "aluminium_bozen" and "ordine" in ddt_matches:
             row.ordine = _string_or_none(ddt_matches["ordine"]["final"])
 
     if certificate_document is not None:
@@ -1958,9 +1999,496 @@ def process_row_minimal(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
         refreshed_row = get_acquisition_row(db, row.id)
         detect_properties(db=db, row=refreshed_row, actor_id=actor_id)
         refreshed_row = get_acquisition_row(db, row.id)
-        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id)
+        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id, openai_api_key=None)
         refreshed_row = get_acquisition_row(db, row.id)
     return serialize_acquisition_row_detail(refreshed_row)
+
+
+def _extract_aluminium_bozen_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_aluminium_bozen_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare DDT row-group crops for AI",
+        )
+
+    local_plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
+    fallback_ddt = next(
+        (_string_or_none(candidate.ddt_number) for candidate in local_plan.row_split_candidates if candidate.ddt_number),
+        None,
+    )
+    if fallback_ddt is None:
+        local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="aluminium_bozen")
+        fallback_ddt = _split_plan_match_value(local_matches, "ddt")
+
+    ddt_number_raw, raw_rows = _extract_aluminium_bozen_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_aluminium_bozen_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+    )
+
+
+def _build_aluminium_bozen_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    if not pages:
+        return crops
+
+    sorted_pages = sorted(pages, key=lambda item: item.numero_pagina)
+    first_page = sorted_pages[0]
+
+    crop_specs: list[tuple[DocumentPage, str, str, float, float, float, float]] = [
+        (first_page, "group_header_num", "header_num", 0.04, 0.18, 0.05, 0.95),
+        (first_page, "group_rows_overview", "row_groups_overview", 0.16, 0.92, 0.03, 0.97),
+        (first_page, "group_material_rows", "material_rows", 0.18, 0.76, 0.03, 0.97),
+        (first_page, "group_packing_rows", "packing_rows", 0.52, 0.96, 0.02, 0.98),
+    ]
+
+    for page in sorted_pages[1:]:
+        crop_specs.append(
+            (
+                page,
+                f"group_packing_rows_p{page.numero_pagina}",
+                "packing_rows",
+                0.12,
+                0.96,
+                0.02,
+                0.98,
+            )
+        )
+
+    for page, suffix, role, top_ratio, bottom_ratio, left_ratio, right_ratio in crop_specs:
+        crop_definition = _create_dynamic_page_crop(
+            page,
+            suffix=suffix,
+            role=role,
+            top_ratio=top_ratio,
+            bottom_ratio=bottom_ratio,
+            left_ratio=left_ratio,
+            right_ratio=right_ratio,
+            save_crop=_save_ddt_crop,
+        )
+        if crop_definition is not None:
+            crops[str(crop_definition["label"])] = crop_definition
+
+    return crops
+
+
+def _extract_aluminium_bozen_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]]]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un documento tecnico di trasporto e ricostruisci tutte le righe logiche materiale presenti. "
+                "Una riga logica puo essere distribuita tra il blocco materiale della prima pagina e uno o piu blocchi packing nelle pagine successive. "
+                "Se il documento contiene 3 righe logiche, restituisci 3 elementi; se ne contiene 5, restituisci 5 elementi. "
+                "Non unire dati di righe diverse e non inventare valori mancanti. "
+                "Non fare il match con nessun certificato e non normalizzare i valori. "
+                "Per l'ordine cliente usa solo il valore associato a Vs. Odv o Rif. ordine cliente. "
+                "Non usare mai Rif. ordine AB o Rif. ns. Odv N. come ordine cliente. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
+                "\"customer_code_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
+                "\"diameter_raw\":\"string|null\",\"cast_raw\":\"string|null\","
+                "\"certificate_no_raw\":\"string|null\",\"net_weight_raw\":\"string|null\","
+                "\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{encoded}",
+                "detail": "high",
+            }
+        )
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="DDT row-group AI request failed") from exc
+
+    return _parse_openai_json_payload_for_row_groups(response.output_text)
+
+
+def _parse_openai_json_payload_for_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected DDT row-group AI payload")
+
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        raw_row_index = raw_row.get("row_index")
+        try:
+            normalized_row_index = int(raw_row_index) if raw_row_index is not None else index
+        except (TypeError, ValueError):
+            normalized_row_index = index
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (
+                _string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else [])
+            )
+            if item is not None
+        ]
+        normalized_rows.append(
+            {
+                "row_index": normalized_row_index,
+                "customer_order_raw": _string_or_none(raw_row.get("customer_order_raw")),
+                "article_code_raw": _string_or_none(raw_row.get("article_code_raw")),
+                "customer_code_raw": _string_or_none(raw_row.get("customer_code_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "cast_raw": _string_or_none(raw_row.get("cast_raw")),
+                "certificate_no_raw": _string_or_none(raw_row.get("certificate_no_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+
+    return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _sanitize_aluminium_bozen_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+) -> list[ReaderRowSplitCandidateResponse]:
+    sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
+    normalized_ddt = _sanitize_ddt_number_candidate(ddt_number_raw, None)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        customer_order_raw = _string_or_none(raw_row.get("customer_order_raw"))
+        article_code_raw = _string_or_none(raw_row.get("article_code_raw"))
+        customer_code_raw = _string_or_none(raw_row.get("customer_code_raw"))
+        alloy_raw = _string_or_none(raw_row.get("alloy_raw"))
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
+        cast_raw = _string_or_none(raw_row.get("cast_raw"))
+        certificate_no_raw = _string_or_none(raw_row.get("certificate_no_raw"))
+        net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
+        source_crops = cast(list[str], raw_row.get("source_crops") or [])
+
+        certificate_no = _extract_token_from_value_or_evidence(
+            certificate_no_raw,
+            certificate_no_raw,
+            r"\b\d{4,7}[A-Z]?\b",
+            disallow={"10204"},
+        )
+        if certificate_no is not None and _looks_like_invalid_cdq(certificate_no, certificate_no_raw):
+            certificate_no = None
+
+        alloy_value = None
+        if alloy_raw is not None:
+            alloy_match = re.search(
+                r"\b([0-9]{4}[A-Z]*)\s*(?:HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF\b|HF\b|/F\b|F\b)",
+                alloy_raw.upper(),
+            )
+            if alloy_match is not None:
+                alloy_value = f"{alloy_match.group(1)} F"
+
+        diameter_value = _extract_token_from_value_or_evidence(
+            diameter_raw,
+            diameter_raw,
+            r"\b\d{1,4}(?:[.,]\d+)?\b",
+        )
+        weight_value = _normalize_value_for_field("ddt", "peso", net_weight_raw)
+        article_code = _extract_token_from_value_or_evidence(
+            article_code_raw,
+            article_code_raw,
+            r"\b[0-9]{2}[A-Z]{2}[0-9A-Z-]{4,}\b",
+        )
+        customer_code = _extract_token_from_value_or_evidence(
+            customer_code_raw,
+            customer_code_raw,
+            r"\bA[0-9A-Z]{5,}\b",
+        )
+        cast_value = _extract_token_from_value_or_evidence(
+            cast_raw,
+            cast_raw,
+            r"\b[0-9]{4,}[A-Z0-9]*\b",
+        )
+
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="aluminium_bozen",
+            ddt_number=normalized_ddt,
+            cdq=certificate_no,
+            customer_code=customer_code,
+            article_code=article_code,
+            lega=alloy_value,
+            diametro=_normalize_value_for_field("ddt", "diametro", diameter_value),
+            peso_netto=weight_value,
+            colata=cast_value,
+            customer_order_no=_normalize_customer_order_tokens(customer_order_raw),
+            snippets=source_crops[:6],
+        )
+
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in (
+                "ddt_number",
+                "cdq",
+                "customer_code",
+                "article_code",
+                "lega",
+                "diametro",
+                "peso_netto",
+                "colata",
+                "customer_order_no",
+            )
+        ):
+            sanitized_rows.append(candidate)
+
+    return sanitized_rows
+
+
+def _apply_aluminium_bozen_ai_row_groups_to_rows(
+    db: Session,
+    *,
+    ddt_document: Document,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+    actor_id: int,
+) -> int:
+    if not rows or not ai_candidates:
+        return 0
+
+    row_models = [get_acquisition_row(db, row.id) for row in rows]
+    assignments = _match_aluminium_bozen_ai_groups_to_rows(db=db, rows=row_models, ai_candidates=ai_candidates)
+    applied_rows = 0
+
+    for row_model in row_models:
+        ai_candidate = assignments.get(row_model.id)
+        if ai_candidate is None:
+            continue
+        if _apply_aluminium_bozen_ai_candidate_to_row(
+            db=db,
+            row=row_model,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        ):
+            applied_rows += 1
+
+    if applied_rows:
+        db.commit()
+    return applied_rows
+
+
+def _match_aluminium_bozen_ai_groups_to_rows(
+    db: Session,
+    *,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+) -> dict[int, ReaderRowSplitCandidateResponse]:
+    pairs: list[tuple[int, int, int]] = []
+    row_value_maps = {
+        row.id: {
+            value.campo: _final_value_for_row(value)
+            for value in (
+                db.query(ReadValue)
+                .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+                .all()
+            )
+        }
+        for row in rows
+    }
+
+    for row in rows:
+        ddt_values = row_value_maps.get(row.id, {})
+        for ai_candidate in ai_candidates:
+            score = _score_aluminium_bozen_ai_group_against_row(
+                row=row,
+                ddt_values=ddt_values,
+                ai_candidate=ai_candidate,
+            )
+            if score >= 70:
+                pairs.append((score, row.id, ai_candidate.candidate_index))
+
+    pairs.sort(reverse=True)
+    assigned_rows: set[int] = set()
+    assigned_candidates: set[int] = set()
+    ai_by_index = {candidate.candidate_index: candidate for candidate in ai_candidates}
+    assignments: dict[int, ReaderRowSplitCandidateResponse] = {}
+
+    for score, row_id, candidate_index in pairs:
+        if row_id in assigned_rows or candidate_index in assigned_candidates:
+            continue
+        assignments[row_id] = ai_by_index[candidate_index]
+        assigned_rows.add(row_id)
+        assigned_candidates.add(candidate_index)
+
+    return assignments
+
+
+def _score_aluminium_bozen_ai_group_against_row(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    ai_candidate: ReaderRowSplitCandidateResponse,
+) -> int:
+    score = 0
+    anchor_matches = 0
+
+    row_article = _string_or_none(ddt_values.get("article_code"))
+    row_customer_code = _string_or_none(ddt_values.get("customer_code"))
+    row_customer_order = _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(row.ordine)
+    row_certificate_no = (
+        _string_or_none(ddt_values.get("numero_certificato_ddt"))
+        or _string_or_none(ddt_values.get("cdq"))
+        or _string_or_none(row.cdq)
+    )
+    row_cast = _string_or_none(ddt_values.get("colata")) or _string_or_none(row.colata)
+    row_diameter = _string_or_none(ddt_values.get("diametro")) or _string_or_none(row.diametro)
+    row_alloy = _string_or_none(ddt_values.get("lega")) or _string_or_none(row.lega_base)
+    row_weight = _string_or_none(ddt_values.get("peso")) or _string_or_none(row.peso)
+
+    if row_article and ai_candidate.article_code and reader_same_token(row_article, ai_candidate.article_code):
+        score += 120
+        anchor_matches += 1
+    if row_customer_code and ai_candidate.customer_code and reader_same_token(row_customer_code, ai_candidate.customer_code):
+        score += 100
+        anchor_matches += 1
+    if row_customer_order and ai_candidate.customer_order_no and reader_same_token(row_customer_order, ai_candidate.customer_order_no):
+        score += 90
+        anchor_matches += 1
+    if row_certificate_no and ai_candidate.cdq and reader_same_token(row_certificate_no, ai_candidate.cdq):
+        score += 85
+        anchor_matches += 1
+    if row_cast and ai_candidate.colata and reader_same_token(row_cast, ai_candidate.colata):
+        score += 75
+        anchor_matches += 1
+    if row_diameter and ai_candidate.diametro and reader_same_token(row_diameter, ai_candidate.diametro):
+        score += 25
+    if row_alloy and ai_candidate.lega and reader_same_token(row_alloy, ai_candidate.lega):
+        score += 20
+    if row_weight and ai_candidate.peso_netto and reader_weights_are_compatible(row_weight, ai_candidate.peso_netto):
+        score += 15
+
+    if anchor_matches == 0:
+        return 0
+    return score
+
+
+def _apply_aluminium_bozen_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "numero_certificato_ddt": ai_candidate.cdq,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "customer_code": ai_candidate.customer_code,
+        "article_code": ai_candidate.article_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "colata": ai_candidate.colata,
+        "peso": ai_candidate.peso_netto,
+    }
+
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+
+    if changed_fields == 0:
+        return False
+
+    _sync_row_from_ddt_values(db, row)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
 
 
 def extract_ddt_fields_with_vision(
@@ -1981,6 +2509,27 @@ def extract_ddt_fields_with_vision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
     supplier_key = _resolve_row_supplier_key(row)
+    if supplier_key == "aluminium_bozen":
+        sibling_rows = (
+            db.query(AcquisitionRow)
+            .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
+            .order_by(AcquisitionRow.id.asc())
+            .all()
+        )
+        ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
+        _apply_aluminium_bozen_ai_row_groups_to_rows(
+            db=db,
+            ddt_document=ddt_document,
+            rows=sibling_rows,
+            ai_candidates=ai_candidates,
+            actor_id=actor_id,
+        )
+        return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
     ddt_values = {
         value.campo: _final_value_for_row(value)
         for value in (
@@ -2131,7 +2680,7 @@ def run_ai_intervention(
             openai_api_key=openai_api_key,
         )
         refreshed_row = get_acquisition_row(db, row.id)
-        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id)
+        detect_standard_notes(db=db, row=refreshed_row, actor_id=actor_id, openai_api_key=openai_api_key)
         refreshed_row = get_acquisition_row(db, row.id)
 
     _record_history_event(
@@ -2185,7 +2734,7 @@ def _process_certificate_side_blocks(
         current_row = get_acquisition_row(db, row.id)
 
     if not _block_has_confirmed_values(db, current_row.id, "note"):
-        detect_standard_notes(db=db, row=current_row, actor_id=actor_id)
+        detect_standard_notes(db=db, row=current_row, actor_id=actor_id, openai_api_key=openai_api_key)
         current_row = get_acquisition_row(db, row.id)
 
     return current_row
@@ -2218,12 +2767,7 @@ def _extract_certificate_core_fields_with_vision(
     supplier_key = _resolve_row_supplier_key(row)
     crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
     if supplier_key == "aluminium_bozen":
-        crop_definitions = {
-            label: crop
-            for label, crop in crop_definitions.items()
-            if str(crop.get("role")) in {"certificate_header", "identity_block", "certificate_continuation"}
-            or str(crop.get("label", "")).endswith("identity_context")
-        }
+        crop_definitions = _select_aluminium_bozen_certificate_core_crops(crop_definitions)
     if not crop_definitions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2240,22 +2784,46 @@ def _extract_certificate_core_fields_with_vision(
         "colata_certificato",
         "peso_certificato",
     ]
-    extracted = _extract_certificate_fields_from_openai(
-        crop_definitions,
-        openai_api_key=openai_api_key,
-        field_names=field_names,
-        instruction=(
-            "Leggi solo i ritagli mascherati del blocco identita e dei blocchi tecnici vicini di un certificato materiale. "
-            "Estrai solo i campi core chiaramente leggibili senza inventare. "
-            "I codici articolo possono apparire come 14BT..., i codici cliente come token tecnici che iniziano con A, "
-            "l'ordine cliente puo apparire come numero con data o data con numero."
-        ),
-    )
+    if supplier_key == "aluminium_bozen":
+        extracted = _sanitize_aluminium_bozen_vision_certificate_fields(
+            _extract_aluminium_bozen_certificate_core_fields_from_openai(
+                crop_definitions,
+                openai_api_key=openai_api_key,
+            )
+        )
+    else:
+        extracted = _extract_certificate_fields_from_openai(
+            crop_definitions,
+            openai_api_key=openai_api_key,
+            field_names=field_names,
+            instruction=(
+                "Leggi i ritagli del blocco identita e dei blocchi tecnici vicini di un certificato materiale. "
+                "Estrai solo i campi core chiaramente leggibili senza inventare. "
+                "I codici articolo possono apparire come 14BT..., i codici cliente come token tecnici che iniziano con A, "
+                "l'ordine cliente puo apparire come numero con data o data con numero."
+            ),
+        )
     extracted_count = 0
 
     for field_name, payload in extracted.items():
         field_value = _string_or_none(payload.get("value"))
         if field_value is None:
+            if _is_revisable_chatgpt_match_value(row, field_name):
+                _upsert_read_value_model(
+                    db=db,
+                    acquisition_row_id=row.id,
+                    blocco="match",
+                    campo=field_name,
+                    valore_grezzo=None,
+                    valore_standardizzato=None,
+                    valore_finale=None,
+                    stato="proposto",
+                    document_evidence_id=None,
+                    metodo_lettura="chatgpt",
+                    fonte_documentale="certificato",
+                    confidenza=None,
+                    actor_id=actor_id,
+                )
             continue
         if _has_stable_value_protected_from_ai(row, "match", field_name):
             continue
@@ -2777,6 +3345,8 @@ def _auto_propose_certificate_match(
     row: AcquisitionRow,
     certificate_documents: list[Document],
     actor_id: int,
+    openai_api_key: str | None = None,
+    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
 ) -> bool:
     if row.certificate_match is not None or row.document_certificato_id is not None:
         return False
@@ -2803,6 +3373,25 @@ def _auto_propose_certificate_match(
             scored_candidates.append(candidate)
     if not scored_candidates:
         return False
+
+    if openai_api_key and _resolve_row_supplier_key(row) == "aluminium_bozen":
+        local_candidates = sorted(scored_candidates, key=lambda item: (-int(item["score"]), int(item["document"].id)))
+        refined_candidates: dict[int, dict[str, object]] = {int(candidate["document"].id): candidate for candidate in local_candidates}
+        for candidate in local_candidates[:3]:
+            certificate_document = cast(Document, candidate["document"])
+            refined = _score_certificate_candidate(
+                db=db,
+                row=row,
+                certificate_document=certificate_document,
+                ddt_certificate_number=ddt_certificate_number,
+                row_ddt_values=ddt_values,
+                openai_api_key=openai_api_key,
+                certificate_ai_cache=certificate_ai_cache,
+                use_ai_refinement=True,
+            )
+            if refined is not None:
+                refined_candidates[int(certificate_document.id)] = refined
+        scored_candidates = list(refined_candidates.values())
 
     scored_candidates.sort(key=lambda item: (-int(item["score"]), int(item["document"].id)))
     best_candidate = scored_candidates[0]
@@ -2851,6 +3440,9 @@ def _score_certificate_candidate(
     certificate_document: Document,
     ddt_certificate_number: str | None,
     row_ddt_values: dict[str, str | None],
+    openai_api_key: str | None = None,
+    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
+    use_ai_refinement: bool = False,
 ) -> dict[str, object] | None:
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None and row.fornitore_id != certificate_document.fornitore_id:
         return None
@@ -2897,6 +3489,29 @@ def _score_certificate_candidate(
         template.supplier_key if template is not None else None,
         "certificato",
     )
+
+    if use_ai_refinement and openai_api_key and supplier_key == "aluminium_bozen":
+        certificate_ai_fields = _get_aluminium_bozen_certificate_ai_fields_for_match(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+        ai_match_values = certificate_ai_fields.get("match_values", {})
+        ai_supplier_fields = certificate_ai_fields.get("supplier_fields", {})
+        certificate_number = certificate_number or _string_or_none(ai_match_values.get("numero_certificato_certificato"))
+        certificate_cast = certificate_cast or _string_or_none(ai_match_values.get("colata_certificato"))
+        certificate_weight = certificate_weight or _string_or_none(ai_match_values.get("peso_certificato"))
+        certificate_supplier_fields = {
+            "article": _string_or_none(certificate_supplier_fields.get("article")) or _string_or_none(ai_supplier_fields.get("article")),
+            "customer_code": _string_or_none(certificate_supplier_fields.get("customer_code")) or _string_or_none(ai_supplier_fields.get("customer_code")),
+            "customer_order_normalized": _string_or_none(certificate_supplier_fields.get("customer_order_normalized"))
+            or _string_or_none(ai_supplier_fields.get("customer_order_normalized")),
+        }
+        if "lega_certificato" not in matches and _string_or_none(ai_match_values.get("lega_certificato")) is not None:
+            matches["lega_certificato"] = {"final": _string_or_none(ai_match_values.get("lega_certificato"))}
+        if "diametro_certificato" not in matches and _string_or_none(ai_match_values.get("diametro_certificato")) is not None:
+            matches["diametro_certificato"] = {"final": _string_or_none(ai_match_values.get("diametro_certificato"))}
 
     score = 0
     reasons: list[tuple[int, str]] = []
@@ -3675,35 +4290,138 @@ def _build_aluminium_bozen_certificate_safe_crops(
     if not image_pages:
         return crops
 
-    first_page = image_pages[0]
-    image_path = get_document_page_image_path(first_page)
-    with Image.open(image_path) as image:
-        crop_specs = [
-            ("certificate_header", (0.05, 0.04, 0.95, 0.20), "certificate_header"),
-            ("identity_block", (0.06, 0.16, 0.95, 0.46), "identity_block"),
-            ("identity_context", (0.04, 0.12, 0.97, 0.54), "identity_block"),
-            ("chemistry_table", (0.05, 0.38, 0.95, 0.68), "chemistry_table"),
-            ("chemistry_context", (0.03, 0.34, 0.97, 0.72), "chemistry_table"),
-            ("properties_table", (0.05, 0.56, 0.95, 0.84), "properties_table"),
-            ("properties_context", (0.03, 0.50, 0.97, 0.90), "properties_table"),
-            ("notes_block", (0.05, 0.80, 0.95, 0.98), "notes_block"),
-        ]
-        for suffix, ratios, role in crop_specs:
-            crop_definition = _create_certificate_crop_definition(first_page, image, suffix=suffix, role=role, ratios=ratios)
-            if crop_definition is not None:
-                crops[crop_definition["label"]] = crop_definition
-
-    for page in image_pages[1:]:
+    for index, page in enumerate(image_pages):
         image_path = get_document_page_image_path(page)
         with Image.open(image_path) as image:
-            for suffix, ratios, role in (
-                ("continuation_upper", (0.05, 0.08, 0.95, 0.52), "certificate_continuation"),
-                ("continuation_lower", (0.05, 0.48, 0.95, 0.96), "notes_block"),
-            ):
-                crop_definition = _create_certificate_crop_definition(page, image, suffix=suffix, role=role, ratios=ratios)
-                if crop_definition is not None:
-                    crops[crop_definition["label"]] = crop_definition
+            masked_page = _build_aluminium_bozen_certificate_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("certificate_header", "certificate_header"),
+                    ("identity_block", "identity_block"),
+                    ("core_context", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
     return crops
+
+
+def _build_aluminium_bozen_certificate_masked_page(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    left = int(width * 0.028)
+    top = int(height * 0.160)
+    right = int(width * 0.972)
+    bottom = int(height * 0.952)
+    masked = image.crop((left, top, right, bottom)).convert("RGB")
+
+    _mask_aluminium_bozen_customer_name(masked)
+
+    draw = ImageDraw.Draw(masked)
+    stamp_box = (
+        int(masked.width * 0.56),
+        int(masked.height * 0.63),
+        int(masked.width * 0.90),
+        int(masked.height * 0.78),
+    )
+    draw.rectangle(stamp_box, fill="black")
+    return masked
+
+
+def _mask_aluminium_bozen_customer_name(image: Image.Image) -> None:
+    try:
+        data = pytesseract.image_to_data(image, lang="eng+ita+deu", output_type=pytesseract.Output.DICT)
+    except (OSError, pytesseract.TesseractNotFoundError):
+        return
+
+    boxes: list[tuple[int, int, int, int]] = []
+    tokens = data.get("text") or []
+    block_nums = data.get("block_num") or []
+    par_nums = data.get("par_num") or []
+    line_nums = data.get("line_num") or []
+    lefts = data.get("left") or []
+    tops = data.get("top") or []
+    widths = data.get("width") or []
+    heights = data.get("height") or []
+
+    matched_lines: set[tuple[int, int, int]] = set()
+    for index, token in enumerate(tokens):
+        normalized = re.sub(r"[^A-Z0-9]", "", _string_or_none(token) or "").upper()
+        if "FORGIALLUMINIO" not in normalized:
+            continue
+        try:
+            matched_lines.add((int(block_nums[index]), int(par_nums[index]), int(line_nums[index])))
+        except (TypeError, ValueError, IndexError):
+            continue
+
+    if not matched_lines:
+        return
+
+    for index, token in enumerate(tokens):
+        try:
+            line_key = (int(block_nums[index]), int(par_nums[index]), int(line_nums[index]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if line_key not in matched_lines:
+            continue
+        text = _string_or_none(token)
+        if text is None:
+            continue
+        try:
+            x0 = int(lefts[index])
+            y0 = int(tops[index])
+            x1 = x0 + int(widths[index])
+            y1 = y0 + int(heights[index])
+        except (TypeError, ValueError, IndexError):
+            continue
+        boxes.append((x0, y0, x1, y1))
+
+    if not boxes:
+        return
+
+    pad_x = max(12, image.width // 200)
+    pad_y = max(8, image.height // 260)
+    left = max(0, min(box[0] for box in boxes) - pad_x)
+    top = max(0, min(box[1] for box in boxes) - pad_y)
+    right = min(image.width, max(box[2] for box in boxes) + pad_x)
+    bottom = min(image.height, max(box[3] for box in boxes) + pad_y)
+    ImageDraw.Draw(image).rectangle((left, top, right, bottom), fill="black")
+
+
+def _select_aluminium_bozen_certificate_core_crops(
+    crop_definitions: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    selected: dict[str, dict[str, str | int]] = {}
+    allowed_roles = {
+        "certificate_header",
+        "identity_block",
+        "certificate_core_context",
+        "certificate_continuation",
+    }
+    for label, crop in crop_definitions.items():
+        role = _string_or_none(crop.get("role"))
+        if role in allowed_roles:
+            selected[label] = crop
+            continue
+        if label.endswith("identity_context") or label.endswith("core_context"):
+            selected[label] = crop
+    return selected
 
 
 def _create_ddt_crop_definition(
@@ -3923,8 +4641,9 @@ def _extract_ddt_fields_from_openai(
                 "numero_certificato_ddt = numero certificato letto da etichette tipo Cert. N o Certificato; "
                 "non usare stringhe normative come EN 10204 3.1, Inspection Certificate o riferimenti ASTM/AMS. "
                 "cdq = popolalo solo se il DDT riporta davvero una sigla esplicita CdQ/C.d.Q.; se sul DDT c'e' solo Cert. N lascia cdq null. "
+                "ordine = per questo fornitore lascia null; non usare mai il valore di Rif. ns. Odv N. come ordine finale. "
                 "customer_order_no = riferimento ordine cliente della riga, anche se visibile come numero e data o data e numero; "
-                "riporta il valore leggibile senza inventarlo. "
+                "usa solo il valore di Vs. Odv e normalizzalo come numero-data; non usare mai Rif. ns. Odv N. al posto di Vs. Odv. "
                 "customer_code = codice cliente/materiale come token tecnico, ad esempio codici che iniziano con A. "
                 "article_code = codice articolo tecnico, ad esempio token come 14BT.... "
                 "lega = lega/stato metallurgico della riga materiale. "
@@ -3985,7 +4704,7 @@ def _extract_certificate_fields_from_openai(
                 f"Usa solo queste chiavi: {', '.join(field_names)}. "
                 "Ogni chiave deve essere un oggetto con campi value, evidence, source_crop. "
                 "Usa null se il dato non e' leggibile o se sei incerto. "
-                "Usa source_crop esattamente come il label del ritaglio fornito. "
+                "Usa source_crop esattamente come il label dell'immagine fornita. "
                 "Non inventare valori mancanti."
             ),
         }
@@ -3999,7 +4718,7 @@ def _extract_certificate_fields_from_openai(
             {
                 "type": "input_text",
                 "text": (
-                    f"Crop label: {crop_label}; "
+                    f"Image label: {crop_label}; "
                     f"role: {crop.get('role') or 'unknown'}; "
                     f"page_number: {crop.get('page_number') or 'unknown'}"
                 ),
@@ -4016,6 +4735,230 @@ def _extract_certificate_fields_from_openai(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Certificate vision extraction request failed") from exc
 
     return _parse_openai_json_payload_for_fields(response.output_text, field_names)
+
+
+def _extract_aluminium_bozen_certificate_core_fields_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, dict[str, str | None]]:
+    raw_field_names = [
+        "certificate_number_raw",
+        "article_code_raw",
+        "customer_order_raw",
+        "alloy_raw",
+        "profile_customer_description_raw",
+        "cast_raw",
+        "net_weight_raw",
+    ]
+    return _extract_certificate_fields_from_openai(
+        crops,
+        openai_api_key=openai_api_key,
+        field_names=raw_field_names,
+        instruction=(
+            "Leggi questo certificato materiale e raccogli i dati raw identificativi e tecnici del certificato. "
+            "Estrai certificate_number_raw dal campo CERT.NO o Nr.CERT. "
+            "Estrai customer_order_raw solo dal campo Nr. ORDINE CLIENTE o etichetta equivalente. "
+            "Non usare mai Nr ORDINE A.B. o riferimenti di ordine interno al posto del customer_order_raw. "
+            "Estrai article_code_raw dal campo ARTICOLO o etichetta equivalente. "
+            "Estrai alloy_raw dal campo LEGA o ALLOY. "
+            "Estrai profile_customer_description_raw dal campo DESCRIZIONE PROFILO CLIENTE o CUSTOMER'S SECTION DESC. "
+            "Estrai cast_raw dal campo N COLATA, CAST BATCH o CHARGE N se presente. "
+            "Estrai net_weight_raw solo dal campo PESO NETTO o NET WEIGHT se il valore e chiaramente visibile. "
+            "Non normalizzare, non inferire e restituisci solo valori chiaramente leggibili."
+        ),
+    )
+
+
+def _sanitize_aluminium_bozen_vision_certificate_fields(
+    extracted: dict[str, dict[str, str | None]],
+) -> dict[str, dict[str, str | None]]:
+    def _payload(raw_field_name: str) -> dict[str, str | None]:
+        return extracted.get(raw_field_name) or {"value": None, "evidence": None, "source_crop": None}
+
+    def _normalize_certificate_number(value: str | None, evidence: str | None) -> str | None:
+        token = _extract_token_from_value_or_evidence(
+            value,
+            evidence,
+            r"\b\d{4,7}[A-Z]?\b",
+            disallow={"10204"},
+        )
+        if token is None or re.fullmatch(r"20\d{2}", token):
+            return None
+        if _looks_like_invalid_cdq(token, evidence):
+            return None
+        return token
+
+    def _normalize_article_code(value: str | None, evidence: str | None) -> str | None:
+        return _extract_token_from_value_or_evidence(
+            value,
+            evidence,
+            r"\b[0-9]{2}[A-Z]{2}[0-9A-Z-]{4,}\b",
+        )
+
+    def _normalize_customer_code(value: str | None, evidence: str | None) -> str | None:
+        token = _extract_token_from_value_or_evidence(
+            value,
+            evidence,
+            r"\bA[0-9A-Z]{5,}\b",
+        )
+        return _normalize_aluminium_bozen_customer_code_token(token)
+
+    def _normalize_customer_order(value: str | None, evidence: str | None) -> str | None:
+        normalized = _normalize_customer_order_tokens(value) or _normalize_customer_order_tokens(evidence)
+        if not _is_normalized_customer_order(normalized):
+            return None
+        return normalized
+
+    def _normalize_alloy(value: str | None, evidence: str | None) -> str | None:
+        haystacks = [candidate for candidate in (value, evidence) if _string_or_none(candidate)]
+        for haystack in haystacks:
+            match = re.search(
+                r"\b([1-9][0-9]{3}[A-Z]{0,3})\s+(HF\s*/\s*F|H\s*/\s*F|G\s*/\s*F|GF|HF|F|T\d+[A-Z0-9/-]*)\b",
+                haystack.upper(),
+            )
+            if match is None:
+                continue
+            alloy = f"{match.group(1)} {match.group(2).replace(' / ', ' ').replace('/', ' ')}"
+            return re.sub(r"\s+", " ", alloy).strip()
+        return None
+
+    def _normalize_diameter(value: str | None, evidence: str | None) -> str | None:
+        haystacks = [candidate for candidate in (value, evidence) if _string_or_none(candidate)]
+        for haystack in haystacks:
+            for match in re.finditer(r"\b\d{1,3}(?:[.,]\d+)?\b", haystack):
+                normalized = _normalize_numeric_value(match.group(0))
+                if normalized is None:
+                    continue
+                try:
+                    numeric_value = float(normalized)
+                except ValueError:
+                    continue
+                if 0 < numeric_value <= 400:
+                    return normalized
+        return None
+
+    def _normalize_cast(value: str | None, evidence: str | None) -> str | None:
+        return _extract_token_from_value_or_evidence(
+            value,
+            evidence,
+            r"\b(?:[A-Z]\d{5,}[A-Z]?|\d{5,}[A-Z]\d|\d{5,}[A-Z]|\d{5,})\b",
+            disallow={"10204"},
+        )
+
+    def _normalize_weight(value: str | None, evidence: str | None) -> str | None:
+        return _normalize_numeric_value(value) or _normalize_numeric_value(evidence)
+
+    field_mapping = {
+        "numero_certificato_certificato": ("certificate_number_raw", _normalize_certificate_number),
+        "articolo_certificato": ("article_code_raw", _normalize_article_code),
+        "codice_cliente_certificato": ("profile_customer_description_raw", _normalize_customer_code),
+        "ordine_cliente_certificato": ("customer_order_raw", _normalize_customer_order),
+        "lega_certificato": ("alloy_raw", _normalize_alloy),
+        "diametro_certificato": ("profile_customer_description_raw", _normalize_diameter),
+        "colata_certificato": ("cast_raw", _normalize_cast),
+        "peso_certificato": ("net_weight_raw", _normalize_weight),
+    }
+
+    normalized: dict[str, dict[str, str | None]] = {}
+    for target_field, (raw_field_name, normalizer) in field_mapping.items():
+        raw_payload = _payload(raw_field_name)
+        raw_value = _string_or_none(raw_payload.get("value"))
+        evidence = _string_or_none(raw_payload.get("evidence")) or raw_value
+        normalized[target_field] = {
+            "value": normalizer(raw_value, evidence),
+            "evidence": evidence,
+            "source_crop": _string_or_none(raw_payload.get("source_crop")),
+        }
+
+    return normalized
+
+
+def _get_aluminium_bozen_certificate_ai_fields_for_match(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
+) -> dict[str, dict[str, str | None]]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    existing_row = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.document_certificato_id == certificate_document.id)
+        .order_by(AcquisitionRow.id.desc())
+        .first()
+    )
+    if existing_row is not None:
+        existing_match_values = {
+            value.campo: _final_value_for_row(value)
+            for value in existing_row.values
+            if value.blocco == "match"
+        }
+        existing_payload = {
+            "match_values": {
+                field_name: _string_or_none(existing_match_values.get(field_name))
+                for field_name in (
+                    "numero_certificato_certificato",
+                    "articolo_certificato",
+                    "codice_cliente_certificato",
+                    "ordine_cliente_certificato",
+                    "lega_certificato",
+                    "diametro_certificato",
+                    "colata_certificato",
+                    "peso_certificato",
+                )
+            },
+            "supplier_fields": {
+                "article": _string_or_none(existing_match_values.get("articolo_certificato")),
+                "customer_code": _string_or_none(existing_match_values.get("codice_cliente_certificato")),
+                "customer_order_normalized": _string_or_none(existing_match_values.get("ordine_cliente_certificato")),
+            },
+        }
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = existing_payload
+        return existing_payload
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crop_definitions = _select_aluminium_bozen_certificate_core_crops(
+        _build_certificate_safe_crops(certificate_document.pages, supplier_key="aluminium_bozen")
+    )
+    if not crop_definitions:
+        empty_payload = {"match_values": {}, "supplier_fields": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    sanitized = _sanitize_aluminium_bozen_vision_certificate_fields(
+        _extract_aluminium_bozen_certificate_core_fields_from_openai(
+            crop_definitions,
+            openai_api_key=openai_api_key,
+        )
+    )
+    payload = {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in sanitized.items()
+        },
+        "supplier_fields": {
+            "article": _string_or_none((sanitized.get("articolo_certificato") or {}).get("value")),
+            "customer_code": _string_or_none((sanitized.get("codice_cliente_certificato") or {}).get("value")),
+            "customer_order_normalized": _string_or_none((sanitized.get("ordine_cliente_certificato") or {}).get("value")),
+        },
+    }
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
 
 
 def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
@@ -4149,7 +5092,7 @@ def _sanitize_vision_ddt_fields(
     customer_order_source_crop = _string_or_none(normalized.get("customer_order_no", {}).get("source_crop"))
     if customer_order_value is not None:
         customer_order_value = _normalize_customer_order_tokens(customer_order_value) or _normalize_customer_order_tokens(customer_order_evidence)
-        if customer_order_value is not None and "|" not in customer_order_value:
+        if not _is_normalized_customer_order(customer_order_value):
             customer_order_value = None
     if "customer_order_no" in normalized:
         normalized["customer_order_no"] = {
@@ -4363,7 +5306,7 @@ def _ai_guardrail_field_aliases(block: str, field_name: str) -> tuple[str, ...]:
         if field_name in {"cdq", "numero_certificato_ddt"}:
             return ("cdq", "numero_certificato_ddt")
         if field_name == "ordine":
-            return ("ordine", "supplier_order_no")
+            return ("ordine", "customer_order_no")
         return (field_name,)
     return (field_name,)
 
@@ -4386,9 +5329,36 @@ def _ddt_row_field_fallback_value(row: AcquisitionRow, field_name: str) -> str |
     return None
 
 
+def _normalize_aluminium_bozen_customer_code_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    token = cleaned.upper()
+    if not token.startswith("A"):
+        return token
+    normalized_chars = [token[0]]
+    for char in token[1:]:
+        if char in {"O", "Q", "D"}:
+            normalized_chars.append("0")
+        elif char == "I":
+            normalized_chars.append("1")
+        else:
+            normalized_chars.append(char)
+    return "".join(normalized_chars)
+
+
 def _is_revisable_chatgpt_ddt_value(row: AcquisitionRow, field_name: str) -> bool:
     for value in row.values:
         if value.blocco != "ddt" or value.campo != field_name:
+            continue
+        if value.metodo_lettura == "chatgpt" and value.stato != "confermato":
+            return True
+    return False
+
+
+def _is_revisable_chatgpt_match_value(row: AcquisitionRow, field_name: str) -> bool:
+    for value in row.values:
+        if value.blocco != "match" or value.campo != field_name:
             continue
         if value.metodo_lettura == "chatgpt" and value.stato != "confermato":
             return True
@@ -4413,8 +5383,8 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
         row.peso = _final_value_for_row(value_map.get("peso"))
     if row.diametro is None and "diametro" in value_map:
         row.diametro = _final_value_for_row(value_map.get("diametro"))
-    if row.ordine is None and ("ordine" in value_map or "supplier_order_no" in value_map):
-        row.ordine = _final_value_for_row(value_map.get("ordine")) or _final_value_for_row(value_map.get("supplier_order_no"))
+    if row.ordine is None and ("customer_order_no" in value_map or "ordine" in value_map):
+        row.ordine = _final_value_for_row(value_map.get("customer_order_no")) or _final_value_for_row(value_map.get("ordine"))
     if "ddt" in value_map and row.ddt is None:
         row.ddt = _final_value_for_row(value_map.get("ddt"))
     if "lega" in value_map and row.lega_base is None:
@@ -4471,6 +5441,16 @@ def _sync_row_from_match_values(db: Session, row: AcquisitionRow) -> None:
     certificate_number = _final_value_for_row(value_map.get("numero_certificato_certificato"))
     if certificate_number is not None:
         row.cdq = certificate_number
+    if row.ordine is None and "ordine_cliente_certificato" in value_map:
+        row.ordine = _final_value_for_row(value_map.get("ordine_cliente_certificato"))
+    if row.lega_base is None and "lega_certificato" in value_map:
+        row.lega_base = _final_value_for_row(value_map.get("lega_certificato"))
+    if row.diametro is None and "diametro_certificato" in value_map:
+        row.diametro = _final_value_for_row(value_map.get("diametro_certificato"))
+    if row.colata is None and "colata_certificato" in value_map:
+        row.colata = _final_value_for_row(value_map.get("colata_certificato"))
+    if row.peso is None and "peso_certificato" in value_map:
+        row.peso = _final_value_for_row(value_map.get("peso_certificato"))
 
 
 def _sync_row_cdq_from_certificate_document(
@@ -5212,7 +6192,7 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
             if "VS. ODV" not in line and "VS ODV" not in line and "RIF. ORDINE CLIENTE" not in line:
                 continue
             normalized = _normalize_customer_order_tokens(line)
-            if normalized is not None and "|" in normalized:
+            if _is_normalized_customer_order(normalized):
                 return normalized
         return None
 
@@ -5229,7 +6209,7 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
             continue
         for candidate in normalized_lines[index : min(index + 5, len(normalized_lines))]:
                 normalized = _normalize_customer_order_tokens(candidate)
-                if normalized is not None and "|" in normalized:
+                if _is_normalized_customer_order(normalized):
                     return normalized
     return None
 
@@ -5691,20 +6671,25 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    cleaned_upper = cleaned.upper()
-    leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", cleaned_upper)
+
+    normalized_text = cleaned.upper()
+    normalized_text = normalized_text.replace("/", "-")
+    normalized_text = re.sub(r"(?<=\d)\.(?=\d)", "-", normalized_text)
+    normalized_text = re.sub(r"\s+", " ", normalized_text).strip()
+
+    leading_date_match = re.search(r"(20\d{2}-\d{2}-\d{2})\D{0,4}(\d{1,4})\b", normalized_text)
     if leading_date_match is not None:
-        return f"{leading_date_match.group(2)}|{leading_date_match.group(1)}"
+        return f"{int(leading_date_match.group(2))}-{leading_date_match.group(1)}"
 
-    trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", cleaned_upper)
+    trailing_date_match = re.search(r"\b(\d{1,4})\D{0,4}(20\d{2}-\d{2}-\d{2})", normalized_text)
     if trailing_date_match is not None:
-        return f"{trailing_date_match.group(1)}|{trailing_date_match.group(2)}"
+        return f"{int(trailing_date_match.group(1))}-{trailing_date_match.group(2)}"
 
-    tokens = re.findall(r"[A-Z0-9]+", cleaned.upper())
+    tokens = re.findall(r"[A-Z0-9]+", normalized_text)
     if not tokens:
         return None
-    if re.search(r"20\d{2}-\d{2}-\d{2}", cleaned):
-        date_match = re.search(r"20\d{2}-\d{2}-\d{2}", cleaned)
+    if re.search(r"20\d{2}-\d{2}-\d{2}", normalized_text):
+        date_match = re.search(r"20\d{2}-\d{2}-\d{2}", normalized_text)
         date_value = date_match.group(0) if date_match else None
         other_tokens = [
             token
@@ -5714,12 +6699,21 @@ def _normalize_customer_order_tokens(value: str | None) -> str | None:
         ]
         if date_value:
             prefix = next((token for token in other_tokens if re.fullmatch(r"\d{1,4}", token)), "".join(other_tokens))
-            return f"{prefix}|{date_value}" if prefix else date_value
+            if prefix:
+                return f"{int(prefix)}-{date_value}"
+            return None
     if len(tokens) >= 4 and re.fullmatch(r"20\d{2}", tokens[1]):
         date_value = f"{tokens[1]}-{tokens[2]}-{tokens[3]}"
         prefix = next((token for token in tokens if re.fullmatch(r"\d{1,4}", token)), tokens[0])
-        return f"{prefix}|{date_value}"
+        return f"{int(prefix)}-{date_value}"
     return "".join(tokens)
+
+
+def _is_normalized_customer_order(value: str | None) -> bool:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return False
+    return re.fullmatch(r"\d{1,4}-20\d{2}-\d{2}-\d{2}", cleaned) is not None
 
 
 def _extract_metalba_ddt_reference_values(lines: list[str]) -> tuple[str | None, str | None]:
@@ -6007,7 +7001,7 @@ def _detect_chemistry_matches_with_vision(
         openai_api_key=openai_api_key,
         field_names=chemistry_fields,
         instruction=(
-            "Leggi solo i ritagli mascherati della tabella di composizione chimica di un certificato materiale. "
+            "Leggi la tabella di composizione chimica del certificato materiale. "
             "La tabella puo essere orizzontale o verticale. "
             "Usa solo questi elementi: Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb. "
             "Ignora righe o colonne Min e Max. "
@@ -6015,6 +7009,37 @@ def _detect_chemistry_matches_with_vision(
         ),
     )
     return _normalize_vision_numeric_matches(extracted, crops)
+
+
+def _detect_note_matches_with_vision(
+    pages: list[DocumentPage],
+    *,
+    openai_api_key: str,
+    supplier_key: str | None = None,
+) -> dict[str, dict[str, str | int]]:
+    crops = _build_certificate_safe_crops(pages, supplier_key=supplier_key)
+    crops = {
+        label: crop
+        for label, crop in crops.items()
+        if str(crop.get("role")) in {"notes_block", "certificate_continuation"}
+        or str(crop.get("label", "")).endswith("notes_block")
+        or str(crop.get("label", "")).endswith("continuation_lower")
+    }
+    if not crops:
+        return {}
+
+    extracted = _extract_certificate_fields_from_openai(
+        crops,
+        openai_api_key=openai_api_key,
+        field_names=["nota_us_control_classe", "nota_rohs", "nota_radioactive_free"],
+        instruction=(
+            "Leggi le note tecniche finali del certificato materiale. "
+            "Per nota_us_control_classe restituisci solo A o B se una nota ASTM/AMS indica chiaramente la classe. "
+            "Per nota_rohs restituisci true solo se la conformita RoHS e chiaramente dichiarata. "
+            "Per nota_radioactive_free restituisci true solo se il certificato dichiara esplicitamente assenza di contaminazione radioattiva."
+        ),
+    )
+    return _normalize_vision_note_matches(extracted, crops)
 
 
 def _detect_property_matches_with_vision(
@@ -6038,7 +7063,7 @@ def _detect_property_matches_with_vision(
         openai_api_key=openai_api_key,
         field_names=sorted(PROPERTY_FIELD_SET),
         instruction=(
-            "Leggi solo i ritagli mascherati della tabella delle proprieta meccaniche o fisiche di un certificato materiale. "
+            "Leggi la tabella delle proprieta meccaniche o fisiche del certificato materiale. "
             "La tabella puo essere orizzontale o verticale. "
             "Ignora righe o colonne Min e Max. "
             "Se ci sono piu righe misurate vere, per ogni campo restituisci il valore misurato reale piu basso chiaramente leggibile."
@@ -6070,6 +7095,46 @@ def _normalize_vision_numeric_matches(
             "raw": raw_value,
             "standardized": cleaned_value,
             "final": cleaned_value,
+            "method": "chatgpt",
+        }
+    return normalized
+
+
+def _normalize_vision_note_matches(
+    extracted: dict[str, dict[str, str | None]],
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    normalized: dict[str, dict[str, str | int]] = {}
+    for field_name, payload in extracted.items():
+        raw_value = _string_or_none(payload.get("value"))
+        evidence = _string_or_none(payload.get("evidence")) or raw_value
+        if evidence is None:
+            continue
+        source_crop = _string_or_none(payload.get("source_crop"))
+        crop = crops.get(source_crop) if source_crop else None
+        page_id = int(crop["page_id"]) if crop and crop.get("page_id") is not None else 0
+        if page_id <= 0:
+            continue
+
+        final_value: str | None = None
+        if field_name == "nota_us_control_classe":
+            final_value = _detect_us_control_class(evidence.lower())
+        elif field_name == "nota_rohs":
+            haystack = evidence.lower()
+            if "rohs" in haystack:
+                final_value = "true"
+        elif field_name == "nota_radioactive_free":
+            if _is_radioactive_free_line(evidence.lower()):
+                final_value = "true"
+
+        if final_value is None:
+            continue
+
+        normalized[field_name] = {
+            "page_id": page_id,
+            "snippet": evidence,
+            "standardized": final_value,
+            "final": final_value,
             "method": "chatgpt",
         }
     return normalized

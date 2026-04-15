@@ -615,7 +615,7 @@ export default function AcquisitionListPage() {
                   <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="ddt" label="Ddt" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="peso" label="Peso Kg" onSort={toggleSort} sortConfig={sortConfig} />
-                  <SortableHeader field="ordine" label="Ordine" onSort={toggleSort} sortConfig={sortConfig} />
+                  <SortableHeader field="ordine" label="Vs. Odv" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="match" label="Match" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="chimica" label="Chim." onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="proprieta" label="Prop." onSort={toggleSort} sortConfig={sortConfig} />

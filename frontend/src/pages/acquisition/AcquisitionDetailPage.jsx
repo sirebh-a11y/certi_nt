@@ -696,7 +696,7 @@ export default function AcquisitionDetailPage() {
                       <th className="px-3 py-2">Colata</th>
                       <th className="px-3 py-2">Ddt</th>
                       <th className="px-3 py-2">Peso Kg</th>
-                      <th className="px-3 py-2">Ordine</th>
+                      <th className="px-3 py-2">Vs. Odv</th>
                       <th className="px-3 py-2">Stato</th>
                     </tr>
                   </thead>
