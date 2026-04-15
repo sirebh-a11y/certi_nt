@@ -1029,7 +1029,31 @@ def run_autonomous_processing(
         explicit_certificate_documents = [
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
-        certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] = {}
+        certificate_ai_cache: dict[int, dict[str, object]] = {}
+        if use_ai_intervention and openai_api_key:
+            for certificate_document in certificate_documents:
+                template = resolve_supplier_template(
+                    certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
+                    certificate_document.nome_file_originale,
+                )
+                if template is None or template.supplier_key != "aluminium_bozen":
+                    continue
+                try:
+                    _get_aluminium_bozen_certificate_ai_payload(
+                        db=db,
+                        certificate_document=certificate_document,
+                        openai_api_key=openai_api_key,
+                        certificate_ai_cache=certificate_ai_cache,
+                    )
+                except HTTPException as exc:
+                    _save_run(
+                        db,
+                        run,
+                        ultimo_errore=str(exc.detail),
+                        messaggio_corrente=(
+                            f"Lettura AI certificato non riuscita su {certificate_document.nome_file_originale}, continuo"
+                        ),
+                    )
         total_target_rows = 0
         for ddt_document in ddt_documents:
             plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
@@ -1179,6 +1203,7 @@ def run_autonomous_processing(
                             actor_id=actor_id,
                             openai_api_key=openai_api_key,
                             use_ai_intervention=use_ai_intervention,
+                            certificate_ai_cache=certificate_ai_cache,
                         )
                         if not had_chemistry and _block_has_values(db, row.id, "chimica"):
                             _save_run(db, run, chimica_rilevata=run.chimica_rilevata + 1)
@@ -1592,11 +1617,20 @@ def detect_standard_notes(
             template = resolve_supplier_template(
                 row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
             )
-            vision_matches = _detect_note_matches_with_vision(
-                certificate_document.pages,
-                openai_api_key=openai_api_key,
-                supplier_key=template.supplier_key if template is not None else None,
-            )
+            if template is not None and template.supplier_key == "aluminium_bozen":
+                payload = _get_aluminium_bozen_certificate_ai_payload(
+                    db=db,
+                    certificate_document=certificate_document,
+                    openai_api_key=openai_api_key,
+                    certificate_ai_cache=None,
+                )
+                vision_matches = cast(dict[str, dict[str, str | int]], payload.get("notes") or {})
+            else:
+                vision_matches = _detect_note_matches_with_vision(
+                    certificate_document.pages,
+                    openai_api_key=openai_api_key,
+                    supplier_key=template.supplier_key if template is not None else None,
+                )
             if vision_matches:
                 matches = vision_matches
     if not matches:
@@ -1679,11 +1713,20 @@ def detect_chemistry(
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
             template = resolve_supplier_template(supplier_name) if supplier_name else None
-            vision_matches = _detect_chemistry_matches_with_vision(
-                certificate_document.pages,
-                openai_api_key=openai_api_key,
-                supplier_key=template.supplier_key if template is not None else None,
-            )
+            if template is not None and template.supplier_key == "aluminium_bozen":
+                payload = _get_aluminium_bozen_certificate_ai_payload(
+                    db=db,
+                    certificate_document=certificate_document,
+                    openai_api_key=openai_api_key,
+                    certificate_ai_cache=None,
+                )
+                vision_matches = cast(dict[str, dict[str, str | int]], payload.get("chemistry") or {})
+            else:
+                vision_matches = _detect_chemistry_matches_with_vision(
+                    certificate_document.pages,
+                    openai_api_key=openai_api_key,
+                    supplier_key=template.supplier_key if template is not None else None,
+                )
             if vision_matches:
                 for field_name, match in vision_matches.items():
                     matches.setdefault(field_name, match)
@@ -1764,11 +1807,20 @@ def detect_properties(
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
             template = resolve_supplier_template(supplier_name) if supplier_name else None
-            vision_matches = _detect_property_matches_with_vision(
-                certificate_document.pages,
-                openai_api_key=openai_api_key,
-                supplier_key=template.supplier_key if template is not None else None,
-            )
+            if template is not None and template.supplier_key == "aluminium_bozen":
+                payload = _get_aluminium_bozen_certificate_ai_payload(
+                    db=db,
+                    certificate_document=certificate_document,
+                    openai_api_key=openai_api_key,
+                    certificate_ai_cache=None,
+                )
+                vision_matches = cast(dict[str, dict[str, str | int]], payload.get("properties") or {})
+            else:
+                vision_matches = _detect_property_matches_with_vision(
+                    certificate_document.pages,
+                    openai_api_key=openai_api_key,
+                    supplier_key=template.supplier_key if template is not None else None,
+                )
             if vision_matches:
                 for field_name, match in vision_matches.items():
                     matches.setdefault(field_name, match)
@@ -2711,19 +2763,27 @@ def _process_certificate_side_blocks(
     actor_id: int,
     openai_api_key: str | None,
     use_ai_intervention: bool,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> AcquisitionRow:
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_certificato_id is None:
         return current_row
 
     if use_ai_intervention and openai_api_key and _resolve_row_supplier_key(current_row) == "aluminium_bozen":
-        _extract_certificate_core_fields_with_vision(
+        payload = _get_aluminium_bozen_certificate_ai_payload(
+            db=db,
+            certificate_document=get_document(db, current_row.document_certificato_id),
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+        _apply_aluminium_bozen_certificate_ai_payload(
             db=db,
             row=current_row,
+            payload=payload,
             actor_id=actor_id,
-            openai_api_key=openai_api_key,
         )
-        current_row = get_acquisition_row(db, row.id)
+        current_row = get_acquisition_row(db, current_row.id)
+        return current_row
 
     if not _block_has_confirmed_values(db, current_row.id, "chimica"):
         detect_chemistry(db=db, row=current_row, actor_id=actor_id, openai_api_key=openai_api_key)
@@ -2765,15 +2825,6 @@ def _extract_certificate_core_fields_with_vision(
         )
 
     supplier_key = _resolve_row_supplier_key(row)
-    crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
-    if supplier_key == "aluminium_bozen":
-        crop_definitions = _select_aluminium_bozen_certificate_core_crops(crop_definitions)
-    if not crop_definitions:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to prepare certificate image crops for vision",
-        )
-
     field_names = [
         "numero_certificato_certificato",
         "articolo_certificato",
@@ -2785,13 +2836,20 @@ def _extract_certificate_core_fields_with_vision(
         "peso_certificato",
     ]
     if supplier_key == "aluminium_bozen":
-        extracted = _sanitize_aluminium_bozen_vision_certificate_fields(
-            _extract_aluminium_bozen_certificate_core_fields_from_openai(
-                crop_definitions,
-                openai_api_key=openai_api_key,
-            )
+        payload = _get_aluminium_bozen_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=None,
         )
+        extracted = cast(dict[str, dict[str, str | None]], payload.get("core_fields") or {})
     else:
+        crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
+        if not crop_definitions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unable to prepare certificate image crops for vision",
+            )
         extracted = _extract_certificate_fields_from_openai(
             crop_definitions,
             openai_api_key=openai_api_key,
@@ -2960,16 +3018,26 @@ def _resolve_certificate_documents_for_automation(
         document = _get_document_of_type(db, document_id, "certificato")
         documents_by_id[document.id] = document
 
-    supplier_ids = {document.fornitore_id for document in ddt_documents if document.fornitore_id is not None}
     if not ddt_documents and explicit_certificate_document_ids:
         return list(documents_by_id.values())
-    repository_query = db.query(Document).filter(Document.tipo_documento == "certificato")
-    if supplier_ids:
-        repository_query = repository_query.filter(
-            (Document.fornitore_id.in_(supplier_ids)) | (Document.fornitore_id.is_(None))
-        )
 
-    for document in repository_query.order_by(Document.id.asc()).all():
+    supplier_ids = {document.fornitore_id for document in ddt_documents if document.fornitore_id is not None}
+    acquisition_query = (
+        db.query(AcquisitionRow.document_certificato_id)
+        .filter(AcquisitionRow.document_certificato_id.is_not(None))
+    )
+    if supplier_ids:
+        acquisition_query = acquisition_query.filter(AcquisitionRow.fornitore_id.in_(supplier_ids))
+
+    acquisition_certificate_ids = sorted(
+        {
+            int(document_id)
+            for (document_id,) in acquisition_query.distinct().all()
+            if document_id is not None
+        }
+    )
+    for document_id in acquisition_certificate_ids:
+        document = _get_document_of_type(db, document_id, "certificato")
         documents_by_id.setdefault(document.id, document)
 
     return list(documents_by_id.values())
@@ -3100,6 +3168,7 @@ def _ensure_certificate_first_rows(
                     actor_id=actor_id,
                     openai_api_key=openai_api_key,
                     use_ai_intervention=use_ai_intervention,
+                    certificate_ai_cache=None,
                 )
             continue
         duplicate_row = next(
@@ -3128,6 +3197,7 @@ def _ensure_certificate_first_rows(
                     actor_id=actor_id,
                     openai_api_key=openai_api_key,
                     use_ai_intervention=use_ai_intervention,
+                    certificate_ai_cache=None,
                 )
             continue
 
@@ -3160,6 +3230,7 @@ def _ensure_certificate_first_rows(
             actor_id=actor_id,
             openai_api_key=openai_api_key,
             use_ai_intervention=use_ai_intervention,
+            certificate_ai_cache=None,
         )
         created_count += 1
 
@@ -3346,7 +3417,7 @@ def _auto_propose_certificate_match(
     certificate_documents: list[Document],
     actor_id: int,
     openai_api_key: str | None = None,
-    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> bool:
     if row.certificate_match is not None or row.document_certificato_id is not None:
         return False
@@ -3368,30 +3439,12 @@ def _auto_propose_certificate_match(
             certificate_document=certificate_document,
             ddt_certificate_number=ddt_certificate_number,
             row_ddt_values=ddt_values,
+            certificate_ai_cache=certificate_ai_cache,
         )
         if candidate is not None:
             scored_candidates.append(candidate)
     if not scored_candidates:
         return False
-
-    if openai_api_key and _resolve_row_supplier_key(row) == "aluminium_bozen":
-        local_candidates = sorted(scored_candidates, key=lambda item: (-int(item["score"]), int(item["document"].id)))
-        refined_candidates: dict[int, dict[str, object]] = {int(candidate["document"].id): candidate for candidate in local_candidates}
-        for candidate in local_candidates[:3]:
-            certificate_document = cast(Document, candidate["document"])
-            refined = _score_certificate_candidate(
-                db=db,
-                row=row,
-                certificate_document=certificate_document,
-                ddt_certificate_number=ddt_certificate_number,
-                row_ddt_values=ddt_values,
-                openai_api_key=openai_api_key,
-                certificate_ai_cache=certificate_ai_cache,
-                use_ai_refinement=True,
-            )
-            if refined is not None:
-                refined_candidates[int(certificate_document.id)] = refined
-        scored_candidates = list(refined_candidates.values())
 
     scored_candidates.sort(key=lambda item: (-int(item["score"]), int(item["document"].id)))
     best_candidate = scored_candidates[0]
@@ -3440,9 +3493,7 @@ def _score_certificate_candidate(
     certificate_document: Document,
     ddt_certificate_number: str | None,
     row_ddt_values: dict[str, str | None],
-    openai_api_key: str | None = None,
-    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
-    use_ai_refinement: bool = False,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> dict[str, object] | None:
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None and row.fornitore_id != certificate_document.fornitore_id:
         return None
@@ -3490,15 +3541,10 @@ def _score_certificate_candidate(
         "certificato",
     )
 
-    if use_ai_refinement and openai_api_key and supplier_key == "aluminium_bozen":
-        certificate_ai_fields = _get_aluminium_bozen_certificate_ai_fields_for_match(
-            db=db,
-            certificate_document=certificate_document,
-            openai_api_key=openai_api_key,
-            certificate_ai_cache=certificate_ai_cache,
-        )
-        ai_match_values = certificate_ai_fields.get("match_values", {})
-        ai_supplier_fields = certificate_ai_fields.get("supplier_fields", {})
+    if supplier_key == "aluminium_bozen" and certificate_ai_cache is not None:
+        certificate_ai_fields = cast(dict[str, object], certificate_ai_cache.get(certificate_document.id) or {})
+        ai_match_values = cast(dict[str, str | None], certificate_ai_fields.get("match_values") or {})
+        ai_supplier_fields = cast(dict[str, str | None], certificate_ai_fields.get("supplier_fields") or {})
         certificate_number = certificate_number or _string_or_none(ai_match_values.get("numero_certificato_certificato"))
         certificate_cast = certificate_cast or _string_or_none(ai_match_values.get("colata_certificato"))
         certificate_weight = certificate_weight or _string_or_none(ai_match_values.get("peso_certificato"))
@@ -4403,27 +4449,6 @@ def _mask_aluminium_bozen_customer_name(image: Image.Image) -> None:
     bottom = min(image.height, max(box[3] for box in boxes) + pad_y)
     ImageDraw.Draw(image).rectangle((left, top, right, bottom), fill="black")
 
-
-def _select_aluminium_bozen_certificate_core_crops(
-    crop_definitions: dict[str, dict[str, str | int]],
-) -> dict[str, dict[str, str | int]]:
-    selected: dict[str, dict[str, str | int]] = {}
-    allowed_roles = {
-        "certificate_header",
-        "identity_block",
-        "certificate_core_context",
-        "certificate_continuation",
-    }
-    for label, crop in crop_definitions.items():
-        role = _string_or_none(crop.get("role"))
-        if role in allowed_roles:
-            selected[label] = crop
-            continue
-        if label.endswith("identity_context") or label.endswith("core_context"):
-            selected[label] = crop
-    return selected
-
-
 def _create_ddt_crop_definition(
     page: DocumentPage,
     image: Image.Image,
@@ -4737,39 +4762,6 @@ def _extract_certificate_fields_from_openai(
     return _parse_openai_json_payload_for_fields(response.output_text, field_names)
 
 
-def _extract_aluminium_bozen_certificate_core_fields_from_openai(
-    crops: dict[str, dict[str, str | int]],
-    *,
-    openai_api_key: str,
-) -> dict[str, dict[str, str | None]]:
-    raw_field_names = [
-        "certificate_number_raw",
-        "article_code_raw",
-        "customer_order_raw",
-        "alloy_raw",
-        "profile_customer_description_raw",
-        "cast_raw",
-        "net_weight_raw",
-    ]
-    return _extract_certificate_fields_from_openai(
-        crops,
-        openai_api_key=openai_api_key,
-        field_names=raw_field_names,
-        instruction=(
-            "Leggi questo certificato materiale e raccogli i dati raw identificativi e tecnici del certificato. "
-            "Estrai certificate_number_raw dal campo CERT.NO o Nr.CERT. "
-            "Estrai customer_order_raw solo dal campo Nr. ORDINE CLIENTE o etichetta equivalente. "
-            "Non usare mai Nr ORDINE A.B. o riferimenti di ordine interno al posto del customer_order_raw. "
-            "Estrai article_code_raw dal campo ARTICOLO o etichetta equivalente. "
-            "Estrai alloy_raw dal campo LEGA o ALLOY. "
-            "Estrai profile_customer_description_raw dal campo DESCRIZIONE PROFILO CLIENTE o CUSTOMER'S SECTION DESC. "
-            "Estrai cast_raw dal campo N COLATA, CAST BATCH o CHARGE N se presente. "
-            "Estrai net_weight_raw solo dal campo PESO NETTO o NET WEIGHT se il valore e chiaramente visibile. "
-            "Non normalizzare, non inferire e restituisci solo valori chiaramente leggibili."
-        ),
-    )
-
-
 def _sanitize_aluminium_bozen_vision_certificate_fields(
     extracted: dict[str, dict[str, str | None]],
 ) -> dict[str, dict[str, str | None]]:
@@ -4874,91 +4866,383 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
     return normalized
 
 
-def _get_aluminium_bozen_certificate_ai_fields_for_match(
+def _get_aluminium_bozen_certificate_ai_payload(
     db: Session,
     *,
     certificate_document: Document,
     openai_api_key: str,
-    certificate_ai_cache: dict[int, dict[str, dict[str, str | None]]] | None = None,
-) -> dict[str, dict[str, str | None]]:
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
     cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
     if cached is not None:
         return cached
-
-    existing_row = (
-        db.query(AcquisitionRow)
-        .filter(AcquisitionRow.document_certificato_id == certificate_document.id)
-        .order_by(AcquisitionRow.id.desc())
-        .first()
-    )
-    if existing_row is not None:
-        existing_match_values = {
-            value.campo: _final_value_for_row(value)
-            for value in existing_row.values
-            if value.blocco == "match"
-        }
-        existing_payload = {
-            "match_values": {
-                field_name: _string_or_none(existing_match_values.get(field_name))
-                for field_name in (
-                    "numero_certificato_certificato",
-                    "articolo_certificato",
-                    "codice_cliente_certificato",
-                    "ordine_cliente_certificato",
-                    "lega_certificato",
-                    "diametro_certificato",
-                    "colata_certificato",
-                    "peso_certificato",
-                )
-            },
-            "supplier_fields": {
-                "article": _string_or_none(existing_match_values.get("articolo_certificato")),
-                "customer_code": _string_or_none(existing_match_values.get("codice_cliente_certificato")),
-                "customer_order_normalized": _string_or_none(existing_match_values.get("ordine_cliente_certificato")),
-            },
-        }
-        if certificate_ai_cache is not None:
-            certificate_ai_cache[certificate_document.id] = existing_payload
-        return existing_payload
 
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
     certificate_document = _ensure_document_page_images(db, certificate_document)
     if not _document_has_image_pages(certificate_document):
-        empty_payload = {"match_values": {}, "supplier_fields": {}}
+        empty_payload = {
+            "match_values": {},
+            "supplier_fields": {},
+            "chemistry": {},
+            "properties": {},
+            "notes": {},
+        }
         if certificate_ai_cache is not None:
             certificate_ai_cache[certificate_document.id] = empty_payload
         return empty_payload
 
-    crop_definitions = _select_aluminium_bozen_certificate_core_crops(
-        _build_certificate_safe_crops(certificate_document.pages, supplier_key="aluminium_bozen")
-    )
-    if not crop_definitions:
-        empty_payload = {"match_values": {}, "supplier_fields": {}}
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="aluminium_bozen")
+    page_images = _select_aluminium_bozen_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {
+            "match_values": {},
+            "supplier_fields": {},
+            "chemistry": {},
+            "properties": {},
+            "notes": {},
+        }
         if certificate_ai_cache is not None:
             certificate_ai_cache[certificate_document.id] = empty_payload
         return empty_payload
 
-    sanitized = _sanitize_aluminium_bozen_vision_certificate_fields(
-        _extract_aluminium_bozen_certificate_core_fields_from_openai(
-            crop_definitions,
-            openai_api_key=openai_api_key,
-        )
+    raw_payload = _extract_aluminium_bozen_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
     )
-    payload = {
-        "match_values": {
-            field_name: _string_or_none(field_payload.get("value"))
-            for field_name, field_payload in sanitized.items()
-        },
-        "supplier_fields": {
-            "article": _string_or_none((sanitized.get("articolo_certificato") or {}).get("value")),
-            "customer_code": _string_or_none((sanitized.get("codice_cliente_certificato") or {}).get("value")),
-            "customer_order_normalized": _string_or_none((sanitized.get("ordine_cliente_certificato") or {}).get("value")),
-        },
-    }
+    payload = _normalize_aluminium_bozen_certificate_ai_payload(page_images, raw_payload)
     if certificate_ai_cache is not None:
         certificate_ai_cache[certificate_document.id] = payload
     return payload
+
+
+def _select_aluminium_bozen_certificate_document_images(
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    selected: dict[str, dict[str, str | int]] = {}
+    by_page: dict[int, list[tuple[str, dict[str, str | int]]]] = {}
+    for label, crop in crops.items():
+        page_number = int(crop.get("page_number") or 0)
+        if page_number <= 0:
+            continue
+        by_page.setdefault(page_number, []).append((label, crop))
+
+    role_priority = {
+        "certificate_core_context": 1,
+        "certificate_continuation": 2,
+        "identity_block": 3,
+        "chemistry_table": 4,
+        "properties_table": 5,
+        "notes_block": 6,
+        "certificate_header": 7,
+    }
+    for page_number, entries in sorted(by_page.items()):
+        best_label, best_crop = sorted(
+            entries,
+            key=lambda item: (
+                role_priority.get(_string_or_none(item[1].get("role")) or "", 99),
+                item[0],
+            ),
+        )[0]
+        selected[best_label] = best_crop
+    return selected
+
+
+def _extract_aluminium_bozen_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato materiale. "
+                "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica, proprieta meccaniche e note tecniche rilevanti. "
+                "Usa solo testo realmente visibile nel documento. Non inventare, non inferire, non normalizzare. "
+                "Per l'ordine cliente usa solo Nr. ORDINE CLIENTE. Non usare mai Nr ORDINE A.B. come ordine cliente. "
+                "Campi core da estrarre: certificate_number_raw, customer_order_raw, article_code_raw, alloy_raw, "
+                "profile_customer_description_raw, cast_raw, net_weight_raw. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; "
+                "restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
+                "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
+                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"certificate_number_raw\":\"string|null\",\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"profile_customer_description_raw\":\"string|null\",\"cast_raw\":\"string|null\",\"net_weight_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
+                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
+                "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Image label: {image_label}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _parse_openai_json_payload_for_certificate_bundle(payload: str) -> dict[str, object]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from certificate AI extraction")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from certificate AI extraction") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected certificate AI payload structure")
+    return data
+
+
+def _normalize_aluminium_bozen_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_extracted = {
+        field_name: {
+            "value": _string_or_none(core_payload.get(field_name)),
+            "evidence": _string_or_none(core_payload.get(field_name)),
+            "source_crop": next(iter(page_images.keys()), None),
+        }
+        for field_name in (
+            "certificate_number_raw",
+            "article_code_raw",
+            "customer_order_raw",
+            "alloy_raw",
+            "profile_customer_description_raw",
+            "cast_raw",
+            "net_weight_raw",
+        )
+    }
+    sanitized_core = _sanitize_aluminium_bozen_vision_certificate_fields(core_extracted)
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": next(iter(page_images.keys()), None),
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            next(iter(page_images.keys()), "page1"): {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+
+    measured_rows_payload = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows_payload if isinstance(measured_rows_payload, list) else [],
+        page_id=first_page_id,
+    )
+
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in sanitized_core.items()
+        },
+        "supplier_fields": {
+            "article": _string_or_none((sanitized_core.get("articolo_certificato") or {}).get("value")),
+            "customer_code": _string_or_none((sanitized_core.get("codice_cliente_certificato") or {}).get("value")),
+            "customer_order_normalized": _string_or_none((sanitized_core.get("ordine_cliente_certificato") or {}).get("value")),
+        },
+        "core_fields": sanitized_core,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+    }
+
+
+def _normalize_aluminium_bozen_measured_rows_payload(
+    measured_rows_payload: list[object],
+    *,
+    page_id: int,
+) -> dict[str, dict[str, str | int]]:
+    candidates: dict[str, list[tuple[float, str]]] = {}
+    snippets: dict[str, str] = {}
+    for raw_row in measured_rows_payload:
+        if not isinstance(raw_row, dict):
+            continue
+        snippet_parts: list[str] = []
+        for field_name in ("Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2/Rm"):
+            raw_value = _string_or_none(raw_row.get(field_name))
+            if raw_value is None:
+                continue
+            standardized = _normalize_numeric_value(raw_value)
+            if standardized is None:
+                continue
+            try:
+                numeric_value = float(standardized)
+            except ValueError:
+                continue
+            candidates.setdefault(field_name, []).append((numeric_value, standardized))
+            snippet_parts.append(f"{field_name}={raw_value}")
+        if snippet_parts:
+            snippet = " ".join(snippet_parts)
+            for field_name in ("Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2/Rm"):
+                if _string_or_none(raw_row.get(field_name)) is not None:
+                    snippets.setdefault(field_name, snippet)
+
+    normalized: dict[str, dict[str, str | int]] = {}
+    for field_name, values in candidates.items():
+        values.sort(key=lambda item: item[0])
+        _, chosen = values[0]
+        normalized[field_name] = {
+            "page_id": page_id,
+            "snippet": snippets.get(field_name, chosen),
+            "raw": chosen,
+            "standardized": chosen,
+            "final": chosen,
+            "method": "chatgpt",
+        }
+    return normalized
+
+
+def _apply_aluminium_bozen_certificate_ai_payload(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: dict[str, object],
+    actor_id: int,
+) -> None:
+    certificate_document = get_document(db, row.document_certificato_id)
+    core_fields = cast(dict[str, dict[str, str | None]], payload.get("core_fields") or {})
+    for field_name, field_payload in core_fields.items():
+        field_value = _string_or_none(field_payload.get("value"))
+        if field_value is None or _has_stable_value_protected_from_ai(row, "match", field_name):
+            continue
+        evidence = _string_or_none(field_payload.get("evidence")) or field_value
+        evidence_model = _create_text_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=certificate_document.id,
+            document_page_id=certificate_document.pages[0].id if certificate_document.pages else None,
+            blocco="match",
+            snippet=evidence,
+            actor_id=actor_id,
+            confidence=0.77,
+        )
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="match",
+            campo=field_name,
+            valore_grezzo=field_value,
+            valore_standardizzato=field_value,
+            valore_finale=field_value,
+            stato="proposto",
+            document_evidence_id=evidence_model.id,
+            metodo_lettura="chatgpt",
+            fonte_documentale="certificato",
+            confidenza=0.77,
+            actor_id=actor_id,
+        )
+
+    for block_name, confidence in (("chemistry", 0.76), ("properties", 0.74), ("notes", 0.74)):
+        block_key = {"chemistry": "chimica", "properties": "proprieta", "notes": "note"}[block_name]
+        matches = cast(dict[str, dict[str, str | int]], payload.get(block_name) or {})
+        if not matches:
+            continue
+        _prune_unconfirmed_block_values(db=db, row_id=row.id, block=block_key, keep_fields=set(matches.keys()))
+        for field_name, match in matches.items():
+            snippet = _string_or_none(cast(dict[str, object], match).get("snippet")) or _string_or_none(cast(dict[str, object], match).get("final")) or ""
+            page_id = cast(dict[str, object], match).get("page_id")
+            evidence = _create_text_evidence(
+                db=db,
+                row_id=row.id,
+                document_id=certificate_document.id,
+                document_page_id=int(page_id) if page_id else None,
+                blocco=block_key,
+                snippet=snippet,
+                actor_id=actor_id,
+                confidence=confidence,
+            )
+            _upsert_read_value_model(
+                db=db,
+                acquisition_row_id=row.id,
+                blocco=block_key,
+                campo=field_name,
+                valore_grezzo=_string_or_none(cast(dict[str, object], match).get("raw")) or _string_or_none(cast(dict[str, object], match).get("final")),
+                valore_standardizzato=_string_or_none(cast(dict[str, object], match).get("standardized")) or _string_or_none(cast(dict[str, object], match).get("final")),
+                valore_finale=_string_or_none(cast(dict[str, object], match).get("final")),
+                stato="proposto",
+                document_evidence_id=evidence.id,
+                metodo_lettura="chatgpt",
+                fonte_documentale="certificato",
+                confidenza=confidence,
+                actor_id=actor_id,
+            )
 
 
 def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
