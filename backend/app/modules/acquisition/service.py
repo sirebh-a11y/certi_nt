@@ -1071,15 +1071,6 @@ def run_autonomous_processing(
                 messaggio_corrente=f"Creo o recupero le righe {index}/{len(ddt_document_ids)} da {ddt_document.nome_file_originale}",
             )
 
-            rows, created_count = _ensure_autonomous_rows(
-                db=db,
-                ddt_document=ddt_document,
-                actor_id=actor_id,
-                actor_email=actor_email,
-            )
-            if created_count:
-                _save_run(db, run, righe_create=run.righe_create + created_count)
-
             ddt_template = resolve_supplier_template(
                 ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
                 ddt_document.nome_file_originale,
@@ -1090,45 +1081,52 @@ def run_autonomous_processing(
                     db,
                     run,
                     fase_corrente="intervento_ai",
-                    messaggio_corrente=f"Ricostruisco le righe DDT con AI per {ddt_document.nome_file_originale}",
+                    messaggio_corrente=f"Creo le righe DDT con AI per {ddt_document.nome_file_originale}",
                 )
                 try:
-                    ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+                    rows, created_count = _ensure_autonomous_rows_with_ai(
                         db=db,
                         ddt_document=ddt_document,
+                        actor_id=actor_id,
+                        actor_email=actor_email,
                         openai_api_key=openai_api_key,
                     )
-                    _apply_aluminium_bozen_ai_row_groups_to_rows(
-                        db=db,
-                        ddt_document=ddt_document,
-                        rows=rows,
-                        ai_candidates=ai_candidates,
-                        actor_id=actor_id,
-                    )
-                    rows = [get_acquisition_row(db, row.id) for row in rows]
+                    if created_count:
+                        _save_run(db, run, righe_create=run.righe_create + created_count)
                 except HTTPException as exc:
                     _save_run(
                         db,
                         run,
                         ultimo_errore=str(exc.detail),
                         messaggio_corrente=(
-                            f"Intervento AI DDT non riuscito su {ddt_document.nome_file_originale}, continuo con il parser locale"
+                            f"Intervento AI DDT non riuscito su {ddt_document.nome_file_originale}"
                         ),
                     )
+                    rows = []
+            else:
+                rows, created_count = _ensure_autonomous_rows(
+                    db=db,
+                    ddt_document=ddt_document,
+                    actor_id=actor_id,
+                    actor_email=actor_email,
+                )
+                if created_count:
+                    _save_run(db, run, righe_create=run.righe_create + created_count)
 
             for row in rows:
                 row = get_acquisition_row(db, row.id)
                 _save_run(db, run, current_row_id=row.id)
 
                 try:
-                    _save_run(
-                        db,
-                        run,
-                        fase_corrente="lettura_ddt",
-                        messaggio_corrente=f"Leggo i campi DDT della riga #{row.id}",
-                    )
-                    extract_core_fields(db=db, row=row, actor_id=actor_id)
-                    row = get_acquisition_row(db, row.id)
+                    if not (use_ai_intervention and ddt_supplier_key == "aluminium_bozen"):
+                        _save_run(
+                            db,
+                            run,
+                            fase_corrente="lettura_ddt",
+                            messaggio_corrente=f"Leggo i campi DDT della riga #{row.id}",
+                        )
+                        extract_core_fields(db=db, row=row, actor_id=actor_id)
+                        row = get_acquisition_row(db, row.id)
 
                     if use_ddt_vision and (not use_ai_intervention) and openai_api_key and _row_needs_ddt_vision(db, row):
                         _save_run(
@@ -1166,6 +1164,7 @@ def run_autonomous_processing(
                         actor_id=actor_id,
                         openai_api_key=openai_api_key if use_ai_intervention else None,
                         certificate_ai_cache=certificate_ai_cache,
+                        ai_only_mode=bool(use_ai_intervention and ddt_supplier_key == "aluminium_bozen"),
                     )
                     if matched:
                         _save_run(db, run, match_proposti=run.match_proposti + 1)
@@ -1241,6 +1240,7 @@ def run_autonomous_processing(
                 actor_email=actor_email,
                 openai_api_key=openai_api_key,
                 use_ai_intervention=use_ai_intervention,
+                certificate_ai_cache=certificate_ai_cache,
             )
             if created_certificate_rows:
                 _save_run(db, run, righe_create=run.righe_create + created_certificate_rows)
@@ -3084,6 +3084,149 @@ def _ensure_autonomous_rows(
     return [get_acquisition_row(db, created.id)], 1
 
 
+def _ensure_autonomous_rows_with_ai(
+    db: Session,
+    *,
+    ddt_document: Document,
+    actor_id: int,
+    actor_email: str,
+    openai_api_key: str,
+) -> tuple[list[AcquisitionRow], int]:
+    existing_rows = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+    if existing_rows:
+        return [get_acquisition_row(db, row.id) for row in existing_rows], 0
+
+    template = resolve_supplier_template(
+        ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
+        ddt_document.nome_file_originale,
+    )
+    supplier_key = template.supplier_key if template is not None else None
+    if supplier_key != "aluminium_bozen":
+        return _ensure_autonomous_rows(
+            db=db,
+            ddt_document=ddt_document,
+            actor_id=actor_id,
+            actor_email=actor_email,
+        )
+
+    ddt_document = _ensure_document_page_images(db, _index_document_from_path(db, ddt_document) if not ddt_document.pages else ddt_document)
+    ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+        db=db,
+        ddt_document=ddt_document,
+        openai_api_key=openai_api_key,
+    )
+    if not ai_candidates:
+        return [], 0
+
+    existing_rows_all = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.fornitore_id == ddt_document.fornitore_id)
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+    existing_signatures = {
+        _split_candidate_signature_from_row(row): row
+        for row in existing_rows_all
+        if row.document_ddt_id is not None
+    }
+
+    created_rows: list[AcquisitionRow] = []
+    fallback_ddt = next((candidate.ddt_number for candidate in ai_candidates if _string_or_none(candidate.ddt_number)), None)
+    for candidate in ai_candidates:
+        candidate_signature = _split_candidate_signature_from_candidate(
+            document=ddt_document,
+            candidate=candidate,
+            fallback_ddt=fallback_ddt,
+        )
+        existing_row = existing_signatures.get(candidate_signature)
+        if existing_row is not None:
+            continue
+
+        certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+            rows=existing_rows_all,
+            document=ddt_document,
+            candidate=candidate,
+            fallback_ddt=fallback_ddt,
+            supplier_key=supplier_key,
+        )
+        if certificate_first_row is not None:
+            certificate_first_row.document_ddt_id = ddt_document.id
+            certificate_first_row.fornitore_id = ddt_document.fornitore_id
+            certificate_first_row.fornitore_raw = ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None
+            certificate_first_row.ddt = candidate.ddt_number or fallback_ddt
+            certificate_first_row.ordine = candidate.customer_order_no
+            certificate_first_row.lega_base = candidate.lega or certificate_first_row.lega_base
+            certificate_first_row.diametro = candidate.diametro or certificate_first_row.diametro
+            certificate_first_row.colata = candidate.colata or certificate_first_row.colata
+            certificate_first_row.peso = candidate.peso_netto or certificate_first_row.peso
+            if candidate.cdq:
+                certificate_first_row.cdq = candidate.cdq
+            db.add(certificate_first_row)
+            db.commit()
+            db.refresh(certificate_first_row)
+            _persist_split_candidate_values(db=db, row=certificate_first_row, candidate=candidate, actor_id=actor_id)
+            _apply_aluminium_bozen_ai_candidate_to_row(
+                db=db,
+                row=certificate_first_row,
+                ai_candidate=candidate,
+                actor_id=actor_id,
+                document_id=ddt_document.id,
+            )
+            db.commit()
+            refreshed = get_acquisition_row(db, certificate_first_row.id)
+            existing_signatures[candidate_signature] = refreshed
+            existing_rows_all.append(refreshed)
+            created_rows.append(refreshed)
+            continue
+
+        created_row = create_acquisition_row(
+            db=db,
+            payload=AcquisitionRowCreateRequest(
+                document_ddt_id=ddt_document.id,
+                fornitore_id=ddt_document.fornitore_id,
+                fornitore_raw=ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
+                cdq=candidate.cdq,
+                lega_base=candidate.lega,
+                diametro=candidate.diametro,
+                colata=candidate.colata,
+                ddt=candidate.ddt_number or fallback_ddt,
+                peso=candidate.peso_netto,
+                ordine=candidate.customer_order_no,
+                stato_tecnico="rosso",
+                stato_workflow="nuova",
+                priorita_operativa="media",
+            ),
+            actor_id=actor_id,
+            actor_email=actor_email,
+        )
+        row = get_acquisition_row(db, created_row.id)
+        _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
+        _apply_aluminium_bozen_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=candidate,
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        )
+        db.commit()
+        refreshed = get_acquisition_row(db, row.id)
+        existing_signatures[candidate_signature] = refreshed
+        existing_rows_all.append(refreshed)
+        created_rows.append(refreshed)
+
+    log_service.record(
+        "acquisition",
+        f"AI rows created from document {ddt_document.id}: {len(created_rows)}",
+        actor_email,
+    )
+    return created_rows, len(created_rows)
+
+
 def _ensure_certificate_first_rows(
     db: Session,
     *,
@@ -3092,6 +3235,7 @@ def _ensure_certificate_first_rows(
     actor_email: str,
     openai_api_key: str | None,
     use_ai_intervention: bool,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> int:
     created_count = 0
     for certificate_document in certificate_documents:
@@ -3112,26 +3256,46 @@ def _ensure_certificate_first_rows(
         if supplier_key != "aluminium_bozen":
             continue
 
-        certificate_matches = reader_detect_certificate_core_matches(
-            certificate_document.pages,
-            supplier_key=supplier_key,
-        )
-        if not certificate_matches:
-            continue
+        if use_ai_intervention and openai_api_key:
+            payload = _get_aluminium_bozen_certificate_ai_payload(
+                db=db,
+                certificate_document=certificate_document,
+                openai_api_key=openai_api_key,
+                certificate_ai_cache=certificate_ai_cache,
+            )
+            ai_match_values = cast(dict[str, str | None], payload.get("match_values") or {})
+            ai_supplier_fields = cast(dict[str, str | None], payload.get("supplier_fields") or {})
+            certificate_number = _string_or_none(ai_match_values.get("numero_certificato_certificato"))
+            certificate_alloy = _string_or_none(ai_match_values.get("lega_certificato"))
+            certificate_diameter = _string_or_none(ai_match_values.get("diametro_certificato"))
+            certificate_cast = _string_or_none(ai_match_values.get("colata_certificato"))
+            certificate_weight = _string_or_none(ai_match_values.get("peso_certificato"))
+            certificate_article = _string_or_none(ai_supplier_fields.get("article"))
+            certificate_customer_code = _string_or_none(ai_supplier_fields.get("customer_code"))
+            certificate_customer_order = _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
+        else:
+            certificate_matches = reader_detect_certificate_core_matches(
+                certificate_document.pages,
+                supplier_key=supplier_key,
+            )
+            if not certificate_matches:
+                continue
+            supplier_fields = reader_extract_supplier_match_fields(
+                certificate_document.pages,
+                supplier_key,
+                "certificato",
+            )
+            certificate_number = _string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final"))
+            certificate_alloy = _string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final"))
+            certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
+            certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
+            certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
+            certificate_article = _string_or_none(supplier_fields.get("article"))
+            certificate_customer_code = _string_or_none(supplier_fields.get("customer_code"))
+            certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized"))
 
-        supplier_fields = reader_extract_supplier_match_fields(
-            certificate_document.pages,
-            supplier_key,
-            "certificato",
-        )
-        certificate_number = _string_or_none(cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final"))
-        certificate_alloy = _string_or_none(cast(dict[str, object], certificate_matches.get("lega_certificato") or {}).get("final"))
-        certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
-        certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
-        certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
-        certificate_article = _string_or_none(supplier_fields.get("article"))
-        certificate_customer_code = _string_or_none(supplier_fields.get("customer_code"))
-        certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized"))
+        if not any((certificate_number, certificate_article, certificate_customer_order, certificate_cast)):
+            continue
         certificate_signature = _certificate_first_signature(
             fornitore_id=certificate_document.fornitore_id,
             cdq=certificate_number,
@@ -3161,14 +3325,15 @@ def _ensure_certificate_first_rows(
                 _sync_row_cdq_from_certificate_document(db, linked_row, certificate_document)
                 _sync_row_statuses(db, linked_row)
                 db.commit()
-                extract_core_fields(db=db, row=get_acquisition_row(db, linked_row.id), actor_id=actor_id)
+                if not (use_ai_intervention and openai_api_key):
+                    extract_core_fields(db=db, row=get_acquisition_row(db, linked_row.id), actor_id=actor_id)
                 linked_row = _process_certificate_side_blocks(
                     db=db,
                     row=get_acquisition_row(db, linked_row.id),
                     actor_id=actor_id,
                     openai_api_key=openai_api_key,
                     use_ai_intervention=use_ai_intervention,
-                    certificate_ai_cache=None,
+                    certificate_ai_cache=certificate_ai_cache,
                 )
             continue
         duplicate_row = next(
@@ -3190,14 +3355,15 @@ def _ensure_certificate_first_rows(
                 _sync_row_cdq_from_certificate_document(db, duplicate_row, certificate_document)
                 _sync_row_statuses(db, duplicate_row)
                 db.commit()
-                extract_core_fields(db=db, row=get_acquisition_row(db, duplicate_row.id), actor_id=actor_id)
+                if not (use_ai_intervention and openai_api_key):
+                    extract_core_fields(db=db, row=get_acquisition_row(db, duplicate_row.id), actor_id=actor_id)
                 duplicate_row = _process_certificate_side_blocks(
                     db=db,
                     row=get_acquisition_row(db, duplicate_row.id),
                     actor_id=actor_id,
                     openai_api_key=openai_api_key,
                     use_ai_intervention=use_ai_intervention,
-                    certificate_ai_cache=None,
+                    certificate_ai_cache=certificate_ai_cache,
                 )
             continue
 
@@ -3223,14 +3389,15 @@ def _ensure_certificate_first_rows(
             actor_email=actor_email,
         )
         created_row_model = get_acquisition_row(db, created_row.id)
-        extract_core_fields(db=db, row=created_row_model, actor_id=actor_id)
+        if not (use_ai_intervention and openai_api_key):
+            extract_core_fields(db=db, row=created_row_model, actor_id=actor_id)
         created_row_model = _process_certificate_side_blocks(
             db=db,
             row=get_acquisition_row(db, created_row.id),
             actor_id=actor_id,
             openai_api_key=openai_api_key,
             use_ai_intervention=use_ai_intervention,
-            certificate_ai_cache=None,
+            certificate_ai_cache=certificate_ai_cache,
         )
         created_count += 1
 
@@ -3418,6 +3585,7 @@ def _auto_propose_certificate_match(
     actor_id: int,
     openai_api_key: str | None = None,
     certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+    ai_only_mode: bool = False,
 ) -> bool:
     if row.certificate_match is not None or row.document_certificato_id is not None:
         return False
@@ -3440,6 +3608,7 @@ def _auto_propose_certificate_match(
             ddt_certificate_number=ddt_certificate_number,
             row_ddt_values=ddt_values,
             certificate_ai_cache=certificate_ai_cache,
+            ai_only_mode=ai_only_mode,
         )
         if candidate is not None:
             scored_candidates.append(candidate)
@@ -3494,6 +3663,7 @@ def _score_certificate_candidate(
     ddt_certificate_number: str | None,
     row_ddt_values: dict[str, str | None],
     certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+    ai_only_mode: bool = False,
 ) -> dict[str, object] | None:
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None and row.fornitore_id != certificate_document.fornitore_id:
         return None
@@ -3509,14 +3679,28 @@ def _score_certificate_candidate(
     )
 
     supplier_key = template.supplier_key if template is not None else None
-    matches = reader_detect_certificate_core_matches(certificate_document.pages, supplier_key=supplier_key)
-    certificate_number = _string_or_none(matches.get("numero_certificato_certificato", {}).get("final"))
-    certificate_cast = _string_or_none(matches.get("colata_certificato", {}).get("final"))
-    certificate_weight = _string_or_none(matches.get("peso_certificato", {}).get("final"))
-    ddt_supplier_fields = reader_extract_supplier_match_fields(
-        row.ddt_document.pages if row.ddt_document is not None else [],
-        template.supplier_key if template is not None else None,
-        "ddt",
+    matches: dict[str, dict[str, str | None]] = {}
+    certificate_number: str | None = None
+    certificate_cast: str | None = None
+    certificate_weight: str | None = None
+    if not (ai_only_mode and supplier_key == "aluminium_bozen"):
+        local_matches = reader_detect_certificate_core_matches(certificate_document.pages, supplier_key=supplier_key)
+        matches = {
+            field_name: {"final": _string_or_none(cast(dict[str, object], payload).get("final"))}
+            for field_name, payload in local_matches.items()
+        }
+        certificate_number = _string_or_none(local_matches.get("numero_certificato_certificato", {}).get("final"))
+        certificate_cast = _string_or_none(local_matches.get("colata_certificato", {}).get("final"))
+        certificate_weight = _string_or_none(local_matches.get("peso_certificato", {}).get("final"))
+
+    ddt_supplier_fields = (
+        {}
+        if ai_only_mode and supplier_key == "aluminium_bozen"
+        else reader_extract_supplier_match_fields(
+            row.ddt_document.pages if row.ddt_document is not None else [],
+            template.supplier_key if template is not None else None,
+            "ddt",
+        )
     )
     if supplier_key == "aluminium_bozen":
         row_supplier_fields = _extract_stable_aluminium_bozen_row_supplier_fields_for_match(
@@ -3535,10 +3719,14 @@ def _score_certificate_candidate(
             supplier_key=template.supplier_key if template is not None else None,
         )
     ddt_supplier_fields = reader_merge_row_supplier_fields(ddt_supplier_fields, row_supplier_fields)
-    certificate_supplier_fields = reader_extract_supplier_match_fields(
-        certificate_document.pages,
-        template.supplier_key if template is not None else None,
-        "certificato",
+    certificate_supplier_fields = (
+        {}
+        if ai_only_mode and supplier_key == "aluminium_bozen"
+        else reader_extract_supplier_match_fields(
+            certificate_document.pages,
+            template.supplier_key if template is not None else None,
+            "certificato",
+        )
     )
 
     if supplier_key == "aluminium_bozen" and certificate_ai_cache is not None:
