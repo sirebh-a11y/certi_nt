@@ -1218,17 +1218,21 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
                 return normalized
         return None
 
+    anchors = (
+        "CUSTOMER",
+        "KUNDENAUFTRAGS",
+        "COMMANDE CLIENT",
+        "ORDINE CLIENTE",
+    )
     for index, line in enumerate(normalized_lines):
-        if "CUSTOMER" in line and "ORDER" in line:
-            for candidate in normalized_lines[index + 1 : min(index + 5, len(normalized_lines))]:
-                normalized = _normalize_customer_order_tokens(candidate)
-                if normalized is not None and "|" in normalized:
-                    return normalized
-
-    for line in normalized_lines:
-        normalized = _normalize_customer_order_tokens(line)
-        if normalized is not None and "|" in normalized:
-            return normalized
+        if not any(anchor in line for anchor in anchors):
+            continue
+        if "CUSTOMER" in line and "ORDER" not in line and "COMMANDE CLIENT" not in line and "ORDINE CLIENTE" not in line:
+            continue
+        for candidate in normalized_lines[index : min(index + 5, len(normalized_lines))]:
+            normalized = _normalize_customer_order_tokens(candidate)
+            if normalized is not None and "|" in normalized:
+                return normalized
     return None
 
 

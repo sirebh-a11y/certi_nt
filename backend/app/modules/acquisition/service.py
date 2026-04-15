@@ -770,7 +770,7 @@ def create_rows_from_document_split_plan(
                 colata=candidate.colata or _split_plan_match_value(shared_matches, "colata"),
                 ddt=candidate.ddt_number or _split_plan_match_value(shared_matches, "ddt"),
                 peso=candidate.peso_netto or _split_plan_match_value(shared_matches, "peso"),
-                ordine=candidate.customer_order_no or candidate.supplier_order_no or _split_plan_match_value(shared_matches, "ordine"),
+                ordine=candidate.supplier_order_no or candidate.customer_order_no or _split_plan_match_value(shared_matches, "ordine"),
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
                 priorita_operativa="media",
@@ -831,7 +831,7 @@ def _split_candidate_signature_from_candidate(
     return (
         str(document.fornitore_id or ""),
         _normalize_row_signature_token(candidate.ddt_number or fallback_ddt),
-        _normalize_row_signature_token(candidate.customer_order_no or candidate.supplier_order_no),
+        _normalize_row_signature_token(candidate.supplier_order_no or candidate.customer_order_no),
         _normalize_row_signature_token(candidate.lega),
         _normalize_row_signature_token(candidate.diametro),
         _normalize_row_signature_token(candidate.colata),
@@ -2022,6 +2022,8 @@ def extract_ddt_fields_with_vision(
                     actor_id=actor_id,
                 )
             continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
         source_crop = payload.get("source_crop")
         evidence_text = _string_or_none(payload.get("evidence")) or field_value
         crop_definition = crop_definitions.get(source_crop) if source_crop else None
@@ -2254,6 +2256,8 @@ def _extract_certificate_core_fields_with_vision(
     for field_name, payload in extracted.items():
         field_value = _string_or_none(payload.get("value"))
         if field_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "match", field_name):
             continue
         source_crop = payload.get("source_crop")
         evidence_text = _string_or_none(payload.get("evidence")) or field_value
@@ -2489,11 +2493,15 @@ def _ensure_certificate_first_rows(
         certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
         certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
         certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
+        certificate_article = _string_or_none(supplier_fields.get("article"))
+        certificate_customer_code = _string_or_none(supplier_fields.get("customer_code"))
         certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized"))
         certificate_signature = _certificate_first_signature(
             fornitore_id=certificate_document.fornitore_id,
             cdq=certificate_number,
             ordine=certificate_customer_order,
+            article=certificate_article,
+            customer_code=certificate_customer_code,
             lega=certificate_alloy,
             diametro=certificate_diameter,
             colata=certificate_cast,
@@ -2503,6 +2511,9 @@ def _ensure_certificate_first_rows(
             db=db,
             supplier_id=certificate_document.fornitore_id,
             certificate_number=certificate_number,
+            article=certificate_article,
+            customer_code=certificate_customer_code,
+            customer_order=certificate_customer_order,
             alloy=certificate_alloy,
             diameter=certificate_diameter,
             cast=certificate_cast,
@@ -2592,6 +2603,9 @@ def _find_existing_aluminium_bozen_row_for_certificate(
     *,
     supplier_id: int | None,
     certificate_number: str | None,
+    article: str | None,
+    customer_code: str | None,
+    customer_order: str | None,
     alloy: str | None,
     diameter: str | None,
     cast: str | None,
@@ -2608,6 +2622,9 @@ def _find_existing_aluminium_bozen_row_for_certificate(
     )
 
     normalized_cdq = reader_normalize_match_token(certificate_number)
+    normalized_article = reader_normalize_match_token(article)
+    normalized_customer_code = reader_normalize_match_token(customer_code)
+    normalized_customer_order = reader_normalize_match_token(customer_order)
     normalized_cast = reader_normalize_match_token(cast)
     normalized_alloy = reader_normalize_match_token(alloy)
     normalized_diameter = reader_normalize_match_token(diameter)
@@ -2615,7 +2632,11 @@ def _find_existing_aluminium_bozen_row_for_certificate(
 
     def score(row: AcquisitionRow) -> int:
         total = 0
+        row_identity_fields = _certificate_first_row_identity_fields(row)
         row_cdq = reader_normalize_match_token(row.cdq)
+        row_article = reader_normalize_match_token(row_identity_fields.get("article"))
+        row_customer_code = reader_normalize_match_token(row_identity_fields.get("customer_code"))
+        row_customer_order = reader_normalize_match_token(row_identity_fields.get("customer_order"))
         row_cast = reader_normalize_match_token(row.colata)
         row_alloy = reader_normalize_match_token(row.lega_base)
         row_diameter = reader_normalize_match_token(row.diametro)
@@ -2625,6 +2646,18 @@ def _find_existing_aluminium_bozen_row_for_certificate(
             if row_cdq != normalized_cdq:
                 return -1
             total += 200
+        if normalized_article and row_article:
+            if row_article != normalized_article:
+                return -1
+            total += 80
+        if normalized_customer_code and row_customer_code:
+            if row_customer_code != normalized_customer_code:
+                return -1
+            total += 60
+        if normalized_customer_order and row_customer_order:
+            if row_customer_order != normalized_customer_order:
+                return -1
+            total += 60
         if normalized_cast and row_cast:
             if row_cast != normalized_cast:
                 return -1
@@ -2656,6 +2689,8 @@ def _certificate_first_signature(
     fornitore_id: int | None,
     cdq: str | None,
     ordine: str | None,
+    article: str | None,
+    customer_code: str | None,
     lega: str | None,
     diametro: str | None,
     colata: str | None,
@@ -2664,6 +2699,9 @@ def _certificate_first_signature(
     return (
         fornitore_id,
         reader_normalize_match_token(cdq),
+        reader_normalize_match_token(ordine),
+        reader_normalize_match_token(article),
+        reader_normalize_match_token(customer_code),
         reader_normalize_match_token(lega),
         reader_normalize_match_token(diametro),
         reader_normalize_match_token(colata),
@@ -2672,15 +2710,36 @@ def _certificate_first_signature(
 
 
 def _certificate_first_signature_from_row(row: AcquisitionRow) -> tuple[str | int | None, ...]:
+    identity_fields = _certificate_first_row_identity_fields(row)
     return _certificate_first_signature(
         fornitore_id=row.fornitore_id,
         cdq=row.cdq,
-        ordine=row.ordine,
+        ordine=identity_fields.get("customer_order"),
+        article=identity_fields.get("article"),
+        customer_code=identity_fields.get("customer_code"),
         lega=row.lega_base or row.lega_designazione or row.variante_lega,
         diametro=row.diametro,
         colata=row.colata,
         peso=row.peso,
     )
+
+
+def _certificate_first_row_identity_fields(row: AcquisitionRow) -> dict[str, str | None]:
+    ddt_values = {
+        value.campo: _final_value_for_row(value)
+        for value in row.values
+        if value.blocco == "ddt"
+    }
+    match_values = {
+        value.campo: _final_value_for_row(value)
+        for value in row.values
+        if value.blocco == "match"
+    }
+    return {
+        "article": _string_or_none(ddt_values.get("article_code")) or _string_or_none(match_values.get("articolo_certificato")),
+        "customer_code": _string_or_none(ddt_values.get("customer_code")) or _string_or_none(match_values.get("codice_cliente_certificato")),
+        "customer_order": _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(match_values.get("ordine_cliente_certificato")),
+    }
 
 
 def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
@@ -2731,12 +2790,6 @@ def _auto_propose_certificate_match(
         )
     }
     ddt_certificate_number = ddt_values.get("numero_certificato_ddt") or row.cdq
-    same_supplier_documents = [
-        document
-        for document in certificate_documents
-        if row.fornitore_id is None or document.fornitore_id is None or row.fornitore_id == document.fornitore_id
-    ]
-
     scored_candidates: list[dict[str, object]] = []
     for certificate_document in certificate_documents:
         candidate = _score_certificate_candidate(
@@ -2748,15 +2801,6 @@ def _auto_propose_certificate_match(
         )
         if candidate is not None:
             scored_candidates.append(candidate)
-
-    if not scored_candidates and len(same_supplier_documents) == 1:
-        scored_candidates.append(
-            {
-                "document": same_supplier_documents[0],
-                "score": 25,
-                "reason": "Unico certificato disponibile dello stesso fornitore",
-            }
-        )
     if not scored_candidates:
         return False
 
@@ -2768,7 +2812,6 @@ def _auto_propose_certificate_match(
         best_score >= 80
         or (best_score >= 45 and best_score - second_score >= 20)
         or (len(scored_candidates) == 1 and best_score >= 35)
-        or (len(scored_candidates) == 1 and best_score >= 25 and str(best_candidate["reason"]).startswith("Unico certificato"))
     )
     if not should_propose:
         return False
@@ -2832,11 +2875,22 @@ def _score_certificate_candidate(
         template.supplier_key if template is not None else None,
         "ddt",
     )
-    row_supplier_fields = reader_extract_row_supplier_match_fields(
-        row=row,
-        ddt_values=row_ddt_values,
-        supplier_key=template.supplier_key if template is not None else None,
-    )
+    if supplier_key == "aluminium_bozen":
+        row_supplier_fields = _extract_stable_aluminium_bozen_row_supplier_fields_for_match(
+            row=row,
+            ddt_values=row_ddt_values,
+        )
+        ddt_supplier_fields = {
+            field_name: field_value
+            for field_name, field_value in ddt_supplier_fields.items()
+            if field_name not in {"article", "customer_code", "customer_order_normalized"}
+        }
+    else:
+        row_supplier_fields = reader_extract_row_supplier_match_fields(
+            row=row,
+            ddt_values=row_ddt_values,
+            supplier_key=template.supplier_key if template is not None else None,
+        )
     ddt_supplier_fields = reader_merge_row_supplier_fields(ddt_supplier_fields, row_supplier_fields)
     certificate_supplier_fields = reader_extract_supplier_match_fields(
         certificate_document.pages,
@@ -4266,6 +4320,72 @@ def _can_replace_row_field(row: AcquisitionRow, field_name: str) -> bool:
     return False
 
 
+def _has_stable_value_protected_from_ai(row: AcquisitionRow, block: str, field_name: str) -> bool:
+    aliases = _ai_guardrail_field_aliases(block, field_name)
+    for value in row.values:
+        if value.blocco != block or value.campo not in aliases:
+            continue
+        if value.metodo_lettura == "chatgpt" and value.stato != "confermato":
+            continue
+        if _final_value_for_row(value) is not None:
+            return True
+    if block == "ddt":
+        return _ddt_row_field_fallback_value(row, field_name) is not None
+    return False
+
+
+def _extract_stable_aluminium_bozen_row_supplier_fields_for_match(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+) -> dict[str, str | None]:
+    article = _string_or_none(ddt_values.get("article_code"))
+    if not _has_stable_value_protected_from_ai(row, "ddt", "article_code"):
+        article = None
+
+    customer_code = _string_or_none(ddt_values.get("customer_code"))
+    if not _has_stable_value_protected_from_ai(row, "ddt", "customer_code"):
+        customer_code = None
+
+    customer_order = _string_or_none(ddt_values.get("customer_order_no"))
+    if not _has_stable_value_protected_from_ai(row, "ddt", "customer_order_no"):
+        customer_order = None
+
+    return {
+        "article": article,
+        "customer_code": customer_code,
+        "customer_order_normalized": customer_order,
+    }
+
+
+def _ai_guardrail_field_aliases(block: str, field_name: str) -> tuple[str, ...]:
+    if block == "ddt":
+        if field_name in {"cdq", "numero_certificato_ddt"}:
+            return ("cdq", "numero_certificato_ddt")
+        if field_name == "ordine":
+            return ("ordine", "supplier_order_no")
+        return (field_name,)
+    return (field_name,)
+
+
+def _ddt_row_field_fallback_value(row: AcquisitionRow, field_name: str) -> str | None:
+    if field_name in {"cdq", "numero_certificato_ddt"}:
+        return _string_or_none(row.cdq)
+    if field_name == "colata":
+        return _string_or_none(row.colata)
+    if field_name == "peso":
+        return _normalize_value_for_field("ddt", "peso", row.peso)
+    if field_name == "diametro":
+        return _normalize_value_for_field("ddt", "diametro", row.diametro)
+    if field_name == "ordine":
+        return _string_or_none(row.ordine)
+    if field_name == "ddt":
+        return _string_or_none(row.ddt)
+    if field_name == "lega":
+        return _string_or_none(row.lega_base)
+    return None
+
+
 def _is_revisable_chatgpt_ddt_value(row: AcquisitionRow, field_name: str) -> bool:
     for value in row.values:
         if value.blocco != "ddt" or value.campo != field_name:
@@ -4285,16 +4405,16 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
         )
     }
 
-    if "cdq" in value_map or "numero_certificato_ddt" in value_map:
+    if row.cdq is None and ("cdq" in value_map or "numero_certificato_ddt" in value_map):
         row.cdq = _final_value_for_row(value_map.get("cdq")) or _final_value_for_row(value_map.get("numero_certificato_ddt"))
-    if "colata" in value_map:
+    if row.colata is None and "colata" in value_map:
         row.colata = _final_value_for_row(value_map.get("colata"))
-    if "peso" in value_map:
+    if row.peso is None and "peso" in value_map:
         row.peso = _final_value_for_row(value_map.get("peso"))
-    if "diametro" in value_map:
+    if row.diametro is None and "diametro" in value_map:
         row.diametro = _final_value_for_row(value_map.get("diametro"))
-    if "ordine" in value_map:
-        row.ordine = _final_value_for_row(value_map.get("ordine"))
+    if row.ordine is None and ("ordine" in value_map or "supplier_order_no" in value_map):
+        row.ordine = _final_value_for_row(value_map.get("ordine")) or _final_value_for_row(value_map.get("supplier_order_no"))
     if "ddt" in value_map and row.ddt is None:
         row.ddt = _final_value_for_row(value_map.get("ddt"))
     if "lega" in value_map and row.lega_base is None:
@@ -5096,17 +5216,21 @@ def _extract_aluminium_bozen_customer_order(lines: list[str], *, document_type: 
                 return normalized
         return None
 
+    anchors = (
+        "CUSTOMER",
+        "KUNDENAUFTRAGS",
+        "COMMANDE CLIENT",
+        "ORDINE CLIENTE",
+    )
     for index, line in enumerate(normalized_lines):
-        if "CUSTOMER" in line and "ORDER" in line:
-            for candidate in normalized_lines[index + 1 : min(index + 5, len(normalized_lines))]:
+        if not any(anchor in line for anchor in anchors):
+            continue
+        if "CUSTOMER" in line and "ORDER" not in line and "COMMANDE CLIENT" not in line and "ORDINE CLIENTE" not in line:
+            continue
+        for candidate in normalized_lines[index : min(index + 5, len(normalized_lines))]:
                 normalized = _normalize_customer_order_tokens(candidate)
                 if normalized is not None and "|" in normalized:
                     return normalized
-
-    for line in normalized_lines:
-        normalized = _normalize_customer_order_tokens(line)
-        if normalized is not None and "|" in normalized:
-            return normalized
     return None
 
 
