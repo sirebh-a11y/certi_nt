@@ -2869,7 +2869,7 @@ def _sanitize_impol_ai_row_groups(
     ai_document_payload_raw: str | None = None,
 ) -> list[ReaderRowSplitCandidateResponse]:
     sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
-    normalized_ddt = _sanitize_ddt_number_candidate(ddt_number_raw, None)
+    normalized_ddt = _sanitize_impol_ddt_number_candidate(ddt_number_raw, None)
     normalized_packing_root = normalize_impol_packing_list_root(packing_list_no_raw or normalized_ddt)
 
     for index, raw_row in enumerate(raw_rows, start=1):
@@ -3226,6 +3226,7 @@ def _apply_impol_ai_candidate_to_row(
         return False
 
     _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
     _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
@@ -4865,7 +4866,25 @@ def _score_certificate_candidate(
             and reader_normalize_match_token(row.diametro)
             == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
         )
-        if not (packing_match and (supplier_order_match or product_code_match or customer_order_match or cast_match or diameter_match)):
+        alloy_match = bool(
+            reader_normalize_match_token(row.lega_base)
+            and reader_normalize_match_token(row.lega_base)
+            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
+        )
+        weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
+        strong_mismatch = False
+        if row.colata and certificate_cast and not cast_match:
+            strong_mismatch = True
+        if row.diametro and _string_or_none(matches.get("diametro_certificato", {}).get("final")) and not diameter_match:
+            strong_mismatch = True
+        if row.lega_base and _string_or_none(matches.get("lega_certificato", {}).get("final")) and not alloy_match:
+            strong_mismatch = True
+        if row.peso and certificate_weight and not weight_match:
+            strong_mismatch = True
+        strong_row_match_count = sum(1 for flag in (cast_match, diameter_match, alloy_match, weight_match) if flag)
+        if strong_mismatch:
+            return None
+        if not (packing_match and strong_row_match_count >= 3):
             return None
 
     if score <= 10:
@@ -7349,6 +7368,17 @@ def _sanitize_ddt_number_candidate(value: str | None, evidence: str | None) -> s
     if token in {"0", "10204"}:
         return None
     return token
+
+
+def _sanitize_impol_ddt_number_candidate(value: str | None, evidence: str | None) -> str | None:
+    for haystack in (value, evidence):
+        cleaned = _string_or_none(haystack)
+        if cleaned is None:
+            continue
+        match = re.search(r"\b(\d{1,6}-\d{1,2})\b", cleaned)
+        if match is not None:
+            return match.group(1)
+    return _sanitize_ddt_number_candidate(value, evidence)
 
 
 def _looks_like_invalid_cdq(value: str, evidence: str | None) -> bool:
