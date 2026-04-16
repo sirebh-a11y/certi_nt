@@ -2494,18 +2494,10 @@ def _build_impol_ddt_group_crops(
 
 def _build_impol_ddt_masked_page(image: Image.Image) -> Image.Image:
     masked = image.convert("RGB")
-    _mask_impol_receiver_block(masked)
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_impol_customer_occurrence_blocks(masked, lines)
+    _mask_impol_supplier_occurrence_blocks(masked, lines)
     return masked
-
-
-def _mask_impol_receiver_block(image: Image.Image) -> None:
-    _mask_ocr_block_between_anchors(
-        image,
-        start_terms=("RECEIVER",),
-        stop_terms=("DELIVERY TERMS", "TRUCK", "CONTAINER", "PRODUCT CODE", "PRODUCT DESCRIPTION"),
-        max_following_lines=8,
-        right_limit_ratio=0.56,
-    )
 
 
 def _extract_aluminium_bozen_ddt_row_groups_from_openai(
@@ -5769,39 +5761,17 @@ def _build_impol_certificate_safe_crops(
 
 def _build_impol_certificate_masked_page(image: Image.Image) -> Image.Image:
     masked = image.convert("RGB")
-    _mask_impol_certificate_customer_block(masked)
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_impol_customer_occurrence_blocks(masked, lines)
+    _mask_impol_supplier_occurrence_blocks(masked, lines)
     return masked
 
 
-def _mask_impol_certificate_customer_block(image: Image.Image) -> None:
-    _mask_ocr_block_between_anchors(
-        image,
-        start_terms=("CUSTOMER",),
-        stop_terms=(
-            "CUSTOMER ORDER",
-            "SUPPLIER ORDER",
-            "PACKING LIST",
-            "ISSUE DATE",
-            "PRODUCT DESCRIPTION",
-            "CHEMICAL COMPOSITION",
-        ),
-        max_following_lines=8,
-        right_limit_ratio=0.48,
-    )
-
-
-def _mask_ocr_block_between_anchors(
-    image: Image.Image,
-    *,
-    start_terms: tuple[str, ...],
-    stop_terms: tuple[str, ...],
-    max_following_lines: int,
-    right_limit_ratio: float,
-) -> None:
+def _extract_ocr_line_blocks(image: Image.Image) -> list[dict[str, int | str]]:
     try:
         data = pytesseract.image_to_data(image, lang="eng+ita+deu", output_type=pytesseract.Output.DICT)
     except (OSError, pytesseract.TesseractNotFoundError):
-        return
+        return []
 
     tokens = data.get("text") or []
     block_nums = data.get("block_num") or []
@@ -5853,44 +5823,200 @@ def _mask_ocr_block_between_anchors(
             }
         )
     lines.sort(key=lambda item: (int(item["top"]), int(item["left"])))
-    if not lines:
-        return
+    return lines
 
-    normalized_start_terms = [term.upper() for term in start_terms]
-    normalized_stop_terms = [term.upper() for term in stop_terms]
-    start_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if any(term in str(line["text"]) for term in normalized_start_terms)
-            and not any(term in str(line["text"]) for term in normalized_stop_terms)
-        ),
-        None,
+
+def _mask_impol_customer_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "RECEIVER",
+        "PACKING LIST",
+        "DELIVERY TERMS",
+        "TRUCK",
+        "CONTAINER",
+        "CUSTOMER ORDER",
+        "SUPPLIER ORDER",
+        "PRODUCT DESCRIPTION",
+        "CHEMICAL COMPOSITION",
     )
-    if start_index is None:
+    candidates = [
+        line
+        for line in lines
+        if "FORGIALLUMINIO" in str(line["text"]).upper()
+        and not any(term in str(line["text"]).upper() for term in stop_terms)
+    ]
+    if not candidates:
         return
+    for start_line in candidates:
+        left = int(start_line["left"])
+        is_header = left <= int(image.width * 0.4) and int(start_line["top"]) <= int(image.height * 0.28)
+        if left <= int(image.width * 0.4):
+            right_limit = int(image.width * 0.52)
+            left_limit = 0
+            max_lines = 8
+        else:
+            left_limit = max(0, left - image.width // 14)
+            right_limit = min(image.width - 1, int(start_line["right"]) + image.width // 8)
+            max_lines = 6
+        cluster = _collect_occurrence_cluster(
+            image,
+            lines,
+            start_line,
+            stop_terms=stop_terms,
+            stop_on_label=True,
+            max_preceding_lines=0,
+            max_following_lines=max_lines,
+            left_limit=left_limit,
+            right_limit=right_limit,
+            max_vertical_gap=max(30, image.height // 24),
+        )
+        if cluster:
+            _mask_line_cluster(
+                image,
+                cluster,
+                left_limit=left_limit if left > int(image.width * 0.4) else None,
+                right_limit=right_limit,
+                top_extra=max(8, image.height // 120) if is_header else 0,
+                bottom_extra=max(48, image.height // 16) if is_header else max(14, image.height // 90),
+            )
 
-    cluster = [lines[start_index]]
-    previous_bottom = int(lines[start_index]["bottom"])
-    max_vertical_gap = max(18, image.height // 35)
+
+def _mask_impol_supplier_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "PACKING LIST",
+        "CUSTOMER ORDER",
+        "SUPPLIER ORDER",
+        "PRODUCT DESCRIPTION",
+        "CHEMICAL COMPOSITION",
+        "MECHANICAL PROPERTIES",
+        "ISSUE DATE",
+    )
+    candidates = [
+        line
+        for line in lines
+        if "IMPOL" in str(line["text"]).upper()
+        and "IMPOL PRODUCT CODE" not in str(line["text"]).upper()
+        and (
+            (int(line["top"]) <= int(image.height * 0.38) and int(line["left"]) >= int(image.width * 0.45))
+            or int(line["top"]) >= int(image.height * 0.68)
+        )
+    ]
+    if not candidates:
+        return
+    for start_line in candidates:
+        is_header = int(start_line["top"]) <= int(image.height * 0.38)
+        left_limit = max(int(image.width * 0.42), int(start_line["left"]) - image.width // 12)
+        cluster = _collect_occurrence_cluster(
+            image,
+            lines,
+            start_line,
+            stop_terms=stop_terms,
+            stop_on_label=True,
+            max_preceding_lines=2 if is_header else 1,
+            max_following_lines=8 if is_header else 5,
+            left_limit=left_limit,
+            right_limit=image.width - 1,
+            max_vertical_gap=max(34, image.height // 20) if is_header else max(26, image.height // 28),
+        )
+        if cluster:
+            _mask_line_cluster(
+                image,
+                cluster,
+                left_limit=left_limit,
+                top_extra=max(34, image.height // 10) if is_header else max(8, image.height // 80),
+                left_extra=max(42, image.width // 8) if is_header else max(10, image.width // 120),
+                right_extra=max(22, image.width // 32) if is_header else max(14, image.width // 70),
+                bottom_extra=max(16, image.height // 70),
+            )
+
+
+def _collect_occurrence_cluster(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+    start_line: dict[str, int | str],
+    *,
+    stop_terms: tuple[str, ...],
+    stop_on_label: bool,
+    max_preceding_lines: int,
+    max_following_lines: int,
+    left_limit: int,
+    right_limit: int,
+    max_vertical_gap: int | None = None,
+) -> list[dict[str, int | str]]:
+    start_index = next((index for index, line in enumerate(lines) if line is start_line), None)
+    if start_index is None:
+        return []
+    cluster = [start_line]
+    vertical_gap_limit = max_vertical_gap or max(18, image.height // 35)
+    previous_top = int(start_line["top"])
+    for line in reversed(lines[max(0, start_index - max_preceding_lines) : start_index]):
+        text = str(line["text"]).upper()
+        if any(term in text for term in stop_terms):
+            break
+        if stop_on_label and ":" in text:
+            break
+        if previous_top - int(line["bottom"]) > vertical_gap_limit:
+            break
+        if int(line["left"]) > right_limit or int(line["right"]) < left_limit:
+            continue
+        cluster.insert(0, line)
+        previous_top = int(line["top"])
+    previous_bottom = int(start_line["bottom"])
     for line in lines[start_index + 1 : start_index + 1 + max_following_lines]:
-        text = str(line["text"])
-        if any(term in text for term in normalized_stop_terms):
+        text = str(line["text"]).upper()
+        if any(term in text for term in stop_terms):
             break
-        if int(line["top"]) - previous_bottom > max_vertical_gap:
+        if stop_on_label and ":" in text:
             break
+        if int(line["top"]) - previous_bottom > vertical_gap_limit:
+            break
+        if int(line["left"]) > right_limit or int(line["right"]) < left_limit:
+            continue
         cluster.append(line)
         previous_bottom = int(line["bottom"])
+    return cluster
 
-    left = max(0, min(int(line["left"]) for line in cluster) - max(10, image.width // 250))
-    top = max(0, min(int(line["top"]) for line in cluster) - max(6, image.height // 300))
-    right = min(int(image.width * right_limit_ratio), max(int(line["right"]) for line in cluster) + max(12, image.width // 220))
-    bottom = min(image.height - 1, max(int(line["bottom"]) for line in cluster) + max(8, image.height // 260))
+
+def _mask_line_cluster(
+    image: Image.Image,
+    cluster: list[dict[str, int | str]],
+    *,
+    left_limit: int | None = None,
+    right_limit: int | None = None,
+    top_extra: int = 0,
+    left_extra: int = 0,
+    right_extra: int = 0,
+    bottom_extra: int = 0,
+) -> None:
+    if not cluster:
+        return
+    left = max(0, min(int(line["left"]) for line in cluster) - max(10, image.width // 250) - left_extra)
+    top = max(0, min(int(line["top"]) for line in cluster) - max(6, image.height // 300) - top_extra)
+    right = max(int(line["right"]) for line in cluster) + max(12, image.width // 220) + right_extra
+    bottom = min(
+        image.height - 1,
+        max(int(line["bottom"]) for line in cluster) + max(8, image.height // 260) + bottom_extra,
+    )
+    if left_limit is not None:
+        left = max(left, left_limit)
+    if right_limit is not None:
+        right = min(right, right_limit)
     if right <= left or bottom <= top:
         return
-
     draw = ImageDraw.Draw(image)
     draw.rectangle((left, top, right, bottom), fill="black")
+
+
+def _extract_primary_anchor_term(text: str) -> str | None:
+    for token in re.findall(r"[A-Z0-9]{5,}", text.upper()):
+        if token not in {"ITALY", "SLOVENIA", "ADDRESS", "CUSTOMER"}:
+            return token
+    return None
 
 def _create_ddt_crop_definition(
     page: DocumentPage,
