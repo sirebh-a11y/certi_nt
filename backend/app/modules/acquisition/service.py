@@ -99,6 +99,9 @@ def serialize_document(document: Document) -> DocumentResponse:
     return DocumentResponse(
         id=document.id,
         tipo_documento=document.tipo_documento,
+        stato_upload=document.stato_upload,
+        upload_batch_id=document.upload_batch_id,
+        scadenza_batch=document.scadenza_batch,
         fornitore_id=document.fornitore_id,
         fornitore_nome=document.supplier.ragione_sociale if document.supplier is not None else None,
         nome_file_originale=document.nome_file_originale,
@@ -301,8 +304,16 @@ def list_documents(
     db: Session,
     tipo_documento: str | None = None,
     fornitore_id: int | None = None,
+    upload_batch_id: str | None = None,
 ) -> list[DocumentResponse]:
     query = db.query(Document).options(joinedload(Document.supplier)).order_by(Document.data_upload.desc(), Document.id.desc())
+    if upload_batch_id is None:
+        query = query.filter(Document.stato_upload == "persistente")
+    else:
+        query = query.filter(
+            (Document.stato_upload == "persistente")
+            | ((Document.stato_upload == "temporaneo") & (Document.upload_batch_id == upload_batch_id))
+        )
     if tipo_documento is not None:
         query = query.filter(Document.tipo_documento == tipo_documento)
     if fornitore_id is not None:
@@ -351,6 +362,9 @@ def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, 
 
     document = Document(
         tipo_documento=payload.tipo_documento,
+        stato_upload=payload.stato_upload,
+        upload_batch_id=payload.upload_batch_id,
+        scadenza_batch=payload.scadenza_batch,
         fornitore_id=payload.fornitore_id,
         nome_file_originale=payload.nome_file_originale,
         storage_key=payload.storage_key,
@@ -379,6 +393,7 @@ def upload_document(
     fornitore_id: int | None = None,
     documento_padre_id: int | None = None,
     origine_upload: str = "utente",
+    upload_batch_id: str | None = None,
 ) -> DocumentResponse:
     if uploaded_file.filename is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file must have a filename")
@@ -392,17 +407,9 @@ def upload_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
     original_name = Path(uploaded_file.filename).name or f"{tipo_documento}.bin"
-    file_hash = hashlib.sha256(file_bytes).hexdigest()
-    duplicate_document = _find_duplicate_document_by_hash(db, file_hash)
-    if duplicate_document is not None and not _allow_duplicate_document_upload():
-        duplicate_name = duplicate_document.nome_file_originale or f"documento #{duplicate_document.id}"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"File duplicato per contenuto: gia caricato come {duplicate_name} (id={duplicate_document.id})",
-        )
-
     extension = Path(original_name).suffix.lower()
     now = datetime.now(UTC)
+    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or uuid4().hex
     relative_storage_key = f"{tipo_documento}/{now:%Y/%m/%d}/{uuid4().hex}{extension}"
     storage_path = _document_storage_root() / relative_storage_key
     storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -410,10 +417,13 @@ def upload_document(
 
     document = Document(
         tipo_documento=tipo_documento,
+        stato_upload="temporaneo",
+        upload_batch_id=resolved_upload_batch_id,
+        scadenza_batch=None,
         fornitore_id=fornitore_id,
         nome_file_originale=original_name,
         storage_key=relative_storage_key.replace("\\", "/"),
-        hash_file=file_hash,
+        hash_file=hashlib.sha256(file_bytes).hexdigest(),
         mime_type=uploaded_file.content_type,
         numero_pagine=None,
         utente_upload_id=actor_id,
@@ -441,10 +451,12 @@ def upload_documents_batch(
     fornitore_id: int | None = None,
     documento_padre_id: int | None = None,
     origine_upload: str = "utente",
+    upload_batch_id: str | None = None,
 ) -> DocumentBatchUploadResponse:
     if not uploaded_files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided for batch upload")
 
+    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or uuid4().hex
     uploaded: list[DocumentResponse] = []
     failed: list[DocumentBatchErrorResponse] = []
 
@@ -460,6 +472,7 @@ def upload_documents_batch(
                 fornitore_id=fornitore_id,
                 documento_padre_id=documento_padre_id,
                 origine_upload=origine_upload,
+                upload_batch_id=resolved_upload_batch_id,
             )
             uploaded.append(uploaded_document)
         except HTTPException as exc:
@@ -471,26 +484,9 @@ def upload_documents_batch(
         requested_count=len(uploaded_files),
         uploaded_count=len(uploaded),
         failed_count=len(failed),
+        upload_batch_id=resolved_upload_batch_id,
         uploaded=uploaded,
         failed=failed,
-    )
-
-
-def _allow_duplicate_document_upload() -> bool:
-    # Placeholder intenzionale: in futuro potremmo voler forzare il ri-caricamento
-    # per scopi di riverifica, ma oggi i duplicati per contenuto vanno esclusi.
-    return False
-
-
-def _find_duplicate_document_by_hash(db: Session, file_hash: str) -> Document | None:
-    if not file_hash:
-        return None
-    return (
-        db.query(Document)
-        .options(joinedload(Document.supplier))
-        .filter(Document.hash_file == file_hash)
-        .order_by(Document.id.asc())
-        .first()
     )
 
 
@@ -1099,6 +1095,8 @@ def start_autonomous_run(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="There is already an autonomous processing run in progress",
         )
+
+    _promote_documents_to_persistent(db, [*ddt_document_ids, *certificate_document_ids])
 
     run = AutonomousProcessingRun(
         stato="in_coda",
@@ -3124,6 +3122,31 @@ def _resolve_supplier_id(
     if len(supplier_ids) > 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Supplier mismatch across row documents")
     return next(iter(supplier_ids), None)
+
+
+def _normalize_upload_batch_id(value: str | None) -> str | None:
+    normalized = _string_or_none(value)
+    if normalized is None:
+        return None
+    return normalized[:64]
+
+
+def _promote_documents_to_persistent(db: Session, document_ids: list[int]) -> None:
+    normalized_ids = _normalize_document_id_list(document_ids)
+    if not normalized_ids:
+        return
+    documents = db.query(Document).filter(Document.id.in_(normalized_ids)).all()
+    changed = False
+    for document in documents:
+        if document.stato_upload == "persistente" and document.upload_batch_id is None and document.scadenza_batch is None:
+            continue
+        document.stato_upload = "persistente"
+        document.upload_batch_id = None
+        document.scadenza_batch = None
+        db.add(document)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def _save_run(

@@ -24,6 +24,9 @@ class Document(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tipo_documento: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    stato_upload: Mapped[str] = mapped_column(String(32), default="persistente", nullable=False, index=True)
+    upload_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    scadenza_batch: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fornitore_id: Mapped[int | None] = mapped_column(ForeignKey("fornitori.id"), nullable=True, index=True)
     nome_file_originale: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)

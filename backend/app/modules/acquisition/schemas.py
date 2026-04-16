@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 DocumentType = Literal["ddt", "certificato"]
 DocumentStatus = Literal["caricato", "indicizzato", "letto", "errore"]
 DocumentOrigin = Literal["utente", "import", "sistema"]
+DocumentUploadState = Literal["temporaneo", "persistente"]
 BlockName = Literal["ddt", "match", "chimica", "proprieta", "note"]
 EvidenceType = Literal["testo", "crop", "tabella", "cella", "bbox", "pagina_mascherata"]
 ExtractionMethod = Literal["pdf_text", "ocr", "regex", "parser_tabella", "chatgpt", "utente", "sistema"]
@@ -32,6 +33,9 @@ def normalize_optional_text(value: str | None) -> str | None:
 
 class DocumentCreateRequest(BaseModel):
     tipo_documento: DocumentType
+    stato_upload: DocumentUploadState = "persistente"
+    upload_batch_id: str | None = Field(default=None, max_length=64)
+    scadenza_batch: datetime | None = None
     fornitore_id: int | None = None
     nome_file_originale: str = Field(min_length=1, max_length=255)
     storage_key: str = Field(min_length=1, max_length=512)
@@ -42,7 +46,7 @@ class DocumentCreateRequest(BaseModel):
     origine_upload: DocumentOrigin = "utente"
     documento_padre_id: int | None = None
 
-    @field_validator("nome_file_originale", "storage_key", "hash_file", "mime_type")
+    @field_validator("nome_file_originale", "storage_key", "hash_file", "mime_type", "upload_batch_id")
     @classmethod
     def normalize_text_fields(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)
@@ -87,6 +91,9 @@ class DocumentResponse(BaseModel):
 
     id: int
     tipo_documento: str
+    stato_upload: str
+    upload_batch_id: str | None
+    scadenza_batch: datetime | None
     fornitore_id: int | None
     fornitore_nome: str | None
     nome_file_originale: str
@@ -119,6 +126,7 @@ class DocumentBatchUploadResponse(BaseModel):
     requested_count: int
     uploaded_count: int
     failed_count: int
+    upload_batch_id: str | None
     uploaded: list[DocumentResponse]
     failed: list[DocumentBatchErrorResponse]
 

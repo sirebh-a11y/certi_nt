@@ -117,8 +117,16 @@ def list_documents_route(
     db: DbSession,
     tipo_documento: str | None = Query(default=None),
     fornitore_id: int | None = Query(default=None),
+    upload_batch_id: str | None = Query(default=None),
 ) -> DocumentListResponse:
-    return DocumentListResponse(items=list_documents(db, tipo_documento=tipo_documento, fornitore_id=fornitore_id))
+    return DocumentListResponse(
+        items=list_documents(
+            db,
+            tipo_documento=tipo_documento,
+            fornitore_id=fornitore_id,
+            upload_batch_id=upload_batch_id,
+        )
+    )
 
 
 @router.post("/documents", response_model=DocumentResponse)
@@ -135,6 +143,7 @@ def upload_document_route(
     fornitore_id: int | None = Form(default=None),
     documento_padre_id: int | None = Form(default=None),
     origine_upload: str = Form(default="utente"),
+    upload_batch_id: str | None = Form(default=None),
 ) -> DocumentResponse:
     return upload_document(
         db=db,
@@ -145,6 +154,7 @@ def upload_document_route(
         fornitore_id=fornitore_id,
         documento_padre_id=documento_padre_id,
         origine_upload=origine_upload,
+        upload_batch_id=upload_batch_id,
     )
 
 
@@ -157,6 +167,7 @@ def upload_documents_batch_route(
     fornitore_id: int | None = Form(default=None),
     documento_padre_id: int | None = Form(default=None),
     origine_upload: str = Form(default="utente"),
+    upload_batch_id: str | None = Form(default=None),
 ) -> DocumentBatchUploadResponse:
     return upload_documents_batch(
         db=db,
@@ -167,6 +178,7 @@ def upload_documents_batch_route(
         fornitore_id=fornitore_id,
         documento_padre_id=documento_padre_id,
         origine_upload=origine_upload,
+        upload_batch_id=upload_batch_id,
     )
 
 

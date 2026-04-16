@@ -1,3 +1,4 @@
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
@@ -25,6 +26,7 @@ from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_s
 
 def initialize_application() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_document_upload_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
@@ -34,6 +36,26 @@ def initialize_application() -> None:
         log_service.record("system", "Application initialized")
     finally:
         db.close()
+
+
+def ensure_document_upload_columns() -> None:
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("documenti_fornitore")}
+    statements: list[str] = []
+
+    if "stato_upload" not in columns:
+        statements.append("ALTER TABLE documenti_fornitore ADD COLUMN stato_upload VARCHAR(32) NOT NULL DEFAULT 'persistente'")
+    if "upload_batch_id" not in columns:
+        statements.append("ALTER TABLE documenti_fornitore ADD COLUMN upload_batch_id VARCHAR(64)")
+    if "scadenza_batch" not in columns:
+        statements.append("ALTER TABLE documenti_fornitore ADD COLUMN scadenza_batch TIMESTAMP WITH TIME ZONE")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def bootstrap_admin_user(db: Session) -> None:
