@@ -282,7 +282,6 @@ def _detect_leichtmetall_ddt_core_matches(pages: list[DocumentPage]) -> dict[str
 
 def _detect_metalba_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
-    cast_counts: dict[str, tuple[int, int, str]] = {}
     for page in pages:
         for line in _page_lines(page):
             lowered = line.casefold()
@@ -298,15 +297,6 @@ def _detect_metalba_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dic
                 match = re.search(r"\bpeso\s+netto\s+kg\s*([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\b", lowered)
                 if match is not None:
                     matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
-            cast_match = re.search(r"\b([0-9]{5}[a-z])\b", lowered)
-            if cast_match is not None and "colate" not in lowered and "kg" not in lowered:
-                token = cast_match.group(1).upper()
-                count, page_id, snippet = cast_counts.get(token, (0, page.id, line))
-                cast_counts[token] = (count + 1, page_id, snippet)
-    if "colata" not in matches and cast_counts:
-        token, (count, page_id, snippet) = max(cast_counts.items(), key=lambda item: item[1][0])
-        if count >= 2:
-            matches["colata"] = _build_match(page_id, snippet, token)
     return matches
 
 
@@ -782,6 +772,12 @@ def extract_row_supplier_match_fields(
             "net_weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
         }
 
+    if supplier_key == "metalba":
+        return {
+            "vs_rif": _string_or_none(ddt_values.get("vs_rif")) or _string_or_none(row.ordine) or _string_or_none(ddt_values.get("ordine")),
+            "rif_ord_root": _string_or_none(ddt_values.get("rif_ord_root")) or _normalize_commessa_root(_string_or_none(ddt_values.get("rif_ord"))),
+        }
+
     if supplier_key == "aluminium_bozen":
         return {
             "article": _string_or_none(ddt_values.get("article_code")),
@@ -807,8 +803,6 @@ def score_supplier_field_matches(
     if supplier_key == "metalba":
         if same_token(ddt_supplier_fields.get("vs_rif"), certificate_supplier_fields.get("ordine_cliente")):
             add_reason(95, "Vs. Rif. / Ordine Cliente coerenti")
-        if same_token(ddt_supplier_fields.get("rif_ord_root"), certificate_supplier_fields.get("commessa_root")):
-            add_reason(110, "Rif. Ord. / Commessa coerenti")
     elif supplier_key == "aww":
         if same_token(ddt_supplier_fields.get("your_part_number"), certificate_supplier_fields.get("kunden_teile_nr")):
             add_reason(110, "Your part number coerente")
