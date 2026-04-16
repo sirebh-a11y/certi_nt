@@ -143,6 +143,8 @@ def _resolve_document_template(document: Document):
 
     if _looks_like_aluminium_bozen_document(lines):
         return resolve_supplier_template("aluminium bozen")
+    if _looks_like_impol_document(lines):
+        return resolve_supplier_template("impol")
 
     return None
 
@@ -309,6 +311,24 @@ def _looks_like_aluminium_bozen_document(lines: list[str]) -> bool:
         for marker in ("RIF. ORDINE AB ODV", "COD. COLATA", "COD. ART. CLIENTE", "LEGA STATO FISICO")
     )
     return (has_delivery_header and has_material_row and (has_cast or has_internal_order)) or has_packing_signals
+
+
+def _looks_like_impol_document(lines: list[str]) -> bool:
+    normalized_lines = [_normalize_line(line) for line in lines]
+    joined = "\n".join(normalized_lines)
+    has_impol_identity = any(
+        marker in joined
+        for marker in ("IMPOL D.O.O", "IMPOL GROUP", "INFO@IMPOL.SI", "WWW.IMPOL.SI", "SLOVENSKA BISTRICA")
+    )
+    has_ddt_signals = any(
+        marker in joined
+        for marker in ("PACKING LIST", "RECEIVER", "DELIVERY TERMS", "TRUCK / CONTAINER", "YOUR ORDER NO")
+    )
+    has_certificate_signals = any(
+        marker in joined
+        for marker in ("INSPECTION CERTIFICATE", "EN 10204", "CHEMICAL COMPOSITION", "MECHANICAL PROPERTIES")
+    )
+    return has_impol_identity and (has_ddt_signals or has_certificate_signals)
 
 
 def _page_lines(page) -> list[str]:

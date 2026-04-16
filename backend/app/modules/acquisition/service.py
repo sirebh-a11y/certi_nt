@@ -392,6 +392,15 @@ def upload_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
     original_name = Path(uploaded_file.filename).name or f"{tipo_documento}.bin"
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    duplicate_document = _find_duplicate_document_by_hash(db, file_hash)
+    if duplicate_document is not None and not _allow_duplicate_document_upload():
+        duplicate_name = duplicate_document.nome_file_originale or f"documento #{duplicate_document.id}"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"File duplicato per contenuto: gia caricato come {duplicate_name} (id={duplicate_document.id})",
+        )
+
     extension = Path(original_name).suffix.lower()
     now = datetime.now(UTC)
     relative_storage_key = f"{tipo_documento}/{now:%Y/%m/%d}/{uuid4().hex}{extension}"
@@ -404,7 +413,7 @@ def upload_document(
         fornitore_id=fornitore_id,
         nome_file_originale=original_name,
         storage_key=relative_storage_key.replace("\\", "/"),
-        hash_file=hashlib.sha256(file_bytes).hexdigest(),
+        hash_file=file_hash,
         mime_type=uploaded_file.content_type,
         numero_pagine=None,
         utente_upload_id=actor_id,
@@ -467,6 +476,24 @@ def upload_documents_batch(
     )
 
 
+def _allow_duplicate_document_upload() -> bool:
+    # Placeholder intenzionale: in futuro potremmo voler forzare il ri-caricamento
+    # per scopi di riverifica, ma oggi i duplicati per contenuto vanno esclusi.
+    return False
+
+
+def _find_duplicate_document_by_hash(db: Session, file_hash: str) -> Document | None:
+    if not file_hash:
+        return None
+    return (
+        db.query(Document)
+        .options(joinedload(Document.supplier))
+        .filter(Document.hash_file == file_hash)
+        .order_by(Document.id.asc())
+        .first()
+    )
+
+
 def _apply_document_identity_detection(db: Session, document: Document) -> Document:
     probable_type = _detect_document_type(document)
     probable_supplier_id = _detect_document_supplier_id(db, document)
@@ -491,6 +518,11 @@ def _detect_document_type(document: Document) -> str | None:
     search_text = _document_identity_text(document)
     if not search_text:
         return None
+
+    file_name = document.nome_file_originale.lower()
+    impol_type = _detect_impol_document_type(search_text, file_name)
+    if impol_type is not None:
+        return impol_type
 
     certificate_score = 0
     ddt_score = 0
@@ -523,7 +555,6 @@ def _detect_document_type(document: Document) -> str | None:
         "peso netto": 1,
     }
 
-    file_name = document.nome_file_originale.lower()
     if re.fullmatch(r"\d[\d_-]{1,}\.pdf", file_name):
         ddt_score += 3
     if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
@@ -535,6 +566,12 @@ def _detect_document_type(document: Document) -> str | None:
     for marker, weight in ddt_markers.items():
         if marker in search_text:
             ddt_score += weight
+
+    if _looks_like_impol_identity_text(search_text):
+        if "packing list" in search_text:
+            ddt_score += 8
+        if any(marker in search_text for marker in ("inspection certificate", "en 10204", "chemical composition", "mechanical properties")):
+            certificate_score += 8
 
     if certificate_score >= ddt_score + 3:
         return "certificato"
@@ -564,6 +601,8 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
             for search_text in search_variants:
                 if normalized_alias in search_text:
                     score = max(score, min(80, 12 + len(normalized_alias)))
+        if _supplier_aliases_look_like_impol(aliases):
+            score = max(score, _score_impol_supplier_identity(search_variants))
         if score > best_score:
             second_score = best_score
             best_score = score
@@ -614,6 +653,87 @@ def _build_identity_search_variants(value: str | None) -> list[str]:
         if variant.strip() and variant not in deduped:
             deduped.append(variant)
     return deduped
+
+
+def _looks_like_impol_identity_text(search_text: str) -> bool:
+    return any(
+        marker in search_text
+        for marker in (
+            " impol d.o.o ",
+            " impol d.o.0 ",
+            " impol group ",
+            " info@impol.si ",
+            " www.impol.si ",
+            " slovenska bistrica ",
+        )
+    )
+
+
+def _detect_impol_document_type(search_text: str, file_name: str) -> str | None:
+    if not _looks_like_impol_identity_text(search_text):
+        return None
+
+    if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
+        return "certificato"
+    if re.fullmatch(r"\d{1,6}-\d{1,2}\.pdf", file_name):
+        return "ddt"
+
+    has_certificate_signals = any(
+        marker in search_text
+        for marker in (
+            "inspection certificate",
+            "en 10204",
+            "chemical composition",
+            "mechanical properties",
+            "customer order no",
+            "packing list no.",
+            "issue date",
+        )
+    )
+    has_ddt_signals = any(
+        marker in search_text
+        for marker in (
+            "packing list",
+            "receiver",
+            "delivery terms",
+            "truck / container",
+            "your order no",
+            "product description",
+            "order date",
+        )
+    )
+
+    if has_certificate_signals and not has_ddt_signals:
+        return "certificato"
+    if has_ddt_signals and not has_certificate_signals:
+        return "ddt"
+    if has_certificate_signals and "inspection certificate" in search_text:
+        return "certificato"
+    if has_ddt_signals and "packing list" in search_text:
+        return "ddt"
+    return None
+
+
+def _supplier_aliases_look_like_impol(aliases: list[str]) -> bool:
+    return any("impol" in (alias or "").casefold() for alias in aliases)
+
+
+def _score_impol_supplier_identity(search_variants: list[str]) -> int:
+    best_score = 0
+    for search_text in search_variants:
+        if not _looks_like_impol_identity_text(search_text):
+            continue
+        score = 20
+        if "packing list" in search_text:
+            score += 12
+        if "inspection certificate" in search_text:
+            score += 12
+        if "customer order no" in search_text or "supplier order no" in search_text:
+            score += 8
+        if "receiver" in search_text or "delivery terms" in search_text:
+            score += 8
+        best_score = max(best_score, score)
+    return best_score
 
 
 def _find_supplier_from_text(db: Session, raw_text: str | None) -> Supplier | None:
