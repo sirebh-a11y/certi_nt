@@ -68,6 +68,7 @@ from app.modules.document_reader.matching import (
     extract_supplier_match_fields as reader_extract_supplier_match_fields,
     extract_row_supplier_match_fields as reader_extract_row_supplier_match_fields,
     merge_row_supplier_fields as reader_merge_row_supplier_fields,
+    normalize_impol_packing_list_root,
     normalize_match_token as reader_normalize_match_token,
     score_supplier_field_matches as reader_score_supplier_field_matches,
     same_token as reader_same_token,
@@ -434,7 +435,10 @@ def upload_document(
 
     temporary_duplicate = _find_temporary_duplicate_document_for_user(db, actor_id=actor_id, file_hash=file_hash)
     if temporary_duplicate is not None:
-        return serialize_document(temporary_duplicate)
+        if (temporary_duplicate.stato_elaborazione or "").lower() == "errore":
+            _delete_temporary_documents_by_ids(db, actor_id=actor_id, document_ids=[temporary_duplicate.id])
+        else:
+            return serialize_document(temporary_duplicate)
 
     extension = Path(original_name).suffix.lower()
     now = datetime.now(UTC)
@@ -1221,7 +1225,11 @@ def start_autonomous_run(
             detail="There is already an autonomous processing run in progress",
         )
 
-    _promote_documents_to_persistent(db, [*ddt_document_ids, *certificate_document_ids])
+    _set_documents_processing_state(
+        db,
+        [*ddt_document_ids, *certificate_document_ids],
+        stato_elaborazione="in_lavorazione",
+    )
 
     run = AutonomousProcessingRun(
         stato="in_coda",
@@ -1504,10 +1512,21 @@ def run_autonomous_processing(
             current_row_id=None,
             finished_at=datetime.now(UTC),
         )
+        _set_documents_processing_state(
+            db,
+            [*ddt_document_ids, *certificate_document_ids],
+            stato_elaborazione="indicizzato",
+        )
+        _promote_documents_to_persistent(db, [*ddt_document_ids, *certificate_document_ids])
         log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
     except Exception as exc:  # pragma: no cover - defensive safeguard for background task
         db.rollback()
         run = db.get(AutonomousProcessingRun, run_id)
+        _set_documents_processing_state(
+            db,
+            [*ddt_document_ids, *certificate_document_ids],
+            stato_elaborazione="errore",
+        )
         if run is not None:
             _save_run(
                 db,
@@ -3870,6 +3889,60 @@ def _delete_temporary_upload_batch(db: Session, *, actor_id: int, upload_batch_i
         db.delete(document)
 
     db.commit()
+
+
+def _delete_temporary_documents_by_ids(db: Session, *, actor_id: int, document_ids: list[int]) -> None:
+    normalized_ids = _normalize_document_id_list(document_ids)
+    if not normalized_ids:
+        return
+    documents = (
+        db.query(Document)
+        .options(joinedload(Document.pages), joinedload(Document.evidences))
+        .filter(
+            Document.utente_upload_id == actor_id,
+            Document.stato_upload == "temporaneo",
+            Document.id.in_(normalized_ids),
+        )
+        .all()
+    )
+    if not documents:
+        return
+
+    for document in documents:
+        if document.rows_as_ddt or document.rows_as_certificate or document.matches or document.match_candidates:
+            continue
+        page_ids = [page.id for page in document.pages]
+        for evidence in document.evidences:
+            _delete_storage_key_if_present(evidence.storage_key_derivato)
+            db.delete(evidence)
+        if page_ids:
+            page_evidences = db.query(DocumentEvidence).filter(DocumentEvidence.document_page_id.in_(page_ids)).all()
+            for evidence in page_evidences:
+                _delete_storage_key_if_present(evidence.storage_key_derivato)
+                db.delete(evidence)
+        for page in document.pages:
+            _delete_storage_key_if_present(page.immagine_pagina_storage_key)
+            db.delete(page)
+        _delete_storage_key_if_present(document.storage_key)
+        db.delete(document)
+
+    db.commit()
+
+
+def _set_documents_processing_state(db: Session, document_ids: list[int], *, stato_elaborazione: str) -> None:
+    normalized_ids = _normalize_document_id_list(document_ids)
+    if not normalized_ids:
+        return
+    documents = db.query(Document).filter(Document.id.in_(normalized_ids)).all()
+    changed = False
+    for document in documents:
+        if document.stato_elaborazione == stato_elaborazione:
+            continue
+        document.stato_elaborazione = stato_elaborazione
+        db.add(document)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def _promote_documents_to_persistent(db: Session, document_ids: list[int]) -> None:
