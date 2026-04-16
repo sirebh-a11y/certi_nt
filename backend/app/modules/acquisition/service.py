@@ -1045,6 +1045,7 @@ def _persist_split_candidate_values(
 
 
 def _find_existing_certificate_first_row_for_split_candidate(
+    db: Session,
     *,
     rows: list[AcquisitionRow],
     document: Document,
@@ -1052,6 +1053,81 @@ def _find_existing_certificate_first_row_for_split_candidate(
     fallback_ddt: str | None,
     supplier_key: str | None,
 ) -> AcquisitionRow | None:
+    if supplier_key == "impol":
+        candidate_packing_list = normalize_impol_packing_list_root(candidate.ddt_number or fallback_ddt)
+        normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
+        normalized_supplier_order = _normalize_row_signature_token(candidate.supplier_order_no)
+        normalized_product_code = _normalize_row_signature_token(candidate.product_code)
+        normalized_lega = _normalize_row_signature_token(candidate.lega)
+        normalized_diameter = _normalize_row_signature_token(candidate.diametro)
+        normalized_colata = _normalize_row_signature_token(candidate.colata)
+        normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
+
+        best_row: AcquisitionRow | None = None
+        best_score = 0
+        for row in rows:
+            if row.document_ddt_id is not None:
+                continue
+            if row.fornitore_id != document.fornitore_id:
+                continue
+            if row.document_certificato_id is None:
+                continue
+
+            certificate_document = row.certificate_document or get_document(db, row.document_certificato_id)
+            if not certificate_document.pages:
+                certificate_document = _index_document_from_path(db, certificate_document)
+            supplier_fields = reader_extract_supplier_match_fields(
+                certificate_document.pages,
+                "impol",
+                "certificato",
+            )
+
+            score = 0
+            row_packing = _normalize_row_signature_token(supplier_fields.get("packing_list_no"))
+            if candidate_packing_list:
+                if row_packing and row_packing != _normalize_row_signature_token(candidate_packing_list):
+                    continue
+                if row_packing == _normalize_row_signature_token(candidate_packing_list):
+                    score += 120
+            row_customer_order = _normalize_row_signature_token(_certificate_first_row_identity_fields(row).get("customer_order"))
+            if normalized_customer_order:
+                if row_customer_order and row_customer_order != normalized_customer_order:
+                    continue
+                if row_customer_order == normalized_customer_order:
+                    score += 100
+            row_supplier_order = _normalize_row_signature_token(supplier_fields.get("supplier_order_no"))
+            if normalized_supplier_order:
+                if row_supplier_order and row_supplier_order != normalized_supplier_order:
+                    continue
+                if row_supplier_order == normalized_supplier_order:
+                    score += 95
+            row_product_code = _normalize_row_signature_token(supplier_fields.get("product_code"))
+            if normalized_product_code:
+                if row_product_code and row_product_code != normalized_product_code:
+                    continue
+                if row_product_code == normalized_product_code:
+                    score += 100
+            row_alloy = _normalize_row_signature_token(row.lega_base)
+            if normalized_lega and row_alloy and row_alloy == normalized_lega:
+                score += 40
+            row_diameter = _normalize_row_signature_token(row.diametro)
+            if normalized_diameter and row_diameter and row_diameter == normalized_diameter:
+                score += 40
+            row_cast = _normalize_row_signature_token(row.colata)
+            if normalized_colata and row_cast and row_cast == normalized_colata:
+                score += 110
+            row_weight = _normalize_row_signature_token(row.peso)
+            if normalized_peso and row_weight and reader_weights_are_compatible(row.peso, candidate.peso_netto):
+                score += 20
+
+            if score > best_score:
+                best_score = score
+                best_row = row
+
+        if best_score >= 180:
+            return best_row
+        return None
+
     if supplier_key != "aluminium_bozen":
         return None
 
@@ -1203,11 +1279,12 @@ def run_autonomous_processing(
                     certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
                     certificate_document.nome_file_originale,
                 )
-                if template is None or template.supplier_key != "aluminium_bozen":
+                if template is None or not _supplier_supports_ai_vision_pipeline(template.supplier_key):
                     continue
                 try:
-                    _get_aluminium_bozen_certificate_ai_payload(
+                    _get_supplier_certificate_ai_payload(
                         db=db,
+                        supplier_key=template.supplier_key,
                         certificate_document=certificate_document,
                         openai_api_key=openai_api_key,
                         certificate_ai_cache=certificate_ai_cache,
@@ -1243,7 +1320,7 @@ def run_autonomous_processing(
                 ddt_document.nome_file_originale,
             )
             ddt_supplier_key = ddt_template.supplier_key if ddt_template is not None else None
-            if use_ai_intervention and openai_api_key and ddt_supplier_key == "aluminium_bozen":
+            if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(ddt_supplier_key):
                 _save_run(
                     db,
                     run,
@@ -1285,7 +1362,7 @@ def run_autonomous_processing(
                 _save_run(db, run, current_row_id=row.id)
 
                 try:
-                    if not (use_ai_intervention and ddt_supplier_key == "aluminium_bozen"):
+                    if not (use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)):
                         _save_run(
                             db,
                             run,
@@ -1331,7 +1408,7 @@ def run_autonomous_processing(
                         actor_id=actor_id,
                         openai_api_key=openai_api_key if use_ai_intervention else None,
                         certificate_ai_cache=certificate_ai_cache,
-                        ai_only_mode=bool(use_ai_intervention and ddt_supplier_key == "aluminium_bozen"),
+                        ai_only_mode=bool(use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)),
                     )
                     if matched:
                         _save_run(db, run, match_proposti=run.match_proposti + 1)
@@ -1792,9 +1869,10 @@ def detect_standard_notes(
             template = resolve_supplier_template(
                 row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
             )
-            if template is not None and template.supplier_key == "aluminium_bozen":
-                payload = _get_aluminium_bozen_certificate_ai_payload(
+            if template is not None and _supplier_supports_ai_vision_pipeline(template.supplier_key):
+                payload = _get_supplier_certificate_ai_payload(
                     db=db,
+                    supplier_key=template.supplier_key,
                     certificate_document=certificate_document,
                     openai_api_key=openai_api_key,
                     certificate_ai_cache=None,
@@ -1888,9 +1966,10 @@ def detect_chemistry(
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
             template = resolve_supplier_template(supplier_name) if supplier_name else None
-            if template is not None and template.supplier_key == "aluminium_bozen":
-                payload = _get_aluminium_bozen_certificate_ai_payload(
+            if template is not None and _supplier_supports_ai_vision_pipeline(template.supplier_key):
+                payload = _get_supplier_certificate_ai_payload(
                     db=db,
+                    supplier_key=template.supplier_key,
                     certificate_document=certificate_document,
                     openai_api_key=openai_api_key,
                     certificate_ai_cache=None,
@@ -1982,9 +2061,10 @@ def detect_properties(
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
             template = resolve_supplier_template(supplier_name) if supplier_name else None
-            if template is not None and template.supplier_key == "aluminium_bozen":
-                payload = _get_aluminium_bozen_certificate_ai_payload(
+            if template is not None and _supplier_supports_ai_vision_pipeline(template.supplier_key):
+                payload = _get_supplier_certificate_ai_payload(
                     db=db,
+                    supplier_key=template.supplier_key,
                     certificate_document=certificate_document,
                     openai_api_key=openai_api_key,
                     certificate_ai_cache=None,
@@ -2272,6 +2352,48 @@ def _extract_aluminium_bozen_ddt_row_groups_with_vision(
     )
 
 
+def _extract_impol_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_impol_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare Impol DDT row-group crops for AI",
+        )
+
+    local_plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
+    fallback_ddt = next(
+        (_string_or_none(candidate.ddt_number) for candidate in local_plan.row_split_candidates if candidate.ddt_number),
+        None,
+    )
+    if fallback_ddt is None:
+        local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="impol")
+        fallback_ddt = _split_plan_match_value(local_matches, "ddt")
+
+    ddt_number_raw, packing_list_no_raw, raw_rows, ai_document_payload_raw = _extract_impol_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_impol_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        packing_list_no_raw=packing_list_no_raw,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
 def _build_aluminium_bozen_ddt_group_crops(
     pages: list[DocumentPage],
 ) -> dict[str, dict[str, str | int]]:
@@ -2317,6 +2439,54 @@ def _build_aluminium_bozen_ddt_group_crops(
             crops[str(crop_definition["label"])] = crop_definition
 
     return crops
+
+
+def _build_impol_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_impol_ddt_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"impol_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_impol_ddt_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    _mask_impol_receiver_block(masked)
+    return masked
+
+
+def _mask_impol_receiver_block(image: Image.Image) -> None:
+    _mask_ocr_block_between_anchors(
+        image,
+        start_terms=("RECEIVER",),
+        stop_terms=("DELIVERY TERMS", "TRUCK", "CONTAINER", "PRODUCT CODE", "PRODUCT DESCRIPTION"),
+        max_following_lines=8,
+        right_limit_ratio=0.56,
+    )
 
 
 def _extract_aluminium_bozen_ddt_row_groups_from_openai(
@@ -2384,6 +2554,80 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     return (*_parse_openai_json_payload_for_row_groups(response.output_text), response.output_text)
 
 
+def _extract_impol_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un documento tecnico di trasporto e ricostruisci tutte le righe logiche materiale presenti. "
+                "Una riga logica puo essere distribuita tra il blocco posizione prodotto e uno o piu blocchi packing della stessa posizione. "
+                "Se il documento contiene 3 righe logiche, restituisci 3 elementi; se ne contiene 5, restituisci 5 elementi. "
+                "Non unire dati di righe diverse e non inventare valori mancanti. "
+                "Non fare il match con nessun certificato e non normalizzare i valori. "
+                "Per l'ordine cliente usa solo il valore associato a Your order No. "
+                "Non usare Customer No. o Supplier No. come ordine cliente. "
+                "Lo stesso ordine cliente puo comparire su piu righe diverse dello stesso DDT: se e chiaramente riferito a piu righe, riportalo in ogni riga interessata. "
+                "Una stessa riga logica puo comparire tra intestazione della posizione prodotto, descrizione prodotto, righe packing unit e riga Pos.total. "
+                "Se la stessa riga logica appare tra questi blocchi, unisci quei dati nello stesso elemento rows. "
+                "ddt_number_raw deve essere il numero del documento letto dal titolo PACKING LIST, come appare nel documento. "
+                "packing_list_no_raw deve essere il riferimento packing list utile al collegamento con i certificati. "
+                "customer_order_raw deve essere il valore raw completo del campo ordine cliente della riga, letto da Your order No. "
+                "supplier_order_no_raw deve essere il valore raw del codice di ordine fornitore della stessa riga, quando visibile sotto Product code. "
+                "product_code_raw deve essere il codice prodotto principale della riga, letto dalla prima riga sotto Product code. "
+                "product_description_raw deve essere il testo raw completo del blocco Product description della stessa riga. "
+                "alloy_raw deve essere la lega o stato letto dalla Product description della stessa riga. "
+                "diameter_raw deve essere il valore di diametro della stessa riga, se compare come DIA nella Product description. "
+                "cast_raw deve essere la Charge della stessa riga logica, quando visibile nelle packing unit collegate. "
+                "net_weight_raw deve essere il peso netto totale della posizione, letto dal Pos.total della stessa posizione. "
+                "Non usare i pesi delle singole packing unit come net_weight_raw finale. "
+                "Usa solo testo realmente visibile. Non inventare. Non inferire. Non normalizzare. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"packing_list_no_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"customer_order_raw\":\"string|null\",\"supplier_order_no_raw\":\"string|null\",\"product_code_raw\":\"string|null\","
+                "\"product_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\","
+                "\"cast_raw\":\"string|null\",\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{encoded}",
+                "detail": "high",
+            }
+        )
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Impol DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_impol_row_groups(response.output_text), response.output_text)
+
+
 def _parse_openai_json_payload_for_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
     text = payload.strip()
     if text.startswith("```"):
@@ -2440,6 +2684,66 @@ def _parse_openai_json_payload_for_row_groups(payload: str) -> tuple[str | None,
         )
 
     return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _parse_openai_json_payload_for_impol_row_groups(
+    payload: str,
+) -> tuple[str | None, str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Impol DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Impol DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Impol DDT row-group AI payload")
+
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Impol DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        raw_row_index = raw_row.get("row_index")
+        try:
+            normalized_row_index = int(raw_row_index) if raw_row_index is not None else index
+        except (TypeError, ValueError):
+            normalized_row_index = index
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (
+                _string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else [])
+            )
+            if item is not None
+        ]
+        normalized_rows.append(
+            {
+                "row_index": normalized_row_index,
+                "customer_order_raw": _string_or_none(raw_row.get("customer_order_raw")),
+                "supplier_order_no_raw": _string_or_none(raw_row.get("supplier_order_no_raw")),
+                "product_code_raw": _string_or_none(raw_row.get("product_code_raw")),
+                "product_description_raw": _string_or_none(raw_row.get("product_description_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "cast_raw": _string_or_none(raw_row.get("cast_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+
+    return _string_or_none(data.get("ddt_number_raw")), _string_or_none(data.get("packing_list_no_raw")), normalized_rows
 
 
 def _sanitize_aluminium_bozen_ai_row_groups(
@@ -2536,6 +2840,111 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             sanitized_rows.append(candidate)
 
     return sanitized_rows
+
+
+def _sanitize_impol_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    packing_list_no_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
+) -> list[ReaderRowSplitCandidateResponse]:
+    sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
+    normalized_ddt = _sanitize_ddt_number_candidate(ddt_number_raw, None)
+    normalized_packing_root = normalize_impol_packing_list_root(packing_list_no_raw or normalized_ddt)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        customer_order_raw = _string_or_none(raw_row.get("customer_order_raw"))
+        supplier_order_no_raw = _string_or_none(raw_row.get("supplier_order_no_raw"))
+        product_code_raw = _string_or_none(raw_row.get("product_code_raw"))
+        product_description_raw = _string_or_none(raw_row.get("product_description_raw"))
+        alloy_raw = _string_or_none(raw_row.get("alloy_raw")) or product_description_raw
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw")) or product_description_raw
+        cast_raw = _string_or_none(raw_row.get("cast_raw"))
+        net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
+        source_crops = cast(list[str], raw_row.get("source_crops") or [])
+
+        customer_order = _extract_token_from_value_or_evidence(
+            customer_order_raw,
+            customer_order_raw,
+            r"\b\d{1,6}\b",
+        )
+        supplier_order_no = _extract_token_from_value_or_evidence(
+            supplier_order_no_raw,
+            supplier_order_no_raw,
+            r"\b\d{3,6}/\d{1,2}\b",
+        )
+        product_code_match = re.search(r"\b(\d{6})(?:/\d)?\b", (product_code_raw or "").upper())
+        product_code = product_code_match.group(1) if product_code_match is not None else None
+        alloy_value = _normalize_impol_alloy_from_text(alloy_raw)
+        diameter_value = _normalize_impol_diameter_from_text(diameter_raw)
+        cast_value = _extract_token_from_value_or_evidence(
+            cast_raw,
+            cast_raw,
+            r"\b\d{6}\b",
+            disallow={"10204"},
+        )
+        weight_value = _normalize_value_for_field("ddt", "peso", net_weight_raw)
+
+        raw_payload = dict(raw_row)
+        if normalized_packing_root is not None and _string_or_none(cast(dict[str, object], raw_payload).get("packing_list_no_raw")) is None:
+            raw_payload["packing_list_no_raw"] = normalized_packing_root
+
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="impol",
+            ddt_number=normalized_ddt,
+            lega=alloy_value,
+            diametro=diameter_value,
+            peso_netto=weight_value,
+            colata=cast_value,
+            customer_order_no=customer_order,
+            supplier_order_no=supplier_order_no,
+            product_code=product_code,
+            snippets=source_crops[:6],
+            ai_row_payload_raw=json.dumps(raw_payload, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in (
+                "ddt_number",
+                "lega",
+                "diametro",
+                "peso_netto",
+                "colata",
+                "customer_order_no",
+                "supplier_order_no",
+                "product_code",
+            )
+        ):
+            sanitized_rows.append(candidate)
+
+    return sanitized_rows
+
+
+def _normalize_impol_alloy_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(
+        r"\bEN\s*AW\s*([0-9]{4}[A-Z]?)\s+([A-Z0-9/-]{1,10})\b",
+        cleaned.upper(),
+    )
+    if match is None:
+        return None
+    return re.sub(r"\s+", " ", f"{match.group(1)} {match.group(2)}").strip()
+
+
+def _normalize_impol_diameter_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\bDIA\s*([0-9]+(?:[.,][0-9]+)?)\b", cleaned.upper())
+    if match is None:
+        return None
+    return _normalize_numeric_value(match.group(1))
 
 
 def _apply_aluminium_bozen_ai_row_groups_to_rows(
@@ -2739,6 +3148,183 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
     return True
 
 
+def _apply_impol_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "supplier_order_no": ai_candidate.supplier_order_no,
+        "product_code": ai_candidate.product_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "colata": ai_candidate.colata,
+        "peso": ai_candidate.peso_netto,
+    }
+
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+
+    if changed_fields == 0:
+        return False
+
+    _sync_row_from_ddt_values(db, row)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
+def _apply_impol_ai_row_groups_to_rows(
+    db: Session,
+    *,
+    ddt_document: Document,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+    actor_id: int,
+) -> int:
+    if not rows or not ai_candidates:
+        return 0
+
+    pairs: list[tuple[int, int, int]] = []
+    row_value_maps = {
+        row.id: {
+            value.campo: _final_value_for_row(value)
+            for value in (
+                db.query(ReadValue)
+                .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+                .all()
+            )
+        }
+        for row in rows
+    }
+
+    for row in rows:
+        ddt_values = row_value_maps.get(row.id, {})
+        for ai_candidate in ai_candidates:
+            score = _score_impol_ai_group_against_row(
+                row=row,
+                ddt_values=ddt_values,
+                ai_candidate=ai_candidate,
+            )
+            if score >= 70:
+                pairs.append((score, row.id, ai_candidate.candidate_index))
+
+    pairs.sort(reverse=True)
+    assigned_rows: set[int] = set()
+    assigned_candidates: set[int] = set()
+    ai_by_index = {candidate.candidate_index: candidate for candidate in ai_candidates}
+    applied_rows = 0
+
+    for _, row_id, candidate_index in pairs:
+        if row_id in assigned_rows or candidate_index in assigned_candidates:
+            continue
+        row_model = next((row for row in rows if row.id == row_id), None)
+        ai_candidate = ai_by_index.get(candidate_index)
+        if row_model is None or ai_candidate is None:
+            continue
+        if _apply_impol_ai_candidate_to_row(
+            db=db,
+            row=row_model,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        ):
+            applied_rows += 1
+        assigned_rows.add(row_id)
+        assigned_candidates.add(candidate_index)
+
+    if applied_rows:
+        db.commit()
+    return applied_rows
+
+
+def _score_impol_ai_group_against_row(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    ai_candidate: ReaderRowSplitCandidateResponse,
+) -> int:
+    score = 0
+    anchor_matches = 0
+
+    row_customer_order = _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(row.ordine)
+    row_supplier_order = _string_or_none(ddt_values.get("supplier_order_no"))
+    row_product_code = _string_or_none(ddt_values.get("product_code"))
+    row_cast = _string_or_none(ddt_values.get("colata")) or _string_or_none(row.colata)
+    row_diameter = _string_or_none(ddt_values.get("diametro")) or _string_or_none(row.diametro)
+    row_alloy = _string_or_none(ddt_values.get("lega")) or _string_or_none(row.lega_base)
+    row_weight = _string_or_none(ddt_values.get("peso")) or _string_or_none(row.peso)
+
+    if row_customer_order and ai_candidate.customer_order_no and reader_same_token(row_customer_order, ai_candidate.customer_order_no):
+        score += 100
+        anchor_matches += 1
+    if row_supplier_order and ai_candidate.supplier_order_no and reader_same_token(row_supplier_order, ai_candidate.supplier_order_no):
+        score += 95
+        anchor_matches += 1
+    if row_product_code and ai_candidate.product_code and reader_same_token(row_product_code, ai_candidate.product_code):
+        score += 100
+        anchor_matches += 1
+    if row_cast and ai_candidate.colata and reader_same_token(row_cast, ai_candidate.colata):
+        score += 110
+        anchor_matches += 1
+    if row_diameter and ai_candidate.diametro and reader_same_token(row_diameter, ai_candidate.diametro):
+        score += 35
+    if row_alloy and ai_candidate.lega and reader_same_token(row_alloy, ai_candidate.lega):
+        score += 20
+    if row_weight and ai_candidate.peso_netto and reader_weights_are_compatible(row_weight, ai_candidate.peso_netto):
+        score += 15
+
+    if anchor_matches == 0:
+        return 0
+    return score
+
+
 def extract_ddt_fields_with_vision(
     db: Session,
     row: AcquisitionRow,
@@ -2757,25 +3343,35 @@ def extract_ddt_fields_with_vision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
     supplier_key = _resolve_row_supplier_key(row)
-    if supplier_key == "aluminium_bozen":
+    if supplier_key in {"aluminium_bozen", "impol"}:
         sibling_rows = (
             db.query(AcquisitionRow)
             .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
             .order_by(AcquisitionRow.id.asc())
             .all()
         )
-        ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+        ai_candidates = _extract_supplier_ddt_row_groups_with_vision(
             db=db,
+            supplier_key=supplier_key,
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
         )
-        _apply_aluminium_bozen_ai_row_groups_to_rows(
-            db=db,
-            ddt_document=ddt_document,
-            rows=sibling_rows,
-            ai_candidates=ai_candidates,
-            actor_id=actor_id,
-        )
+        if supplier_key == "aluminium_bozen":
+            _apply_aluminium_bozen_ai_row_groups_to_rows(
+                db=db,
+                ddt_document=ddt_document,
+                rows=sibling_rows,
+                ai_candidates=ai_candidates,
+                actor_id=actor_id,
+            )
+        else:
+            _apply_impol_ai_row_groups_to_rows(
+                db=db,
+                ddt_document=ddt_document,
+                rows=sibling_rows,
+                ai_candidates=ai_candidates,
+                actor_id=actor_id,
+            )
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
     ddt_values = {
@@ -2883,10 +3479,10 @@ def run_ai_intervention(
     openai_api_key: str,
 ) -> AcquisitionRowDetailResponse:
     supplier_key = _resolve_row_supplier_key(row)
-    if supplier_key != "aluminium_bozen":
+    if not _supplier_supports_ai_vision_pipeline(supplier_key):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Intervento AI disponibile solo per Aluminium Bozen in questa fase",
+            detail="Intervento AI disponibile solo per i fornitori con pipeline AI attiva in questa fase",
         )
     if row.document_ddt_id is None and row.document_certificato_id is None:
         raise HTTPException(
@@ -2965,14 +3561,16 @@ def _process_certificate_side_blocks(
     if current_row.document_certificato_id is None:
         return current_row
 
-    if use_ai_intervention and openai_api_key and _resolve_row_supplier_key(current_row) == "aluminium_bozen":
-        payload = _get_aluminium_bozen_certificate_ai_payload(
+    supplier_key = _resolve_row_supplier_key(current_row)
+    if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(supplier_key):
+        payload = _get_supplier_certificate_ai_payload(
             db=db,
+            supplier_key=supplier_key,
             certificate_document=get_document(db, current_row.document_certificato_id),
             openai_api_key=openai_api_key,
             certificate_ai_cache=certificate_ai_cache,
         )
-        _apply_aluminium_bozen_certificate_ai_payload(
+        _apply_supplier_certificate_ai_payload(
             db=db,
             row=current_row,
             payload=payload,
@@ -3031,9 +3629,12 @@ def _extract_certificate_core_fields_with_vision(
         "colata_certificato",
         "peso_certificato",
     ]
-    if supplier_key == "aluminium_bozen":
-        payload = _get_aluminium_bozen_certificate_ai_payload(
+    crop_definitions: dict[str, dict[str, str | int]]
+    if _supplier_supports_ai_vision_pipeline(supplier_key):
+        crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
+        payload = _get_supplier_certificate_ai_payload(
             db=db,
+            supplier_key=supplier_key,
             certificate_document=certificate_document,
             openai_api_key=openai_api_key,
             certificate_ai_cache=None,
@@ -3418,7 +4019,7 @@ def _ensure_autonomous_rows_with_ai(
         ddt_document.nome_file_originale,
     )
     supplier_key = template.supplier_key if template is not None else None
-    if supplier_key != "aluminium_bozen":
+    if not _supplier_supports_ai_vision_pipeline(supplier_key):
         return _ensure_autonomous_rows(
             db=db,
             ddt_document=ddt_document,
@@ -3427,8 +4028,9 @@ def _ensure_autonomous_rows_with_ai(
         )
 
     ddt_document = _ensure_document_page_images(db, _index_document_from_path(db, ddt_document) if not ddt_document.pages else ddt_document)
-    ai_candidates = _extract_aluminium_bozen_ddt_row_groups_with_vision(
+    ai_candidates = _extract_supplier_ddt_row_groups_with_vision(
         db=db,
+        supplier_key=supplier_key,
         ddt_document=ddt_document,
         openai_api_key=openai_api_key,
     )
@@ -3460,6 +4062,7 @@ def _ensure_autonomous_rows_with_ai(
             continue
 
         certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+            db=db,
             rows=existing_rows_all,
             document=ddt_document,
             candidate=candidate,
@@ -3482,7 +4085,7 @@ def _ensure_autonomous_rows_with_ai(
             db.commit()
             db.refresh(certificate_first_row)
             _persist_split_candidate_values(db=db, row=certificate_first_row, candidate=candidate, actor_id=actor_id)
-            _apply_aluminium_bozen_ai_candidate_to_row(
+            _apply_supplier_ai_candidate_to_row(
                 db=db,
                 row=certificate_first_row,
                 ai_candidate=candidate,
@@ -3518,7 +4121,7 @@ def _ensure_autonomous_rows_with_ai(
         )
         row = get_acquisition_row(db, created_row.id)
         _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
-        _apply_aluminium_bozen_ai_candidate_to_row(
+        _apply_supplier_ai_candidate_to_row(
             db=db,
             row=row,
             ai_candidate=candidate,
@@ -3565,12 +4168,13 @@ def _ensure_certificate_first_rows(
             certificate_document.nome_file_originale,
         )
         supplier_key = template.supplier_key if template is not None else None
-        if supplier_key != "aluminium_bozen":
+        if supplier_key not in {"aluminium_bozen", "impol"}:
             continue
 
         if use_ai_intervention and openai_api_key:
-            payload = _get_aluminium_bozen_certificate_ai_payload(
+            payload = _get_supplier_certificate_ai_payload(
                 db=db,
+                supplier_key=supplier_key,
                 certificate_document=certificate_document,
                 openai_api_key=openai_api_key,
                 certificate_ai_cache=certificate_ai_cache,
@@ -3582,9 +4186,19 @@ def _ensure_certificate_first_rows(
             certificate_diameter = _string_or_none(ai_match_values.get("diametro_certificato"))
             certificate_cast = _string_or_none(ai_match_values.get("colata_certificato"))
             certificate_weight = _string_or_none(ai_match_values.get("peso_certificato"))
-            certificate_article = _string_or_none(ai_supplier_fields.get("article"))
+            certificate_article = (
+                _string_or_none(ai_supplier_fields.get("article"))
+                or _string_or_none(ai_supplier_fields.get("product_code"))
+                or _string_or_none(ai_match_values.get("articolo_certificato"))
+            )
             certificate_customer_code = _string_or_none(ai_supplier_fields.get("customer_code"))
-            certificate_customer_order = _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
+            certificate_customer_order = (
+                _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
+                or _string_or_none(ai_supplier_fields.get("customer_order_no"))
+                or _string_or_none(ai_match_values.get("ordine_cliente_certificato"))
+            )
+            certificate_packing_list = _string_or_none(ai_supplier_fields.get("packing_list_no"))
+            certificate_supplier_order = _string_or_none(ai_supplier_fields.get("supplier_order_no"))
         else:
             certificate_matches = reader_detect_certificate_core_matches(
                 certificate_document.pages,
@@ -3602,11 +4216,13 @@ def _ensure_certificate_first_rows(
             certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
             certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
             certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
-            certificate_article = _string_or_none(supplier_fields.get("article"))
+            certificate_article = _string_or_none(supplier_fields.get("article")) or _string_or_none(supplier_fields.get("product_code"))
             certificate_customer_code = _string_or_none(supplier_fields.get("customer_code"))
-            certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized"))
+            certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized")) or _string_or_none(supplier_fields.get("customer_order_no"))
+            certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
+            certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
 
-        if not any((certificate_number, certificate_article, certificate_customer_order, certificate_cast)):
+        if not any((certificate_number, certificate_article, certificate_customer_order, certificate_cast, certificate_packing_list, certificate_supplier_order)):
             continue
         certificate_signature = _certificate_first_signature(
             fornitore_id=certificate_document.fornitore_id,
@@ -3619,18 +4235,20 @@ def _ensure_certificate_first_rows(
             colata=certificate_cast,
             peso=certificate_weight,
         )
-        linked_row = _find_existing_aluminium_bozen_row_for_certificate(
-            db=db,
-            supplier_id=certificate_document.fornitore_id,
-            certificate_number=certificate_number,
-            article=certificate_article,
-            customer_code=certificate_customer_code,
-            customer_order=certificate_customer_order,
-            alloy=certificate_alloy,
-            diameter=certificate_diameter,
-            cast=certificate_cast,
-            weight=certificate_weight,
-        )
+        linked_row = None
+        if supplier_key == "aluminium_bozen":
+            linked_row = _find_existing_aluminium_bozen_row_for_certificate(
+                db=db,
+                supplier_id=certificate_document.fornitore_id,
+                certificate_number=certificate_number,
+                article=certificate_article,
+                customer_code=certificate_customer_code,
+                customer_order=certificate_customer_order,
+                alloy=certificate_alloy,
+                diameter=certificate_diameter,
+                cast=certificate_cast,
+                weight=certificate_weight,
+            )
         if linked_row is not None:
             if linked_row.document_certificato_id is None:
                 linked_row.document_certificato_id = certificate_document.id
@@ -3996,7 +4614,7 @@ def _score_certificate_candidate(
     certificate_number: str | None = None
     certificate_cast: str | None = None
     certificate_weight: str | None = None
-    if not (ai_only_mode and supplier_key == "aluminium_bozen"):
+    if not (ai_only_mode and _supplier_supports_ai_vision_pipeline(supplier_key)):
         local_matches = reader_detect_certificate_core_matches(certificate_document.pages, supplier_key=supplier_key)
         matches = {
             field_name: {"final": _string_or_none(cast(dict[str, object], payload).get("final"))}
@@ -4008,7 +4626,7 @@ def _score_certificate_candidate(
 
     ddt_supplier_fields = (
         {}
-        if ai_only_mode and supplier_key == "aluminium_bozen"
+        if ai_only_mode and _supplier_supports_ai_vision_pipeline(supplier_key)
         else reader_extract_supplier_match_fields(
             row.ddt_document.pages if row.ddt_document is not None else [],
             template.supplier_key if template is not None else None,
@@ -4034,7 +4652,7 @@ def _score_certificate_candidate(
     ddt_supplier_fields = reader_merge_row_supplier_fields(ddt_supplier_fields, row_supplier_fields)
     certificate_supplier_fields = (
         {}
-        if ai_only_mode and supplier_key == "aluminium_bozen"
+        if ai_only_mode and _supplier_supports_ai_vision_pipeline(supplier_key)
         else reader_extract_supplier_match_fields(
             certificate_document.pages,
             template.supplier_key if template is not None else None,
@@ -4042,19 +4660,30 @@ def _score_certificate_candidate(
         )
     )
 
-    if supplier_key == "aluminium_bozen" and certificate_ai_cache is not None:
+    if _supplier_supports_ai_vision_pipeline(supplier_key) and certificate_ai_cache is not None:
         certificate_ai_fields = cast(dict[str, object], certificate_ai_cache.get(certificate_document.id) or {})
         ai_match_values = cast(dict[str, str | None], certificate_ai_fields.get("match_values") or {})
         ai_supplier_fields = cast(dict[str, str | None], certificate_ai_fields.get("supplier_fields") or {})
         certificate_number = certificate_number or _string_or_none(ai_match_values.get("numero_certificato_certificato"))
         certificate_cast = certificate_cast or _string_or_none(ai_match_values.get("colata_certificato"))
         certificate_weight = certificate_weight or _string_or_none(ai_match_values.get("peso_certificato"))
-        certificate_supplier_fields = {
-            "article": _string_or_none(certificate_supplier_fields.get("article")) or _string_or_none(ai_supplier_fields.get("article")),
-            "customer_code": _string_or_none(certificate_supplier_fields.get("customer_code")) or _string_or_none(ai_supplier_fields.get("customer_code")),
-            "customer_order_normalized": _string_or_none(certificate_supplier_fields.get("customer_order_normalized"))
-            or _string_or_none(ai_supplier_fields.get("customer_order_normalized")),
-        }
+        if supplier_key == "aluminium_bozen":
+            certificate_supplier_fields = {
+                "article": _string_or_none(certificate_supplier_fields.get("article")) or _string_or_none(ai_supplier_fields.get("article")),
+                "customer_code": _string_or_none(certificate_supplier_fields.get("customer_code")) or _string_or_none(ai_supplier_fields.get("customer_code")),
+                "customer_order_normalized": _string_or_none(certificate_supplier_fields.get("customer_order_normalized"))
+                or _string_or_none(ai_supplier_fields.get("customer_order_normalized")),
+            }
+        elif supplier_key == "impol":
+            certificate_supplier_fields = {
+                "packing_list_no": _string_or_none(certificate_supplier_fields.get("packing_list_no")) or _string_or_none(ai_supplier_fields.get("packing_list_no")),
+                "customer_order_no": _string_or_none(certificate_supplier_fields.get("customer_order_no")) or _string_or_none(ai_supplier_fields.get("customer_order_no")),
+                "supplier_order_no": _string_or_none(certificate_supplier_fields.get("supplier_order_no")) or _string_or_none(ai_supplier_fields.get("supplier_order_no")),
+                "product_code": _string_or_none(certificate_supplier_fields.get("product_code")) or _string_or_none(ai_supplier_fields.get("product_code")),
+                "charge": _string_or_none(certificate_supplier_fields.get("charge")) or _string_or_none(ai_supplier_fields.get("charge")),
+                "diameter": _string_or_none(certificate_supplier_fields.get("diameter")) or _string_or_none(ai_supplier_fields.get("diameter")),
+                "net_weight": _string_or_none(certificate_supplier_fields.get("net_weight")) or _string_or_none(ai_supplier_fields.get("net_weight")),
+            }
         if "lega_certificato" not in matches and _string_or_none(ai_match_values.get("lega_certificato")) is not None:
             matches["lega_certificato"] = {"final": _string_or_none(ai_match_values.get("lega_certificato"))}
         if "diametro_certificato" not in matches and _string_or_none(ai_match_values.get("diametro_certificato")) is not None:
@@ -4132,6 +4761,38 @@ def _score_certificate_candidate(
             certificate_number_match or has_full_structural_match or has_row_match_with_cast_support
         )
         if not has_strong_row_link:
+            return None
+    elif supplier_key == "impol":
+        packing_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("packing_list_no"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("packing_list_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("packing_list_no"))
+        )
+        supplier_order_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("supplier_order_no"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("supplier_order_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("supplier_order_no"))
+        )
+        product_code_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("product_code"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("product_code"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("product_code"))
+        )
+        customer_order_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("customer_order_no"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("customer_order_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_order_no"))
+        )
+        cast_match = bool(
+            reader_normalize_match_token(row.colata)
+            and reader_normalize_match_token(row.colata) == reader_normalize_match_token(certificate_cast)
+        )
+        diameter_match = bool(
+            reader_normalize_match_token(row.diametro)
+            and reader_normalize_match_token(row.diametro)
+            == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
+        )
+        if not (packing_match and (supplier_order_match or product_code_match or customer_order_match or cast_match or diameter_match)):
             return None
 
     if score <= 10:
@@ -4676,6 +5337,10 @@ def _build_certificate_safe_crops(
         specialized = _build_aluminium_bozen_certificate_safe_crops(pages)
         if specialized:
             return specialized
+    if supplier_key == "impol":
+        specialized = _build_impol_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
 
     crops: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -4969,6 +5634,171 @@ def _mask_aluminium_bozen_customer_name(image: Image.Image) -> None:
 
         draw.rectangle((left, top, right, bottom), fill="black")
         masked_rects.append((left, top, right, bottom))
+
+
+def _build_impol_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_impol_certificate_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"impol_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("core_page", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_impol_certificate_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    _mask_impol_certificate_customer_block(masked)
+    return masked
+
+
+def _mask_impol_certificate_customer_block(image: Image.Image) -> None:
+    _mask_ocr_block_between_anchors(
+        image,
+        start_terms=("CUSTOMER",),
+        stop_terms=(
+            "CUSTOMER ORDER",
+            "SUPPLIER ORDER",
+            "PACKING LIST",
+            "ISSUE DATE",
+            "PRODUCT DESCRIPTION",
+            "CHEMICAL COMPOSITION",
+        ),
+        max_following_lines=8,
+        right_limit_ratio=0.48,
+    )
+
+
+def _mask_ocr_block_between_anchors(
+    image: Image.Image,
+    *,
+    start_terms: tuple[str, ...],
+    stop_terms: tuple[str, ...],
+    max_following_lines: int,
+    right_limit_ratio: float,
+) -> None:
+    try:
+        data = pytesseract.image_to_data(image, lang="eng+ita+deu", output_type=pytesseract.Output.DICT)
+    except (OSError, pytesseract.TesseractNotFoundError):
+        return
+
+    tokens = data.get("text") or []
+    block_nums = data.get("block_num") or []
+    par_nums = data.get("par_num") or []
+    line_nums = data.get("line_num") or []
+    lefts = data.get("left") or []
+    tops = data.get("top") or []
+    widths = data.get("width") or []
+    heights = data.get("height") or []
+
+    line_map: dict[tuple[int, int, int], dict[str, object]] = {}
+    for index, token in enumerate(tokens):
+        normalized = re.sub(r"\s+", " ", (_string_or_none(token) or "").upper()).strip()
+        try:
+            line_key = (int(block_nums[index]), int(par_nums[index]), int(line_nums[index]))
+            x0 = int(lefts[index])
+            y0 = int(tops[index])
+            width = int(widths[index])
+            height = int(heights[index])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        x1 = x0 + width
+        y1 = y0 + height
+        entry = line_map.setdefault(
+            line_key,
+            {"text_parts": [], "left": x0, "top": y0, "right": x1, "bottom": y1},
+        )
+        if normalized:
+            cast(list[str], entry["text_parts"]).append(normalized)
+        entry["left"] = min(int(entry["left"]), x0)
+        entry["top"] = min(int(entry["top"]), y0)
+        entry["right"] = max(int(entry["right"]), x1)
+        entry["bottom"] = max(int(entry["bottom"]), y1)
+
+    lines = []
+    for entry in line_map.values():
+        text = " ".join(cast(list[str], entry["text_parts"])).strip()
+        if not text:
+            continue
+        lines.append(
+            {
+                "text": text,
+                "left": int(entry["left"]),
+                "top": int(entry["top"]),
+                "right": int(entry["right"]),
+                "bottom": int(entry["bottom"]),
+            }
+        )
+    lines.sort(key=lambda item: (int(item["top"]), int(item["left"])))
+    if not lines:
+        return
+
+    normalized_start_terms = [term.upper() for term in start_terms]
+    normalized_stop_terms = [term.upper() for term in stop_terms]
+    start_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if any(term in str(line["text"]) for term in normalized_start_terms)
+            and not any(term in str(line["text"]) for term in normalized_stop_terms)
+        ),
+        None,
+    )
+    if start_index is None:
+        return
+
+    cluster = [lines[start_index]]
+    previous_bottom = int(lines[start_index]["bottom"])
+    max_vertical_gap = max(18, image.height // 35)
+    for line in lines[start_index + 1 : start_index + 1 + max_following_lines]:
+        text = str(line["text"])
+        if any(term in text for term in normalized_stop_terms):
+            break
+        if int(line["top"]) - previous_bottom > max_vertical_gap:
+            break
+        cluster.append(line)
+        previous_bottom = int(line["bottom"])
+
+    left = max(0, min(int(line["left"]) for line in cluster) - max(10, image.width // 250))
+    top = max(0, min(int(line["top"]) for line in cluster) - max(6, image.height // 300))
+    right = min(int(image.width * right_limit_ratio), max(int(line["right"]) for line in cluster) + max(12, image.width // 220))
+    bottom = min(image.height - 1, max(int(line["bottom"]) for line in cluster) + max(8, image.height // 260))
+    if right <= left or bottom <= top:
+        return
+
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((left, top, right, bottom), fill="black")
 
 def _create_ddt_crop_definition(
     page: DocumentPage,
@@ -5682,6 +6512,306 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
     }
 
 
+def _get_impol_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {
+            "match_values": {},
+            "supplier_fields": {},
+            "chemistry": {},
+            "properties": {},
+            "notes": {},
+        }
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="impol")
+    page_images = _select_impol_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {
+            "match_values": {},
+            "supplier_fields": {},
+            "chemistry": {},
+            "properties": {},
+            "notes": {},
+        }
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    raw_payload = _extract_impol_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
+    )
+    payload = _normalize_impol_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _select_impol_certificate_document_images(
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    selected: dict[str, dict[str, str | int]] = {}
+    by_page: dict[int, list[tuple[str, dict[str, str | int]]]] = {}
+    for label, crop in crops.items():
+        page_number = int(crop.get("page_number") or 0)
+        if page_number <= 0:
+            continue
+        by_page.setdefault(page_number, []).append((label, crop))
+
+    role_priority = {
+        "certificate_core_context": 1,
+        "certificate_continuation": 2,
+        "chemistry_table": 3,
+        "properties_table": 4,
+        "notes_block": 5,
+    }
+    for page_number, entries in sorted(by_page.items()):
+        best_label, best_crop = sorted(
+            entries,
+            key=lambda item: (
+                role_priority.get(_string_or_none(item[1].get("role")) or "", 99),
+                item[0],
+            ),
+        )[0]
+        selected[best_label] = best_crop
+    return selected
+
+
+def _extract_impol_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato materiale. "
+                "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica, proprieta meccaniche e note tecniche rilevanti. "
+                "Presta particolare attenzione a Packing list No., Customer Order No., Supplier Order No., Netto e Product description. "
+                "Usa solo testo realmente visibile nel documento. Non inventare, non inferire, non normalizzare. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Campi core da estrarre. "
+                "numero_certificato: estrai il numero certificato dal campo No. "
+                "ordine_cliente: estrai il valore del campo Customer Order No. "
+                "articolo: estrai il valore del campo Impol product code o di un campo equivalente che identifica chiaramente il product code. "
+                "lega: estrai la lega o stato dal blocco Product description. "
+                "descrizione_profilo_cliente: per questo fornitore usa null se non esiste un vero campo equivalente a una descrizione profilo cliente separata; non inventare un codice cliente. "
+                "colata: estrai il valore del campo Charge della riga misurata. "
+                "peso_netto: estrai il valore del campo Netto o di un campo equivalente che indica chiaramente il peso netto del materiale; "
+                "il valore puo essere un numero con o senza unita; considera valido il numero piu vicino al label nella stessa riga, cella o area visiva; "
+                "non confondere questo campo con altri pesi o valori tabellari; non restituire null se il label e presente e un numero e chiaramente associato nella stessa area. "
+                "Campi runtime di supporto da estrarre inoltre. "
+                "packing_list_no: estrai il valore del campo Packing list No. "
+                "supplier_order_no: estrai il valore del campo Supplier Order No. "
+                "product_description_raw: estrai l'intero contenuto raw del blocco Product description; se il contenuto e spezzato su piu righe ma appartiene allo stesso blocco o cella, unisci le righe con uno spazio. "
+                "diameter_raw: estrai il diametro dal blocco Product description se compare come DIA. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
+                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
+                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
+                "\"packing_list_no\":\"string|null\",\"supplier_order_no\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
+                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
+                "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Image label: {image_label}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Impol certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_impol_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_impol_vision_certificate_fields(core_payload, next(iter(page_images.keys()), None))
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": next(iter(page_images.keys()), None),
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            next(iter(page_images.keys()), "page1"): {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+
+    measured_rows_payload = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows_payload if isinstance(measured_rows_payload, list) else [],
+        page_id=first_page_id,
+    )
+
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    packing_list_raw = _string_or_none(core_payload.get("packing_list_no"))
+    customer_order_raw = _string_or_none(core_payload.get("ordine_cliente"))
+    supplier_order_raw = _string_or_none(core_payload.get("supplier_order_no"))
+    article_raw = _string_or_none(core_payload.get("articolo"))
+    product_description_raw = _string_or_none(core_payload.get("product_description_raw"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or product_description_raw
+    cast_raw = _string_or_none(core_payload.get("colata"))
+    weight_raw = _string_or_none(core_payload.get("peso_netto"))
+
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in core_fields.items()
+        },
+        "supplier_fields": {
+            "packing_list_no": normalize_impol_packing_list_root(packing_list_raw),
+            "customer_order_no": _extract_token_from_value_or_evidence(customer_order_raw, customer_order_raw, r"\b\d{1,6}\b"),
+            "supplier_order_no": _extract_token_from_value_or_evidence(supplier_order_raw, supplier_order_raw, r"\b\d{3,6}/\d{1,2}\b"),
+            "product_code": _normalize_impol_product_code(article_raw),
+            "product_description_raw": product_description_raw,
+            "charge": _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{6}\b", disallow={"10204"}),
+            "diameter": _normalize_impol_diameter_from_text(diameter_raw),
+            "net_weight": _normalize_numeric_value(weight_raw),
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_impol_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    certificate_raw = _string_or_none(core_payload.get("numero_certificato"))
+    order_raw = _string_or_none(core_payload.get("ordine_cliente"))
+    article_raw = _string_or_none(core_payload.get("articolo"))
+    alloy_raw = _string_or_none(core_payload.get("lega")) or _string_or_none(core_payload.get("product_description_raw"))
+    cast_raw = _string_or_none(core_payload.get("colata"))
+    weight_raw = _string_or_none(core_payload.get("peso_netto"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("product_description_raw"))
+
+    def _payload(value: str | None) -> dict[str, str | None]:
+        return {
+            "value": value,
+            "evidence": value,
+            "source_crop": source_crop,
+        }
+
+    return {
+        "numero_certificato_certificato": _payload(
+            _extract_token_from_value_or_evidence(
+                certificate_raw,
+                certificate_raw,
+                r"\b\d{1,6}\s*[/-]?\s*[A-Z0-9]{0,2}\b",
+                disallow={"10204"},
+            )
+        ),
+        "articolo_certificato": _payload(_normalize_impol_product_code(article_raw)),
+        "codice_cliente_certificato": _payload(None),
+        "ordine_cliente_certificato": _payload(
+            _extract_token_from_value_or_evidence(order_raw, order_raw, r"\b\d{1,6}\b")
+        ),
+        "lega_certificato": _payload(_normalize_impol_alloy_from_text(alloy_raw)),
+        "diametro_certificato": _payload(_normalize_impol_diameter_from_text(diameter_raw)),
+        "colata_certificato": _payload(
+            _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{6}\b", disallow={"10204"})
+        ),
+        "peso_certificato": _payload(_normalize_numeric_value(weight_raw)),
+    }
+
+
+def _normalize_impol_product_code(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{6})(?:/\d)?\b", cleaned.upper())
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def _normalize_aluminium_bozen_measured_rows_payload(
     measured_rows_payload: list[object],
     *,
@@ -5817,6 +6947,103 @@ def _apply_aluminium_bozen_certificate_ai_payload(
     _sync_row_from_match_values(db, row)
     _sync_row_statuses(db, row)
     db.add(row)
+
+
+def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
+    return supplier_key in {"aluminium_bozen", "impol"}
+
+
+def _get_supplier_certificate_ai_payload(
+    db: Session,
+    *,
+    supplier_key: str | None,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    if supplier_key == "aluminium_bozen":
+        return _get_aluminium_bozen_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    if supplier_key == "impol":
+        return _get_impol_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    return {
+        "match_values": {},
+        "supplier_fields": {},
+        "chemistry": {},
+        "properties": {},
+        "notes": {},
+    }
+
+
+def _extract_supplier_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    supplier_key: str | None,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if supplier_key == "aluminium_bozen":
+        return _extract_aluminium_bozen_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
+    if supplier_key == "impol":
+        return _extract_impol_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
+    return []
+
+
+def _apply_supplier_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    if ai_candidate.supplier_key == "impol":
+        return _apply_impol_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
+    return _apply_aluminium_bozen_ai_candidate_to_row(
+        db=db,
+        row=row,
+        ai_candidate=ai_candidate,
+        actor_id=actor_id,
+        document_id=document_id,
+    )
+
+
+def _apply_supplier_certificate_ai_payload(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: dict[str, object],
+    actor_id: int,
+) -> None:
+    _apply_aluminium_bozen_certificate_ai_payload(
+        db=db,
+        row=row,
+        payload=payload,
+        actor_id=actor_id,
+    )
 
 
 def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
