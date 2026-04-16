@@ -58,6 +58,14 @@ function runStateClasses(run) {
   return "border-amber-200 bg-amber-50 text-amber-700";
 }
 
+function MaskedAiIcon() {
+  return (
+    <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/15 ring-1 ring-white/25">
+      <img alt="" className="h-full w-full object-contain" src="/assets/branding/ai-masked-bot.png" />
+    </span>
+  );
+}
+
 export default function AcquisitionUploadPage() {
   const { token, clearAuth } = useAuth();
   const navigate = useNavigate();
@@ -439,12 +447,16 @@ export default function AcquisitionUploadPage() {
                 {startingRun ? "Avvio..." : "Avvia lavorazione"}
               </button>
               <button
-                className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
                 disabled={startingRun || startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
                 onClick={() => startAutomationRun(automationSignature, true)}
                 type="button"
               >
-                {startingAiRun ? "Intervento AI..." : "Intervento AI"}
+                <MaskedAiIcon />
+                <span className="flex flex-col">
+                  <span className="text-base font-semibold leading-tight">{startingAiRun ? "AI processing..." : "AI Intervention"}</span>
+                  <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
+                </span>
               </button>
               <span className="self-center text-xs text-slate-500">Vision DDT viene usata quando disponibile.</span>
             </div>
