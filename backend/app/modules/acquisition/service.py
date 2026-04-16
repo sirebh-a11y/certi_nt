@@ -5202,18 +5202,42 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
             "text": (
                 "Leggi questo certificato materiale. "
                 "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica, proprieta meccaniche e note tecniche rilevanti. "
+                "Presta particolare attenzione a peso netto del materiale e descrizione profilo cliente. "
                 "Usa solo testo realmente visibile nel documento. Non inventare, non inferire, non normalizzare. "
-                "Per l'ordine cliente usa solo Nr. ORDINE CLIENTE. Non usare mai Nr ORDINE A.B. come ordine cliente. "
-                "Campi core da estrarre: certificate_number_raw, customer_order_raw, article_code_raw, alloy_raw, "
-                "profile_customer_description_raw, cast_raw, net_weight_raw. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Per l'ordine cliente usa il campo che indica chiaramente l'ordine del cliente; "
+                "non usare il campo che indica l'ordine interno A.B. o equivalente. "
+                "Campi core da estrarre. "
+                "numero_certificato: estrai il numero certificato dal campo che identifica chiaramente il certificato; "
+                "esempi frequenti: CERT.NO, Nr.CERT, No.CERT. "
+                "ordine_cliente: estrai il valore del campo che indica chiaramente l'ordine cliente; "
+                "esempi frequenti: Nr. ORDINE CLIENTE, CUSTOMER ORDER, CLIENT ORDER; "
+                "non usare il campo dell'ordine interno A.B. o equivalente. "
+                "articolo: estrai il codice articolo dal campo che identifica chiaramente articolo o profilo; "
+                "esempi frequenti: ARTICOLO, ARTICLE, PROFIL. "
+                "lega: estrai la lega dal campo che identifica chiaramente lega e stato fisico; "
+                "esempi frequenti: LEGA, ALLOY, ALLOY & Phys.State. "
+                "descrizione_profilo_cliente: estrai la stringa completa del campo DESCRIZIONE PROFILO CLIENTE "
+                "o di un campo equivalente che descrive profilo cliente o sezione cliente; "
+                "questo campo puo contenere codice cliente, tipo profilo, diametro o altre informazioni descrittive; "
+                "restituisci l'intera stringa raw del campo, non separare i componenti; "
+                "esempi frequenti: DESCRIZIONE PROFILO CLIENTE, CUSTOMER'S SECTION DESC., SECTION DESC., PROFIL; "
+                "se il nome del campo cambia ma il significato e chiaramente quello, usa comunque quel campo. "
+                "colata: estrai il valore del campo che identifica chiaramente colata, batch o charge; "
+                "esempi frequenti: N° COLATA, CAST BATCH N°, CHARGE N°, CAST NO. "
+                "peso_netto: estrai il valore del campo PESO NETTO "
+                "o di un campo equivalente che indica chiaramente il peso netto del materiale; "
+                "esempi frequenti: PESO NETTO, NET WEIGHT, POIDS NET, NETTOGEWICHT; "
+                "non confondere questo campo con altri pesi, quantita o valori tabellari; "
+                "se il nome del campo cambia ma il significato e chiaramente peso netto del materiale, usa comunque quel campo. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; "
                 "restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
                 "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
-                "{\"core\":{\"certificate_number_raw\":\"string|null\",\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
-                "\"alloy_raw\":\"string|null\",\"profile_customer_description_raw\":\"string|null\",\"cast_raw\":\"string|null\",\"net_weight_raw\":\"string|null\"},"
+                "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
+                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
                 "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
                 "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
@@ -5280,22 +5304,27 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
     last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
 
     core_payload = cast(dict[str, object], raw_payload.get("core") or {})
-    core_extracted = {
-        field_name: {
-            "value": _string_or_none(core_payload.get(field_name)),
-            "evidence": _string_or_none(core_payload.get(field_name)),
+    core_aliases = {
+        "certificate_number_raw": ("numero_certificato", "certificate_number_raw"),
+        "customer_order_raw": ("ordine_cliente", "customer_order_raw"),
+        "article_code_raw": ("articolo", "article_code_raw"),
+        "alloy_raw": ("lega", "alloy_raw"),
+        "profile_customer_description_raw": ("descrizione_profilo_cliente", "profile_customer_description_raw"),
+        "cast_raw": ("colata", "cast_raw"),
+        "net_weight_raw": ("peso_netto", "net_weight_raw"),
+    }
+    core_extracted: dict[str, dict[str, str | None]] = {}
+    for field_name, aliases in core_aliases.items():
+        raw_value = None
+        for alias in aliases:
+            raw_value = _string_or_none(core_payload.get(alias))
+            if raw_value is not None:
+                break
+        core_extracted[field_name] = {
+            "value": raw_value,
+            "evidence": raw_value,
             "source_crop": next(iter(page_images.keys()), None),
         }
-        for field_name in (
-            "certificate_number_raw",
-            "article_code_raw",
-            "customer_order_raw",
-            "alloy_raw",
-            "profile_customer_description_raw",
-            "cast_raw",
-            "net_weight_raw",
-        )
-    }
     sanitized_core = _sanitize_aluminium_bozen_vision_certificate_fields(core_extracted)
 
     chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
