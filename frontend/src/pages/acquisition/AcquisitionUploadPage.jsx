@@ -79,7 +79,7 @@ export default function AcquisitionUploadPage() {
   const [certificateResult, setCertificateResult] = useState(null);
   const [sessionDdtDocuments, setSessionDdtDocuments] = useState([]);
   const [sessionCertificateDocuments, setSessionCertificateDocuments] = useState([]);
-  const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [currentRun, setCurrentRun] = useState(null);
   const [lastStartedSignature, setLastStartedSignature] = useState("");
   const [activeRunChecked, setActiveRunChecked] = useState(false);
@@ -569,6 +569,15 @@ function UploadSection({
               {result.uploaded.slice(0, 4).map((item) => (
                 <div key={item.id}>
                   #{item.id} · {item.nome_file_originale} · {item.tipo_documento} {item.fornitore_nome ? `· ${item.fornitore_nome}` : ""}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {result.failed?.length ? (
+            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+              {result.failed.map((item, index) => (
+                <div key={`${item.file_name}-${index}`}>
+                  {item.file_name}: {item.detail}
                 </div>
               ))}
             </div>
