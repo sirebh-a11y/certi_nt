@@ -13,6 +13,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowListResponse,
     AcquisitionRowUpdateRequest,
     DocumentBatchUploadResponse,
+    CurrentUploadBatchResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
@@ -35,6 +36,7 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_rows_from_document_split_plan,
     create_evidence,
+    discard_current_upload_batch,
     detect_chemistry,
     detect_properties,
     detect_standard_notes,
@@ -46,6 +48,7 @@ from app.modules.acquisition.service import (
     get_document_page,
     get_document_page_image_path,
     index_document,
+    get_current_upload_batch,
     list_acquisition_rows,
     list_documents,
     process_row_minimal,
@@ -113,7 +116,7 @@ def get_automation_run_route(run_id: int, _: CurrentUser, db: DbSession) -> Auto
 
 @router.get("/documents", response_model=DocumentListResponse)
 def list_documents_route(
-    _: CurrentUser,
+    current_user: CurrentUser,
     db: DbSession,
     tipo_documento: str | None = Query(default=None),
     fornitore_id: int | None = Query(default=None),
@@ -125,8 +128,19 @@ def list_documents_route(
             tipo_documento=tipo_documento,
             fornitore_id=fornitore_id,
             upload_batch_id=upload_batch_id,
+            actor_id=current_user.id,
         )
     )
+
+
+@router.get("/documents/current-batch", response_model=CurrentUploadBatchResponse)
+def get_current_upload_batch_route(current_user: CurrentUser, db: DbSession) -> CurrentUploadBatchResponse:
+    return get_current_upload_batch(db, actor_id=current_user.id)
+
+
+@router.delete("/documents/current-batch", response_model=CurrentUploadBatchResponse)
+def discard_current_upload_batch_route(current_user: CurrentUser, db: DbSession) -> CurrentUploadBatchResponse:
+    return discard_current_upload_batch(db, actor_id=current_user.id)
 
 
 @router.post("/documents", response_model=DocumentResponse)

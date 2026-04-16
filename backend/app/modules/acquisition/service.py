@@ -44,6 +44,7 @@ from app.modules.acquisition.schemas import (
     DocumentSplitRowsCreateResponse,
     DocumentBatchErrorResponse,
     DocumentBatchUploadResponse,
+    CurrentUploadBatchResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
@@ -305,20 +306,36 @@ def list_documents(
     tipo_documento: str | None = None,
     fornitore_id: int | None = None,
     upload_batch_id: str | None = None,
+    actor_id: int | None = None,
 ) -> list[DocumentResponse]:
     query = db.query(Document).options(joinedload(Document.supplier)).order_by(Document.data_upload.desc(), Document.id.desc())
     if upload_batch_id is None:
         query = query.filter(Document.stato_upload == "persistente")
     else:
-        query = query.filter(
-            (Document.stato_upload == "persistente")
-            | ((Document.stato_upload == "temporaneo") & (Document.upload_batch_id == upload_batch_id))
-        )
+        query = query.filter((Document.stato_upload == "temporaneo") & (Document.upload_batch_id == upload_batch_id))
+        if actor_id is not None:
+            query = query.filter(Document.utente_upload_id == actor_id)
     if tipo_documento is not None:
         query = query.filter(Document.tipo_documento == tipo_documento)
     if fornitore_id is not None:
         query = query.filter(Document.fornitore_id == fornitore_id)
     return [serialize_document(document) for document in query.all()]
+
+
+def get_current_upload_batch(db: Session, *, actor_id: int) -> CurrentUploadBatchResponse:
+    upload_batch_id = _get_latest_temporary_upload_batch_id(db, actor_id=actor_id)
+    if upload_batch_id is None:
+        return CurrentUploadBatchResponse(upload_batch_id=None, items=[])
+    items = list_documents(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
+    return CurrentUploadBatchResponse(upload_batch_id=upload_batch_id, items=items)
+
+
+def discard_current_upload_batch(db: Session, *, actor_id: int) -> CurrentUploadBatchResponse:
+    upload_batch_id = _get_latest_temporary_upload_batch_id(db, actor_id=actor_id)
+    if upload_batch_id is None:
+        return CurrentUploadBatchResponse(upload_batch_id=None, items=[])
+    _delete_temporary_upload_batch(db, actor_id=actor_id, upload_batch_id=upload_batch_id)
+    return CurrentUploadBatchResponse(upload_batch_id=None, items=[])
 
 
 def get_document(db: Session, document_id: int) -> Document:
@@ -409,7 +426,7 @@ def upload_document(
     original_name = Path(uploaded_file.filename).name or f"{tipo_documento}.bin"
     extension = Path(original_name).suffix.lower()
     now = datetime.now(UTC)
-    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or uuid4().hex
+    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _get_latest_temporary_upload_batch_id(db, actor_id=actor_id) or uuid4().hex
     relative_storage_key = f"{tipo_documento}/{now:%Y/%m/%d}/{uuid4().hex}{extension}"
     storage_path = _document_storage_root() / relative_storage_key
     storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3129,6 +3146,66 @@ def _normalize_upload_batch_id(value: str | None) -> str | None:
     if normalized is None:
         return None
     return normalized[:64]
+
+
+def _get_latest_temporary_upload_batch_id(db: Session, *, actor_id: int) -> str | None:
+    document = (
+        db.query(Document)
+        .filter(
+            Document.utente_upload_id == actor_id,
+            Document.stato_upload == "temporaneo",
+            Document.upload_batch_id.isnot(None),
+        )
+        .order_by(Document.data_upload.desc(), Document.id.desc())
+        .first()
+    )
+    if document is None:
+        return None
+    return _normalize_upload_batch_id(document.upload_batch_id)
+
+
+def _delete_storage_key_if_present(storage_key: str | None) -> None:
+    resolved_key = _string_or_none(storage_key)
+    if resolved_key is None:
+        return
+    path = _resolve_storage_path(resolved_key)
+    if path.exists():
+        path.unlink()
+
+
+def _delete_temporary_upload_batch(db: Session, *, actor_id: int, upload_batch_id: str) -> None:
+    documents = (
+        db.query(Document)
+        .options(joinedload(Document.pages), joinedload(Document.evidences))
+        .filter(
+            Document.utente_upload_id == actor_id,
+            Document.stato_upload == "temporaneo",
+            Document.upload_batch_id == upload_batch_id,
+        )
+        .all()
+    )
+    if not documents:
+        return
+
+    for document in documents:
+        if document.rows_as_ddt or document.rows_as_certificate or document.matches or document.match_candidates:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot discard a batch that is already in use")
+        page_ids = [page.id for page in document.pages]
+        for evidence in document.evidences:
+            _delete_storage_key_if_present(evidence.storage_key_derivato)
+            db.delete(evidence)
+        if page_ids:
+            page_evidences = db.query(DocumentEvidence).filter(DocumentEvidence.document_page_id.in_(page_ids)).all()
+            for evidence in page_evidences:
+                _delete_storage_key_if_present(evidence.storage_key_derivato)
+                db.delete(evidence)
+        for page in document.pages:
+            _delete_storage_key_if_present(page.immagine_pagina_storage_key)
+            db.delete(page)
+        _delete_storage_key_if_present(document.storage_key)
+        db.delete(document)
+
+    db.commit()
 
 
 def _promote_documents_to_persistent(db: Session, document_ids: list[int]) -> None:

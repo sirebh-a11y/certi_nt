@@ -4,6 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
+const UPLOAD_BATCH_STORAGE_KEY = "acquisition.uploadBatchId";
+
 function mergeUploadedDocuments(currentItems, uploadedItems) {
   const map = new Map(currentItems.map((item) => [item.id, item]));
   uploadedItems.forEach((item) => {
@@ -59,6 +61,12 @@ function runStateClasses(run) {
 export default function AcquisitionUploadPage() {
   const { token, clearAuth } = useAuth();
   const navigate = useNavigate();
+  const [uploadBatchId, setUploadBatchId] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    return window.sessionStorage.getItem(UPLOAD_BATCH_STORAGE_KEY) || "";
+  });
   const [ddtFiles, setDdtFiles] = useState([]);
   const [certificateFiles, setCertificateFiles] = useState([]);
   const [processingDdt, setProcessingDdt] = useState(false);
@@ -104,6 +112,45 @@ export default function AcquisitionUploadPage() {
     setError(message);
   }
 
+  async function loadCurrentBatch() {
+    try {
+      const response = await apiRequest("/acquisition/documents/current-batch", {}, token);
+      const batchId = response.upload_batch_id || "";
+      const documents = response.items || [];
+      setUploadBatchId(batchId);
+      setSessionDdtDocuments(documents.filter((item) => item.tipo_documento === "ddt"));
+      setSessionCertificateDocuments(documents.filter((item) => item.tipo_documento === "certificato"));
+      if (batchId && documents.length) {
+        setAutoStartEnabled(false);
+        setNotice("Hai un batch temporaneo aperto: puoi continuare oppure scartarlo.");
+      }
+    } catch (requestError) {
+      handleRequestError(requestError);
+    }
+  }
+
+  async function discardCurrentBatch() {
+    setError("");
+    setNotice("");
+    try {
+      await apiRequest(
+        "/acquisition/documents/current-batch",
+        {
+          method: "DELETE",
+        },
+        token,
+      );
+      setUploadBatchId("");
+      setSessionDdtDocuments([]);
+      setSessionCertificateDocuments([]);
+      setDdtResult(null);
+      setCertificateResult(null);
+      setNotice("Batch temporaneo scartato.");
+    } catch (requestError) {
+      handleRequestError(requestError);
+    }
+  }
+
   async function loadActiveRun() {
     try {
       const run = await apiRequest("/acquisition/automation/runs/active", {}, token);
@@ -133,6 +180,9 @@ export default function AcquisitionUploadPage() {
 
     const formData = new FormData();
     formData.append("tipo_documento", tipoDocumento);
+    if (uploadBatchId) {
+      formData.append("upload_batch_id", uploadBatchId);
+    }
     files.forEach((file) => formData.append("files", file));
 
     setProcessing(true);
@@ -147,6 +197,9 @@ export default function AcquisitionUploadPage() {
         },
         token,
       );
+      if (response.upload_batch_id) {
+        setUploadBatchId(response.upload_batch_id);
+      }
       setResult(response);
       resetFiles([]);
       const uploadedDocuments = response.uploaded || [];
@@ -192,6 +245,7 @@ export default function AcquisitionUploadPage() {
       );
       setCurrentRun(run);
       setLastStartedSignature(signature);
+      setUploadBatchId("");
     } catch (requestError) {
       const message = requestError?.message || "Request failed";
       if (message === "There is already an autonomous processing run in progress") {
@@ -205,6 +259,21 @@ export default function AcquisitionUploadPage() {
       setStarting(false);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (uploadBatchId) {
+      window.sessionStorage.setItem(UPLOAD_BATCH_STORAGE_KEY, uploadBatchId);
+    } else {
+      window.sessionStorage.removeItem(UPLOAD_BATCH_STORAGE_KEY);
+    }
+  }, [uploadBatchId]);
+
+  useEffect(() => {
+    loadCurrentBatch();
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -279,7 +348,7 @@ export default function AcquisitionUploadPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">Caricamento documenti</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Flusso semplice: carichi DDT e certificati, il sistema lavora da solo il più possibile, poi quality entra sulle righe.
+              Flusso semplice: carichi DDT e certificati nel batch corrente, il sistema li riconosce e poi lavora sui documenti selezionati.
             </p>
           </div>
           <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
@@ -322,10 +391,23 @@ export default function AcquisitionUploadPage() {
                 <h3 className="text-base font-semibold text-slate-900">Documenti pronti</h3>
                 <p className="mt-1 text-sm text-slate-500">Tipo reale riconosciuto e fornitore dove disponibile.</p>
               </div>
-              <div className="text-xs text-slate-500">
-                {sessionDdtDocuments.length} DDT · {sessionCertificateDocuments.length} certificati
+              <div className="flex items-center gap-3">
+                <div className="text-xs text-slate-500">
+                  {sessionDdtDocuments.length} DDT · {sessionCertificateDocuments.length} certificati
+                </div>
+                {uploadBatchId ? (
+                  <button
+                    className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                    onClick={discardCurrentBatch}
+                    type="button"
+                  >
+                    Scarta batch
+                  </button>
+                ) : null}
               </div>
             </div>
+
+            {uploadBatchId ? <div className="mt-3 text-xs text-slate-500">Batch corrente: {uploadBatchId}</div> : null}
 
             <div className="mt-4 grid gap-4 xl:grid-cols-2">
               <DocumentTable emptyLabel="Nessun DDT pronto." items={sessionDdtDocuments} title="DDT pronti" />
@@ -338,7 +420,7 @@ export default function AcquisitionUploadPage() {
               <div>
                 <h3 className="text-base font-semibold text-slate-900">3. Lavorazione automatica</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Usa i DDT caricati e i certificati già presenti nel repository, non solo quelli della sessione.
+                  Usa i documenti pronti del batch corrente che vedi qui sopra.
                 </p>
               </div>
               <label className="flex items-center gap-2 text-sm text-slate-700">

@@ -131,6 +131,11 @@ class DocumentBatchUploadResponse(BaseModel):
     failed: list[DocumentBatchErrorResponse]
 
 
+class CurrentUploadBatchResponse(BaseModel):
+    upload_batch_id: str | None
+    items: list[DocumentResponse]
+
+
 class AutonomousRunStartRequest(BaseModel):
     ddt_document_ids: list[int] = Field(default_factory=list)
     certificate_document_ids: list[int] = Field(default_factory=list)
