@@ -2507,6 +2507,18 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
     actor_id: int,
     document_id: int,
 ) -> bool:
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+
     field_values = {
         "ddt": ai_candidate.ddt_number,
         "numero_certificato_ddt": ai_candidate.cdq,
@@ -2545,18 +2557,6 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
 
     if changed_fields == 0:
         return False
-
-    if ai_candidate.ai_row_payload_raw:
-        _create_ai_payload_evidence(
-            db=db,
-            row_id=row.id,
-            document_id=document_id,
-            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
-            blocco="ddt",
-            payload_text=ai_candidate.ai_row_payload_raw,
-            actor_id=actor_id,
-            confidence=0.72,
-        )
 
     _sync_row_from_ddt_values(db, row)
     _sync_row_statuses(db, row)
@@ -4596,15 +4596,6 @@ def _build_aluminium_bozen_certificate_masked_page(image: Image.Image) -> Image.
     masked = image.crop((left, top, right, bottom)).convert("RGB")
 
     _mask_aluminium_bozen_customer_name(masked)
-
-    draw = ImageDraw.Draw(masked)
-    stamp_box = (
-        int(masked.width * 0.56),
-        int(masked.height * 0.63),
-        int(masked.width * 0.90),
-        int(masked.height * 0.78),
-    )
-    draw.rectangle(stamp_box, fill="black")
     return masked
 
 
@@ -4614,7 +4605,6 @@ def _mask_aluminium_bozen_customer_name(image: Image.Image) -> None:
     except (OSError, pytesseract.TesseractNotFoundError):
         return
 
-    boxes: list[tuple[int, int, int, int]] = []
     tokens = data.get("text") or []
     block_nums = data.get("block_num") or []
     par_nums = data.get("par_num") or []
@@ -4624,48 +4614,78 @@ def _mask_aluminium_bozen_customer_name(image: Image.Image) -> None:
     widths = data.get("width") or []
     heights = data.get("height") or []
 
-    matched_lines: set[tuple[int, int, int]] = set()
+    line_tokens: dict[tuple[int, int, int], list[tuple[int, str, int, int, int, int]]] = {}
+    anchor_indices: list[int] = []
     for index, token in enumerate(tokens):
         normalized = re.sub(r"[^A-Z0-9]", "", _string_or_none(token) or "").upper()
-        if "FORGIALLUMINIO" not in normalized:
-            continue
-        try:
-            matched_lines.add((int(block_nums[index]), int(par_nums[index]), int(line_nums[index])))
-        except (TypeError, ValueError, IndexError):
-            continue
-
-    if not matched_lines:
-        return
-
-    for index, token in enumerate(tokens):
         try:
             line_key = (int(block_nums[index]), int(par_nums[index]), int(line_nums[index]))
-        except (TypeError, ValueError, IndexError):
-            continue
-        if line_key not in matched_lines:
-            continue
-        text = _string_or_none(token)
-        if text is None:
-            continue
-        try:
             x0 = int(lefts[index])
             y0 = int(tops[index])
-            x1 = x0 + int(widths[index])
-            y1 = y0 + int(heights[index])
+            width = int(widths[index])
+            height = int(heights[index])
         except (TypeError, ValueError, IndexError):
             continue
-        boxes.append((x0, y0, x1, y1))
+        if width <= 0 or height <= 0:
+            continue
+        x1 = x0 + width
+        y1 = y0 + height
+        line_tokens.setdefault(line_key, []).append((index, normalized, x0, y0, x1, y1))
+        if "FORGIALLUMINIO" in normalized:
+            anchor_indices.append(index)
 
-    if not boxes:
+    if not anchor_indices:
         return
 
-    pad_x = max(12, image.width // 200)
-    pad_y = max(8, image.height // 260)
-    left = max(0, min(box[0] for box in boxes) - pad_x)
-    top = max(0, min(box[1] for box in boxes) - pad_y)
-    right = min(image.width, max(box[2] for box in boxes) + pad_x)
-    bottom = min(image.height, max(box[3] for box in boxes) + pad_y)
-    ImageDraw.Draw(image).rectangle((left, top, right, bottom), fill="black")
+    max_gap = max(24, image.width // 28)
+    draw = ImageDraw.Draw(image)
+    masked_rects: list[tuple[int, int, int, int]] = []
+
+    for anchor_index in anchor_indices:
+        try:
+            line_key = (int(block_nums[anchor_index]), int(par_nums[anchor_index]), int(line_nums[anchor_index]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        entries = sorted(line_tokens.get(line_key, []), key=lambda item: item[2])
+        if not entries:
+            continue
+        anchor_position = next((idx for idx, item in enumerate(entries) if item[0] == anchor_index), None)
+        if anchor_position is None:
+            continue
+        anchor = entries[anchor_position]
+        _, _, ax0, ay0, ax1, ay1 = anchor
+
+        cluster = [anchor]
+        prev_x1 = ax1
+        next_limit = min(len(entries), anchor_position + 5)
+        for entry in entries[anchor_position + 1 : anchor_position + 5]:
+            _, token_text, ex0, ey0, ex1, ey1 = entry
+            if ex0 - prev_x1 > max_gap:
+                break
+            if not token_text:
+                continue
+            cluster.append(entry)
+            prev_x1 = ex1
+
+        left = max(0, min(item[2] for item in cluster) - max(10, image.width // 300))
+        top = max(0, min(item[3] for item in cluster) - max(6, image.height // 350))
+        right = min(image.width - 1, max(item[4] for item in cluster) + max(10, image.width // 300))
+        bottom = min(image.height - 1, max(item[5] for item in cluster) + max(6, image.height // 350))
+        if right <= left or bottom <= top:
+            continue
+
+        is_duplicate = any(
+            abs(left - existing[0]) <= 4
+            and abs(top - existing[1]) <= 4
+            and abs(right - existing[2]) <= 4
+            and abs(bottom - existing[3]) <= 4
+            for existing in masked_rects
+        )
+        if is_duplicate:
+            continue
+
+        draw.rectangle((left, top, right, bottom), fill="black")
+        masked_rects.append((left, top, right, bottom))
 
 def _create_ddt_crop_definition(
     page: DocumentPage,
