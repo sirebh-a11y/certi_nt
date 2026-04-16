@@ -424,6 +424,18 @@ def upload_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
     original_name = Path(uploaded_file.filename).name or f"{tipo_documento}.bin"
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    persistent_duplicate = _find_persistent_duplicate_document(db, file_hash=file_hash)
+    if persistent_duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"File duplicato: contenuto gia presente come documento persistente #{persistent_duplicate.id}",
+        )
+
+    temporary_duplicate = _find_temporary_duplicate_document_for_user(db, actor_id=actor_id, file_hash=file_hash)
+    if temporary_duplicate is not None:
+        return serialize_document(temporary_duplicate)
+
     extension = Path(original_name).suffix.lower()
     now = datetime.now(UTC)
     resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _get_latest_temporary_upload_batch_id(db, actor_id=actor_id) or uuid4().hex
@@ -440,7 +452,7 @@ def upload_document(
         fornitore_id=fornitore_id,
         nome_file_originale=original_name,
         storage_key=relative_storage_key.replace("\\", "/"),
-        hash_file=hashlib.sha256(file_bytes).hexdigest(),
+        hash_file=file_hash,
         mime_type=uploaded_file.content_type,
         numero_pagine=None,
         utente_upload_id=actor_id,
@@ -473,9 +485,10 @@ def upload_documents_batch(
     if not uploaded_files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided for batch upload")
 
-    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or uuid4().hex
+    resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _get_latest_temporary_upload_batch_id(db, actor_id=actor_id) or uuid4().hex
     uploaded: list[DocumentResponse] = []
     failed: list[DocumentBatchErrorResponse] = []
+    uploaded_ids: set[int] = set()
 
     for uploaded_file in uploaded_files:
         file_name = Path(uploaded_file.filename or "").name or f"{tipo_documento}.bin"
@@ -491,6 +504,15 @@ def upload_documents_batch(
                 origine_upload=origine_upload,
                 upload_batch_id=resolved_upload_batch_id,
             )
+            if uploaded_document.id in uploaded_ids:
+                failed.append(
+                    DocumentBatchErrorResponse(
+                        file_name=file_name,
+                        detail="File duplicato: gia presente nel batch temporaneo aperto",
+                    )
+                )
+                continue
+            uploaded_ids.add(uploaded_document.id)
             uploaded.append(uploaded_document)
         except HTTPException as exc:
             failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc.detail)))
@@ -3146,6 +3168,37 @@ def _normalize_upload_batch_id(value: str | None) -> str | None:
     if normalized is None:
         return None
     return normalized[:64]
+
+
+def _find_temporary_duplicate_document_for_user(db: Session, *, actor_id: int, file_hash: str) -> Document | None:
+    if not file_hash:
+        return None
+    return (
+        db.query(Document)
+        .options(joinedload(Document.supplier))
+        .filter(
+            Document.utente_upload_id == actor_id,
+            Document.stato_upload == "temporaneo",
+            Document.hash_file == file_hash,
+        )
+        .order_by(Document.data_upload.desc(), Document.id.desc())
+        .first()
+    )
+
+
+def _find_persistent_duplicate_document(db: Session, *, file_hash: str) -> Document | None:
+    if not file_hash:
+        return None
+    return (
+        db.query(Document)
+        .options(joinedload(Document.supplier))
+        .filter(
+            Document.stato_upload == "persistente",
+            Document.hash_file == file_hash,
+        )
+        .order_by(Document.data_upload.desc(), Document.id.desc())
+        .first()
+    )
 
 
 def _get_latest_temporary_upload_batch_id(db: Session, *, actor_id: int) -> str | None:
