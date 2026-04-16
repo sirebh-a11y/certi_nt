@@ -621,6 +621,8 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
     if not search_variants:
         return None
 
+    looks_like_impol = any(_looks_like_impol_identity_text(search_text) for search_text in search_variants)
+
     suppliers = db.query(Supplier).options(joinedload(Supplier.aliases)).filter(Supplier.attivo.is_(True)).all()
     best_supplier_id = None
     best_score = 0
@@ -628,6 +630,8 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
 
     for supplier in suppliers:
         aliases = [supplier.ragione_sociale] + [alias.nome_alias for alias in supplier.aliases if alias.attivo]
+        if looks_like_impol and _is_impol_customer_composite_supplier(supplier.ragione_sociale, aliases):
+            continue
         score = 0
         for alias in aliases:
             normalized_alias = _normalize_identity_text(alias)
@@ -751,6 +755,12 @@ def _detect_impol_document_type(search_text: str, file_name: str) -> str | None:
 
 def _supplier_aliases_look_like_impol(aliases: list[str]) -> bool:
     return any("impol" in (alias or "").casefold() for alias in aliases)
+
+
+def _is_impol_customer_composite_supplier(supplier_name: str | None, aliases: list[str]) -> bool:
+    candidates = [supplier_name or "", *aliases]
+    normalized = " | ".join((candidate or "").casefold() for candidate in candidates)
+    return "ralcom" in normalized and "impol" in normalized and "impol d.o.o" not in normalized
 
 
 def _score_impol_supplier_identity(search_variants: list[str]) -> int:
