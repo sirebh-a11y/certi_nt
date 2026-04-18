@@ -214,6 +214,18 @@ function rowActivityState(row) {
   return { tone: "verde", label: "pronto" };
 }
 
+function documentMatchVisualState(row) {
+  const hasDdt = Boolean(row.document_ddt_id || row.ddt);
+  const hasCertificate = Boolean(row.document_certificato_id || row.certificate_file_name);
+  if (hasDdt && hasCertificate) {
+    return "verde";
+  }
+  if (hasDdt) {
+    return "giallo";
+  }
+  return "rosso";
+}
+
 function activityRank(label) {
   if (label === "confermata") {
     return 3;
@@ -293,36 +305,72 @@ function rowSortScore(row) {
   return [priorityRank, technicalRank, workflowRank, -updatedAt, -row.id];
 }
 
-function RowStateCell({ row }) {
+function CellShell({ children, onClick, onKeyDown, interactive = false }) {
+  const Tag = interactive ? "button" : "div";
+  return (
+    <Tag
+      className={`block w-full text-left ${interactive ? "focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg" : ""}`}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      type={interactive ? "button" : undefined}
+    >
+      {children}
+    </Tag>
+  );
+}
+
+function documentPlateClasses(state) {
+  if (state === "verde") {
+    return "border-emerald-300 bg-emerald-100/90";
+  }
+  if (state === "giallo") {
+    return "border-amber-300 bg-amber-100/90";
+  }
+  return "border-rose-300 bg-rose-100/90";
+}
+
+function RowStateCell({ row, onClick, onKeyDown }) {
   const activity = rowActivityState(row);
 
   return (
-    <div className="min-w-[96px]">
-      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(activity.tone)}`}>
-        <span className="block text-xs font-semibold">{activity.label}</span>
-      </div>
+    <div className="min-w-[96px] py-1">
+      <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
+        <div className={`mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start rounded-lg border px-2.5 pb-1.5 pt-2 ${stateSurfaceClasses(activity.tone)}`}>
+          <span className="block text-xs font-semibold">{activity.label}</span>
+        </div>
+      </CellShell>
     </div>
   );
 }
 
-function DataCell({ value, state, secondary }) {
+function DataCell({ value, state, secondary, onClick, onKeyDown, wide = false, boxRef = null }) {
   return (
-    <div className="min-w-[92px]">
-      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(state)}`}>
-        <span className="block truncate text-sm font-semibold">{value || "-"}</span>
-        {secondary ? <div className="mt-0.5 truncate text-[10px] opacity-75">{secondary}</div> : null}
-      </div>
+    <div className={`relative ${wide ? "min-w-[220px]" : "min-w-[92px]"} py-1`}>
+      <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
+        <div
+          className={`relative z-10 mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start overflow-hidden rounded-lg border px-2.5 pb-1.5 pt-2 ${stateSurfaceClasses(state)}`}
+          ref={boxRef}
+        >
+          <span className="block truncate text-sm font-semibold leading-none">{value || "-"}</span>
+          {secondary ? <div className="mt-0.5 truncate text-[10px] leading-none opacity-75">{secondary}</div> : null}
+        </div>
+      </CellShell>
     </div>
   );
 }
 
-function BlockCell({ label, state, secondary }) {
+function BlockCell({ label, state, secondary, onClick, onKeyDown, boxRef = null }) {
   return (
-    <div className="min-w-[100px]">
-      <div className={`flex min-h-[54px] w-full flex-col justify-center rounded-lg border px-2.5 py-2 ${stateSurfaceClasses(state)}`}>
-        <span className="block text-[11px] font-semibold uppercase tracking-[0.12em]">{label}</span>
-        <div className="mt-0.5 truncate text-[10px] opacity-75">{secondary}</div>
-      </div>
+    <div className="relative min-w-[100px] py-1">
+      <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
+        <div
+          className={`relative z-10 mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start overflow-hidden rounded-lg border px-2.5 pb-1.5 pt-2 ${stateSurfaceClasses(state)}`}
+          ref={boxRef}
+        >
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] leading-none">{label}</span>
+          <div className="mt-0.5 truncate text-[10px] leading-none opacity-75">{secondary}</div>
+        </div>
+      </CellShell>
     </div>
   );
 }
@@ -340,10 +388,14 @@ export default function AcquisitionListPage() {
   const [operatorTwo, setOperatorTwo] = useState("and");
   const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
+  const [documentPlateMetrics, setDocumentPlateMetrics] = useState({});
   const topScrollRef = useRef(null);
   const tableViewportRef = useRef(null);
   const tableRef = useRef(null);
   const syncingScrollRef = useRef(false);
+  const firstDocumentAnchorRefs = useRef({});
+  const firstDocumentCellRefs = useRef({});
+  const lastDocumentCellRefs = useRef({});
 
   useEffect(() => {
     let ignore = false;
@@ -456,6 +508,47 @@ export default function AcquisitionListPage() {
     };
   }, [visibleRows.length, rows.length]);
 
+  useEffect(() => {
+    function updateDocumentPlateMetrics() {
+      const nextMetrics = {};
+
+      visibleRows.forEach((row) => {
+        const anchorWrapper = firstDocumentAnchorRefs.current[row.id];
+        const anchorElement = firstDocumentCellRefs.current[row.id];
+        const lastCell = lastDocumentCellRefs.current[row.id];
+
+        if (!anchorWrapper || !anchorElement || !lastCell) {
+          return;
+        }
+
+        const wrapperRect = anchorWrapper.getBoundingClientRect();
+        const anchorRect = anchorElement.getBoundingClientRect();
+        const firstRect = anchorElement.getBoundingClientRect();
+        const lastRect = lastCell.getBoundingClientRect();
+        const leftInset = -8;
+        const width = Math.max(0, lastRect.right - firstRect.left - leftInset);
+        const left = firstRect.left - wrapperRect.left + leftInset;
+        const panelHeight = 50;
+        const top = firstRect.top - wrapperRect.top + (firstRect.height - panelHeight) / 2;
+
+        nextMetrics[row.id] = {
+          left,
+          top,
+          width,
+          height: panelHeight,
+        };
+      });
+
+      setDocumentPlateMetrics(nextMetrics);
+    }
+
+    updateDocumentPlateMetrics();
+    window.addEventListener("resize", updateDocumentPlateMetrics);
+    return () => {
+      window.removeEventListener("resize", updateDocumentPlateMetrics);
+    };
+  }, [visibleRows]);
+
   function syncScroll(target, source) {
     if (!target || !source) {
       return;
@@ -474,10 +567,21 @@ export default function AcquisitionListPage() {
     navigate(`/acquisition/${rowId}`);
   }
 
+  function openSection(rowId, sectionKey) {
+    navigate(`/acquisition/${rowId}/${sectionKey}`);
+  }
+
   function handleRowKeyDown(event, rowId) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       openRow(rowId);
+    }
+  }
+
+  function handleSectionKeyDown(event, rowId, sectionKey) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openSection(rowId, sectionKey);
     }
   }
 
@@ -492,6 +596,30 @@ export default function AcquisitionListPage() {
 
       return { field, direction: "asc" };
     });
+  }
+
+  function setFirstDocumentCellRef(rowId, element) {
+    if (element) {
+      firstDocumentCellRefs.current[rowId] = element;
+    } else {
+      delete firstDocumentCellRefs.current[rowId];
+    }
+  }
+
+  function setFirstDocumentAnchorRef(rowId, element) {
+    if (element) {
+      firstDocumentAnchorRefs.current[rowId] = element;
+    } else {
+      delete firstDocumentAnchorRefs.current[rowId];
+    }
+  }
+
+  function setLastDocumentCellRef(rowId, element) {
+    if (element) {
+      lastDocumentCellRefs.current[rowId] = element;
+    } else {
+      delete lastDocumentCellRefs.current[rowId];
+    }
   }
 
   return (
@@ -625,72 +753,123 @@ export default function AcquisitionListPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleRows.map((row) => (
-                  <tr
-                    className="cursor-pointer align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70"
-                    key={row.id}
-                    onClick={() => openRow(row.id)}
-                    onKeyDown={(event) => handleRowKeyDown(event, row.id)}
-                    tabIndex={0}
-                  >
-                    <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-700">{row.id}</td>
-                    <td className="min-w-[220px] max-w-[220px] px-2 py-2">
+                  <tr className="relative align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70" key={row.id}>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-700">{row.id}</td>
+                    <td className="relative min-w-[220px] max-w-[220px] overflow-visible px-0 py-0" ref={(element) => setFirstDocumentAnchorRef(row.id, element)}>
+                      <div
+                        className={`pointer-events-none absolute left-3 z-0 rounded-2xl border ${documentPlateClasses(documentMatchVisualState(row))}`}
+                        style={{
+                          left: `${documentPlateMetrics[row.id]?.left || 0}px`,
+                          top: `${documentPlateMetrics[row.id]?.top || 0}px`,
+                          width: `${documentPlateMetrics[row.id]?.width || 0}px`,
+                          height: `${documentPlateMetrics[row.id]?.height || 0}px`,
+                        }}
+                      />
                       <DataCell
+                        boxRef={(element) => setFirstDocumentCellRef(row.id, element)}
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         state={supplierFieldState(row)}
                         value={displaySupplierName(row)}
                         secondary={row.ddt_data_upload ? `DDT ${formatUploadDate(row.ddt_data_upload)}` : ""}
+                        wide
                       />
                     </td>
-                    <td className="max-w-[110px] px-2 py-2">
-                      <DataCell state={legaFieldState(row)} value={composeLega(row)} />
+                    <td className="max-w-[110px] px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={legaFieldState(row)}
+                        value={composeLega(row)}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={ddtFieldState(row, "diametro")} value={formatRowFieldDisplay("diametro", row.diametro)} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={ddtFieldState(row, "diametro")}
+                        value={formatRowFieldDisplay("diametro", row.diametro)}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={ddtFieldState(row, "cdq")} value={row.cdq} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={ddtFieldState(row, "cdq")}
+                        value={row.cdq}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={ddtFieldState(row, "colata")} value={row.colata} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={ddtFieldState(row, "colata")}
+                        value={row.colata}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={row.ddt ? "verde" : "rosso"} value={row.ddt || "-"} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={row.ddt ? "verde" : "rosso"}
+                        value={row.ddt || "-"}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={ddtFieldState(row, "peso")} value={formatRowFieldDisplay("peso", row.peso)} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={ddtFieldState(row, "peso")}
+                        value={formatRowFieldDisplay("peso", row.peso)}
+                      />
                     </td>
-                    <td className="px-2 py-2">
-                      <DataCell state={ddtFieldState(row, "ordine")} value={row.ordine} />
+                    <td className="px-0 py-0">
+                      <DataCell
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
+                        state={ddtFieldState(row, "ordine")}
+                        value={row.ordine}
+                      />
                     </td>
-                    <td className="px-2 py-2">
+                    <td className="px-0 py-0" ref={(element) => setLastDocumentCellRef(row.id, element)}>
                       <BlockCell
+                        boxRef={(element) => setLastDocumentCellRef(row.id, element)}
                         label={BLOCK_LABELS.match}
+                        onClick={() => openSection(row.id, "document-matching")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         secondary={compactMatchReference(row)}
                         state={row.block_states?.match || "rosso"}
                       />
                     </td>
-                    <td className="px-2 py-2">
+                    <td className="px-0 py-0">
                       <BlockCell
                         label={BLOCK_LABELS.chimica}
+                        onClick={() => openSection(row.id, "chemistry")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "chemistry")}
                         secondary={activityLabelFromState(row.block_states?.chimica || "rosso")}
                         state={row.block_states?.chimica || "rosso"}
                       />
                     </td>
-                    <td className="px-2 py-2">
+                    <td className="px-0 py-0">
                       <BlockCell
                         label={BLOCK_LABELS.proprieta}
+                        onClick={() => openSection(row.id, "properties")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "properties")}
                         secondary={activityLabelFromState(row.block_states?.proprieta || "rosso")}
                         state={row.block_states?.proprieta || "rosso"}
                       />
                     </td>
-                    <td className="px-2 py-2">
+                    <td className="px-0 py-0">
                       <BlockCell
                         label={BLOCK_LABELS.note}
+                        onClick={() => openSection(row.id, "notes")}
+                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "notes")}
                         secondary={compactNoteReference(row)}
                         state={row.block_states?.note || "rosso"}
                       />
                     </td>
-                    <td className="px-2 py-2">
-                      <RowStateCell row={row} />
+                    <td className="px-0 py-0">
+                      <RowStateCell row={row} onClick={() => openRow(row.id)} onKeyDown={(event) => handleRowKeyDown(event, row.id)} />
                     </td>
                   </tr>
                 ))}
