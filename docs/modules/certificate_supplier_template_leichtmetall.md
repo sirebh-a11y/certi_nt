@@ -30,14 +30,15 @@ Questo file serve a fissare:
 
 ## 2. Dataset Letto
 
-* `pdf_letti`: `CdQ_94683_6082_Ø295.pdf`, `CdQ_94668_6082_Ø240.pdf`, `CdQ_94775_7075_Ø165.pdf`
-* `pagine_totali_lette`: `3`
-* `documenti_rappresentativi`: gli stessi 3 file
+* `pdf_letti`: `CdQ_94683_6082_Ø295.pdf`, `CdQ_94668_6082_Ø240.pdf`, `CdQ_94668_6082_Ø228_1.pdf`, `CdQ_94775_7075_Ø165.pdf`
+* `pagine_totali_lette`: `4`
+* `documenti_rappresentativi`: gli stessi 4 file
 
 Match forti gia' verificati con i DDT:
 
 * `80008518.pdf` -> `CdQ_94683_6082_Ø295.pdf`
 * `80008519.pdf` -> `CdQ_94668_6082_Ø240.pdf`
+* `80008535.pdf` -> almeno un certificato famiglia `94668`, coerente con il gruppo batch da `5,014 KG`
 * `80008577.pdf` -> `CdQ_94775_7075_Ø165.pdf`
 * `80008578.pdf` -> `CdQ_94775_7075_Ø144.pdf` stesso template osservato, stesso impianto dati
 
@@ -46,6 +47,8 @@ Nota metodologica:
 * i nomi file sopra aiutano solo l'analisi e la validazione del dataset storico
 * il match runtime futuro non deve usare il nome file
 * il match runtime deve usare solo i campi letti dal DDT e dal certificato
+* stessa famiglia/root certificato non significa documento uguale
+* `Charge/Cast No` da solo non basta a distinguere i certificati quando esistono piu' PDF diversi della stessa famiglia
 
 ---
 
@@ -150,6 +153,11 @@ Regola:
 2. confermare con diameter
 3. chiudere il match con `Charge/Cast No`
 4. usare weight come ulteriore controllo
+
+Nota pratica importante:
+
+* possono esistere piu' certificati distinti con lo stesso `Charge/Cast No`
+* in questi casi il match va chiuso con `PO-No.` + alloy + diameter + weight e non solo con il cast
 
 ---
 

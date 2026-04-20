@@ -54,8 +54,18 @@ Match forti gia' verificati:
 
 Casi ancora da confermare meglio:
 
-* `80008535.pdf`
 * `80008657.pdf`
+
+Caso strutturale importante gia' verificato:
+
+* `80008535.pdf`
+  * pagina 1: materiale unico apparente `EN AW-6082`, `Diameter 228,00 mm`, `Quantity 17,225 KG`, `Purchase Number 19.2 + 4 + 5`
+  * pagina 2: il DDT si spezza in due gruppi batch reali
+    * batch `94668` con peso netto totale `5,014 KG`
+    * batch `94752` con peso netto totale `12,211 KG`
+  * conseguenza runtime:
+    * un solo DDT puo' richiedere piu' certificati distinti
+    * il totale pagina 1 non basta per chiudere il match
 
 Nota metodologica:
 
@@ -166,6 +176,7 @@ Se il peso o la riga vanno ricostruiti:
 * i colli della pagina 2 vanno sommati solo se coerenti con lo stesso materiale reale
 * il gruppo corretto si conferma con alloy, diameter, `Purchase Number`/ordine e certificato collegato
 * se il gruppo non e' chiaro, lasciare il caso all'utente
+* se pagina 2 mostra piu' batch distinti, il DDT va trattato come caso multi-certificato
 
 ---
 
@@ -381,6 +392,7 @@ Se il peso o la riga vanno ricostruiti:
 * piu' certificati possibili con stesso alloy + diameter
 * mismatch tra purchase number DDT e PO-No. certificato
 * weight non coerente
+* totale pagina 1 compatibile con piu' gruppi batch diversi in pagina 2
 
 Azione corretta:
 
@@ -409,6 +421,7 @@ Azione corretta:
 * leggere pagina 1 e pagina 2 insieme
 * usare il certificato per chiudere il batch/cdq corretto
 * trattare `purchase number` come campo forte di famiglia materiale
+* non assumere che il totale di pagina 1 corrisponda a un solo certificato
 
 ---
 
