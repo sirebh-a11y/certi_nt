@@ -573,7 +573,7 @@ def _build_aluminium_bozen_row_split_candidates(
             supplier_key=supplier_key,
             ddt_number=ddt_number,
             cdq=_extract_aluminium_bozen_cdq_from_window(normalized_lines, index),
-            customer_code=_extract_aluminium_bozen_customer_code_from_line(normalized_line),
+            profile_code=_extract_aluminium_bozen_profile_code_from_line(normalized_line),
             article_code=_extract_aluminium_bozen_article_from_line(normalized_line),
             lega=lega,
             diametro=diametro,
@@ -594,7 +594,7 @@ def _is_aluminium_bozen_material_line(line: str) -> bool:
     if any(marker in line for marker in ("DES. ART. CLIENTE", "LEGA STATO FISICO", "RIF. ORDINE AB ODV", "COD. COLATA")):
         return False
     article = _extract_aluminium_bozen_article_from_line(line)
-    customer_code = _extract_aluminium_bozen_customer_code_from_line(line)
+    profile_code = _extract_aluminium_bozen_profile_code_from_line(line)
     material_label = _extract_aluminium_bozen_material_label_from_line(line)
     diameter = _extract_aluminium_bozen_diameter_from_line(line)
     weight = _extract_aluminium_bozen_weight_from_line(line)
@@ -603,11 +603,11 @@ def _is_aluminium_bozen_material_line(line: str) -> bool:
 
     if explicit_anchor and diameter is not None:
         return True
-    if explicit_anchor and (article is not None or customer_code is not None):
+    if explicit_anchor and (article is not None or profile_code is not None):
         return True
-    if material_label is not None and customer_code is not None and article is not None and diameter is not None:
+    if material_label is not None and profile_code is not None and article is not None and diameter is not None:
         return True
-    if article is not None and customer_code is not None and diameter is not None and (weight is not None or lega is not None):
+    if article is not None and profile_code is not None and diameter is not None and (weight is not None or lega is not None):
         return True
     return False
 
@@ -1004,7 +1004,7 @@ def _extract_aluminium_bozen_customer_order_from_window(lines: list[str], index:
     return None
 
 
-def _extract_aluminium_bozen_customer_code_from_line(line: str) -> str | None:
+def _extract_aluminium_bozen_profile_code_from_line(line: str) -> str | None:
     match = re.match(r"^\s*([A-Z0-9][A-Z0-9]{5,})\b", line)
     if match is not None:
         token = match.group(1)
@@ -1022,10 +1022,10 @@ def _extract_aluminium_bozen_article_from_line(line: str) -> str | None:
 
 def _extract_aluminium_bozen_material_label_from_line(line: str) -> str | None:
     compact_line = " ".join(line.split())
-    customer_code = _extract_aluminium_bozen_customer_code_from_line(compact_line)
-    if customer_code is None:
+    profile_code = _extract_aluminium_bozen_profile_code_from_line(compact_line)
+    if profile_code is None:
         return None
-    without_code = compact_line[len(customer_code) :].strip()
+    without_code = compact_line[len(profile_code) :].strip()
     article_match = re.search(r"\([0-9A-Z-]{6,}\)", without_code)
     if article_match is not None:
         without_code = without_code[: article_match.start()].strip()
@@ -1122,7 +1122,7 @@ def _merge_aluminium_bozen_candidates(
 
     for candidate in candidates:
         key = (
-            candidate.article_code or candidate.customer_code or candidate.supplier_order_no or "",
+            candidate.article_code or candidate.profile_code or candidate.supplier_order_no or "",
             candidate.lega or "",
             candidate.diametro or "",
         )
@@ -1134,7 +1134,7 @@ def _merge_aluminium_bozen_candidates(
                     supplier_key=supplier_key,
                     ddt_number=ddt_number or candidate.ddt_number,
                     cdq=candidate.cdq,
-                    customer_code=candidate.customer_code,
+                    profile_code=candidate.profile_code,
                     article_code=candidate.article_code,
                     lega=candidate.lega,
                     diametro=candidate.diametro,
@@ -1150,7 +1150,7 @@ def _merge_aluminium_bozen_candidates(
                 "orders": [],
                 "cdqs": [],
                 "customer_orders": [],
-                "customer_codes": [],
+                "profile_codes": [],
             },
         )
 
@@ -1167,8 +1167,8 @@ def _merge_aluminium_bozen_candidates(
             entry["cdqs"].append(candidate.cdq)
         if candidate.customer_order_no:
             entry["customer_orders"].append(candidate.customer_order_no)
-        if candidate.customer_code:
-            entry["customer_codes"].append(candidate.customer_code)
+        if candidate.profile_code:
+            entry["profile_codes"].append(candidate.profile_code)
 
     merged: list[ReaderRowSplitCandidateResponse] = []
     for index, (_, entry) in enumerate(grouped.items(), start=1):
@@ -1186,7 +1186,7 @@ def _merge_aluminium_bozen_candidates(
         candidate.customer_order_no = _choose_best_aluminium_bozen_customer_order(
             entry["customer_orders"], candidate.customer_order_no
         )
-        candidate.customer_code = _choose_best_aluminium_bozen_customer_code(entry["customer_codes"], candidate.customer_code)
+        candidate.profile_code = _choose_best_aluminium_bozen_profile_code(entry["profile_codes"], candidate.profile_code)
         candidate.snippets = list(entry["snippets"])[:6]
         candidate.candidate_index = index
         merged.append(candidate)
@@ -1351,12 +1351,12 @@ def _choose_best_aluminium_bozen_order(orders: list[str], fallback: str | None) 
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
 
 
-def _choose_best_aluminium_bozen_customer_code(customer_codes: list[str], fallback: str | None) -> str | None:
-    if not customer_codes:
+def _choose_best_aluminium_bozen_profile_code(profile_codes: list[str], fallback: str | None) -> str | None:
+    if not profile_codes:
         return fallback
     counts: dict[str, int] = {}
-    for customer_code in customer_codes:
-        counts[customer_code] = counts.get(customer_code, 0) + 1
+    for profile_code in profile_codes:
+        counts[profile_code] = counts.get(profile_code, 0) + 1
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
 
 

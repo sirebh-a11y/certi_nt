@@ -171,25 +171,15 @@ function legaFieldState(row) {
 }
 
 function ddtCoreState(row) {
-  const hasMissingCore =
-    !row.diametro ||
-    !row.cdq ||
-    !row.colata ||
-    !row.peso ||
-    !row.ddt;
+  const requiredFields = row.ddt_required_fields || [];
+  const missingFields = row.ddt_missing_fields || [];
+  const pendingFields = row.ddt_pending_fields || [];
 
-  if (hasMissingCore) {
+  if (requiredFields.some((field) => missingFields.includes(field))) {
     return "rosso";
   }
 
-  const hasPendingCore =
-    ddtFieldState(row, "diametro") === "giallo" ||
-    ddtFieldState(row, "cdq") === "giallo" ||
-    ddtFieldState(row, "colata") === "giallo" ||
-    ddtFieldState(row, "peso") === "giallo" ||
-    ddtFieldState(row, "ordine") === "giallo";
-
-  return hasPendingCore ? "giallo" : "verde";
+  return requiredFields.some((field) => pendingFields.includes(field)) ? "giallo" : "verde";
 }
 
 function rowActivityState(row) {
@@ -215,13 +205,17 @@ function rowActivityState(row) {
 }
 
 function documentMatchVisualState(row) {
-  const hasDdt = Boolean(row.document_ddt_id || row.ddt);
-  const hasCertificate = Boolean(row.document_certificato_id || row.certificate_file_name);
-  if (hasDdt && hasCertificate) {
+  const hasDdt = Boolean(row.document_ddt_id);
+  const hasCertificate = Boolean(row.document_certificato_id);
+  const hasActualMatch = Boolean(hasCertificate && row.match_state && row.match_state !== "mancante");
+  if (hasDdt && hasActualMatch) {
     return "verde";
   }
   if (hasDdt) {
     return "giallo";
+  }
+  if (hasCertificate) {
+    return "rosso";
   }
   return "rosso";
 }
@@ -811,7 +805,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={row.ddt ? "verde" : "rosso"}
+                        state={ddtFieldState(row, "ddt")}
                         value={row.ddt || "-"}
                       />
                     </td>

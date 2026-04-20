@@ -151,7 +151,7 @@ def extract_supplier_match_fields(
         ),
         "aluminium_bozen": lambda current_lines, current_type: {
             "article": _extract_code_pattern(current_lines, r"\b14BT[0-9A-Z-]+\b"),
-            "customer_code": _extract_aluminium_bozen_customer_code(current_lines),
+            "profile_code": _extract_aluminium_bozen_profile_code(current_lines),
             "customer_order_normalized": _extract_aluminium_bozen_customer_order(current_lines, document_type=current_type),
         },
         "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
@@ -607,9 +607,9 @@ def _detect_aluminium_bozen_certificate_core_matches(
                 matches["articolo_certificato"] = _build_match(page.id, f"ARTICLE | {article}", article)
 
         if "codice_cliente_certificato" not in matches:
-            customer_code = _extract_aluminium_bozen_customer_code(lines)
-            if customer_code is not None:
-                matches["codice_cliente_certificato"] = _build_match(page.id, customer_code, customer_code)
+            profile_code = _extract_aluminium_bozen_profile_code(lines)
+            if profile_code is not None:
+                matches["codice_cliente_certificato"] = _build_match(page.id, profile_code, profile_code)
 
         if "ordine_cliente_certificato" not in matches:
             customer_order = _extract_aluminium_bozen_customer_order(lines, document_type="certificato")
@@ -642,9 +642,9 @@ def _detect_aluminium_bozen_certificate_core_matches(
             identity_normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in identity_crop_lines]
 
             if "codice_cliente_certificato" not in matches:
-                customer_code = _extract_aluminium_bozen_customer_code(identity_crop_lines)
-                if customer_code is not None:
-                    matches["codice_cliente_certificato"] = _build_match(page.id, customer_code, customer_code)
+                profile_code = _extract_aluminium_bozen_profile_code(identity_crop_lines)
+                if profile_code is not None:
+                    matches["codice_cliente_certificato"] = _build_match(page.id, profile_code, profile_code)
 
             if "diametro_certificato" not in matches:
                 diameter_payload = _extract_aluminium_bozen_certificate_diameter(identity_crop_lines, identity_normalized_lines)
@@ -781,7 +781,7 @@ def extract_row_supplier_match_fields(
     if supplier_key == "aluminium_bozen":
         return {
             "article": _string_or_none(ddt_values.get("article_code")),
-            "customer_code": _string_or_none(ddt_values.get("customer_code")),
+            "profile_code": _string_or_none(ddt_values.get("profile_code")) or _string_or_none(ddt_values.get("customer_code")),
             "customer_order_normalized": _string_or_none(ddt_values.get("customer_order_no")),
         }
 
@@ -813,8 +813,8 @@ def score_supplier_field_matches(
     elif supplier_key == "aluminium_bozen":
         if same_token(ddt_supplier_fields.get("article"), certificate_supplier_fields.get("article")):
             add_reason(100, "Article coerente")
-        if same_token(ddt_supplier_fields.get("customer_code"), certificate_supplier_fields.get("customer_code")):
-            add_reason(100, "Codice cliente coerente")
+        if same_token(ddt_supplier_fields.get("profile_code"), certificate_supplier_fields.get("profile_code")):
+            add_reason(100, "Codice profilo coerente")
         if same_token(ddt_supplier_fields.get("customer_order_normalized"), certificate_supplier_fields.get("customer_order_normalized")):
             add_reason(45, "Ordine cliente normalizzato coerente")
     elif supplier_key == "zalco":
@@ -860,15 +860,15 @@ def score_supplier_field_matches(
     elif supplier_key == "impol":
         row_packing_list_root = normalize_impol_packing_list_root(row.ddt) or ddt_supplier_fields.get("packing_list_no")
         if same_token(row_packing_list_root, certificate_supplier_fields.get("packing_list_no")):
-            add_reason(120, "Packing list coerente")
+            add_reason(45, "Packing list coerente")
         if same_token(row.ordine, certificate_supplier_fields.get("customer_order_no")):
-            add_reason(100, "Customer order coerente")
+            add_reason(120, "Customer order coerente")
         elif same_token(ddt_supplier_fields.get("customer_order_no"), certificate_supplier_fields.get("customer_order_no")):
-            add_reason(100, "Customer order coerente")
+            add_reason(120, "Customer order coerente")
         if same_token(ddt_supplier_fields.get("supplier_order_no"), certificate_supplier_fields.get("supplier_order_no")):
-            add_reason(95, "Supplier order coerente")
+            add_reason(70, "Supplier order coerente")
         if same_token(ddt_supplier_fields.get("product_code"), certificate_supplier_fields.get("product_code")):
-            add_reason(100, "Product code coerente")
+            add_reason(60, "Product code coerente")
         if same_token(row.colata, certificate_supplier_fields.get("charge")):
             add_reason(110, "Charge coerente")
         elif same_token(ddt_supplier_fields.get("charge"), certificate_supplier_fields.get("charge")):
@@ -1173,10 +1173,10 @@ def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
     return None
 
 
-def _extract_aluminium_bozen_customer_code(lines: list[str]) -> str | None:
+def _extract_aluminium_bozen_profile_code(lines: list[str]) -> str | None:
     def _candidate_from_text(source: str) -> str | None:
         for match in re.finditer(r"\bA[0-9A-Z]{5,}\b", source):
-            token = _normalize_aluminium_bozen_customer_code(match.group(0))
+            token = _normalize_aluminium_bozen_profile_code(match.group(0))
             if len(re.findall(r"\d", token)) < 5:
                 continue
             if len(token) < 7:
@@ -1257,7 +1257,7 @@ def _extract_aluminium_bozen_certificate_number(
     return None
 
 
-def _normalize_aluminium_bozen_customer_code(value: str) -> str:
+def _normalize_aluminium_bozen_profile_code(value: str) -> str:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return value
@@ -1346,8 +1346,8 @@ def _extract_aluminium_bozen_certificate_diameter(
                         return f"{lines[index]} | {lines[index + offset]}", normalized
 
     for index, line in enumerate(normalized_lines):
-        customer_code_match = re.search(r"\bA\d[0-9A-Z]{4,}\b", line)
-        if customer_code_match is None:
+        profile_code_match = re.search(r"\bA\d[0-9A-Z]{4,}\b", line)
+        if profile_code_match is None:
             continue
         for offset, candidate in enumerate(normalized_lines[index : min(index + 5, len(normalized_lines))]):
             isolated_match = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*", candidate)

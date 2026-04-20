@@ -253,6 +253,7 @@ def serialize_autonomous_run(run: AutonomousProcessingRun) -> AutonomousRunRespo
 
 
 def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowListItemResponse:
+    supplier_key = _resolve_row_supplier_key(row)
     ddt_summary = _compute_ddt_field_summary(row)
     return AcquisitionRowListItemResponse(
         id=row.id,
@@ -278,8 +279,9 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
         block_states=_compute_block_states(row),
-        match_state=row.certificate_match.stato if row.certificate_match is not None else ("proposto" if row.document_certificato_id is not None else "mancante"),
+        match_state=row.certificate_match.stato if row.certificate_match is not None else "mancante",
         certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
+        ddt_required_fields=list(_ddt_required_fields(supplier_key)),
         ddt_confirmed_fields=ddt_summary["confirmed"],
         ddt_pending_fields=ddt_summary["pending"],
         ddt_missing_fields=ddt_summary["missing"],
@@ -625,6 +627,12 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
     if not search_variants:
         return None
 
+    template = resolve_supplier_template(raw_identity_text, *search_variants)
+    if template is not None:
+        supplier_from_template = _find_supplier_from_template(db, template)
+        if supplier_from_template is not None:
+            return supplier_from_template.id
+
     looks_like_impol = any(_looks_like_impol_identity_text(search_text) for search_text in search_variants)
 
     suppliers = db.query(Supplier).options(joinedload(Supplier.aliases)).filter(Supplier.attivo.is_(True)).all()
@@ -660,6 +668,15 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
     if second_score and best_score - second_score < 4:
         return None
     return best_supplier_id
+
+
+def _find_supplier_from_template(db: Session, template: SupplierReaderTemplate) -> Supplier | None:
+    template_candidates = [template.display_name, template.supplier_key, *template.aliases]
+    for candidate in template_candidates:
+        supplier = _find_supplier_from_text(db, candidate)
+        if supplier is not None:
+            return supplier
+    return None
 
 
 def _document_identity_text(document: Document) -> str:
@@ -902,8 +919,12 @@ def create_rows_from_document_split_plan(
         existing_row = existing_signatures.get(candidate_signature)
         if existing_row is not None:
             continue
-        certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+        certificate_first_candidates = _candidate_rows_for_incoming_ddt_link(
             rows=existing_rows,
+            supplier_id=document.fornitore_id,
+        )
+        certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+            rows=certificate_first_candidates,
             document=document,
             candidate=candidate,
             fallback_ddt=_split_plan_match_value(shared_matches, "ddt"),
@@ -1018,7 +1039,7 @@ def _persist_split_candidate_values(
 ) -> None:
     candidate_values = {
         "cdq": candidate.cdq,
-        "customer_code": candidate.customer_code,
+        "profile_code": candidate.profile_code,
         "article_code": candidate.article_code,
         "customer_order_no": candidate.customer_order_no,
         "lot_batch_no": candidate.lot_batch_no,
@@ -1046,6 +1067,10 @@ def _persist_split_candidate_values(
             ),
             actor_id=actor_id,
         )
+
+    # Keep canonical DDT fields in sync even when supplier-specific split candidates
+    # only contribute support fields such as customer_order_no/product_code.
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
 
 
 def _find_existing_certificate_first_row_for_split_candidate(
@@ -1088,47 +1113,139 @@ def _find_existing_certificate_first_row_for_split_candidate(
 
             score = 0
             row_packing = _normalize_row_signature_token(supplier_fields.get("packing_list_no"))
-            if candidate_packing_list:
-                if row_packing and row_packing != _normalize_row_signature_token(candidate_packing_list):
-                    continue
-                if row_packing == _normalize_row_signature_token(candidate_packing_list):
-                    score += 120
             row_customer_order = _normalize_row_signature_token(_certificate_first_row_identity_fields(row).get("customer_order"))
             if normalized_customer_order:
-                if row_customer_order and row_customer_order != normalized_customer_order:
+                # For Impol, the bridge between DDT and certificate starts from
+                # Your order No. / Customer Order No. If it does not match, do
+                # not recycle an existing certificate-first row.
+                if row_customer_order != normalized_customer_order:
                     continue
-                if row_customer_order == normalized_customer_order:
-                    score += 100
+                score += 160
             row_supplier_order = _normalize_row_signature_token(supplier_fields.get("supplier_order_no"))
-            if normalized_supplier_order:
-                if row_supplier_order and row_supplier_order != normalized_supplier_order:
-                    continue
-                if row_supplier_order == normalized_supplier_order:
-                    score += 95
             row_product_code = _normalize_row_signature_token(supplier_fields.get("product_code"))
-            if normalized_product_code:
-                if row_product_code and row_product_code != normalized_product_code:
-                    continue
-                if row_product_code == normalized_product_code:
-                    score += 100
+
             row_alloy = _normalize_row_signature_token(row.lega_base)
-            if normalized_lega and row_alloy and row_alloy == normalized_lega:
-                score += 40
             row_diameter = _normalize_row_signature_token(row.diametro)
-            if normalized_diameter and row_diameter and row_diameter == normalized_diameter:
-                score += 40
             row_cast = _normalize_row_signature_token(row.colata)
-            if normalized_colata and row_cast and row_cast == normalized_colata:
-                score += 110
             row_weight = _normalize_row_signature_token(row.peso)
-            if normalized_peso and row_weight and reader_weights_are_compatible(row.peso, candidate.peso_netto):
-                score += 20
+
+            material_match_count = 0
+            available_material_signals = 0
+
+            if normalized_lega:
+                available_material_signals += 1
+                if row_alloy is None or row_alloy != normalized_lega:
+                    continue
+                score += 80
+                material_match_count += 1
+
+            if normalized_diameter:
+                available_material_signals += 1
+                if row_diameter is None or row_diameter != normalized_diameter:
+                    continue
+                score += 80
+                material_match_count += 1
+
+            if normalized_colata:
+                available_material_signals += 1
+                if row_cast is None or row_cast != normalized_colata:
+                    continue
+                score += 110
+                material_match_count += 1
+
+            if normalized_peso:
+                available_material_signals += 1
+                if row_weight is None or not reader_weights_are_compatible(row.peso, candidate.peso_netto):
+                    continue
+                score += 70
+                material_match_count += 1
+
+            # Packing list identifies the DDT and helps the bridge, but it must
+            # not dominate the row match. Keep it as support only.
+            if candidate_packing_list and row_packing == _normalize_row_signature_token(candidate_packing_list):
+                score += 35
+
+            if normalized_supplier_order and row_supplier_order == normalized_supplier_order:
+                score += 30
+
+            if normalized_product_code and row_product_code == normalized_product_code:
+                score += 30
+
+            required_material_matches = min(3, available_material_signals)
+            if material_match_count < required_material_matches:
+                continue
 
             if score > best_score:
                 best_score = score
                 best_row = row
 
-        if best_score >= 180:
+        if best_score >= 260:
+            return best_row
+        return None
+
+    if supplier_key == "metalba":
+        normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
+        if not normalized_customer_order:
+            return None
+
+        normalized_lega = _normalize_row_signature_token(candidate.lega)
+        normalized_diameter = _normalize_row_signature_token(candidate.diametro)
+        normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
+
+        best_row: AcquisitionRow | None = None
+        best_score = 0
+        for row in rows:
+            if row.document_ddt_id is not None:
+                continue
+            if row.fornitore_id != document.fornitore_id:
+                continue
+            if row.document_certificato_id is None:
+                continue
+
+            row_customer_order = _normalize_row_signature_token(_certificate_first_row_identity_fields(row).get("customer_order"))
+            if row_customer_order != normalized_customer_order:
+                continue
+
+            score = 160
+            material_match_count = 0
+            available_material_signals = 0
+
+            row_alloy = _normalize_row_signature_token(row.lega_base)
+            if normalized_lega:
+                available_material_signals += 1
+                if row_alloy:
+                    if row_alloy != normalized_lega:
+                        continue
+                    score += 45
+                    material_match_count += 1
+
+            row_diameter = _normalize_row_signature_token(row.diametro)
+            if normalized_diameter:
+                available_material_signals += 1
+                if row_diameter:
+                    if row_diameter != normalized_diameter:
+                        continue
+                    score += 55
+                    material_match_count += 1
+
+            row_weight_raw = _string_or_none(row.peso)
+            if normalized_peso:
+                available_material_signals += 1
+                if row_weight_raw:
+                    if not reader_weights_are_compatible(row_weight_raw, candidate.peso_netto):
+                        continue
+                    score += 35
+                    material_match_count += 1
+
+            required_material_matches = min(2, available_material_signals)
+            if material_match_count < required_material_matches:
+                continue
+
+            if score > best_score:
+                best_score = score
+                best_row = row
+
+        if best_score >= 230:
             return best_row
         return None
 
@@ -1167,6 +1284,41 @@ def _find_existing_certificate_first_row_for_split_candidate(
         return row
 
     return None
+
+
+def _candidate_rows_for_incoming_ddt_link(
+    *,
+    rows: list[AcquisitionRow],
+    supplier_id: int | None,
+) -> list[AcquisitionRow]:
+    if supplier_id is None:
+        return []
+    return [
+        row
+        for row in rows
+        if row.fornitore_id == supplier_id
+        and row.document_ddt_id is None
+        and row.document_certificato_id is not None
+    ]
+
+
+def _candidate_rows_for_incoming_certificate_link(
+    db: Session,
+    *,
+    supplier_id: int | None,
+) -> list[AcquisitionRow]:
+    if supplier_id is None:
+        return []
+    return (
+        db.query(AcquisitionRow)
+        .filter(
+            AcquisitionRow.fornitore_id == supplier_id,
+            AcquisitionRow.document_ddt_id.is_not(None),
+            AcquisitionRow.document_certificato_id.is_(None),
+        )
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
 
 
 def create_document_page(db: Session, document: Document, payload: DocumentPageCreateRequest) -> DocumentPageResponse:
@@ -2405,6 +2557,12 @@ def _extract_impol_ddt_row_groups_with_vision(
         crop_definitions,
         openai_api_key=openai_api_key,
     )
+    normalized_ai_ddt = _sanitize_impol_ddt_number_candidate(ddt_number_raw, None)
+    if normalized_ai_ddt and "-" not in normalized_ai_ddt and fallback_ddt:
+        ai_root = normalize_impol_packing_list_root(normalized_ai_ddt)
+        fallback_root = normalize_impol_packing_list_root(fallback_ddt)
+        if ai_root and fallback_root and ai_root == fallback_root:
+            ddt_number_raw = fallback_ddt
     return _sanitize_impol_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         packing_list_no_raw=packing_list_no_raw,
@@ -2518,14 +2676,15 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Per l'ordine cliente usa solo il valore associato a Vs. Odv o Rif. ordine cliente. "
                 "Non usare mai Rif. ordine AB o Rif. ns. Odv N. come ordine cliente. "
                 "Lo stesso ordine cliente puo comparire su piu righe diverse dello stesso DDT: se e chiaramente riferito a piu righe, riportalo in ogni riga interessata. "
-                "customer_order_raw deve contenere il testo raw completo del campo ordine cliente della riga, con numero e data; se manca la data, restituisci null. "
+                "customer_order_raw deve contenere il testo raw completo del campo ordine cliente della riga, letto solo da Vs. Odv o Rif. ordine cliente. "
+                "Se sono presenti numero e data, riportali entrambi; se il riferimento cliente e leggibile ma la data manca, restituisci comunque il valore raw visibile. "
                 "certificate_no_raw deve essere il valore del Cert. N. della stessa riga logica, quando visibile nel packing group collegato. "
                 "Non saltare certificate_no_raw se e presente; non usare numeri di norme come EN 10204 3.1 o simili. "
                 "Se la stessa riga logica appare tra material_rows e packing_rows, unisci quei dati nello stesso elemento rows. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
-                "\"customer_code_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
+                "\"profile_code_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
                 "\"diameter_raw\":\"string|null\",\"cast_raw\":\"string|null\","
                 "\"certificate_no_raw\":\"string|null\",\"net_weight_raw\":\"string|null\","
                 "\"source_crops\":[\"label\"]}]}"
@@ -2684,7 +2843,7 @@ def _parse_openai_json_payload_for_row_groups(payload: str) -> tuple[str | None,
                 "row_index": normalized_row_index,
                 "customer_order_raw": _string_or_none(raw_row.get("customer_order_raw")),
                 "article_code_raw": _string_or_none(raw_row.get("article_code_raw")),
-                "customer_code_raw": _string_or_none(raw_row.get("customer_code_raw")),
+                "profile_code_raw": _string_or_none(raw_row.get("profile_code_raw")) or _string_or_none(raw_row.get("customer_code_raw")),
                 "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
                 "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
                 "cast_raw": _string_or_none(raw_row.get("cast_raw")),
@@ -2769,7 +2928,7 @@ def _sanitize_aluminium_bozen_ai_row_groups(
     for index, raw_row in enumerate(raw_rows, start=1):
         customer_order_raw = _string_or_none(raw_row.get("customer_order_raw"))
         article_code_raw = _string_or_none(raw_row.get("article_code_raw"))
-        customer_code_raw = _string_or_none(raw_row.get("customer_code_raw"))
+        profile_code_raw = _string_or_none(raw_row.get("profile_code_raw")) or _string_or_none(raw_row.get("customer_code_raw"))
         alloy_raw = _string_or_none(raw_row.get("alloy_raw"))
         diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
         cast_raw = _string_or_none(raw_row.get("cast_raw"))
@@ -2806,9 +2965,9 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             article_code_raw,
             r"\b[0-9]{2}[A-Z]{2}[0-9A-Z-]{4,}\b",
         )
-        customer_code = _extract_token_from_value_or_evidence(
-            customer_code_raw,
-            customer_code_raw,
+        profile_code = _extract_token_from_value_or_evidence(
+            profile_code_raw,
+            profile_code_raw,
             r"\bA[0-9A-Z]{5,}\b",
         )
         cast_value = _extract_token_from_value_or_evidence(
@@ -2822,7 +2981,7 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             supplier_key="aluminium_bozen",
             ddt_number=normalized_ddt,
             cdq=certificate_no,
-            customer_code=customer_code,
+            profile_code=profile_code,
             article_code=article_code,
             lega=alloy_value,
             diametro=_normalize_value_for_field("ddt", "diametro", diameter_value),
@@ -2839,7 +2998,7 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             for field_name in (
                 "ddt_number",
                 "cdq",
-                "customer_code",
+                "profile_code",
                 "article_code",
                 "lega",
                 "diametro",
@@ -2939,23 +3098,42 @@ def _normalize_impol_alloy_from_text(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
+    upper_cleaned = cleaned.upper()
     match = re.search(
         r"\bEN\s*AW\s*([0-9]{4}[A-Z]?)\s+([A-Z0-9/-]{1,10})\b",
-        cleaned.upper(),
+        upper_cleaned,
     )
-    if match is None:
+    if match is not None:
+        return re.sub(r"\s+", " ", f"{match.group(1)} {match.group(2)}").strip()
+
+    # The AI prompts ask for the alloy/state from Product description and may
+    # legitimately return a short form such as "6082 F" instead of the full
+    # "EN AW 6082 F" phrase. Accept both shapes.
+    short_match = re.search(
+        r"\b([0-9]{4}[A-Z]?)\s+([A-Z][A-Z0-9/-]{0,9})\b",
+        upper_cleaned,
+    )
+    if short_match is None:
         return None
-    return re.sub(r"\s+", " ", f"{match.group(1)} {match.group(2)}").strip()
+    return re.sub(r"\s+", " ", f"{short_match.group(1)} {short_match.group(2)}").strip()
 
 
 def _normalize_impol_diameter_from_text(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    match = re.search(r"\bDIA\s*([0-9]+(?:[.,][0-9]+)?)\b", cleaned.upper())
-    if match is None:
+    upper_cleaned = cleaned.upper()
+    match = re.search(r"\bDIA\s*([0-9]+(?:[.,][0-9]+)?)\b", upper_cleaned)
+    if match is not None:
+        return _normalize_numeric_value(match.group(1))
+
+    # The AI may also return only the value ("32") or a short raw fragment such
+    # as "32 x 5000mm" after following the prompt. Accept the leading numeric
+    # token in these reduced forms.
+    short_match = re.match(r"\s*([0-9]+(?:[.,][0-9]+)?)\b", cleaned)
+    if short_match is None:
         return None
-    return _normalize_numeric_value(match.group(1))
+    return _normalize_numeric_value(short_match.group(1))
 
 
 def _apply_aluminium_bozen_ai_row_groups_to_rows(
@@ -3047,7 +3225,7 @@ def _score_aluminium_bozen_ai_group_against_row(
     anchor_matches = 0
 
     row_article = _string_or_none(ddt_values.get("article_code"))
-    row_customer_code = _string_or_none(ddt_values.get("customer_code"))
+    row_profile_code = _string_or_none(ddt_values.get("profile_code")) or _string_or_none(ddt_values.get("customer_code"))
     row_customer_order = _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(row.ordine)
     row_certificate_no = (
         _string_or_none(ddt_values.get("numero_certificato_ddt"))
@@ -3062,7 +3240,7 @@ def _score_aluminium_bozen_ai_group_against_row(
     if row_article and ai_candidate.article_code and reader_same_token(row_article, ai_candidate.article_code):
         score += 120
         anchor_matches += 1
-    if row_customer_code and ai_candidate.customer_code and reader_same_token(row_customer_code, ai_candidate.customer_code):
+    if row_profile_code and ai_candidate.profile_code and reader_same_token(row_profile_code, ai_candidate.profile_code):
         score += 100
         anchor_matches += 1
     if row_customer_order and ai_candidate.customer_order_no and reader_same_token(row_customer_order, ai_candidate.customer_order_no):
@@ -3110,7 +3288,7 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
         "ddt": ai_candidate.ddt_number,
         "numero_certificato_ddt": ai_candidate.cdq,
         "customer_order_no": ai_candidate.customer_order_no,
-        "customer_code": ai_candidate.customer_code,
+        "profile_code": ai_candidate.profile_code,
         "article_code": ai_candidate.article_code,
         "lega": ai_candidate.lega,
         "diametro": ai_candidate.diametro,
@@ -3179,11 +3357,22 @@ def _apply_impol_ai_candidate_to_row(
             confidence=0.72,
         )
 
+    raw_payload: dict[str, object] = {}
+    if ai_candidate.ai_row_payload_raw:
+        try:
+            parsed_payload = json.loads(ai_candidate.ai_row_payload_raw)
+            if isinstance(parsed_payload, dict):
+                raw_payload = parsed_payload
+        except json.JSONDecodeError:
+            raw_payload = {}
+
     field_values = {
         "ddt": ai_candidate.ddt_number,
+        "packing_list_no": _string_or_none(raw_payload.get("packing_list_no_raw")),
         "customer_order_no": ai_candidate.customer_order_no,
         "supplier_order_no": ai_candidate.supplier_order_no,
         "product_code": ai_candidate.product_code,
+        "product_description_raw": _string_or_none(raw_payload.get("product_description_raw")),
         "lega": ai_candidate.lega,
         "diametro": ai_candidate.diametro,
         "colata": ai_candidate.colata,
@@ -4567,9 +4756,13 @@ def _ensure_autonomous_rows_with_ai(
         if existing_row is not None:
             continue
 
+        certificate_first_candidates = _candidate_rows_for_incoming_ddt_link(
+            rows=existing_rows_all,
+            supplier_id=ddt_document.fornitore_id,
+        )
         certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
             db=db,
-            rows=existing_rows_all,
+            rows=certificate_first_candidates,
             document=ddt_document,
             candidate=candidate,
             fallback_ddt=fallback_ddt,
@@ -4697,7 +4890,7 @@ def _ensure_certificate_first_rows(
                 or _string_or_none(ai_supplier_fields.get("product_code"))
                 or _string_or_none(ai_match_values.get("articolo_certificato"))
             )
-            certificate_customer_code = _string_or_none(ai_supplier_fields.get("customer_code"))
+            certificate_profile_code = _string_or_none(ai_supplier_fields.get("profile_code")) or _string_or_none(ai_supplier_fields.get("customer_code"))
             certificate_customer_order = (
                 _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(ai_supplier_fields.get("customer_order_no"))
@@ -4723,7 +4916,7 @@ def _ensure_certificate_first_rows(
             certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
             certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
             certificate_article = _string_or_none(supplier_fields.get("article")) or _string_or_none(supplier_fields.get("product_code"))
-            certificate_customer_code = _string_or_none(supplier_fields.get("customer_code"))
+            certificate_profile_code = _string_or_none(supplier_fields.get("profile_code")) or _string_or_none(supplier_fields.get("customer_code"))
             certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized")) or _string_or_none(supplier_fields.get("customer_order_no"))
             certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
             certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
@@ -4735,26 +4928,27 @@ def _ensure_certificate_first_rows(
             cdq=certificate_number,
             ordine=certificate_customer_order,
             article=certificate_article,
-            customer_code=certificate_customer_code,
+            profile_code=certificate_profile_code,
             lega=certificate_alloy,
             diametro=certificate_diameter,
             colata=certificate_cast,
             peso=certificate_weight,
         )
-        linked_row = None
-        if supplier_key == "aluminium_bozen":
-            linked_row = _find_existing_aluminium_bozen_row_for_certificate(
-                db=db,
-                supplier_id=certificate_document.fornitore_id,
-                certificate_number=certificate_number,
-                article=certificate_article,
-                customer_code=certificate_customer_code,
-                customer_order=certificate_customer_order,
-                alloy=certificate_alloy,
-                diameter=certificate_diameter,
-                cast=certificate_cast,
-                weight=certificate_weight,
-            )
+        linked_row = _find_existing_row_for_certificate(
+            db=db,
+            supplier_key=supplier_key,
+            supplier_id=certificate_document.fornitore_id,
+            certificate_number=certificate_number,
+            article=certificate_article,
+            profile_code=certificate_profile_code,
+            customer_order=certificate_customer_order,
+            alloy=certificate_alloy,
+            diameter=certificate_diameter,
+            cast=certificate_cast,
+            weight=certificate_weight,
+            packing_list=certificate_packing_list,
+            supplier_order=certificate_supplier_order,
+        )
         if linked_row is not None:
             if linked_row.document_certificato_id is None:
                 linked_row.document_certificato_id = certificate_document.id
@@ -4841,31 +5035,23 @@ def _ensure_certificate_first_rows(
 
 
 def _find_existing_aluminium_bozen_row_for_certificate(
-    db: Session,
     *,
-    supplier_id: int | None,
+    rows: list[AcquisitionRow],
     certificate_number: str | None,
     article: str | None,
-    customer_code: str | None,
+    profile_code: str | None,
     customer_order: str | None,
     alloy: str | None,
     diameter: str | None,
     cast: str | None,
     weight: str | None,
 ) -> AcquisitionRow | None:
-    if supplier_id is None:
+    if not rows:
         return None
-
-    rows = (
-        db.query(AcquisitionRow)
-        .filter(AcquisitionRow.fornitore_id == supplier_id)
-        .order_by(AcquisitionRow.id.asc())
-        .all()
-    )
 
     normalized_cdq = reader_normalize_match_token(certificate_number)
     normalized_article = reader_normalize_match_token(article)
-    normalized_customer_code = reader_normalize_match_token(customer_code)
+    normalized_profile_code = reader_normalize_match_token(profile_code)
     normalized_customer_order = reader_normalize_match_token(customer_order)
     normalized_cast = reader_normalize_match_token(cast)
     normalized_alloy = reader_normalize_match_token(alloy)
@@ -4877,7 +5063,9 @@ def _find_existing_aluminium_bozen_row_for_certificate(
         row_identity_fields = _certificate_first_row_identity_fields(row)
         row_cdq = reader_normalize_match_token(row.cdq)
         row_article = reader_normalize_match_token(row_identity_fields.get("article"))
-        row_customer_code = reader_normalize_match_token(row_identity_fields.get("customer_code"))
+        row_profile_code = reader_normalize_match_token(
+            row_identity_fields.get("profile_code") or row_identity_fields.get("customer_code")
+        )
         row_customer_order = reader_normalize_match_token(row_identity_fields.get("customer_order"))
         row_cast = reader_normalize_match_token(row.colata)
         row_alloy = reader_normalize_match_token(row.lega_base)
@@ -4893,8 +5081,8 @@ def _find_existing_aluminium_bozen_row_for_certificate(
             if row_article != normalized_article:
                 return -1
             total += 80
-        if normalized_customer_code and row_customer_code:
-            if row_customer_code != normalized_customer_code:
+        if normalized_profile_code and row_profile_code:
+            if row_profile_code != normalized_profile_code:
                 return -1
             total += 60
         if normalized_customer_order and row_customer_order:
@@ -4927,13 +5115,269 @@ def _find_existing_aluminium_bozen_row_for_certificate(
     return scored[0][1]
 
 
+def _find_existing_impol_row_for_certificate(
+    *,
+    rows: list[AcquisitionRow],
+    customer_order: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    cast: str | None,
+    weight: str | None,
+    packing_list: str | None,
+    supplier_order: str | None,
+    product_code: str | None,
+) -> AcquisitionRow | None:
+    if not rows:
+        return None
+
+    normalized_customer_order = reader_normalize_match_token(customer_order)
+    if not normalized_customer_order:
+        return None
+
+    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_diameter = reader_normalize_match_token(diameter)
+    normalized_cast = reader_normalize_match_token(cast)
+    normalized_packing_list = reader_normalize_match_token(normalize_impol_packing_list_root(packing_list))
+    normalized_supplier_order = reader_normalize_match_token(supplier_order)
+    normalized_product_code = reader_normalize_match_token(product_code)
+
+    best_row: AcquisitionRow | None = None
+    best_score = 0
+
+    for row in rows:
+        if row.document_ddt_id is None:
+            continue
+
+        ddt_values = {
+            value.campo: _final_value_for_row(value)
+            for value in row.values
+            if value.blocco == "ddt"
+        }
+        supplier_fields = reader_extract_row_supplier_match_fields(
+            row=row,
+            ddt_values=ddt_values,
+            supplier_key="impol",
+        )
+
+        row_customer_order = reader_normalize_match_token(
+            supplier_fields.get("customer_order_no") or row.ordine
+        )
+        if row_customer_order != normalized_customer_order:
+            continue
+
+        score = 160
+        row_alloy = reader_normalize_match_token(row.lega_base)
+        row_diameter = reader_normalize_match_token(row.diametro)
+        row_cast = reader_normalize_match_token(row.colata)
+        row_weight_raw = _string_or_none(row.peso)
+
+        material_match_count = 0
+        available_material_signals = 0
+
+        if normalized_alloy:
+            available_material_signals += 1
+            if row_alloy:
+                if row_alloy != normalized_alloy:
+                    continue
+                score += 80
+                material_match_count += 1
+
+        if normalized_diameter:
+            available_material_signals += 1
+            if row_diameter:
+                if row_diameter != normalized_diameter:
+                    continue
+                score += 80
+                material_match_count += 1
+
+        if normalized_cast:
+            available_material_signals += 1
+            if row_cast:
+                if row_cast != normalized_cast:
+                    continue
+                score += 110
+                material_match_count += 1
+
+        if _string_or_none(weight):
+            available_material_signals += 1
+            if row_weight_raw:
+                if not reader_weights_are_compatible(row_weight_raw, weight):
+                    continue
+                score += 70
+                material_match_count += 1
+
+        row_packing = reader_normalize_match_token(supplier_fields.get("packing_list_no"))
+        row_supplier_order = reader_normalize_match_token(supplier_fields.get("supplier_order_no"))
+        row_product_code = reader_normalize_match_token(supplier_fields.get("product_code"))
+
+        if normalized_packing_list and row_packing == normalized_packing_list:
+            score += 35
+        if normalized_supplier_order and row_supplier_order == normalized_supplier_order:
+            score += 30
+        if normalized_product_code and row_product_code == normalized_product_code:
+            score += 30
+
+        required_material_matches = min(3, available_material_signals)
+        if material_match_count < required_material_matches:
+            continue
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 260:
+        return best_row
+    return None
+
+
+def _find_existing_metalba_row_for_certificate(
+    *,
+    rows: list[AcquisitionRow],
+    customer_order: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    weight: str | None,
+) -> AcquisitionRow | None:
+    if not rows:
+        return None
+
+    normalized_customer_order = reader_normalize_match_token(customer_order)
+    if not normalized_customer_order:
+        return None
+
+    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_diameter = reader_normalize_match_token(diameter)
+
+    best_row: AcquisitionRow | None = None
+    best_score = 0
+
+    for row in rows:
+        if row.document_ddt_id is None:
+            continue
+
+        ddt_values = {
+            value.campo: _final_value_for_row(value)
+            for value in row.values
+            if value.blocco == "ddt"
+        }
+        supplier_fields = reader_extract_row_supplier_match_fields(
+            row=row,
+            ddt_values=ddt_values,
+            supplier_key="metalba",
+        )
+
+        row_vs_rif = reader_normalize_match_token(
+            supplier_fields.get("vs_rif") or row.ordine
+        )
+        if row_vs_rif != normalized_customer_order:
+            continue
+
+        score = 160
+        material_match_count = 0
+        available_material_signals = 0
+
+        row_diameter = reader_normalize_match_token(row.diametro)
+        if normalized_diameter:
+            available_material_signals += 1
+            if row_diameter:
+                if row_diameter != normalized_diameter:
+                    continue
+                score += 55
+                material_match_count += 1
+
+        row_alloy = reader_normalize_match_token(row.lega_base)
+        if normalized_alloy:
+            available_material_signals += 1
+            if row_alloy:
+                if row_alloy != normalized_alloy:
+                    continue
+                score += 45
+                material_match_count += 1
+
+        row_weight_raw = _string_or_none(row.peso)
+        if _string_or_none(weight):
+            available_material_signals += 1
+            if row_weight_raw:
+                if not reader_weights_are_compatible(row_weight_raw, weight):
+                    continue
+                score += 35
+                material_match_count += 1
+
+        required_material_matches = min(2, available_material_signals)
+        if material_match_count < required_material_matches:
+            continue
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 230:
+        return best_row
+    return None
+
+
+def _find_existing_row_for_certificate(
+    db: Session,
+    *,
+    supplier_key: str | None,
+    supplier_id: int | None,
+    certificate_number: str | None,
+    article: str | None,
+    profile_code: str | None,
+    customer_order: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    cast: str | None,
+    weight: str | None,
+    packing_list: str | None,
+    supplier_order: str | None,
+) -> AcquisitionRow | None:
+    candidate_rows = _candidate_rows_for_incoming_certificate_link(
+        db,
+        supplier_id=supplier_id,
+    )
+    if supplier_key == "aluminium_bozen":
+        return _find_existing_aluminium_bozen_row_for_certificate(
+            rows=candidate_rows,
+            certificate_number=certificate_number,
+            article=article,
+            profile_code=profile_code,
+            customer_order=customer_order,
+            alloy=alloy,
+            diameter=diameter,
+            cast=cast,
+            weight=weight,
+        )
+    if supplier_key == "impol":
+        return _find_existing_impol_row_for_certificate(
+            rows=candidate_rows,
+            customer_order=customer_order,
+            alloy=alloy,
+            diameter=diameter,
+            cast=cast,
+            weight=weight,
+            packing_list=packing_list,
+            supplier_order=supplier_order,
+            product_code=article,
+        )
+    if supplier_key == "metalba":
+        return _find_existing_metalba_row_for_certificate(
+            rows=candidate_rows,
+            customer_order=customer_order,
+            alloy=alloy,
+            diameter=diameter,
+            weight=weight,
+        )
+    return None
+
+
 def _certificate_first_signature(
     *,
     fornitore_id: int | None,
     cdq: str | None,
     ordine: str | None,
     article: str | None,
-    customer_code: str | None,
+    profile_code: str | None,
     lega: str | None,
     diametro: str | None,
     colata: str | None,
@@ -4944,7 +5388,7 @@ def _certificate_first_signature(
         reader_normalize_match_token(cdq),
         reader_normalize_match_token(ordine),
         reader_normalize_match_token(article),
-        reader_normalize_match_token(customer_code),
+        reader_normalize_match_token(profile_code),
         reader_normalize_match_token(lega),
         reader_normalize_match_token(diametro),
         reader_normalize_match_token(colata),
@@ -4959,7 +5403,7 @@ def _certificate_first_signature_from_row(row: AcquisitionRow) -> tuple[str | in
         cdq=row.cdq,
         ordine=identity_fields.get("customer_order"),
         article=identity_fields.get("article"),
-        customer_code=identity_fields.get("customer_code"),
+        profile_code=identity_fields.get("profile_code") or identity_fields.get("customer_code"),
         lega=row.lega_base or row.lega_designazione or row.variante_lega,
         diametro=row.diametro,
         colata=row.colata,
@@ -4980,15 +5424,18 @@ def _certificate_first_row_identity_fields(row: AcquisitionRow) -> dict[str, str
     }
     return {
         "article": _string_or_none(ddt_values.get("article_code")) or _string_or_none(match_values.get("articolo_certificato")),
-        "customer_code": _string_or_none(ddt_values.get("customer_code")) or _string_or_none(match_values.get("codice_cliente_certificato")),
+        "profile_code": _string_or_none(ddt_values.get("profile_code"))
+        or _string_or_none(ddt_values.get("customer_code"))
+        or _string_or_none(match_values.get("codice_cliente_certificato")),
         "customer_order": _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(match_values.get("ordine_cliente_certificato")),
     }
 
 
 def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
     values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt").all()
-    summary = _compute_ddt_field_summary_from_values(values)
-    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields()]
+    supplier_key = _resolve_row_supplier_key(row)
+    summary = _compute_ddt_field_summary_from_values(values, row=row, supplier_key=supplier_key)
+    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields(supplier_key)]
     return bool(required_missing)
 
 
@@ -5147,7 +5594,7 @@ def _score_certificate_candidate(
         ddt_supplier_fields = {
             field_name: field_value
             for field_name, field_value in ddt_supplier_fields.items()
-            if field_name not in {"article", "customer_code", "customer_order_normalized"}
+            if field_name not in {"article", "profile_code", "customer_order_normalized"}
         }
     else:
         row_supplier_fields = reader_extract_row_supplier_match_fields(
@@ -5176,7 +5623,10 @@ def _score_certificate_candidate(
         if supplier_key == "aluminium_bozen":
             certificate_supplier_fields = {
                 "article": _string_or_none(certificate_supplier_fields.get("article")) or _string_or_none(ai_supplier_fields.get("article")),
-                "customer_code": _string_or_none(certificate_supplier_fields.get("customer_code")) or _string_or_none(ai_supplier_fields.get("customer_code")),
+                "profile_code": _string_or_none(certificate_supplier_fields.get("profile_code"))
+                or _string_or_none(certificate_supplier_fields.get("customer_code"))
+                or _string_or_none(ai_supplier_fields.get("profile_code"))
+                or _string_or_none(ai_supplier_fields.get("customer_code")),
                 "customer_order_normalized": _string_or_none(certificate_supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(ai_supplier_fields.get("customer_order_normalized")),
             }
@@ -5237,10 +5687,10 @@ def _score_certificate_candidate(
             and reader_normalize_match_token(ddt_supplier_fields.get("article"))
             == reader_normalize_match_token(certificate_supplier_fields.get("article"))
         )
-        customer_code_match = (
-            reader_normalize_match_token(ddt_supplier_fields.get("customer_code"))
-            and reader_normalize_match_token(ddt_supplier_fields.get("customer_code"))
-            == reader_normalize_match_token(certificate_supplier_fields.get("customer_code"))
+        profile_code_match = (
+            reader_normalize_match_token(ddt_supplier_fields.get("profile_code"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("profile_code"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("profile_code"))
         )
         customer_order_match = (
             reader_normalize_match_token(ddt_supplier_fields.get("customer_order_normalized"))
@@ -5267,10 +5717,10 @@ def _score_certificate_candidate(
             == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
         )
         has_full_structural_match = bool(
-            article_match and customer_code_match and customer_order_match and alloy_match and diameter_match
+            article_match and profile_code_match and customer_order_match and alloy_match and diameter_match
         )
         has_row_match_with_cast_support = bool(
-            cast_match and article_match and (customer_code_match or customer_order_match or diameter_match)
+            cast_match and article_match and (profile_code_match or customer_order_match or diameter_match)
         )
         has_strong_row_link = bool(
             certificate_number_match or has_full_structural_match or has_row_match_with_cast_support
@@ -5314,6 +5764,8 @@ def _score_certificate_candidate(
         )
         weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
         strong_mismatch = False
+        if row.ordine and certificate_supplier_fields.get("customer_order_no") and not customer_order_match:
+            strong_mismatch = True
         if row.colata and certificate_cast and not cast_match:
             strong_mismatch = True
         if row.diametro and _string_or_none(matches.get("diametro_certificato", {}).get("final")) and not diameter_match:
@@ -5325,7 +5777,11 @@ def _score_certificate_candidate(
         strong_row_match_count = sum(1 for flag in (cast_match, diameter_match, alloy_match, weight_match) if flag)
         if strong_mismatch:
             return None
-        if not (packing_match and strong_row_match_count >= 3):
+        # Impol: packing list identifies the DDT, but row matching closes on
+        # customer order, alloy, diameter, charge and net weight.
+        if not customer_order_match:
+            return None
+        if strong_row_match_count < 3:
             return None
     elif supplier_key == "metalba":
         order_match = bool(
@@ -5447,9 +5903,10 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
     values_by_block: dict[str, list[ReadValue]] = {}
     for value in row.values:
         values_by_block.setdefault(value.blocco, []).append(value)
+    supplier_key = _resolve_row_supplier_key(row)
 
     return {
-        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
+        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state(row),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
@@ -5462,6 +5919,7 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     values_by_block: dict[str, list[ReadValue]] = {}
     for value in values:
         values_by_block.setdefault(value.blocco, []).append(value)
+    supplier_key = _resolve_row_supplier_key(row)
 
     match = (
         db.query(CertificateMatch)
@@ -5470,7 +5928,7 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     )
 
     return {
-        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", [])),
+        "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
@@ -5504,11 +5962,16 @@ def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso",
     return "giallo"
 
 
-def _compute_ddt_block_state(row: AcquisitionRow, values: list[ReadValue]) -> str:
+def _compute_ddt_block_state(
+    row: AcquisitionRow,
+    values: list[ReadValue],
+    *,
+    supplier_key: str | None = None,
+) -> str:
     if not row.document_ddt_id:
         return "rosso"
-    summary = _compute_ddt_field_summary_from_values(values)
-    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields()]
+    summary = _compute_ddt_field_summary_from_values(values, row=row, supplier_key=supplier_key)
+    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields(supplier_key)]
     if required_missing:
         return "rosso"
     if not summary["pending"]:
@@ -5518,16 +5981,21 @@ def _compute_ddt_block_state(row: AcquisitionRow, values: list[ReadValue]) -> st
 
 def _compute_ddt_field_summary(row: AcquisitionRow) -> dict[str, list[str]]:
     values = [value for value in row.values if value.blocco == "ddt"]
-    return _compute_ddt_field_summary_from_values(values, row=row)
+    return _compute_ddt_field_summary_from_values(values, row=row, supplier_key=_resolve_row_supplier_key(row))
 
 
-def _compute_ddt_field_summary_from_values(values: list[ReadValue], *, row: AcquisitionRow | None = None) -> dict[str, list[str]]:
+def _compute_ddt_field_summary_from_values(
+    values: list[ReadValue],
+    *,
+    row: AcquisitionRow | None = None,
+    supplier_key: str | None = None,
+) -> dict[str, list[str]]:
     by_field = {value.campo: value for value in values}
     confirmed: list[str] = []
     pending: list[str] = []
     missing: list[str] = []
 
-    for field in _ddt_required_fields() + _ddt_optional_fields():
+    for field in _ddt_required_fields(supplier_key) + _ddt_optional_fields(supplier_key):
         has_payload = _ddt_field_has_payload(by_field, field, row=row)
         if not has_payload:
             missing.append(field)
@@ -5557,6 +6025,13 @@ def _ddt_field_has_payload(by_field: dict[str, ReadValue], field: str, *, row: A
             _string_or_none(candidate) is not None
             for candidate in (fallback_value.valore_finale, fallback_value.valore_standardizzato, fallback_value.valore_grezzo)
         )
+    if field == "ordine":
+        fallback_value = by_field.get("customer_order_no")
+        if fallback_value is not None and any(
+            _string_or_none(candidate) is not None
+            for candidate in (fallback_value.valore_finale, fallback_value.valore_standardizzato, fallback_value.valore_grezzo)
+        ):
+            return True
     if row is not None:
         return _row_ddt_field_value(row, field) is not None
     return False
@@ -5569,6 +6044,9 @@ def _ddt_field_is_confirmed(by_field: dict[str, ReadValue], field: str, *, row: 
     if field == "cdq":
         fallback_value = by_field.get("numero_certificato_ddt")
         return fallback_value is not None and fallback_value.stato == "confermato" and _ddt_field_has_payload(by_field, field, row=row)
+    if field == "ordine":
+        fallback_value = by_field.get("customer_order_no")
+        return fallback_value is not None and fallback_value.stato == "confermato" and _ddt_field_has_payload(by_field, field, row=row)
     return False
 
 
@@ -5580,6 +6058,8 @@ def _row_ddt_field_value(row: AcquisitionRow, field: str) -> str | None:
         "peso": row.peso,
         "numero_certificato_ddt": row.cdq,
         "ordine": row.ordine,
+        "ddt": row.ddt,
+        "lega": row.lega_base,
     }
     value = field_map.get(field)
     if field in {"diametro", "peso"}:
@@ -5587,11 +6067,23 @@ def _row_ddt_field_value(row: AcquisitionRow, field: str) -> str | None:
     return _string_or_none(value)
 
 
-def _ddt_required_fields() -> tuple[str, ...]:
-    return ("cdq", "colata", "diametro", "peso")
+def _ddt_required_fields(supplier_key: str | None = None) -> tuple[str, ...]:
+    if supplier_key == "impol":
+        return ("ddt", "lega", "colata", "diametro", "peso", "ordine")
+    if supplier_key == "metalba":
+        return ("ddt", "lega", "diametro", "peso", "ordine")
+    if supplier_key == "aluminium_bozen":
+        return ("ddt", "lega", "cdq", "colata", "diametro", "peso")
+    return ("ddt", "lega", "cdq", "colata", "diametro", "peso")
 
 
-def _ddt_optional_fields() -> tuple[str, ...]:
+def _ddt_optional_fields(supplier_key: str | None = None) -> tuple[str, ...]:
+    if supplier_key == "impol":
+        return ("cdq", "numero_certificato_ddt")
+    if supplier_key == "metalba":
+        return ("colata", "cdq", "numero_certificato_ddt")
+    if supplier_key == "aluminium_bozen":
+        return ("numero_certificato_ddt", "ordine")
     return ("numero_certificato_ddt", "ordine")
 
 
@@ -5964,7 +6456,7 @@ def _build_aluminium_bozen_ddt_safe_crops(
 
     material_tokens = [
         _string_or_none(ddt_values.get("article_code")),
-        _string_or_none(ddt_values.get("customer_code")),
+        _string_or_none(ddt_values.get("profile_code")) or _string_or_none(ddt_values.get("customer_code")),
         _string_or_none(row.diametro),
         _string_or_none(row.lega_base),
         "BARRA TONDA",
@@ -6859,7 +7351,7 @@ def _extract_ddt_fields_from_openai(
         "diametro",
         "ordine",
         "customer_order_no",
-        "customer_code",
+        "profile_code",
         "article_code",
         "lega",
     ]
@@ -6880,7 +7372,7 @@ def _extract_ddt_fields_from_openai(
                 "ordine = per questo fornitore lascia null; non usare mai il valore di Rif. ns. Odv N. come ordine finale. "
                 "customer_order_no = riferimento ordine cliente della riga, anche se visibile come numero e data o data e numero; "
                 "usa solo il valore di Vs. Odv e normalizzalo come numero-data; non usare mai Rif. ns. Odv N. al posto di Vs. Odv. "
-                "customer_code = codice cliente/materiale come token tecnico, ad esempio codici che iniziano con A. "
+                "profile_code = codice iniziale di profilo/materiale come token tecnico, ad esempio codici che iniziano con A. "
                 "article_code = codice articolo tecnico, ad esempio token come 14BT.... "
                 "lega = lega/stato metallurgico della riga materiale. "
                 "diametro = valore associato alla riga materiale, non norme o altri riferimenti. "
@@ -6999,13 +7491,13 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
             r"\b[0-9]{2}[A-Z]{2}[0-9A-Z-]{4,}\b",
         )
 
-    def _normalize_customer_code(value: str | None, evidence: str | None) -> str | None:
+    def _normalize_profile_code(value: str | None, evidence: str | None) -> str | None:
         token = _extract_token_from_value_or_evidence(
             value,
             evidence,
             r"\bA[0-9A-Z]{5,}\b",
         )
-        return _normalize_aluminium_bozen_customer_code_token(token)
+        return _normalize_aluminium_bozen_profile_code_token(token)
 
     def _normalize_customer_order(value: str | None, evidence: str | None) -> str | None:
         normalized = _normalize_customer_order_tokens(value) or _normalize_customer_order_tokens(evidence)
@@ -7059,7 +7551,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
     field_mapping = {
         "numero_certificato_certificato": ("certificate_number_raw", _normalize_certificate_number),
         "articolo_certificato": ("article_code_raw", _normalize_article_code),
-        "codice_cliente_certificato": ("profile_customer_description_raw", _normalize_customer_code),
+        "codice_cliente_certificato": ("profile_customer_description_raw", _normalize_profile_code),
         "ordine_cliente_certificato": ("customer_order_raw", _normalize_customer_order),
         "lega_certificato": ("alloy_raw", _normalize_alloy),
         "diametro_certificato": ("profile_customer_description_raw", _normalize_diameter),
@@ -7361,7 +7853,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
         },
         "supplier_fields": {
             "article": _string_or_none((sanitized_core.get("articolo_certificato") or {}).get("value")),
-            "customer_code": _string_or_none((sanitized_core.get("codice_cliente_certificato") or {}).get("value")),
+            "profile_code": _string_or_none((sanitized_core.get("codice_cliente_certificato") or {}).get("value")),
             "customer_order_normalized": _string_or_none((sanitized_core.get("ordine_cliente_certificato") or {}).get("value")),
         },
         "core_fields": sanitized_core,
@@ -8381,20 +8873,21 @@ def _sanitize_vision_ddt_fields(
             "source_crop": customer_order_source_crop,
         }
 
-    customer_code_value = _string_or_none(normalized.get("customer_code", {}).get("value"))
-    customer_code_evidence = _string_or_none(normalized.get("customer_code", {}).get("evidence"))
-    customer_code_source_crop = _string_or_none(normalized.get("customer_code", {}).get("source_crop"))
-    if customer_code_value is not None:
-        customer_code_value = _extract_token_from_value_or_evidence(
-            customer_code_value,
-            customer_code_evidence,
+    profile_code_payload = normalized.get("profile_code") or normalized.get("customer_code") or {}
+    profile_code_value = _string_or_none(profile_code_payload.get("value"))
+    profile_code_evidence = _string_or_none(profile_code_payload.get("evidence"))
+    profile_code_source_crop = _string_or_none(profile_code_payload.get("source_crop"))
+    if profile_code_value is not None:
+        profile_code_value = _extract_token_from_value_or_evidence(
+            profile_code_value,
+            profile_code_evidence,
             r"\bA\d[0-9A-Z]{4,}\b",
         )
-    if "customer_code" in normalized:
-        normalized["customer_code"] = {
-            "value": customer_code_value,
-            "evidence": customer_code_evidence,
-            "source_crop": customer_code_source_crop,
+    if "profile_code" in normalized or "customer_code" in normalized:
+        normalized["profile_code"] = {
+            "value": profile_code_value,
+            "evidence": profile_code_evidence,
+            "source_crop": profile_code_source_crop,
         }
 
     article_code_value = _string_or_none(normalized.get("article_code", {}).get("value"))
@@ -8577,9 +9070,12 @@ def _extract_stable_aluminium_bozen_row_supplier_fields_for_match(
     if not _has_stable_value_protected_from_ai(row, "ddt", "article_code"):
         article = None
 
-    customer_code = _string_or_none(ddt_values.get("customer_code"))
-    if not _has_stable_value_protected_from_ai(row, "ddt", "customer_code"):
-        customer_code = None
+    profile_code = _string_or_none(ddt_values.get("profile_code")) or _string_or_none(ddt_values.get("customer_code"))
+    if not (
+        _has_stable_value_protected_from_ai(row, "ddt", "profile_code")
+        or _has_stable_value_protected_from_ai(row, "ddt", "customer_code")
+    ):
+        profile_code = None
 
     customer_order = _string_or_none(ddt_values.get("customer_order_no"))
     if not _has_stable_value_protected_from_ai(row, "ddt", "customer_order_no"):
@@ -8587,7 +9083,7 @@ def _extract_stable_aluminium_bozen_row_supplier_fields_for_match(
 
     return {
         "article": article,
-        "customer_code": customer_code,
+        "profile_code": profile_code,
         "customer_order_normalized": customer_order,
     }
 
@@ -8598,6 +9094,8 @@ def _ai_guardrail_field_aliases(block: str, field_name: str) -> tuple[str, ...]:
             return ("cdq", "numero_certificato_ddt")
         if field_name == "ordine":
             return ("ordine", "customer_order_no")
+        if field_name in {"profile_code", "customer_code"}:
+            return ("profile_code", "customer_code")
         return (field_name,)
     return (field_name,)
 
@@ -8620,7 +9118,7 @@ def _ddt_row_field_fallback_value(row: AcquisitionRow, field_name: str) -> str |
     return None
 
 
-def _normalize_aluminium_bozen_customer_code_token(value: str | None) -> str | None:
+def _normalize_aluminium_bozen_profile_code_token(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
@@ -9398,7 +9896,7 @@ def _extract_supplier_match_fields(
         ),
         "aluminium_bozen": lambda current_lines, current_type: {
             "article": _extract_code_pattern(current_lines, r"\b14BT[0-9A-Z-]+\b"),
-            "customer_code": _extract_aluminium_bozen_customer_code(current_lines),
+            "profile_code": _extract_aluminium_bozen_profile_code(current_lines),
             "customer_order_normalized": _extract_aluminium_bozen_customer_order(current_lines, document_type=current_type),
         },
         "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
@@ -9484,7 +9982,7 @@ def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
     return None
 
 
-def _extract_aluminium_bozen_customer_code(lines: list[str]) -> str | None:
+def _extract_aluminium_bozen_profile_code(lines: list[str]) -> str | None:
     for line in lines:
         normalized = _normalize_mojibake_numeric_text(line).upper()
         match = re.search(r"\bA\d[0-9A-Z]{4,}\b", normalized)

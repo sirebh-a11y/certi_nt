@@ -23,7 +23,7 @@ TEMPLATE_REGISTRY: tuple[SupplierReaderTemplate, ...] = (
         certificate_template_id="aluminium_bozen_certificate_v1",
         aliases=("aluminium bz", "aluminium bozen", "bozen"),
         openai_double_check_blocks=("ddt_core", "match", "chemistry", "properties", "notes"),
-        strong_match_fields=("cert_no", "article", "customer_code", "alloy", "cast", "customer_order"),
+        strong_match_fields=("cert_no", "article", "profile_code", "alloy", "cast", "customer_order"),
         notes=("Packing list centrale per cert no e cast.",),
     ),
     SupplierReaderTemplate(
@@ -43,8 +43,8 @@ TEMPLATE_REGISTRY: tuple[SupplierReaderTemplate, ...] = (
         certificate_template_id="impol_certificate_multirow_v1",
         aliases=("impol",),
         openai_double_check_blocks=("match", "chemistry", "properties", "notes"),
-        strong_match_fields=("packing_list_no", "customer_order_no", "supplier_order_no", "charge", "diameter"),
-        notes=("Un DDT puo generare piu righe e piu certificati.",),
+        strong_match_fields=("customer_order_no", "alloy", "diameter", "charge", "weight"),
+        notes=("Packing list identifica il DDT; il match riga si chiude su ordine, lega, diametro, charge e peso netto.",),
     ),
     SupplierReaderTemplate(
         supplier_key="arconic_hannover",
@@ -73,8 +73,8 @@ TEMPLATE_REGISTRY: tuple[SupplierReaderTemplate, ...] = (
         certificate_template_id="metalba_test_certificate_v1",
         aliases=("metalba",),
         openai_double_check_blocks=("ddt_core", "match", "chemistry", "properties", "notes"),
-        strong_match_fields=("vs_rif", "rif_ord", "alloy", "diameter", "weight"),
-        notes=("Il ponte forte e stampato: Vs. Rif. ↔ Ordine Cliente, Rif. Ord. ↔ Commessa.",),
+        strong_match_fields=("vs_rif", "alloy", "diameter", "weight"),
+        notes=("Il ponte forte e stampato: Vs. Rif. ↔ Ordine Cliente. Rif. Ord. / Commessa restano campi di supporto.",),
     ),
     SupplierReaderTemplate(
         supplier_key="zalco",
