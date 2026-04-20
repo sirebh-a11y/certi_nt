@@ -110,18 +110,21 @@ Campi forti futuri:
 * alloy / temper
 * customer code
 * dimensione
-* `Commessa`
 * `Ordine Cliente`
+
+Campi documentali di supporto:
+
+* `Commessa`
 
 Nota:
 
 * il template certificato e' maturo
 * il match forte osservato nasce da:
-  * `Commessa` <-> `Rif. Ord.` del DDT
   * `Ordine Cliente` <-> `Vs. Rif.` del DDT
   * alloy / temper
   * dimensione
   * peso
+* `Commessa` <-> `Rif. Ord.` del DDT resta un supporto documentale utile, ma non il ponte principale
 * il suffisso di `Commessa` (`/1`, `/2`, `/3`, `/4`) e' dettaglio di sottoriga certificato, mentre il root coincide col valore DDT
 
 Casi gia' verificati:

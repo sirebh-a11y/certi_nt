@@ -41,7 +41,8 @@ Nota metodologica:
 Descrizione breve del template:
 
 * DDT classico italiano, una pagina
-* una riga materiale principale per documento
+* una riga materiale principale per documento nella maggior parte dei casi
+* non assumere pero' monoriga come vincolo assoluto: se il documento contiene piu' righe materiali, il runtime deve saperle trattare separate
 * campi tecnici stampati e annotazioni manuali storiche spesso presenti sugli esempi
 
 Il template si riconosce da:
@@ -70,11 +71,14 @@ Il template si riconosce da:
 
 Campi ponte forti osservati verso il certificato:
 
-* `Rif. Ord.`
 * `Vs. Rif.`
 * alloy / temper
 * diametro
 * peso netto
+
+Campi documentali di supporto osservati verso il certificato:
+
+* `Rif. Ord.`
 
 ### 4.2 Contesto Storico Da NON Usare Nel Runtime
 
@@ -96,13 +100,15 @@ Campi ponte forti osservati verso il certificato:
 ### 5.2 Regola Di Riga Acquisition
 
 * in questo template una pagina coincide spesso con una riga materiale
+* non trasformare questa osservazione in una regola rigida: se compaiono piu' righe materiali, vanno mantenute separate
 * la riga si costruisce da:
   * alloy
   * diametro
   * customer code
   * lunghezza
   * peso netto
-* `Rif. Ord.` e `Vs. Rif.` sono i due campi piu' forti per il match col certificato
+* `Vs. Rif.` e' il campo documento piu' forte per il match col certificato
+* `Rif. Ord.` resta un campo di supporto utile, coerente con `Commessa`, ma non e' il ponte principale
 
 ---
 
@@ -114,8 +120,11 @@ Campi ponte forti osservati verso il certificato:
 * diametro
 * lunghezza
 * peso netto
-* `Rif. Ord.`
 * `Vs. Rif.`
+
+Campi di supporto:
+
+* `Rif. Ord.`
 
 Casi gia' verificati:
 
@@ -143,5 +152,6 @@ Casi gia' verificati:
 ## 7. Note Runtime
 
 * template semplice ma delicato, perche' i campi stampati sono pochi e le annotazioni manuali storiche sono fuorvianti
-* il match runtime puo' essere forte anche senza colata scritta a mano, usando `Rif. Ord.` + `Vs. Rif.` + alloy/diametro/peso
+* il match runtime puo' essere forte anche senza colata scritta a mano, usando prima di tutto `Vs. Rif.` e poi alloy/diametro/peso
+* `Rif. Ord.` resta utile come supporto coerente con `Commessa`, ma non deve sostituire `Vs. Rif.` come ponte principale
 * qui il runtime dovra' restare disciplinato sui soli campi stampati
