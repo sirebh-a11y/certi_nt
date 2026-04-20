@@ -383,6 +383,8 @@ def _build_row_split_hint(document: Document | None, template) -> ReaderRowSplit
 
     if template.supplier_key == "impol":
         return _build_impol_row_split_hint(lines)
+    if template.supplier_key == "leichtmetall":
+        return _build_leichtmetall_row_split_hint(document, lines)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_hint(lines)
     if template.supplier_key == "aluminium_bozen":
@@ -427,6 +429,18 @@ def _build_impol_row_split_hint(lines: list[str]) -> ReaderRowSplitHintResponse:
     return ReaderRowSplitHintResponse(needed=False, estimated_rows=1, signals=[])
 
 
+def _build_leichtmetall_row_split_hint(document: Document | None, lines: list[str]) -> ReaderRowSplitHintResponse:
+    candidate_count = len(_build_leichtmetall_row_split_candidates(document, "leichtmetall"))
+    if candidate_count > 1:
+        return ReaderRowSplitHintResponse(
+            needed=True,
+            estimated_rows=candidate_count,
+            reason="Il DDT Leichtmetall contiene piu gruppi batch/cdq e va scisso in piu righe acquisition.",
+            signals=[f"candidate={candidate_count}"],
+        )
+    return ReaderRowSplitHintResponse(needed=False, estimated_rows=max(candidate_count, 1), signals=[])
+
+
 def _build_row_split_candidates(document: Document | None, template) -> list[ReaderRowSplitCandidateResponse]:
     if document is None or template is None:
         return []
@@ -439,6 +453,8 @@ def _build_row_split_candidates(document: Document | None, template) -> list[Rea
 
     if template.supplier_key == "impol":
         return _build_impol_row_split_candidates(lines, template.supplier_key)
+    if template.supplier_key == "leichtmetall":
+        return _build_leichtmetall_row_split_candidates(document, template.supplier_key)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_candidates(lines, template.supplier_key)
     if template.supplier_key == "aluminium_bozen":
@@ -653,6 +669,226 @@ def _build_impol_row_split_candidates(lines: list[str], supplier_key: str) -> li
             candidates.append(candidate)
 
     return candidates
+
+
+def _build_leichtmetall_row_split_candidates(
+    document: Document | None,
+    supplier_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if document is None or not document.pages:
+        return []
+
+    first_page = next((page for page in document.pages if page.numero_pagina == 1), document.pages[0])
+    first_page_lines = _page_lines(first_page)
+    normalized_first_page_lines = [_normalize_line(line) for line in first_page_lines]
+    all_lines = [line for page in document.pages for line in _page_lines(page)]
+    normalized_all_lines = [_normalize_line(line) for line in all_lines]
+
+    ddt_number = _extract_leichtmetall_ddt_number(normalized_all_lines)
+    purchase_number = _extract_leichtmetall_purchase_number(normalized_first_page_lines) or _extract_leichtmetall_purchase_number(normalized_all_lines)
+    order_confirmation = _extract_leichtmetall_order_confirmation(normalized_first_page_lines) or _extract_leichtmetall_order_confirmation(normalized_all_lines)
+    lega = _extract_leichtmetall_alloy(normalized_first_page_lines) or _extract_leichtmetall_alloy(normalized_all_lines)
+    diametro = _extract_leichtmetall_diameter(normalized_first_page_lines) or _extract_leichtmetall_diameter(normalized_all_lines)
+    quantity = _extract_leichtmetall_header_weight(normalized_first_page_lines) or _extract_leichtmetall_header_weight(normalized_all_lines)
+
+    batch_groups = _extract_leichtmetall_batch_groups(document)
+    if batch_groups:
+        if quantity is not None:
+            header_total = _parse_leichtmetall_weight_token(quantity)
+            if header_total is not None:
+                if len(batch_groups) == 1:
+                    only_batch_payload = next(iter(batch_groups.values()))
+                    only_batch_payload["weight_total"] = header_total
+                else:
+                    grouped_total = sum(int(payload.get("weight_total", 0)) for payload in batch_groups.values())
+                    if 0 < grouped_total < header_total:
+                        dominant_batch_payload = max(
+                            batch_groups.values(),
+                            key=lambda payload: (
+                                int(payload.get("weight_total", 0)),
+                                len(list(payload.get("snippets", []))),
+                            ),
+                        )
+                        dominant_batch_payload["weight_total"] = int(dominant_batch_payload.get("weight_total", 0)) + (
+                            header_total - grouped_total
+                        )
+        candidates: list[ReaderRowSplitCandidateResponse] = []
+        for index, (batch, payload) in enumerate(batch_groups.items(), start=1):
+            weight_total = int(payload.get("weight_total", 0))
+            snippets = list(payload.get("snippets", []))
+            candidates.append(
+                ReaderRowSplitCandidateResponse(
+                    candidate_index=index,
+                    supplier_key=supplier_key,
+                    ddt_number=ddt_number,
+                    cdq=batch,
+                    lega=lega,
+                    diametro=diametro,
+                    peso_netto=_format_leichtmetall_weight(weight_total) if weight_total > 0 else quantity,
+                    colata=batch,
+                    lot_batch_no=batch,
+                    customer_order_no=purchase_number,
+                    supplier_order_no=order_confirmation,
+                    snippets=snippets[:6],
+                )
+            )
+        return candidates
+
+    if not any((ddt_number, purchase_number, lega, diametro, quantity)):
+        return []
+
+    return [
+        ReaderRowSplitCandidateResponse(
+            candidate_index=1,
+            supplier_key=supplier_key,
+            ddt_number=ddt_number,
+            lega=lega,
+            diametro=diametro,
+            peso_netto=quantity,
+            customer_order_no=purchase_number,
+            supplier_order_no=order_confirmation,
+            snippets=first_page_lines[:6],
+        )
+    ]
+
+
+def _extract_leichtmetall_ddt_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\b(?:DELIVERY NOTE|BELEG)\s*:?\s*([0-9]{5,})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_leichtmetall_purchase_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bPURCHASE\s+NUMBER\s*:?\s*([0-9][0-9.+/\-\s]{1,})\b", line)
+        if match is not None:
+            return _normalize_leichtmetall_order_token(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_order_confirmation(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bORDER\s+CONFIRMATION\s*:?\s*([0-9][0-9./-]{3,})\b", line)
+        if match is not None:
+            return match.group(1).replace("/", "-")
+    return None
+
+
+def _extract_leichtmetall_alloy(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bALLOY\s+(?:EN\s+AW-?)?([0-9]{4}[A-Z]?)\b", line)
+        if match is not None:
+            return _normalize_leichtmetall_alloy(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_diameter(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bDIAMETER\s+([0-9]+(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_header_weight(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bQUANTITY\s*:?\s*([0-9]{1,3}(?:[.,][0-9]{3})+|\d+)\s*KG\b", line)
+        if match is not None:
+            return _normalize_leichtmetall_weight(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_batch_groups(document: Document) -> dict[str, dict[str, object]]:
+    batch_groups: dict[str, dict[str, object]] = {}
+    candidate_pages = [page for page in document.pages if page.numero_pagina > 1] or document.pages
+
+    for page in candidate_pages:
+        for raw_line in _page_lines(page):
+            line = _normalize_line(raw_line)
+            if any(marker in line for marker in ("HANNOVER GMBH", "UST.ID.NR", "SWIFT:", "COBA DE FF")):
+                continue
+            batch = _extract_leichtmetall_batch_from_line(line)
+            if batch is None:
+                continue
+            weight = _extract_leichtmetall_page2_row_weight(line, batch)
+            if weight is None:
+                continue
+            entry = batch_groups.setdefault(batch, {"weight_total": 0, "snippets": []})
+            entry["weight_total"] = int(entry["weight_total"]) + weight
+            entry["snippets"] = _merge_snippets(entry["snippets"], [raw_line])
+
+    return batch_groups
+
+
+def _extract_leichtmetall_batch_from_line(line: str) -> str | None:
+    matches = list(re.finditer(r"\b(\d{5})\b", line))
+    if matches:
+        return matches[-1].group(1)
+    return None
+
+
+def _extract_leichtmetall_page2_row_weight(line: str, batch: str) -> int | None:
+    batch_match = None
+    for match in re.finditer(rf"\b{re.escape(batch)}\b", line):
+        batch_match = match
+    if batch_match is None:
+        return None
+    prefix = line[: batch_match.start()]
+    numeric_tokens = re.findall(r"\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?", prefix)
+    for token in reversed(numeric_tokens):
+        parsed = _parse_leichtmetall_weight_token(token)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_leichtmetall_weight_token(value: str | None) -> int | None:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return None
+    token = normalized.replace(" ", "")
+    plain_digits = re.sub(r"[.,]", "", token)
+    if len(plain_digits) > 5:
+        return None
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token):
+        return int(re.sub(r"[.,]", "", token))
+    if re.fullmatch(r"\d+", token):
+        return int(token)
+    if re.fullmatch(r"\d+[.,]\d+", token):
+        integer_part, decimal_part = re.split(r"[.,]", token, maxsplit=1)
+        if len(decimal_part) == 3:
+            return int(integer_part + decimal_part)
+    return None
+
+
+def _format_leichtmetall_weight(value: int) -> str:
+    return str(value)
+
+
+def _normalize_leichtmetall_weight(value: str | None) -> str | None:
+    parsed = _parse_leichtmetall_weight_token(value)
+    if parsed is None:
+        return None
+    return _format_leichtmetall_weight(parsed)
+
+
+def _normalize_leichtmetall_alloy(value: str | None) -> str | None:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return None
+    if normalized == "7175":
+        return "7075"
+    return normalized
+
+
+def _normalize_leichtmetall_order_token(value: str | None) -> str | None:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return None
+    parts = [part for part in re.split(r"\s*\+\s*", normalized) if part]
+    return " + ".join(parts) if parts else None
 
 
 def _trim_impol_candidate_section(lines: list[str]) -> list[str]:

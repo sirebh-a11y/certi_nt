@@ -154,6 +154,7 @@ def extract_supplier_match_fields(
             "profile_code": _extract_aluminium_bozen_profile_code(current_lines),
             "customer_order_normalized": _extract_aluminium_bozen_customer_order(current_lines, document_type=current_type),
         },
+        "leichtmetall": lambda current_lines, current_type: _extract_leichtmetall_match_fields(current_lines, document_type=current_type),
         "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
         "arconic_hannover": lambda current_lines, current_type: _extract_arconic_hannover_match_fields(current_lines),
         "neuman": lambda current_lines, current_type: _extract_neuman_match_fields(current_lines),
@@ -164,6 +165,154 @@ def extract_supplier_match_fields(
     if supplier_match_extractor is None:
         return {}
     return supplier_match_extractor(lines, document_type)
+
+
+def _extract_leichtmetall_match_fields(lines: list[str], document_type: str) -> dict[str, str]:
+    po_no = (
+        _extract_leichtmetall_purchase_number(lines)
+        if document_type == "ddt"
+        else _extract_leichtmetall_po_no(lines)
+    )
+    charge_cast_no = _extract_leichtmetall_charge_cast_no(lines)
+    alloy = _extract_leichtmetall_alloy(lines)
+    diameter = _extract_leichtmetall_diameter(lines)
+    weight = (
+        _extract_leichtmetall_header_weight(lines)
+        if document_type == "ddt"
+        else _extract_leichtmetall_certificate_weight(lines)
+    )
+
+    payload = {
+        "po_no": po_no or "",
+        "customer_order_no": po_no or "",
+        "charge_cast_no": charge_cast_no or "",
+        "cdq": charge_cast_no or "",
+        "alloy": alloy or "",
+        "diameter": diameter or "",
+        "weight": weight or "",
+    }
+    if document_type == "ddt":
+        payload["supplier_order_no"] = _extract_leichtmetall_order_confirmation(lines) or ""
+    return {key: value for key, value in payload.items() if value}
+
+
+def _extract_leichtmetall_purchase_number(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bPURCHASE\s+NUMBER\s*:?\s*([0-9][0-9.+/\-\s]{1,})\b", normalized)
+        if match is not None:
+            return _normalize_leichtmetall_order_token(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_po_no(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bPO-NO\.?\s*:?\s*([0-9][0-9.+/\-\s]{1,})\b", normalized)
+        if match is not None:
+            return _normalize_leichtmetall_order_token(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_order_confirmation(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bORDER\s+CONFIRMATION\s*:?\s*([0-9][0-9./-]{3,})\b", normalized)
+        if match is not None:
+            return match.group(1).replace("/", "-")
+    return None
+
+
+def _extract_leichtmetall_charge_cast_no(lines: list[str]) -> str | None:
+    direct = _extract_anchor_value_from_lines(
+        lines,
+        anchors=("charge/ cast no", "charge/cast no", "charge / cast no", "cast no"),
+        pattern=r"\b\d{5}\b",
+        exclude_tokens=set(),
+        lookahead=6,
+    )
+    if direct is not None:
+        _, value = direct
+        return value
+    return None
+
+
+def _extract_leichtmetall_alloy(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\b(?:ALLOY|ALLOY NO\.?)\s*:?\s*(?:EN\s+AW-?)?([0-9]{4}[A-Z]?)\b", normalized)
+        if match is not None:
+            return _normalize_leichtmetall_alloy(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_diameter(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bDIAMETER\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\b", normalized)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_header_weight(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        match = re.search(r"\bQUANTITY\s*:?\s*([0-9]{1,3}(?:[.,][0-9]{3})+|\d+)\s*KG\b", normalized)
+        if match is not None:
+            return _normalize_leichtmetall_weight(match.group(1))
+    return None
+
+
+def _extract_leichtmetall_certificate_weight(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        if "WEIGHT" not in normalized and "KG" not in normalized:
+            continue
+        match = re.search(r"\bWEIGHT\s*:?\s*([0-9]{1,3}(?:[.,][0-9]{3})+|\d+)\s*KG\b", normalized)
+        if match is not None:
+            return _normalize_leichtmetall_weight(match.group(1))
+    return None
+
+
+def _normalize_leichtmetall_weight(value: str | None) -> str | None:
+    parsed = _parse_leichtmetall_weight_token(value)
+    if parsed is None:
+        return None
+    return str(parsed)
+
+
+def _normalize_leichtmetall_alloy(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    if cleaned == "7175":
+        return "7075"
+    return cleaned
+
+
+def _parse_leichtmetall_weight_token(value: str | None) -> int | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    token = cleaned.replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token):
+        return int(re.sub(r"[.,]", "", token))
+    if re.fullmatch(r"\d+", token):
+        return int(token)
+    if re.fullmatch(r"\d+[.,]\d+", token):
+        integer_part, decimal_part = re.split(r"[.,]", token, maxsplit=1)
+        if len(decimal_part) == 3:
+            return int(integer_part + decimal_part)
+    return None
+
+
+def _normalize_leichtmetall_order_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    parts = [part for part in re.split(r"\s*\+\s*", cleaned) if part]
+    return " + ".join(parts) if parts else None
 
 
 def _extract_ddt_number_from_line(line: str) -> str | None:
@@ -249,34 +398,41 @@ def _normalize_decimal_value(value: str) -> str:
 def _detect_leichtmetall_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     batch_counts: dict[str, tuple[int, int, str]] = {}
+    lines: list[str] = []
+    first_page_id = pages[0].id if pages else 0
     for page in pages:
-        for line in _page_lines(page):
+        page_lines = _page_lines(page)
+        lines.extend(page_lines)
+        for line in page_lines:
             lowered = line.casefold()
             if "ddt" not in matches:
                 match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", lowered)
                 if match is not None:
                     matches["ddt"] = _build_match(page.id, line, match.group(1))
-            if "ordine" not in matches:
-                match = re.search(r"\border\s+confirmation\s+([0-9][0-9./-]{3,})\b", lowered)
-                if match is not None:
-                    matches["ordine"] = _build_match(page.id, line, match.group(1).replace("/", "-"))
             if "diametro" not in matches:
                 match = re.search(r"\bdiameter\s+([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
                 if match is not None:
                     matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(match.group(1)))
-            if "peso" not in matches:
-                match = re.search(r"\bquantity\s*:\s*([0-9]+(?:[.,][0-9]+)?)\s*kg\b", lowered)
-                if match is not None:
-                    matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
             batch_match = re.search(r"\b(\d{5})\b\s+\d+\s*$", line)
             if batch_match is not None:
                 token = batch_match.group(1)
                 count, page_id, snippet = batch_counts.get(token, (0, page.id, line))
                 batch_counts[token] = (count + 1, page_id, snippet)
+    supplier_fields = _extract_leichtmetall_match_fields(lines, document_type="ddt")
+    if "ordine" not in matches and supplier_fields.get("customer_order_no"):
+        snippet = _find_line_containing_token(lines, "PURCHASE NUMBER") or supplier_fields["customer_order_no"]
+        matches["ordine"] = _build_match(first_page_id, snippet, supplier_fields["customer_order_no"])
+    if "lega" not in matches and supplier_fields.get("alloy"):
+        snippet = _find_line_containing_token(lines, "ALLOY") or supplier_fields["alloy"]
+        matches["lega"] = _build_match(first_page_id, snippet, supplier_fields["alloy"])
+    if "peso" not in matches and supplier_fields.get("weight"):
+        snippet = _find_line_containing_token(lines, "QUANTITY") or supplier_fields["weight"]
+        matches["peso"] = _build_match(first_page_id, snippet, supplier_fields["weight"])
     if "colata" not in matches and batch_counts:
         token, (count, page_id, snippet) = max(batch_counts.items(), key=lambda item: item[1][0])
         if count >= 2:
             matches["colata"] = _build_match(page_id, snippet, token)
+            matches["cdq"] = _build_match(page_id, snippet, token)
     return matches
 
 
@@ -566,6 +722,7 @@ def detect_certificate_core_matches(
     matches: dict[str, dict[str, str | int]] = {}
     supplier_detector = {
         "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
+        "leichtmetall": _detect_leichtmetall_certificate_core_matches,
     }.get(supplier_key)
     if supplier_detector is not None:
         matches.update(supplier_detector(pages))
@@ -584,6 +741,33 @@ def detect_certificate_core_matches(
             weight_payload = _extract_certificate_weight_payload(lines, page.id)
             if weight_payload is not None:
                 matches["peso_certificato"] = weight_payload
+    return matches
+
+
+def _detect_leichtmetall_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        supplier_fields = _extract_leichtmetall_match_fields(lines, document_type="certificato")
+        cast_value = _string_or_none(supplier_fields.get("charge_cast_no"))
+        if cast_value is not None:
+            if "colata_certificato" not in matches:
+                snippet = _find_line_containing_token(lines, "CHARGE / CAST NO") or cast_value
+                matches["colata_certificato"] = _build_match(page.id, snippet, cast_value)
+            if "numero_certificato_certificato" not in matches:
+                snippet = _find_line_containing_token(lines, "CHARGE / CAST NO") or cast_value
+                matches["numero_certificato_certificato"] = _build_match(page.id, snippet, cast_value)
+        if "lega_certificato" not in matches and supplier_fields.get("alloy"):
+            snippet = _find_line_containing_token(lines, "ALLOY") or supplier_fields["alloy"]
+            matches["lega_certificato"] = _build_match(page.id, snippet, supplier_fields["alloy"])
+        if "diametro_certificato" not in matches and supplier_fields.get("diameter"):
+            snippet = _find_line_containing_token(lines, "DIAMETER") or supplier_fields["diameter"]
+            matches["diametro_certificato"] = _build_match(page.id, snippet, supplier_fields["diameter"])
+        if "peso_certificato" not in matches and supplier_fields.get("weight"):
+            snippet = _find_line_containing_token(lines, "WEIGHT") or supplier_fields["weight"]
+            matches["peso_certificato"] = _build_match(page.id, snippet, supplier_fields["weight"])
     return matches
 
 
@@ -772,6 +956,25 @@ def extract_row_supplier_match_fields(
             "net_weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
         }
 
+    if supplier_key == "leichtmetall":
+        charge_cast = (
+            _string_or_none(row.colata)
+            or _string_or_none(ddt_values.get("colata"))
+            or _string_or_none(ddt_values.get("lot_batch_no"))
+            or _string_or_none(row.cdq)
+            or _string_or_none(ddt_values.get("cdq"))
+        )
+        return {
+            "po_no": _string_or_none(row.ordine) or _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(ddt_values.get("ordine")),
+            "customer_order_no": _string_or_none(row.ordine) or _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(ddt_values.get("ordine")),
+            "supplier_order_no": _string_or_none(ddt_values.get("supplier_order_no")),
+            "charge_cast_no": charge_cast,
+            "cdq": charge_cast,
+            "alloy": _string_or_none(row.lega_base) or _string_or_none(ddt_values.get("lega")),
+            "diameter": _string_or_none(row.diametro) or _string_or_none(ddt_values.get("diametro")),
+            "weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
+        }
+
     if supplier_key == "metalba":
         return {
             "vs_rif": _string_or_none(ddt_values.get("vs_rif")) or _string_or_none(row.ordine) or _string_or_none(ddt_values.get("ordine")),
@@ -803,6 +1006,13 @@ def score_supplier_field_matches(
     if supplier_key == "metalba":
         if same_token(ddt_supplier_fields.get("vs_rif"), certificate_supplier_fields.get("ordine_cliente")):
             add_reason(95, "Vs. Rif. / Ordine Cliente coerenti")
+    elif supplier_key == "leichtmetall":
+        if same_token(ddt_supplier_fields.get("po_no"), certificate_supplier_fields.get("po_no")):
+            add_reason(120, "PO-No coerente")
+        elif same_token(ddt_supplier_fields.get("customer_order_no"), certificate_supplier_fields.get("customer_order_no")):
+            add_reason(120, "PO-No coerente")
+        if same_token(ddt_supplier_fields.get("charge_cast_no"), certificate_supplier_fields.get("charge_cast_no")):
+            add_reason(110, "Charge/Cast coerente")
     elif supplier_key == "aww":
         if same_token(ddt_supplier_fields.get("your_part_number"), certificate_supplier_fields.get("kunden_teile_nr")):
             add_reason(110, "Your part number coerente")

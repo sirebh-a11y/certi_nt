@@ -924,6 +924,7 @@ def create_rows_from_document_split_plan(
             supplier_id=document.fornitore_id,
         )
         certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
+            db=db,
             rows=certificate_first_candidates,
             document=document,
             candidate=candidate,
@@ -999,6 +1000,17 @@ def _normalize_row_signature_token(value: str | None) -> str:
     if normalized is None:
         return ""
     return reader_normalize_match_token(normalized) or normalized.upper().strip()
+
+
+def _supplier_decimal_tokens_match(left: str | None, right: str | None) -> bool:
+    left_value = _string_or_none(left)
+    right_value = _string_or_none(right)
+    if left_value is None or right_value is None:
+        return False
+    try:
+        return abs(float(_normalize_decimal_value(left_value)) - float(_normalize_decimal_value(right_value))) < 0.0001
+    except ValueError:
+        return _normalize_row_signature_token(left_value) == _normalize_row_signature_token(right_value)
 
 
 def _split_candidate_signature_from_row(row: AcquisitionRow) -> tuple[str, str, str, str, str, str, str]:
@@ -1082,6 +1094,79 @@ def _find_existing_certificate_first_row_for_split_candidate(
     fallback_ddt: str | None,
     supplier_key: str | None,
 ) -> AcquisitionRow | None:
+    if supplier_key == "leichtmetall":
+        normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
+
+        normalized_cast = _normalize_row_signature_token(candidate.colata or candidate.cdq or candidate.lot_batch_no)
+        normalized_lega = _normalize_row_signature_token(candidate.lega)
+        normalized_diameter = _normalize_row_signature_token(candidate.diametro)
+        normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
+
+        best_row: AcquisitionRow | None = None
+        best_score = 0
+        for row in rows:
+            if row.document_ddt_id is not None:
+                continue
+            if row.fornitore_id != document.fornitore_id:
+                continue
+            if row.document_certificato_id is None:
+                continue
+
+            row_customer_order = _normalize_row_signature_token(_certificate_first_row_identity_fields(row).get("customer_order"))
+            if normalized_customer_order and row_customer_order and row_customer_order != normalized_customer_order:
+                continue
+
+            score = 160 if normalized_customer_order and row_customer_order else 0
+            material_match_count = 0
+            available_material_signals = 0
+
+            if normalized_lega:
+                available_material_signals += 1
+                row_alloy = _normalize_row_signature_token(row.lega_base)
+                if row_alloy:
+                    if row_alloy != normalized_lega:
+                        continue
+                    score += 70
+                    material_match_count += 1
+
+            if normalized_diameter:
+                available_material_signals += 1
+                row_diameter = _string_or_none(row.diametro)
+                if row_diameter:
+                    if not _supplier_decimal_tokens_match(row_diameter, candidate.diametro):
+                        continue
+                    score += 70
+                    material_match_count += 1
+
+            if normalized_cast:
+                available_material_signals += 1
+                row_cast = _normalize_row_signature_token(row.colata or row.cdq)
+                if row_cast:
+                    if row_cast != normalized_cast:
+                        continue
+                    score += 120
+                    material_match_count += 1
+
+            if normalized_peso:
+                available_material_signals += 1
+                if row.peso:
+                    if not reader_weights_are_compatible(row.peso, candidate.peso_netto):
+                        continue
+                    score += 65
+                    material_match_count += 1
+
+            required_material_matches = min(4 if not row_customer_order else 3, available_material_signals)
+            if material_match_count < required_material_matches:
+                continue
+
+            if score > best_score:
+                best_score = score
+                best_row = row
+
+        if best_score >= (260 if normalized_customer_order else 280):
+            return best_row
+        return None
+
     if supplier_key == "impol":
         candidate_packing_list = normalize_impol_packing_list_root(candidate.ddt_number or fallback_ddt)
         normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
@@ -1433,7 +1518,7 @@ def run_autonomous_processing(
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
         certificate_ai_cache: dict[int, dict[str, object]] = {}
-        if use_ai_intervention and openai_api_key:
+        if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(supplier_key):
             for certificate_document in certificate_documents:
                 template = resolve_supplier_template(
                     certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
@@ -3505,6 +3590,90 @@ def _apply_metalba_ai_candidate_to_row(
     return True
 
 
+def _apply_leichtmetall_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    raw_payload: dict[str, object] = {}
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+        try:
+            parsed_payload = json.loads(ai_candidate.ai_row_payload_raw)
+            if isinstance(parsed_payload, dict):
+                raw_payload = parsed_payload
+        except json.JSONDecodeError:
+            raw_payload = {}
+
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "ordine": ai_candidate.customer_order_no,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "supplier_order_no": ai_candidate.supplier_order_no,
+        "cdq": ai_candidate.cdq,
+        "colata": ai_candidate.colata,
+        "lot_batch_no": ai_candidate.lot_batch_no,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "peso": ai_candidate.peso_netto,
+        "purchase_number_raw": _string_or_none(raw_payload.get("purchase_number_raw")),
+        "order_confirmation_raw": _string_or_none(raw_payload.get("order_confirmation_raw")),
+    }
+
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+
+    if changed_fields == 0:
+        return False
+
+    _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
 def _apply_impol_ai_row_groups_to_rows(
     db: Session,
     *,
@@ -3716,6 +3885,120 @@ def _score_metalba_ai_group_against_row(
     if row_weight and ai_candidate.peso_netto:
         if reader_weights_are_compatible(row_weight, ai_candidate.peso_netto):
             score += 20
+        else:
+            return 0
+
+    return score
+
+
+def _apply_leichtmetall_ai_row_groups_to_rows(
+    db: Session,
+    *,
+    ddt_document: Document,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+    actor_id: int,
+) -> int:
+    if not rows or not ai_candidates:
+        return 0
+
+    pairs: list[tuple[int, int, int]] = []
+    row_value_maps = {
+        row.id: {
+            value.campo: _final_value_for_row(value)
+            for value in (
+                db.query(ReadValue)
+                .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+                .all()
+            )
+        }
+        for row in rows
+    }
+
+    for row in rows:
+        ddt_values = row_value_maps.get(row.id, {})
+        for ai_candidate in ai_candidates:
+            score = _score_leichtmetall_ai_group_against_row(
+                row=row,
+                ddt_values=ddt_values,
+                ai_candidate=ai_candidate,
+            )
+            if score >= 80:
+                pairs.append((score, row.id, ai_candidate.candidate_index))
+
+    pairs.sort(reverse=True)
+    assigned_rows: set[int] = set()
+    assigned_candidates: set[int] = set()
+    ai_by_index = {candidate.candidate_index: candidate for candidate in ai_candidates}
+    applied_rows = 0
+
+    for _, row_id, candidate_index in pairs:
+        if row_id in assigned_rows or candidate_index in assigned_candidates:
+            continue
+        row_model = next((row for row in rows if row.id == row_id), None)
+        ai_candidate = ai_by_index.get(candidate_index)
+        if row_model is None or ai_candidate is None:
+            continue
+        if _apply_leichtmetall_ai_candidate_to_row(
+            db=db,
+            row=row_model,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        ):
+            applied_rows += 1
+        assigned_rows.add(row_id)
+        assigned_candidates.add(candidate_index)
+
+    if applied_rows:
+        db.commit()
+    return applied_rows
+
+
+def _score_leichtmetall_ai_group_against_row(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    ai_candidate: ReaderRowSplitCandidateResponse,
+) -> int:
+    score = 0
+    row_order = _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(row.ordine)
+    row_batch = (
+        _string_or_none(ddt_values.get("lot_batch_no"))
+        or _string_or_none(ddt_values.get("cdq"))
+        or _string_or_none(ddt_values.get("colata"))
+        or _string_or_none(row.colata)
+        or _string_or_none(row.cdq)
+    )
+    row_diameter = _string_or_none(ddt_values.get("diametro")) or _string_or_none(row.diametro)
+    row_alloy = _string_or_none(ddt_values.get("lega")) or _string_or_none(row.lega_base)
+    row_weight = _string_or_none(ddt_values.get("peso")) or _string_or_none(row.peso)
+
+    order_match = bool(row_order and ai_candidate.customer_order_no and reader_same_token(row_order, ai_candidate.customer_order_no))
+    batch_match = bool(row_batch and (ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no) and reader_same_token(row_batch, ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no))
+
+    if row_batch and (ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no) and not batch_match:
+        return 0
+    if row_order and ai_candidate.customer_order_no and not order_match:
+        return 0
+
+    if batch_match:
+        score += 140
+    if order_match:
+        score += 80
+    if row_diameter and ai_candidate.diametro:
+        if _supplier_decimal_tokens_match(row_diameter, ai_candidate.diametro):
+            score += 30
+        else:
+            return 0
+    if row_alloy and ai_candidate.lega:
+        if reader_same_token(row_alloy, ai_candidate.lega):
+            score += 20
+        else:
+            return 0
+    if row_weight and ai_candidate.peso_netto:
+        if reader_weights_are_compatible(row_weight, ai_candidate.peso_netto):
+            score += 25
         else:
             return 0
 
@@ -3976,7 +4259,7 @@ def extract_ddt_fields_with_vision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
     supplier_key = _resolve_row_supplier_key(row)
-    if supplier_key in {"aluminium_bozen", "impol", "metalba"}:
+    if supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}:
         sibling_rows = (
             db.query(AcquisitionRow)
             .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
@@ -3999,6 +4282,14 @@ def extract_ddt_fields_with_vision(
             )
         elif supplier_key == "metalba":
             _apply_metalba_ai_row_groups_to_rows(
+                db=db,
+                ddt_document=ddt_document,
+                rows=sibling_rows,
+                ai_candidates=ai_candidates,
+                actor_id=actor_id,
+            )
+        elif supplier_key == "leichtmetall":
+            _apply_leichtmetall_ai_row_groups_to_rows(
                 db=db,
                 ddt_document=ddt_document,
                 rows=sibling_rows,
@@ -4867,7 +5158,7 @@ def _ensure_certificate_first_rows(
             certificate_document.nome_file_originale,
         )
         supplier_key = template.supplier_key if template is not None else None
-        if supplier_key not in {"aluminium_bozen", "impol", "metalba"}:
+        if supplier_key not in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}:
             continue
 
         if use_ai_intervention and openai_api_key:
@@ -4917,7 +5208,11 @@ def _ensure_certificate_first_rows(
             certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
             certificate_article = _string_or_none(supplier_fields.get("article")) or _string_or_none(supplier_fields.get("product_code"))
             certificate_profile_code = _string_or_none(supplier_fields.get("profile_code")) or _string_or_none(supplier_fields.get("customer_code"))
-            certificate_customer_order = _string_or_none(supplier_fields.get("customer_order_normalized")) or _string_or_none(supplier_fields.get("customer_order_no"))
+            certificate_customer_order = (
+                _string_or_none(supplier_fields.get("customer_order_normalized"))
+                or _string_or_none(supplier_fields.get("customer_order_no"))
+                or _string_or_none(supplier_fields.get("po_no"))
+            )
             certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
             certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
 
@@ -5009,7 +5304,7 @@ def _ensure_certificate_first_rows(
                 diametro=certificate_diameter,
                 colata=certificate_cast,
                 peso=certificate_weight,
-                ordine=None,
+                ordine=certificate_customer_order if supplier_key == "leichtmetall" else None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -5131,8 +5426,6 @@ def _find_existing_impol_row_for_certificate(
         return None
 
     normalized_customer_order = reader_normalize_match_token(customer_order)
-    if not normalized_customer_order:
-        return None
 
     normalized_alloy = reader_normalize_match_token(alloy)
     normalized_diameter = reader_normalize_match_token(diameter)
@@ -5316,6 +5609,104 @@ def _find_existing_metalba_row_for_certificate(
     return None
 
 
+def _find_existing_leichtmetall_row_for_certificate(
+    *,
+    rows: list[AcquisitionRow],
+    customer_order: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    cast: str | None,
+    weight: str | None,
+) -> AcquisitionRow | None:
+    if not rows:
+        return None
+
+    normalized_customer_order = reader_normalize_match_token(customer_order)
+    if not normalized_customer_order:
+        return None
+
+    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_diameter = reader_normalize_match_token(diameter)
+    normalized_cast = reader_normalize_match_token(cast)
+
+    best_row: AcquisitionRow | None = None
+    best_score = 0
+
+    for row in rows:
+        if row.document_ddt_id is None:
+            continue
+
+        ddt_values = {
+            value.campo: _final_value_for_row(value)
+            for value in row.values
+            if value.blocco == "ddt"
+        }
+        supplier_fields = reader_extract_row_supplier_match_fields(
+            row=row,
+            ddt_values=ddt_values,
+            supplier_key="leichtmetall",
+        )
+
+        row_customer_order = reader_normalize_match_token(
+            supplier_fields.get("po_no") or supplier_fields.get("customer_order_no") or row.ordine
+        )
+        if normalized_customer_order and row_customer_order and row_customer_order != normalized_customer_order:
+            continue
+
+        score = 160 if normalized_customer_order and row_customer_order else 0
+        material_match_count = 0
+        available_material_signals = 0
+
+        if normalized_alloy:
+            available_material_signals += 1
+            row_alloy = reader_normalize_match_token(row.lega_base)
+            if row_alloy:
+                if row_alloy != normalized_alloy:
+                    continue
+                score += 70
+                material_match_count += 1
+
+        if normalized_diameter:
+            available_material_signals += 1
+            row_diameter = _string_or_none(row.diametro)
+            if row_diameter:
+                if not _supplier_decimal_tokens_match(row_diameter, diameter):
+                    continue
+                score += 70
+                material_match_count += 1
+
+        if normalized_cast:
+            available_material_signals += 1
+            row_cast = reader_normalize_match_token(
+                supplier_fields.get("charge_cast_no") or row.colata or row.cdq
+            )
+            if row_cast:
+                if row_cast != normalized_cast:
+                    continue
+                score += 120
+                material_match_count += 1
+
+        if _string_or_none(weight):
+            available_material_signals += 1
+            if row.peso:
+                if not reader_weights_are_compatible(row.peso, weight):
+                    continue
+                score += 65
+                material_match_count += 1
+
+        required_material_matches = min(4 if not (normalized_customer_order and row_customer_order) else 3, available_material_signals)
+        if material_match_count < required_material_matches:
+            continue
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= (260 if normalized_customer_order else 280):
+        return best_row
+    return None
+
+
 def _find_existing_row_for_certificate(
     db: Session,
     *,
@@ -5359,6 +5750,15 @@ def _find_existing_row_for_certificate(
             packing_list=packing_list,
             supplier_order=supplier_order,
             product_code=article,
+        )
+    if supplier_key == "leichtmetall":
+        return _find_existing_leichtmetall_row_for_certificate(
+            rows=candidate_rows,
+            customer_order=customer_order,
+            alloy=alloy,
+            diameter=diameter,
+            cast=cast,
+            weight=weight,
         )
     if supplier_key == "metalba":
         return _find_existing_metalba_row_for_certificate(
@@ -5427,7 +5827,9 @@ def _certificate_first_row_identity_fields(row: AcquisitionRow) -> dict[str, str
         "profile_code": _string_or_none(ddt_values.get("profile_code"))
         or _string_or_none(ddt_values.get("customer_code"))
         or _string_or_none(match_values.get("codice_cliente_certificato")),
-        "customer_order": _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(match_values.get("ordine_cliente_certificato")),
+        "customer_order": _string_or_none(ddt_values.get("customer_order_no"))
+        or _string_or_none(match_values.get("ordine_cliente_certificato"))
+        or _string_or_none(row.ordine),
     }
 
 
@@ -5753,9 +6155,11 @@ def _score_certificate_candidate(
             and reader_normalize_match_token(row.colata) == reader_normalize_match_token(certificate_cast)
         )
         diameter_match = bool(
-            reader_normalize_match_token(row.diametro)
-            and reader_normalize_match_token(row.diametro)
-            == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
+            _string_or_none(row.diametro)
+            and _supplier_decimal_tokens_match(
+                row.diametro,
+                _string_or_none(matches.get("diametro_certificato", {}).get("final")),
+            )
         )
         alloy_match = bool(
             reader_normalize_match_token(row.lega_base)
@@ -5782,6 +6186,52 @@ def _score_certificate_candidate(
         if not customer_order_match:
             return None
         if strong_row_match_count < 3:
+            return None
+    elif supplier_key == "leichtmetall":
+        certificate_order_token = reader_normalize_match_token(
+            certificate_supplier_fields.get("po_no") or certificate_supplier_fields.get("customer_order_no")
+        )
+        ddt_order_token = reader_normalize_match_token(
+            ddt_supplier_fields.get("po_no") or ddt_supplier_fields.get("customer_order_no")
+        )
+        customer_order_match = bool(
+            ddt_order_token
+            and certificate_order_token
+            and ddt_order_token == certificate_order_token
+        )
+        cast_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("charge_cast_no") or row.colata or row.cdq)
+            and reader_normalize_match_token(ddt_supplier_fields.get("charge_cast_no") or row.colata or row.cdq)
+            == reader_normalize_match_token(certificate_supplier_fields.get("charge_cast_no") or certificate_cast)
+        )
+        diameter_match = bool(
+            reader_normalize_match_token(row.diametro)
+            and reader_normalize_match_token(row.diametro)
+            == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
+        )
+        alloy_match = bool(
+            reader_normalize_match_token(row.lega_base)
+            and reader_normalize_match_token(row.lega_base)
+            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
+        )
+        weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
+        strong_mismatch = False
+        if row.ordine and (certificate_supplier_fields.get("po_no") or certificate_supplier_fields.get("customer_order_no")) and not customer_order_match:
+            strong_mismatch = True
+        if (row.colata or row.cdq) and (certificate_supplier_fields.get("charge_cast_no") or certificate_cast) and not cast_match:
+            strong_mismatch = True
+        if row.diametro and _string_or_none(matches.get("diametro_certificato", {}).get("final")) and not diameter_match:
+            strong_mismatch = True
+        if row.lega_base and _string_or_none(matches.get("lega_certificato", {}).get("final")) and not alloy_match:
+            strong_mismatch = True
+        if row.peso and certificate_weight and not weight_match:
+            strong_mismatch = True
+        if strong_mismatch:
+            return None
+        if certificate_order_token and not customer_order_match:
+            return None
+        required_material_matches = 3 if customer_order_match else 4
+        if sum(1 for flag in (cast_match, diameter_match, alloy_match, weight_match) if flag) < required_material_matches:
             return None
     elif supplier_key == "metalba":
         order_match = bool(
@@ -6070,6 +6520,8 @@ def _row_ddt_field_value(row: AcquisitionRow, field: str) -> str | None:
 def _ddt_required_fields(supplier_key: str | None = None) -> tuple[str, ...]:
     if supplier_key == "impol":
         return ("ddt", "lega", "colata", "diametro", "peso", "ordine")
+    if supplier_key == "leichtmetall":
+        return ("ddt", "lega", "colata", "diametro", "peso", "ordine")
     if supplier_key == "metalba":
         return ("ddt", "lega", "diametro", "peso", "ordine")
     if supplier_key == "aluminium_bozen":
@@ -6079,6 +6531,8 @@ def _ddt_required_fields(supplier_key: str | None = None) -> tuple[str, ...]:
 
 def _ddt_optional_fields(supplier_key: str | None = None) -> tuple[str, ...]:
     if supplier_key == "impol":
+        return ("cdq", "numero_certificato_ddt")
+    if supplier_key == "leichtmetall":
         return ("cdq", "numero_certificato_ddt")
     if supplier_key == "metalba":
         return ("colata", "cdq", "numero_certificato_ddt")
@@ -6398,6 +6852,10 @@ def _build_certificate_safe_crops(
             return specialized
     if supplier_key == "metalba":
         specialized = _build_metalba_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
+    if supplier_key == "leichtmetall":
+        specialized = _build_leichtmetall_certificate_safe_crops(pages)
         if specialized:
             return specialized
 
@@ -6789,6 +7247,53 @@ def _build_metalba_certificate_masked_page(image: Image.Image) -> Image.Image:
     return masked
 
 
+def _build_leichtmetall_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_leichtmetall_certificate_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"leichtmetall_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("core_page", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_leichtmetall_certificate_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_leichtmetall_customer_occurrence_blocks(masked, lines)
+    _mask_leichtmetall_supplier_occurrence_blocks(masked, lines)
+    return masked
+
+
 def _extract_ocr_line_blocks(image: Image.Image) -> list[dict[str, int | str]]:
     try:
         data = pytesseract.image_to_data(image, lang="eng+ita+deu", output_type=pytesseract.Output.DICT)
@@ -7066,6 +7571,113 @@ def _mask_metalba_supplier_occurrence_blocks(
                 bottom_extra=max(18, image.height // 60),
                 left_extra=max(10, image.width // 120),
                 right_extra=max(16, image.width // 80),
+            )
+
+
+def _mask_leichtmetall_customer_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "PURCHASE NUMBER",
+        "ORDER CONFIRMATION",
+        "PO-NO",
+        "CHARGE",
+        "CAST NO",
+        "CHEMICAL",
+        "MECHANICAL",
+        "QUANTITY",
+        "BATCH",
+        "ALLOY",
+        "DIAMETER",
+    )
+    candidates = [
+        line
+        for line in lines
+        if "FORGIALLUMINIO" in str(line["text"]).upper()
+        and not any(term in str(line["text"]).upper() for term in stop_terms)
+    ]
+    if not candidates:
+        return
+    for start_line in candidates:
+        left = int(start_line["left"])
+        if left <= int(image.width * 0.55):
+            left_limit = 0
+            right_limit = min(image.width - 1, int(image.width * 0.64))
+        else:
+            left_limit = max(0, left - image.width // 14)
+            right_limit = min(image.width - 1, int(start_line["right"]) + image.width // 8)
+        cluster = _collect_occurrence_cluster(
+            image,
+            lines,
+            start_line,
+            stop_terms=stop_terms,
+            stop_on_label=True,
+            max_preceding_lines=1,
+            max_following_lines=8,
+            left_limit=left_limit,
+            right_limit=right_limit,
+            max_vertical_gap=max(30, image.height // 24),
+        )
+        if cluster:
+            _mask_line_cluster(
+                image,
+                cluster,
+                left_limit=left_limit,
+                right_limit=right_limit,
+                top_extra=max(8, image.height // 110),
+                bottom_extra=max(18, image.height // 60),
+            )
+
+
+def _mask_leichtmetall_supplier_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "PURCHASE NUMBER",
+        "ORDER CONFIRMATION",
+        "PO-NO",
+        "CHARGE",
+        "CAST NO",
+        "CHEMICAL",
+        "MECHANICAL",
+        "QUANTITY",
+        "BATCH",
+        "ALLOY",
+        "DIAMETER",
+    )
+    candidates = [
+        line
+        for line in lines
+        if ("LEICHTMETALL" in str(line["text"]).upper() or "HANNOVER" in str(line["text"]).upper())
+        and int(line["top"]) <= int(image.height * 0.42)
+    ]
+    if not candidates:
+        return
+    for start_line in candidates:
+        left_limit = 0 if int(start_line["left"]) <= int(image.width * 0.55) else max(0, int(start_line["left"]) - image.width // 14)
+        right_limit = min(image.width - 1, max(int(image.width * 0.52), int(start_line["right"]) + image.width // 10))
+        cluster = _collect_occurrence_cluster(
+            image,
+            lines,
+            start_line,
+            stop_terms=stop_terms,
+            stop_on_label=True,
+            max_preceding_lines=1,
+            max_following_lines=9,
+            left_limit=left_limit,
+            right_limit=right_limit,
+            max_vertical_gap=max(32, image.height // 22),
+        )
+        if cluster:
+            _mask_line_cluster(
+                image,
+                cluster,
+                left_limit=left_limit,
+                right_limit=right_limit,
+                top_extra=max(8, image.height // 110),
+                bottom_extra=max(18, image.height // 60),
             )
 
 
@@ -8447,6 +9059,283 @@ def _sanitize_metalba_ai_row_groups(
     return sanitized_rows
 
 
+def _extract_leichtmetall_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_leichtmetall_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare Leichtmetall DDT row-group crops for AI",
+        )
+
+    local_plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
+    fallback_ddt = next(
+        (_string_or_none(candidate.ddt_number) for candidate in local_plan.row_split_candidates if candidate.ddt_number),
+        None,
+    )
+    if fallback_ddt is None:
+        local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="leichtmetall")
+        fallback_ddt = _split_plan_match_value(local_matches, "ddt")
+
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_leichtmetall_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_leichtmetall_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
+def _build_leichtmetall_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_leichtmetall_ddt_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"leichtmetall_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_leichtmetall_ddt_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_leichtmetall_customer_occurrence_blocks(masked, lines)
+    _mask_leichtmetall_supplier_occurrence_blocks(masked, lines)
+    return masked
+
+
+def _extract_leichtmetall_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un documento tecnico di trasporto Leichtmetall e ricostruisci tutte le righe logiche materiale presenti. "
+                "Questo DDT puo richiedere piu certificati: se in pagina 2 esistono piu batch o gruppi con peso netto diverso, restituisci una riga logica separata per ogni gruppo batch. "
+                "Non unire batch diversi nella stessa riga. Non fare il match con nessun certificato e non normalizzare i valori. "
+                "Per l'ordine utile al match usa il valore del campo Purchase Number. "
+                "Order Confirmation e solo un riferimento di supporto e non sostituisce Purchase Number. "
+                "Se alloy, diameter o Purchase Number sono condivisi da tutto il documento, ripetili in ogni riga batch interessata. "
+                "ddt_number_raw deve essere il numero del DDT. "
+                "purchase_number_raw deve essere il valore raw del campo Purchase Number. "
+                "order_confirmation_raw deve essere il valore raw del campo Order Confirmation. "
+                "alloy_raw deve essere la lega materiale del documento o della stessa riga batch, quando visibile. "
+                "diameter_raw deve essere il diametro del materiale, quando visibile. "
+                "batch_raw deve essere il batch della stessa riga logica, letto dal gruppo pagina 2. "
+                "net_weight_raw deve essere il peso netto del gruppo batch della stessa riga logica. "
+                "Usa solo testo realmente visibile. Non inventare, non inferire e non usare nome file o conoscenza esterna. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"purchase_number_raw\":\"string|null\",\"order_confirmation_raw\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"batch_raw\":\"string|null\","
+                "\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{encoded}",
+                "detail": "high",
+            }
+        )
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Leichtmetall DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_leichtmetall_row_groups(response.output_text), response.output_text)
+
+
+def _parse_openai_json_payload_for_leichtmetall_row_groups(
+    payload: str,
+) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Leichtmetall DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Leichtmetall DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Leichtmetall DDT row-group AI payload")
+
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Leichtmetall DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        raw_row_index = raw_row.get("row_index")
+        try:
+            normalized_row_index = int(raw_row_index) if raw_row_index is not None else index
+        except (TypeError, ValueError):
+            normalized_row_index = index
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (
+                _string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else [])
+            )
+            if item is not None
+        ]
+        normalized_rows.append(
+            {
+                "row_index": normalized_row_index,
+                "purchase_number_raw": _string_or_none(raw_row.get("purchase_number_raw")),
+                "order_confirmation_raw": _string_or_none(raw_row.get("order_confirmation_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "batch_raw": _string_or_none(raw_row.get("batch_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+
+    return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _sanitize_leichtmetall_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
+) -> list[ReaderRowSplitCandidateResponse]:
+    sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
+    normalized_ddt = _sanitize_leichtmetall_ddt_number_candidate(ddt_number_raw)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        purchase_number_raw = _string_or_none(raw_row.get("purchase_number_raw"))
+        order_confirmation_raw = _string_or_none(raw_row.get("order_confirmation_raw"))
+        alloy_raw = _string_or_none(raw_row.get("alloy_raw"))
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
+        batch_raw = _string_or_none(raw_row.get("batch_raw"))
+        net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
+        source_crops = cast(list[str], raw_row.get("source_crops") or [])
+
+        order_value = _normalize_leichtmetall_order_token(purchase_number_raw)
+        batch_value = _normalize_leichtmetall_batch_token(batch_raw)
+        alloy_value = _normalize_leichtmetall_alloy_from_text(alloy_raw)
+        diameter_value = _normalize_leichtmetall_diameter_from_text(diameter_raw)
+        weight_value = _normalize_value_for_field("ddt", "peso", net_weight_raw)
+
+        raw_payload = dict(raw_row)
+        raw_payload["purchase_number_raw"] = purchase_number_raw
+        raw_payload["order_confirmation_raw"] = order_confirmation_raw
+
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="leichtmetall",
+            ddt_number=normalized_ddt,
+            cdq=batch_value,
+            customer_order_no=order_value,
+            supplier_order_no=_string_or_none(order_confirmation_raw),
+            lega=alloy_value,
+            diametro=diameter_value,
+            peso_netto=weight_value,
+            colata=batch_value,
+            lot_batch_no=batch_value,
+            snippets=source_crops[:6],
+            ai_row_payload_raw=json.dumps(raw_payload, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in (
+                "ddt_number",
+                "customer_order_no",
+                "cdq",
+                "lega",
+                "diametro",
+                "peso_netto",
+                "colata",
+            )
+        ):
+            sanitized_rows.append(candidate)
+
+    return sanitized_rows
+
+
+def _sanitize_leichtmetall_ddt_number_candidate(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{7,9})\b", cleaned)
+    if match is not None:
+        return match.group(1)
+    return _sanitize_ddt_number_candidate(value, None)
+
+
 def _sanitize_metalba_ddt_number_candidate(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
@@ -8476,6 +9365,48 @@ def _normalize_metalba_diameter_from_text(value: str | None) -> str | None:
     if match is None:
         return None
     return _normalize_numeric_value(match.group(1))
+
+
+def _normalize_leichtmetall_alloy_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"\s+", " ", cleaned.upper()).strip()
+    match = re.search(r"\b([1-9][0-9]{3}[A-Z]?)\b", normalized)
+    if match is None:
+        return None
+    alloy = match.group(1)
+    return "7075" if alloy == "7175" else alloy
+
+
+def _normalize_leichtmetall_diameter_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(?:DIA(?:METER)?|Ø)\s*([0-9]+(?:[.,][0-9]+)?)\b", cleaned.upper())
+    if match is not None:
+        return _normalize_numeric_value(match.group(1))
+    short_match = re.search(r"\b([0-9]{2,4}(?:[.,][0-9]+)?)\b", cleaned)
+    if short_match is None:
+        return None
+    return _normalize_numeric_value(short_match.group(1))
+
+
+def _normalize_leichtmetall_order_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    parts = [part.strip() for part in re.split(r"\s*\+\s*", cleaned) if part.strip()]
+    return " + ".join(parts) if parts else None
+
+
+def _normalize_leichtmetall_batch_token(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(
+        value,
+        value,
+        r"\b\d{5,6}\b",
+        disallow={"10204"},
+    )
 
 
 def _normalize_aluminium_bozen_measured_rows_payload(
@@ -8521,6 +9452,245 @@ def _normalize_aluminium_bozen_measured_rows_payload(
             "method": "chatgpt",
         }
     return normalized
+
+
+def _get_leichtmetall_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="leichtmetall")
+    page_images = _select_leichtmetall_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    raw_payload = _extract_leichtmetall_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
+    )
+    payload = _normalize_leichtmetall_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _select_leichtmetall_certificate_document_images(
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    return _select_impol_certificate_document_images(crops)
+
+
+def _extract_leichtmetall_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato materiale Leichtmetall. "
+                "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica, proprieta meccaniche e note tecniche rilevanti. "
+                "Presta particolare attenzione a PO-No., Charge / Cast No, alloy, diameter e weight. "
+                "Per questo fornitore la Charge / Cast No del certificato puo essere trattata anche come cdq. "
+                "Usa solo testo realmente visibile nel documento. Non inventare, non inferire, non normalizzare. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Campi core da estrarre. "
+                "numero_certificato: per questo fornitore usa il valore di Charge / Cast No, che puo essere trattato anche come cdq. "
+                "ordine_cliente: estrai il valore del campo PO-No. "
+                "articolo: usa null se non esiste un vero codice articolo distinto. "
+                "lega: estrai la lega materiale. "
+                "descrizione_profilo_cliente: usa null se non esiste un campo separato equivalente. "
+                "colata: estrai il valore del campo Charge / Cast No. "
+                "peso_netto: estrai il weight netto della riga materiale. "
+                "Campi runtime di supporto da estrarre inoltre. "
+                "po_no: estrai il valore raw del campo PO-No. "
+                "charge_cast_no: estrai il valore raw del campo Charge / Cast No. "
+                "alloy_raw: estrai il valore raw della lega. "
+                "diameter_raw: estrai il diametro raw del materiale. "
+                "weight_raw: estrai il peso raw del materiale. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
+                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
+                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
+                "\"po_no\":\"string|null\",\"charge_cast_no\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
+                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
+                "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Image label: {image_label}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Leichtmetall certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_leichtmetall_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_leichtmetall_vision_certificate_fields(core_payload, next(iter(page_images.keys()), None))
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": next(iter(page_images.keys()), None),
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            next(iter(page_images.keys()), "page1"): {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+
+    measured_rows_payload = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows_payload if isinstance(measured_rows_payload, list) else [],
+        page_id=first_page_id,
+    )
+
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    po_no_raw = _string_or_none(core_payload.get("po_no")) or _string_or_none(core_payload.get("ordine_cliente"))
+    charge_cast_raw = _string_or_none(core_payload.get("charge_cast_no")) or _string_or_none(core_payload.get("colata"))
+    alloy_raw = _string_or_none(core_payload.get("alloy_raw")) or _string_or_none(core_payload.get("lega"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw"))
+    weight_raw = _string_or_none(core_payload.get("weight_raw")) or _string_or_none(core_payload.get("peso_netto"))
+
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in core_fields.items()
+        },
+        "supplier_fields": {
+            "po_no": _normalize_leichtmetall_order_token(po_no_raw),
+            "customer_order_no": _normalize_leichtmetall_order_token(po_no_raw),
+            "charge_cast_no": _normalize_leichtmetall_batch_token(charge_cast_raw),
+            "alloy": _normalize_leichtmetall_alloy_from_text(alloy_raw),
+            "diameter": _normalize_leichtmetall_diameter_from_text(diameter_raw),
+            "weight": _normalize_numeric_value(weight_raw),
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_leichtmetall_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    order_raw = _string_or_none(core_payload.get("po_no")) or _string_or_none(core_payload.get("ordine_cliente"))
+    cast_raw = _string_or_none(core_payload.get("charge_cast_no")) or _string_or_none(core_payload.get("colata"))
+    alloy_raw = _string_or_none(core_payload.get("alloy_raw")) or _string_or_none(core_payload.get("lega"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw"))
+    weight_raw = _string_or_none(core_payload.get("weight_raw")) or _string_or_none(core_payload.get("peso_netto"))
+
+    def _payload(value: str | None) -> dict[str, str | None]:
+        return {"value": value, "evidence": value, "source_crop": source_crop}
+
+    normalized_order = _normalize_leichtmetall_order_token(order_raw)
+    normalized_cast = _normalize_leichtmetall_batch_token(cast_raw)
+    normalized_alloy = _normalize_leichtmetall_alloy_from_text(alloy_raw)
+    normalized_diameter = _normalize_leichtmetall_diameter_from_text(diameter_raw)
+    normalized_weight = _normalize_numeric_value(weight_raw)
+
+    return {
+        "numero_certificato_certificato": _payload(normalized_cast),
+        "ordine_cliente_certificato": _payload(normalized_order),
+        "articolo_certificato": _payload(None),
+        "codice_cliente_certificato": _payload(None),
+        "lega_certificato": _payload(normalized_alloy),
+        "descrizione_profilo_cliente_certificato": _payload(None),
+        "colata_certificato": _payload(normalized_cast),
+        "peso_certificato": _payload(normalized_weight),
+        "diametro_certificato": _payload(normalized_diameter),
+    }
 
 
 def _apply_aluminium_bozen_certificate_ai_payload(
@@ -8616,7 +9786,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
-    return supplier_key in {"aluminium_bozen", "impol", "metalba"}
+    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}
 
 
 def _get_supplier_certificate_ai_payload(
@@ -8643,6 +9813,13 @@ def _get_supplier_certificate_ai_payload(
         )
     if supplier_key == "metalba":
         return _get_metalba_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    if supplier_key == "leichtmetall":
+        return _get_leichtmetall_certificate_ai_payload(
             db=db,
             certificate_document=certificate_document,
             openai_api_key=openai_api_key,
@@ -8682,6 +9859,12 @@ def _extract_supplier_ddt_row_groups_with_vision(
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
         )
+    if supplier_key == "leichtmetall":
+        return _extract_leichtmetall_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
     return []
 
 
@@ -8703,6 +9886,14 @@ def _apply_supplier_ai_candidate_to_row(
         )
     if ai_candidate.supplier_key == "metalba":
         return _apply_metalba_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
+    if ai_candidate.supplier_key == "leichtmetall":
+        return _apply_leichtmetall_ai_candidate_to_row(
             db=db,
             row=row,
             ai_candidate=ai_candidate,
@@ -9519,36 +10710,44 @@ def _normalize_decimal_value(value: str) -> str:
 def _detect_leichtmetall_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     batch_counts: dict[str, tuple[int, int, str]] = {}
+    lines: list[str] = []
+    first_page_id = pages[0].id if pages else 0
     for page in pages:
-        for line in _page_lines(page):
+        page_lines = _page_lines(page)
+        lines.extend(page_lines)
+        for line in page_lines:
             lowered = line.casefold()
             if "ddt" not in matches:
                 match = re.search(r"\b(?:delivery\s+note|beleg)\s*:?\s*([0-9]{5,})\b", lowered)
                 if match is not None:
                     matches["ddt"] = _build_match(page.id, line, match.group(1))
-            if "ordine" not in matches:
-                match = re.search(r"\border\s+confirmation\s+([0-9][0-9./-]{3,})\b", lowered)
-                if match is not None:
-                    matches["ordine"] = _build_match(page.id, line, match.group(1).replace("/", "-"))
             if "diametro" not in matches:
                 match = re.search(r"\bdiameter\s+([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
                 if match is not None:
                     matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(match.group(1)))
-            if "peso" not in matches:
-                match = re.search(r"\bquantity\s*:\s*([0-9]+(?:[.,][0-9]+)?)\s*kg\b", lowered)
-                if match is not None:
-                    matches["peso"] = _build_match(page.id, line, _normalize_weight(match.group(1)))
-
             batch_match = re.search(r"\b(\d{5})\b\s+\d+\s*$", line)
             if batch_match is not None:
                 token = batch_match.group(1)
                 count, page_id, snippet = batch_counts.get(token, (0, page.id, line))
                 batch_counts[token] = (count + 1, page_id, snippet)
 
+    supplier_fields = reader_extract_supplier_match_fields(
+        pages,
+        "leichtmetall",
+        "ddt",
+    )
+    if "ordine" not in matches and supplier_fields.get("customer_order_no"):
+        snippet = next((line for line in lines if "PURCHASE NUMBER" in line.upper()), supplier_fields["customer_order_no"])
+        matches["ordine"] = _build_match(first_page_id, snippet, supplier_fields["customer_order_no"])
+    if "peso" not in matches and supplier_fields.get("weight"):
+        snippet = next((line for line in lines if "QUANTITY" in line.upper()), supplier_fields["weight"])
+        matches["peso"] = _build_match(first_page_id, snippet, supplier_fields["weight"])
+
     if "colata" not in matches and batch_counts:
         token, (count, page_id, snippet) = max(batch_counts.items(), key=lambda item: item[1][0])
         if count >= 2:
             matches["colata"] = _build_match(page_id, snippet, token)
+            matches["cdq"] = _build_match(page_id, snippet, token)
     return matches
 
 
