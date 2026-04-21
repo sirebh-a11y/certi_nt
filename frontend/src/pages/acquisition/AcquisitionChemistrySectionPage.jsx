@@ -154,7 +154,7 @@ function sourceLabel(value, field, draft) {
 
 function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, onCaptureValue, token }) {
   const [pageImages, setPageImages] = useState([]);
-  const [zoom, setZoom] = useState(125);
+  const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
 
@@ -272,7 +272,7 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
         </div>
       </div>
 
-      <div className="h-[50vh] overflow-auto rounded-2xl border border-border bg-slate-50 p-3">
+      <div className="h-[43vh] overflow-auto rounded-2xl border border-border bg-slate-50 p-3">
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
@@ -285,7 +285,7 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
                   className={`block rounded-xl border border-slate-200 bg-white shadow-sm ${captureField ? "cursor-crosshair" : "cursor-default"}`}
                   onClick={(event) => handlePageClick(page, event)}
                   src={page.src}
-                  style={{ maxWidth: "none", width: `${zoom}%` }}
+                  style={{ width: `${zoom}%`, minWidth: "100%" }}
                 />
                 {captureBusyPageId === page.id ? (
                   <p className="mt-2 text-center text-xs font-medium text-sky-700">Cattura in corso...</p>
