@@ -315,6 +315,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [captureField, setCaptureField] = useState("");
+  const [tableCaptureActive, setTableCaptureActive] = useState(false);
 
   useEffect(() => {
     setDraft(initialDraft);
@@ -345,6 +346,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setDraft(initialDraft);
     setError("");
     setCaptureField("");
+    setTableCaptureActive(false);
   }
 
   function handleCaptureValue(field, value) {
@@ -437,7 +439,13 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   function handleToggleCapture(field) {
+    setTableCaptureActive(false);
     setCaptureField((current) => (current === field ? "" : field));
+  }
+
+  function handleToggleTableCapture() {
+    setCaptureField("");
+    setTableCaptureActive((current) => !current);
   }
 
   return (
@@ -451,14 +459,33 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       />
 
       <div className="rounded-2xl border border-border bg-white p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">Workspace Chimica</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Modifichi tutta la pagina in bozza e confermi solo alla fine. I valori iniziali sono quelli persistiti quando entri.
-            </p>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
+            <div className="flex min-h-[72px] min-w-[178px] flex-col justify-center rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+              <p className="text-[11px] font-semibold text-sky-700">Tabella</p>
+              <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-sky-700">
+                Cattura un rettangolo sopra la tabella chimica completa.
+              </p>
+              <button
+                className={`mt-2 w-full rounded-md border px-2 py-2 text-xs font-semibold transition ${
+                  tableCaptureActive
+                    ? "border-sky-400 bg-sky-200 text-sky-800"
+                    : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
+                }`}
+                onClick={handleToggleTableCapture}
+                type="button"
+              >
+                {tableCaptureActive ? "Cattura tabella attiva" : "Cattura tabella"}
+              </button>
+            </div>
+            <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <h3 className="text-base font-semibold text-slate-900">Workspace Chimica</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Modifichi tutta la pagina in bozza e confermi solo alla fine. I valori iniziali sono quelli persistiti quando entri.
+              </p>
+            </div>
           </div>
-        <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2 xl:self-center">
             <button
               className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={!hasUnsavedChanges || submitting}
@@ -488,7 +515,9 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         <div className="mt-3 min-h-[44px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="flex min-h-[28px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
             <div className="min-w-0 text-sm font-medium text-sky-700">
-              {captureField ? (
+              {tableCaptureActive ? (
+                <span>Cattura tabella attiva: il prossimo passo sarà selezionare un rettangolo sulla tabella chimica.</span>
+              ) : captureField ? (
                 <span>Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.</span>
               ) : (
                 <span className="invisible">Cattura attiva: spazio riservato.</span>
