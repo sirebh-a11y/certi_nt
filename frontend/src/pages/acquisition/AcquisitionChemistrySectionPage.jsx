@@ -30,8 +30,6 @@ const DERIVED_FIELDS = {
   "Bi+Pb": ["Bi", "Pb"],
 };
 
-const BASE_CHEMISTRY_FIELDS = CHEMISTRY_FIELD_ORDER.filter((field) => !Object.prototype.hasOwnProperty.call(DERIVED_FIELDS, field));
-
 function normalizeDisplayValue(value) {
   return (value || "").trim();
 }
@@ -154,51 +152,103 @@ function sourceLabel(value, field, draft) {
   return value.fonte_documentale || "manuale";
 }
 
-function ChemistryPdfPanel({ certificateDocument, token }) {
-  const [pdfUrl, setPdfUrl] = useState("");
+function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, onCaptureValue, token }) {
+  const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(125);
   const [error, setError] = useState("");
+  const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
 
   useEffect(() => {
     let ignore = false;
-    let objectUrl = "";
+    const objectUrls = [];
 
-    async function loadPdf() {
-      if (!certificateDocument?.file_url) {
-        setPdfUrl("");
+    async function loadPageImages() {
+      const pages = (certificateDocument?.pages || []).filter((page) => page.image_url);
+      if (!pages.length) {
+        setPageImages([]);
         return;
       }
       try {
-        const blob = await fetchApiBlob(certificateDocument.file_url, token);
-        objectUrl = URL.createObjectURL(blob);
+        const loadedPages = await Promise.all(
+          pages.map(async (page) => {
+            const blob = await fetchApiBlob(page.image_url, token);
+            const objectUrl = URL.createObjectURL(blob);
+            objectUrls.push(objectUrl);
+            return {
+              id: page.id,
+              numero_pagina: page.numero_pagina,
+              src: objectUrl,
+            };
+          }),
+        );
         if (!ignore) {
-          setPdfUrl(objectUrl);
+          setPageImages(loadedPages);
           setError("");
         }
       } catch (requestError) {
         if (!ignore) {
+          setPageImages([]);
           setError(requestError.message);
         }
       }
     }
 
-    loadPdf();
+    loadPageImages();
 
     return () => {
       ignore = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [certificateDocument, token]);
 
-  const pdfSrc = pdfUrl ? `${pdfUrl}#view=FitH&zoom=${zoom}` : "";
+  async function handlePageClick(page, event) {
+    if (!captureField) {
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+    const xRatio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
+    const yRatio = Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1);
+
+    setCaptureBusyPageId(page.id);
+    setError("");
+    try {
+      const capture = await apiRequest(
+        `/acquisition/document-pages/${page.id}/chemistry-capture`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            x_ratio: xRatio,
+            y_ratio: yRatio,
+          }),
+        },
+        token,
+      );
+
+      if (!capture?.value) {
+        const message = "Nessun valore chimico leggibile vicino al punto cliccato.";
+        setError(message);
+        onCaptureError?.(message);
+        return;
+      }
+
+      onCaptureValue(captureField, capture.value);
+    } catch (requestError) {
+      setError(requestError.message);
+      onCaptureError?.(requestError.message);
+    } finally {
+      setCaptureBusyPageId(null);
+    }
+  }
 
   return (
     <div className="rounded-2xl border border-border bg-white p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Certificato PDF</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Certificato</p>
           <p className="mt-1 text-sm text-slate-600">
             {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
           </p>
@@ -222,15 +272,39 @@ function ChemistryPdfPanel({ certificateDocument, token }) {
         </div>
       </div>
 
-      <div className="h-[50vh] overflow-hidden rounded-2xl border border-border bg-slate-50">
-        {pdfSrc ? (
-          <iframe className="h-full w-full" src={pdfSrc} title="Certificato PDF chimica" />
+      <div className="h-[50vh] overflow-auto rounded-2xl border border-border bg-slate-50 p-3">
+        {pageImages.length ? (
+          <div className="space-y-4">
+            {pageImages.map((page) => (
+              <div className="mx-auto w-fit" key={page.id}>
+                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Pagina {page.numero_pagina}
+                </p>
+                <img
+                  alt={`Certificato pagina ${page.numero_pagina}`}
+                  className={`block rounded-xl border border-slate-200 bg-white shadow-sm ${captureField ? "cursor-crosshair" : "cursor-default"}`}
+                  onClick={(event) => handlePageClick(page, event)}
+                  src={page.src}
+                  style={{ maxWidth: "none", width: `${zoom}%` }}
+                />
+                {captureBusyPageId === page.id ? (
+                  <p className="mt-2 text-center text-xs font-medium text-sky-700">Cattura in corso...</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-sm text-slate-500">
-            {error || "PDF non disponibile."}
+            {error || "Immagini pagina non disponibili."}
           </div>
         )}
       </div>
+      {captureField ? (
+        <p className="mt-3 text-xs font-medium text-sky-700">
+          Modalità cattura attiva su {formatChemistryFieldLabel(captureField)}. Clicca il valore nella pagina del certificato.
+        </p>
+      ) : null}
+      {error ? <p className="mt-2 text-sm text-rose-600">{error}</p> : null}
     </div>
   );
 }
@@ -274,6 +348,12 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setDraft(initialDraft);
     setError("");
     setCaptureField("");
+  }
+
+  function handleCaptureValue(field, value) {
+    updateField(field, value);
+    setCaptureField("");
+    setError("");
   }
 
   async function persistDraft() {
@@ -365,7 +445,13 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
 
   return (
     <div className="space-y-4">
-      <ChemistryPdfPanel certificateDocument={certificateDocument} token={token} />
+      <ChemistryPdfPanel
+        captureField={captureField}
+        certificateDocument={certificateDocument}
+        onCaptureError={setError}
+        onCaptureValue={handleCaptureValue}
+        token={token}
+      />
 
       <div className="rounded-2xl border border-border bg-white p-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -439,19 +525,17 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
                     />
                     <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Origine</p>
                     <p className="mt-0.5 text-[11px] font-medium leading-tight text-slate-600">{sourceLabel(existingValue, field, effectiveDraft)}</p>
-                    {BASE_CHEMISTRY_FIELDS.includes(field) ? (
-                      <button
-                        className={`mt-2 w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
-                          captureField === field
-                            ? "border-sky-300 bg-sky-100 text-sky-700"
-                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                        }`}
-                        onClick={() => handleToggleCapture(field)}
-                        type="button"
-                      >
-                        {captureField === field ? "Cattura attiva" : "Cattura"}
-                      </button>
-                    ) : null}
+                    <button
+                      className={`mt-2 w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                        captureField === field
+                          ? "border-sky-300 bg-sky-100 text-sky-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                      onClick={() => handleToggleCapture(field)}
+                      type="button"
+                    >
+                      {captureField === field ? "Cattura attiva" : "Cattura"}
+                    </button>
                   </div>
                 );
               })}

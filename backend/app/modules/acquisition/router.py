@@ -12,6 +12,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
     AcquisitionRowUpdateRequest,
+    ChemistryCaptureRequest,
+    ChemistryCaptureResponse,
     DocumentBatchUploadResponse,
     CurrentUploadBatchResponse,
     DocumentCreateRequest,
@@ -35,6 +37,7 @@ from app.modules.acquisition.service import (
     create_document,
     create_document_page,
     create_rows_from_document_split_plan,
+    capture_chemistry_value_from_page,
     create_evidence,
     discard_current_upload_batch,
     detect_chemistry,
@@ -258,6 +261,17 @@ def get_document_page_image_route(page_id: int, _: CurrentUser, db: DbSession) -
     image_path = get_document_page_image_path(page)
     filename = image_path.name
     return FileResponse(path=image_path, media_type="image/png", filename=filename)
+
+
+@router.post("/document-pages/{page_id}/chemistry-capture", response_model=ChemistryCaptureResponse)
+def capture_chemistry_value_route(
+    page_id: int,
+    payload: ChemistryCaptureRequest,
+    _: CurrentUser,
+    db: DbSession,
+) -> ChemistryCaptureResponse:
+    page = get_document_page(db, page_id)
+    return capture_chemistry_value_from_page(page=page, payload=payload)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)

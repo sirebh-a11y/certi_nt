@@ -41,6 +41,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowDetailResponse,
     AcquisitionRowListItemResponse,
     AcquisitionValueHistoryResponse,
+    ChemistryCaptureRequest,
+    ChemistryCaptureResponse,
     DocumentSplitRowsCreateResponse,
     DocumentBatchErrorResponse,
     DocumentBatchUploadResponse,
@@ -78,6 +80,9 @@ from app.modules.document_reader.schemas import ReaderRowSplitCandidateResponse
 from app.modules.document_reader.service import build_document_row_split_plan
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
+
+
+CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
 
 
 def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
@@ -368,6 +373,159 @@ def get_document_page_image_path(page: DocumentPage) -> Path:
     if not page.immagine_pagina_storage_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
     return _resolve_storage_path(page.immagine_pagina_storage_key)
+
+
+def _normalize_chemistry_capture_value(value: str | None) -> str | None:
+    raw = _string_or_none(value)
+    if raw is None:
+        return None
+    compact = raw.replace(" ", "").replace("≤", "<=")
+    match = CHEMISTRY_CAPTURE_PATTERN.match(compact)
+    if not match:
+        return None
+    prefix = match.group("prefix") or ""
+    number = (match.group("number") or "").replace(".", ",")
+    if not number:
+        return None
+    return f"{prefix}{number}"
+
+
+def _extract_capture_candidates_from_crop(
+    crop: Image.Image,
+    *,
+    click_x: int,
+    click_y: int,
+    left_offset: int,
+    top_offset: int,
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[tuple[str, int, int, int, int]] = set()
+
+    for config in ("--psm 11", "--psm 6"):
+        try:
+            data = pytesseract.image_to_data(crop, lang="eng+ita+deu", config=config, output_type=pytesseract.Output.DICT)
+        except (OSError, pytesseract.TesseractNotFoundError):
+            continue
+
+        tokens = data.get("text") or []
+        block_nums = data.get("block_num") or []
+        par_nums = data.get("par_num") or []
+        line_nums = data.get("line_num") or []
+        lefts = data.get("left") or []
+        tops = data.get("top") or []
+        widths = data.get("width") or []
+        heights = data.get("height") or []
+
+        line_tokens: dict[tuple[int, int, int], list[dict[str, int | str]]] = {}
+        for index, raw_token in enumerate(tokens):
+            token = _string_or_none(raw_token)
+            if token is None:
+                continue
+            try:
+                line_key = (int(block_nums[index]), int(par_nums[index]), int(line_nums[index]))
+                x0 = int(lefts[index])
+                y0 = int(tops[index])
+                width = int(widths[index])
+                height = int(heights[index])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if width <= 0 or height <= 0:
+                continue
+            line_tokens.setdefault(line_key, []).append(
+                {
+                    "text": token,
+                    "x0": x0,
+                    "y0": y0,
+                    "x1": x0 + width,
+                    "y1": y0 + height,
+                }
+            )
+
+        for items in line_tokens.values():
+            ordered = sorted(items, key=lambda item: int(item["x0"]))
+            for idx, item in enumerate(ordered):
+                raw_text = str(item["text"])
+                prefixed_text = raw_text
+                if idx > 0:
+                    previous = str(ordered[idx - 1]["text"]).replace(" ", "")
+                    if previous in {"<", "<=", "≤"}:
+                        prefixed_text = f"{previous}{raw_text}"
+                normalized_value = _normalize_chemistry_capture_value(prefixed_text) or _normalize_chemistry_capture_value(raw_text)
+                if normalized_value is None:
+                    continue
+
+                x0 = left_offset + int(item["x0"])
+                y0 = top_offset + int(item["y0"])
+                x1 = left_offset + int(item["x1"])
+                y1 = top_offset + int(item["y1"])
+                key = (normalized_value, x0, y0, x1, y1)
+                if key in seen:
+                    continue
+                seen.add(key)
+                center_x = (x0 + x1) // 2
+                center_y = (y0 + y1) // 2
+                distance = abs(center_x - click_x) + abs(center_y - click_y)
+                candidates.append(
+                    {
+                        "value": normalized_value,
+                        "raw_text": prefixed_text,
+                        "bbox": f"{x0},{y0},{x1},{y1}",
+                        "distance": distance,
+                    }
+                )
+
+    return candidates
+
+
+def capture_chemistry_value_from_page(*, page: DocumentPage, payload: ChemistryCaptureRequest) -> ChemistryCaptureResponse:
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            click_x = min(max(int(width * payload.x_ratio), 0), max(width - 1, 0))
+            click_y = min(max(int(height * payload.y_ratio), 0), max(height - 1, 0))
+            half_width = max(140, int(width * 0.08))
+            half_height = max(34, int(height * 0.03))
+            left = max(0, click_x - half_width)
+            top = max(0, click_y - half_height)
+            right = min(width, click_x + half_width)
+            bottom = min(height, click_y + half_height)
+            crop = image.crop((left, top, right, bottom))
+    except OSError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
+
+    candidates = _extract_capture_candidates_from_crop(
+        crop,
+        click_x=click_x,
+        click_y=click_y,
+        left_offset=left,
+        top_offset=top,
+    )
+    if candidates:
+        best = min(candidates, key=lambda item: int(item["distance"]))
+        return ChemistryCaptureResponse(
+            page_id=page.id,
+            page_number=page.numero_pagina,
+            value=cast(str | None, best.get("value")),
+            raw_text=cast(str | None, best.get("raw_text")),
+            bbox=cast(str | None, best.get("bbox")),
+        )
+
+    try:
+        fallback_text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config="--psm 6")
+    except (OSError, pytesseract.TesseractNotFoundError):
+        fallback_text = ""
+    fallback_value = _normalize_chemistry_capture_value(fallback_text)
+    return ChemistryCaptureResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        value=fallback_value,
+        raw_text=_string_or_none(fallback_text),
+        bbox=f"{left},{top},{right},{bottom}",
+    )
 
 
 def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, actor_email: str) -> DocumentResponse:

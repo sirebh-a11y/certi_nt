@@ -86,6 +86,19 @@ class DocumentPageResponse(BaseModel):
     hash_render: str | None
 
 
+class ChemistryCaptureRequest(BaseModel):
+    x_ratio: float = Field(ge=0, le=1)
+    y_ratio: float = Field(ge=0, le=1)
+
+
+class ChemistryCaptureResponse(BaseModel):
+    page_id: int
+    page_number: int
+    value: str | None
+    raw_text: str | None
+    bbox: str | None
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
