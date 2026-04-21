@@ -1,4 +1,9 @@
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+
+import { apiRequest } from "../../app/api";
+import { useAuth } from "../../app/auth";
+import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 
 const SECTION_TITLES = {
   "document-matching": "Matching documentale",
@@ -8,9 +13,42 @@ const SECTION_TITLES = {
 };
 
 export default function AcquisitionSectionPlaceholderPage() {
+  const { token } = useAuth();
   const navigate = useNavigate();
-  const { sectionKey } = useParams();
+  const { rowId, sectionKey } = useParams();
   const title = SECTION_TITLES[sectionKey] || "Sezione";
+  const [row, setRow] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function load() {
+      setLoading(true);
+      setError("");
+      try {
+        const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
+        if (!ignore) {
+          setRow(rowData);
+        }
+      } catch (requestError) {
+        if (!ignore) {
+          setError(requestError.message);
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+
+    return () => {
+      ignore = true;
+    };
+  }, [rowId, token]);
 
   return (
     <section className="space-y-4">
@@ -21,6 +59,10 @@ export default function AcquisitionSectionPlaceholderPage() {
         <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
         <h1 className="mt-1 text-3xl font-semibold text-slate-900">{title}</h1>
       </div>
+
+      {loading ? <p className="text-sm text-slate-500">Caricamento riga...</p> : null}
+      {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+      {row ? <AcquisitionRowSummaryCard row={row} rowId={rowId} /> : null}
     </section>
   );
 }

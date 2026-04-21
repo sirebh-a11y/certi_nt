@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 import { formatFieldDisplay, formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
@@ -80,10 +81,6 @@ function stateClasses(state) {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
-function displaySupplierName(row) {
-  return row.fornitore_nome || row.fornitore_raw || "-";
-}
-
 function readValueStateClasses(block, field, value) {
   if (isExplicitNullValue(block, field, value)) {
     return stateClasses("verde");
@@ -134,22 +131,6 @@ function workflowStepLabel(step) {
   return BLOCK_LABELS[step] || step;
 }
 
-function workflowLabel(value) {
-  if (value === "in_lavorazione") {
-    return "In lavorazione";
-  }
-  if (value === "validata_quality") {
-    return "Validata";
-  }
-  if (value === "riaperta") {
-    return "Riaperta";
-  }
-  if (value === "nuova") {
-    return "Nuova";
-  }
-  return value || "-";
-}
-
 function workflowStepAction(row, step) {
   const state = workflowStepState(row, step);
   if (step === "validazione_finale") {
@@ -178,10 +159,6 @@ function readValueStateLabel(block, field, value) {
     return "pronto";
   }
   return "da verificare";
-}
-
-function composeLega(row) {
-  return row?.lega_designazione || row?.lega_base || row?.variante_lega || "-";
 }
 
 export default function AcquisitionDetailPage() {
@@ -684,46 +661,7 @@ export default function AcquisitionDetailPage() {
 
         {row ? (
           <div className="mt-4 space-y-4">
-            <div className="overflow-hidden rounded-2xl border border-border bg-white">
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      <th className="px-3 py-2">Fornitore</th>
-                      <th className="px-3 py-2">Lega</th>
-                      <th className="px-3 py-2">Ø</th>
-                      <th className="px-3 py-2">Cdq</th>
-                      <th className="px-3 py-2">Colata</th>
-                      <th className="px-3 py-2">Ddt</th>
-                      <th className="px-3 py-2">Peso Kg</th>
-                      <th className="px-3 py-2">Vs. Odv</th>
-                      <th className="px-3 py-2">Stato</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white">
-                    <tr>
-                      <td className="px-3 py-3 text-slate-900">{displaySupplierName(row)}</td>
-                      <td className="px-3 py-3 text-slate-800">{composeLega(row)}</td>
-                      <td className="px-3 py-3 text-slate-800">{formatRowFieldDisplay("diametro", row.diametro) || "-"}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.cdq || "-"}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.colata || "-"}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.ddt || `#${row.document_ddt_id}`}</td>
-                      <td className="px-3 py-3 text-slate-800">{formatRowFieldDisplay("peso", row.peso) || "-"}</td>
-                      <td className="px-3 py-3 text-slate-800">{row.ordine || "-"}</td>
-                      <td className="px-3 py-3">
-                        <div className="flex flex-wrap gap-1.5">
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateClasses(row.stato_tecnico)}`}>Tecnico {row.stato_tecnico}</span>
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow)}</span>
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
-                            {row.validata_finale ? "Validata" : canValidateFinal ? "Pronta da validare" : "Non pronta"}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <AcquisitionRowSummaryCard canValidateFinal={canValidateFinal} row={row} rowId={rowId} showStatus showTitle={false} />
 
             <div className="rounded-2xl border border-border bg-white p-4">
               <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Percorso operativo</div>
