@@ -132,17 +132,27 @@ export default function AcquisitionSectionPlaceholderPage() {
 
   return (
     <section className="space-y-4">
-      <div>
-        <button className="text-sm font-medium text-accent hover:underline" onClick={handleBackToList} type="button">
-          Torna alla lista
-        </button>
-        <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
-        <h1 className="mt-1 text-3xl font-semibold text-slate-900">{title}</h1>
-      </div>
-
       {loading ? <p className="text-sm text-slate-500">Caricamento riga...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
-      {row ? <AcquisitionRowSummaryCard row={row} rowId={rowId} /> : null}
+      {row ? (
+        <div className="rounded-2xl border border-slate-600 bg-slate-700 p-3">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
+            <div className="flex min-h-[92px] w-full shrink-0 flex-col justify-center rounded-2xl border border-slate-600 bg-slate-700 px-5 py-3 xl:w-[230px]">
+              <p className="text-[17px] font-semibold leading-none text-slate-200">Riga #{rowId}</p>
+              <h1 className="mt-1.5 text-[31px] font-semibold leading-none text-white">{title}</h1>
+            </div>
+            <div className="min-w-0 flex-1">
+              <AcquisitionRowSummaryCard
+                compact
+                containerClassName="min-h-[92px]"
+                row={row}
+                rowId={rowId}
+                showTitle={false}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       {row && sectionKey === "chemistry" ? (
         <AcquisitionChemistrySectionPage
           certificateDocument={certificateDocument}

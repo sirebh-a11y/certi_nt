@@ -160,6 +160,7 @@ function sourceLabel(value, field, draft, sessionSourceOverrides) {
 function ChemistryPdfPanel({
   captureField,
   certificateDocument,
+  footerContent,
   onCaptureError,
   onCaptureValue,
   onTableCaptureProposal,
@@ -375,7 +376,7 @@ function ChemistryPdfPanel({
       : null;
 
   return (
-    <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+    <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Certificato</p>
@@ -452,6 +453,7 @@ function ChemistryPdfPanel({
       {captureField ? (
         <div className="sr-only">Modalità cattura attiva su {formatChemistryFieldLabel(captureField)}</div>
       ) : null}
+      {footerContent ? <div className="mt-3">{footerContent}</div> : null}
     </div>
   );
 }
@@ -478,13 +480,31 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setSessionInitialDraft(nextInitial);
     setDraft(nextInitial);
     setSessionSourceOverrides({});
+    onDirtyChange?.(false);
   }, [persistedInitialDraft]);
 
   const effectiveDraft = useMemo(() => buildEffectiveDraft(sessionInitialDraft, draft), [sessionInitialDraft, draft]);
-  const hasUnsavedChanges = useMemo(
-    () => !draftsEqual(sessionInitialDraft, effectiveDraft, fieldList),
-    [effectiveDraft, fieldList, sessionInitialDraft],
+  const initialSources = useMemo(
+    () =>
+      Object.fromEntries(
+        fieldList.map((field) => [field, sourceLabel(valueMap.get(field), field, sessionInitialDraft, {})]),
+      ),
+    [fieldList, sessionInitialDraft, valueMap],
   );
+  const currentSources = useMemo(
+    () =>
+      Object.fromEntries(
+        fieldList.map((field) => [field, sourceLabel(valueMap.get(field), field, effectiveDraft, sessionSourceOverrides)]),
+      ),
+    [effectiveDraft, fieldList, sessionSourceOverrides, valueMap],
+  );
+  const hasUnsavedChanges = useMemo(() => {
+    const valuesChanged = !draftsEqual(sessionInitialDraft, effectiveDraft, fieldList);
+    if (valuesChanged) {
+      return true;
+    }
+    return fieldList.some((field) => initialSources[field] !== currentSources[field]);
+  }, [currentSources, effectiveDraft, fieldList, initialSources, sessionInitialDraft]);
 
   useEffect(() => {
     onDirtyChange?.(hasUnsavedChanges);
@@ -504,6 +524,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
 
   function updateField(field, value, options = {}) {
     const { markTouched = true } = options;
+    onDirtyChange?.(true);
     setDraft((current) => ({
       ...current,
       [field]: value,
@@ -536,6 +557,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setCaptureField("");
     setTableCaptureActive(false);
     setTableCaptureProposal(null);
+    onDirtyChange?.(false);
   }
 
   function handleWorkspaceError(message) {
@@ -546,6 +568,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   function handleCaptureValue(field, value) {
+    onDirtyChange?.(true);
     updateField(field, value, { markTouched: true });
     setCaptureField("");
     setError("");
@@ -633,6 +656,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       setTableCaptureActive(false);
       setTableCaptureProposal(null);
       setError("");
+      onDirtyChange?.(false);
 
       await onRefreshRow();
       return true;
@@ -677,6 +701,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     if (!tableCaptureProposal?.values) {
       return;
     }
+    onDirtyChange?.(true);
     const nextDraft = {
       ...draft,
       ...tableCaptureProposal.values,
@@ -694,20 +719,32 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setError("");
   }
 
-  return (
-    <div className="space-y-4">
-      <ChemistryPdfPanel
-        captureField={captureField}
-        certificateDocument={certificateDocument}
-        onCaptureError={handleWorkspaceError}
-        onCaptureValue={handleCaptureValue}
-        onTableCaptureProposal={handleTableCaptureProposal}
-        tableCaptureActive={tableCaptureActive}
-        token={token}
-      />
-
-      <div className="rounded-2xl border border-slate-500 bg-slate-600 p-4">
-        <div className="overflow-hidden rounded-2xl border border-slate-400 bg-slate-50">
+  const chemistryControls = (
+    <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
+        <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[230px]">
+          <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+            <p className="text-[11px] font-semibold text-sky-700">Tabella</p>
+            <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-slate-600">
+              Cattura un rettangolo sopra la tabella chimica completa.
+            </p>
+            <p className="mt-1 text-[11px] leading-tight text-slate-500">
+              Per almeno tre elementi.
+            </p>
+            <button
+              className={`mt-2 w-full rounded-md border px-2 py-2 text-xs font-semibold transition ${
+                tableCaptureActive
+                  ? "border-sky-400 bg-sky-200 text-sky-800"
+                  : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
+              }`}
+              onClick={handleToggleTableCapture}
+              type="button"
+            >
+              {tableCaptureActive ? "Cattura tabella attiva" : "Cattura tabella"}
+            </button>
+          </div>
+        </div>
+        <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-slate-400 bg-slate-50">
           <div className="overflow-x-auto">
             <div className="grid auto-cols-[82px] grid-flow-col gap-0 border-b border-slate-200">
               {fieldList.map((field) => {
@@ -744,109 +781,111 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             </div>
           </div>
         </div>
+        <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[230px] xl:self-start">
+          <button
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={!hasUnsavedChanges || submitting}
+            onClick={() => setResetDialogOpen(true)}
+            type="button"
+          >
+            Valori iniziali
+          </button>
+          <button
+            className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+            disabled={submitting}
+            onClick={handleConfirm}
+            type="button"
+          >
+            {submitting ? "Conferma..." : "Conferma"}
+          </button>
+        </div>
       </div>
+    </div>
+  );
+
+  const workspaceStatusBar = (
+    <div className="min-h-[32px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
+      <div className="flex min-h-[18px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
+        <div className="min-w-0 text-sm font-medium text-sky-700">
+          {tableCaptureActive ? (
+            <span>Cattura tabella attiva: seleziona un rettangolo sopra la tabella chimica.</span>
+          ) : captureField ? (
+            <span>Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.</span>
+          ) : (
+            <span className="invisible">Cattura attiva: spazio riservato.</span>
+          )}
+        </div>
+        <div className="min-w-0 text-sm text-rose-600 md:text-right">
+          {error ? <span>{error}</span> : <span className="invisible">Nessun errore</span>}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <ChemistryPdfPanel
+        captureField={captureField}
+        certificateDocument={certificateDocument}
+        footerContent={
+          <div className="space-y-2">
+            {workspaceStatusBar}
+            {chemistryControls}
+          </div>
+        }
+        onCaptureError={handleWorkspaceError}
+        onCaptureValue={handleCaptureValue}
+        onTableCaptureProposal={handleTableCaptureProposal}
+        tableCaptureActive={tableCaptureActive}
+        token={token}
+      />
 
       <div className="rounded-2xl border border-border bg-white p-4" ref={workspaceRef}>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
-            <div className="flex min-h-[72px] min-w-[178px] flex-col justify-center rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
-              <p className="text-[11px] font-semibold text-sky-700">Tabella</p>
-              <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-sky-700">
-                Cattura un rettangolo sopra la tabella chimica completa.
+      </div>
+
+      {tableCaptureProposal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-sky-200 bg-white p-5 shadow-2xl">
+            <p className="text-lg font-semibold text-slate-900">
+              Proposta tabella{" "}
+              <span className="text-sky-700">
+                {tableCaptureProposal.orientation === "horizontal"
+                  ? "orizzontale"
+                  : tableCaptureProposal.orientation === "vertical"
+                    ? "verticale"
+                    : "incerta"}
+              </span>
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Ho raccolto questi valori dalla tabella chimica. Puoi applicarli alla bozza oppure scartare la proposta.
+            </p>
+            <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">Campi trovati</p>
+              <p className="mt-2 text-sm leading-6 text-sky-800">
+                {Object.entries(tableCaptureProposal.values)
+                  .map(([field, value]) => `${field} ${value}`)
+                  .join(" · ")}
               </p>
+            </div>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
-                className={`mt-2 w-full rounded-md border px-2 py-2 text-xs font-semibold transition ${
-                  tableCaptureActive
-                    ? "border-sky-400 bg-sky-200 text-sky-800"
-                    : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
-                }`}
-                onClick={handleToggleTableCapture}
+                className="rounded-xl border border-sky-200 bg-white px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100"
+                onClick={() => setTableCaptureProposal(null)}
                 type="button"
               >
-                {tableCaptureActive ? "Cattura tabella attiva" : "Cattura tabella"}
+                Scarta proposta
+              </button>
+              <button
+                className="rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800"
+                onClick={applyTableCaptureProposal}
+                type="button"
+              >
+                Applica proposta
               </button>
             </div>
-            <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
-              <h3 className="text-base font-semibold text-slate-900">Workspace Chimica</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Modifichi tutta la pagina in bozza e confermi solo alla fine. I valori iniziali sono quelli persistiti quando entri.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 xl:self-center">
-            <button
-              className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              disabled={!hasUnsavedChanges || submitting}
-              onClick={() => setResetDialogOpen(true)}
-              type="button"
-            >
-              Valori iniziali
-            </button>
-            <button
-              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-              disabled={submitting}
-              onClick={handleConfirm}
-              type="button"
-            >
-              {submitting ? "Conferma..." : "Conferma"}
-            </button>
           </div>
         </div>
-        <div className="mt-3 min-h-[44px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="flex min-h-[28px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
-            <div className="min-w-0 text-sm font-medium text-sky-700">
-              {tableCaptureActive ? (
-                <span>Cattura tabella attiva: seleziona un rettangolo sopra la tabella chimica.</span>
-              ) : captureField ? (
-                <span>Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.</span>
-              ) : (
-                <span className="invisible">Cattura attiva: spazio riservato.</span>
-              )}
-            </div>
-            <div className="min-w-0 text-sm text-rose-600 md:text-right">
-              {error ? <span>{error}</span> : <span className="invisible">Nessun errore</span>}
-            </div>
-          </div>
-        </div>
-        {tableCaptureProposal ? (
-          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-3">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-sky-800">
-                  Proposta tabella:{" "}
-                  {tableCaptureProposal.orientation === "horizontal"
-                    ? "orizzontale"
-                    : tableCaptureProposal.orientation === "vertical"
-                      ? "verticale"
-                      : "incerta"}
-                </p>
-                <p className="mt-1 text-xs text-sky-700">
-                  Campi trovati:{" "}
-                  {Object.entries(tableCaptureProposal.values)
-                    .map(([field, value]) => `${field} ${value}`)
-                    .join(" · ")}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100"
-                  onClick={() => setTableCaptureProposal(null)}
-                  type="button"
-                >
-                  Scarta proposta
-                </button>
-                <button
-                  className="rounded-xl bg-sky-700 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-800"
-                  onClick={applyTableCaptureProposal}
-                  type="button"
-                >
-                  Applica proposta
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       {confirmDialogOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
