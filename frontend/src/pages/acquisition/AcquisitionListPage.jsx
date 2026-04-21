@@ -635,6 +635,18 @@ export default function AcquisitionListPage() {
         <SummaryCell label="Logica attività" value="Placeholder" />
       </div>
 
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 px-4 py-3 shadow-sm">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Placeholder Visivo</p>
+            <p className="mt-1 text-sm font-medium text-slate-800">Area riservata alla logica attivita e ai filtri evoluti.</p>
+          </div>
+          <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
+            In definizione
+          </div>
+        </div>
+      </div>
+
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search-1">
