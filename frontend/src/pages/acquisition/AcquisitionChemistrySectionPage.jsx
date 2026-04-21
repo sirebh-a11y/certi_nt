@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
@@ -171,7 +171,8 @@ function ChemistryPdfPanel({
   const [error, setError] = useState("");
   const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
   const [selection, setSelection] = useState(null);
-
+  const viewportRef = useRef(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
   useEffect(() => {
     let ignore = false;
     const objectUrls = [];
@@ -214,6 +215,24 @@ function ChemistryPdfPanel({
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [certificateDocument, token]);
+
+  useEffect(() => {
+    const node = viewportRef.current;
+    if (!node) {
+      return undefined;
+    }
+
+    function updateViewportWidth() {
+      const nextWidth = Math.max(node.clientWidth - 24, 0);
+      setViewportWidth(nextWidth);
+    }
+
+    updateViewportWidth();
+    const observer = new ResizeObserver(updateViewportWidth);
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, []);
 
   async function handlePageClick(page, event) {
     if (!captureField) {
@@ -356,25 +375,25 @@ function ChemistryPdfPanel({
       : null;
 
   return (
-    <div className="rounded-2xl border border-border bg-white p-4">
+    <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Certificato</p>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Certificato</p>
+          <p className="mt-1 text-sm text-white">
             {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
             onClick={() => setZoom((current) => Math.max(50, current - 10))}
             type="button"
           >
             -
           </button>
-          <span className="min-w-[64px] text-center text-sm font-semibold text-slate-700">{zoom}%</span>
+          <span className="min-w-[64px] text-center text-sm font-semibold text-white">{zoom}%</span>
           <button
-            className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
             onClick={() => setZoom((current) => Math.min(250, current + 10))}
             type="button"
           >
@@ -383,42 +402,49 @@ function ChemistryPdfPanel({
         </div>
       </div>
 
-      <div className="h-[43vh] overflow-auto rounded-2xl border border-border bg-slate-50 p-3">
+      <div className="h-[43vh] overflow-auto rounded-2xl border border-slate-600 bg-slate-700 p-3" ref={viewportRef}>
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
-              <div className="relative mx-auto w-fit" key={page.id}>
-                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+              <div className="w-full" key={page.id}>
+                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">
                   Pagina {page.numero_pagina}
                 </p>
-                <img
-                  alt={`Certificato pagina ${page.numero_pagina}`}
-                  className="block rounded-xl border border-slate-200 bg-white shadow-sm"
-                  draggable={false}
-                  src={page.src}
-                  style={{ width: `${zoom}%`, minWidth: "100%", userSelect: "none" }}
-                />
                 <div
-                  className={`${captureField || tableCaptureActive ? "cursor-crosshair" : "cursor-default"} absolute inset-0`}
-                  onClick={(event) => handlePageClick(page, event)}
-                  onMouseDown={(event) => handleSelectionStart(page, event)}
-                  onMouseMove={(event) => handleSelectionMove(page, event)}
-                  onMouseUp={() => void handleSelectionEnd(page)}
-                />
-                {selection && selection.pageId === page.id && selectionStyle ? (
-                  <div
-                    className="pointer-events-none absolute rounded-lg border-2 border-sky-400 bg-sky-200/20"
-                    style={selectionStyle}
+                  className="relative"
+                  style={{
+                    width: viewportWidth > 0 ? `${(viewportWidth * zoom) / 100}px` : "100%",
+                  }}
+                >
+                  <img
+                    alt={`Certificato pagina ${page.numero_pagina}`}
+                    className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm"
+                    draggable={false}
+                    src={page.src}
+                    style={{ userSelect: "none" }}
                   />
-                ) : null}
+                  <div
+                    className={`${captureField || tableCaptureActive ? "cursor-crosshair" : "cursor-default"} absolute inset-0`}
+                    onClick={(event) => handlePageClick(page, event)}
+                    onMouseDown={(event) => handleSelectionStart(page, event)}
+                    onMouseMove={(event) => handleSelectionMove(page, event)}
+                    onMouseUp={() => void handleSelectionEnd(page)}
+                  />
+                  {selection && selection.pageId === page.id && selectionStyle ? (
+                    <div
+                      className="pointer-events-none absolute rounded-lg border-2 border-sky-400 bg-sky-200/20"
+                      style={selectionStyle}
+                    />
+                  ) : null}
+                </div>
                 {captureBusyPageId === page.id ? (
-                  <p className="mt-2 text-center text-xs font-medium text-sky-700">Cattura in corso...</p>
+                  <p className="mt-2 text-center text-xs font-medium text-sky-300">Cattura in corso...</p>
                 ) : null}
               </div>
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-500">
+          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-200">
             {error || "Immagini pagina non disponibili."}
           </div>
         )}
@@ -443,6 +469,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [captureField, setCaptureField] = useState("");
   const [tableCaptureActive, setTableCaptureActive] = useState(false);
   const [tableCaptureProposal, setTableCaptureProposal] = useState(null);
+  const workspaceRef = useRef(null);
 
   useEffect(() => {
     const nextInitial = { ...persistedInitialDraft };
@@ -511,8 +538,12 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   function handleTableCaptureProposal(proposal) {
+    setTableCaptureActive(false);
     setTableCaptureProposal(proposal);
     setError("");
+    requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function persistDraft() {
@@ -638,7 +669,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       <ChemistryPdfPanel
         captureField={captureField}
         certificateDocument={certificateDocument}
-        onCaptureError={setError}
+        onCaptureError={handleWorkspaceError}
         onCaptureValue={handleCaptureValue}
         onTableCaptureProposal={handleTableCaptureProposal}
         tableCaptureActive={tableCaptureActive}
@@ -646,6 +677,55 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       />
 
       <div className="rounded-2xl border border-border bg-white p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Elementi chimici</p>
+            <p className="mt-1 text-sm text-slate-500">Griglia compatta. I campi derivati vengono completati solo se mancanti e se i campi base ci sono.</p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${hasUnsavedChanges ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+            {hasUnsavedChanges ? "Modifiche non confermate" : "Allineato ai valori persistiti"}
+          </span>
+        </div>
+        <div className="overflow-hidden rounded-2xl border border-border">
+          <div className="overflow-x-auto">
+            <div className="grid auto-cols-[82px] grid-flow-col gap-0 border-b border-slate-200">
+              {fieldList.map((field) => {
+                const existingValue = valueMap.get(field);
+                const currentValue = effectiveDraft[field] || "";
+
+                return (
+                  <div className="border-r border-slate-200 px-1.5 py-1" key={field}>
+                    <p className="text-center text-[11px] font-semibold leading-none text-slate-600">{formatChemistryFieldLabel(field)}</p>
+                    <input
+                      className="mt-0.5 w-full rounded-md border border-slate-200 bg-white px-1 py-0.5 text-center text-[13px] text-slate-800 outline-none transition focus:border-accent"
+                      onChange={(event) => updateField(field, event.target.value)}
+                      placeholder="Valore"
+                      value={currentValue}
+                    />
+                    <p className="mt-0.5 text-center text-[8px] font-semibold uppercase tracking-[0.03em] text-slate-400">Origine</p>
+                    <p className="mt-0 min-h-[20px] text-center text-[10px] font-medium leading-tight text-slate-600">
+                      {sourceLabel(existingValue, field, effectiveDraft, sessionSourceOverrides)}
+                    </p>
+                    <button
+                      className={`mt-0.5 w-full rounded-md border px-1 py-0.5 text-[10px] font-semibold transition ${
+                        captureField === field
+                          ? "border-sky-300 bg-sky-100 text-sky-700"
+                          : "border-slate-200 bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700"
+                      }`}
+                      onClick={() => handleToggleCapture(field)}
+                      type="button"
+                    >
+                      {captureField === field ? "Cattura attiva" : "Cattura"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-white p-4" ref={workspaceRef}>
         <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
             <div className="flex min-h-[72px] min-w-[178px] flex-col justify-center rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
@@ -755,55 +835,12 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         ) : null}
       </div>
 
-      <div className="rounded-2xl border border-border bg-white p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Elementi chimici</p>
-            <p className="mt-1 text-sm text-slate-500">Griglia compatta. I campi derivati vengono completati solo se mancanti e se i campi base ci sono.</p>
-          </div>
-          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${hasUnsavedChanges ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-            {hasUnsavedChanges ? "Modifiche non confermate" : "Allineato ai valori persistiti"}
-          </span>
-        </div>
-
-        <div className="overflow-hidden rounded-2xl border border-border">
-          <div className="overflow-x-auto">
-            <div className="grid auto-cols-[112px] grid-flow-col gap-2 p-2">
-              {fieldList.map((field) => {
-                const existingValue = valueMap.get(field);
-                const currentValue = effectiveDraft[field] || "";
-
-                return (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2" key={field}>
-                    <p className="text-[11px] font-semibold text-slate-600">{formatChemistryFieldLabel(field)}</p>
-                    <input
-                      className="mt-1.5 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none transition focus:border-accent"
-                      onChange={(event) => updateField(field, event.target.value)}
-                      placeholder="Valore"
-                      value={currentValue}
-                    />
-                    <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Origine</p>
-                    <p className="mt-0.5 text-[11px] font-medium leading-tight text-slate-600">
-                      {sourceLabel(existingValue, field, effectiveDraft, sessionSourceOverrides)}
-                    </p>
-                    <button
-                      className={`mt-2 w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
-                        captureField === field
-                          ? "border-sky-300 bg-sky-100 text-sky-700"
-                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                      }`}
-                      onClick={() => handleToggleCapture(field)}
-                      type="button"
-                    >
-                      {captureField === field ? "Cattura attiva" : "Cattura"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
+  function handleWorkspaceError(message) {
+    setError(message);
+    requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }

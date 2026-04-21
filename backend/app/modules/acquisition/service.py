@@ -15,7 +15,7 @@ import fitz
 from fastapi import UploadFile
 from fastapi import HTTPException, status
 from openai import OpenAI
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from pypdf import PdfReader
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -557,17 +557,35 @@ def capture_chemistry_value_from_page(*, page: DocumentPage, payload: ChemistryC
 def _ocr_crop_lines(crop: Image.Image) -> list[str]:
     seen: set[str] = set()
     lines: list[str] = []
-    for config in ("--psm 6", "--psm 4", "--psm 11"):
-        try:
-            text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config=config)
-        except (OSError, pytesseract.TesseractNotFoundError):
-            continue
-        for raw_line in text.splitlines():
-            cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_line))
-            if cleaned is None or cleaned in seen:
+
+    grayscale = ImageOps.grayscale(crop)
+    autocontrasted = ImageOps.autocontrast(grayscale)
+    enlarged = autocontrasted.resize(
+        (max(1, autocontrasted.width * 2), max(1, autocontrasted.height * 2)),
+        Image.Resampling.LANCZOS,
+    )
+    thresholded = enlarged.point(lambda value: 255 if value > 180 else 0)
+
+    variants = (
+        crop,
+        grayscale,
+        autocontrasted,
+        enlarged,
+        thresholded,
+    )
+
+    for image_variant in variants:
+        for config in ("--psm 6", "--psm 4", "--psm 11"):
+            try:
+                text = pytesseract.image_to_string(image_variant, lang="eng+ita+deu", config=config)
+            except (OSError, pytesseract.TesseractNotFoundError):
                 continue
-            seen.add(cleaned)
-            lines.append(cleaned)
+            for raw_line in text.splitlines():
+                cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_line))
+                if cleaned is None or cleaned in seen:
+                    continue
+                seen.add(cleaned)
+                lines.append(cleaned)
     return lines
 
 
@@ -13548,19 +13566,66 @@ def _extract_aluminium_bozen_chemistry_slots_from_line(line: str) -> list[str | 
 
 def _find_chemistry_measurement_line(lines: list[str], start_index: int, expected_count: int) -> str | None:
     window = lines[start_index : min(start_index + 6, len(lines))]
-    for candidate in choose_measured_lines(window):
-        lowered = candidate.lower()
-        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
-            continue
-        values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
-        if len(values) >= min(expected_count, 3):
-            return candidate
+    best_candidate: str | None = None
+    best_score = -999
 
     for candidate in window:
         lowered = candidate.lower()
         if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
             continue
+        if _extract_chemistry_header(candidate):
+            continue
+
+        values = _extract_horizontal_chemistry_values(candidate, 99)
+        numeric_values = [value for value in values if value not in {"/", "Other", "other"}]
+        if len(numeric_values) < min(expected_count, 3):
+            continue
+
+        score = 0
+        if "remainder" in lowered or "other" in lowered:
+            score += 6
+        if re.match(r"^\s*[A-Z]?\d{3,}[A-Z0-9()/-]*\s+", candidate, re.IGNORECASE):
+            score += 5
         if any(marker in lowered for marker in ("min", "max")):
+            score -= 4
+        else:
+            score += 2
+        if len(numeric_values) >= expected_count:
+            score += 3
+        decimal_like = sum(1 for value in numeric_values if "," in value or "." in value)
+        if decimal_like >= min(expected_count, 3):
+            score += 2
+        if "-" not in candidate:
+            score += 2
+
+        plausible_small = 0
+        implausible_large = 0
+        for value in numeric_values:
+            normalized = _normalize_numeric_value(value)
+            if normalized is None:
+                continue
+            try:
+                numeric = float(normalized)
+            except ValueError:
+                continue
+            if 0 <= numeric <= 5:
+                plausible_small += 1
+            elif numeric > 5:
+                implausible_large += 1
+
+        score += plausible_small
+        score -= implausible_large * 3
+
+        if score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    if best_candidate is not None:
+        return best_candidate
+
+    for candidate in choose_measured_lines(window):
+        lowered = candidate.lower()
+        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
             continue
         values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
         if len(values) >= min(expected_count, 3):
