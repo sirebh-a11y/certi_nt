@@ -9,6 +9,8 @@ const CHEMISTRY_NUMERIC_FIELDS = new Set([
   "Ni",
   "Zn",
   "Ti",
+  "Cd",
+  "Hg",
   "Pb",
   "V",
   "Bi",

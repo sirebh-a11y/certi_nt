@@ -99,6 +99,22 @@ class ChemistryCaptureResponse(BaseModel):
     bbox: str | None
 
 
+class ChemistryTableCaptureRequest(BaseModel):
+    x1_ratio: float = Field(ge=0, le=1)
+    y1_ratio: float = Field(ge=0, le=1)
+    x2_ratio: float = Field(ge=0, le=1)
+    y2_ratio: float = Field(ge=0, le=1)
+
+
+class ChemistryTableCaptureResponse(BaseModel):
+    page_id: int
+    page_number: int
+    orientation: Literal["horizontal", "vertical", "unknown"]
+    bbox: str
+    raw_lines: list[str]
+    values: dict[str, str]
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

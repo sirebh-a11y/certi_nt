@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import re
 import pytesseract
 from pathlib import Path
@@ -43,6 +44,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionValueHistoryResponse,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
+    ChemistryTableCaptureResponse,
     DocumentSplitRowsCreateResponse,
     DocumentBatchErrorResponse,
     DocumentBatchUploadResponse,
@@ -81,8 +83,32 @@ from app.modules.document_reader.service import build_document_row_split_plan
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
+logger = logging.getLogger(__name__)
+
 
 CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
+CHEMISTRY_CAPTURE_FIELD_ORDER = [
+    "Si",
+    "Fe",
+    "Cu",
+    "Mn",
+    "Mg",
+    "Cr",
+    "Ni",
+    "Zn",
+    "Ti",
+    "Cd",
+    "Hg",
+    "Pb",
+    "V",
+    "Bi",
+    "Sn",
+    "Zr",
+    "Be",
+    "Zr+Ti",
+    "Mn+Cr",
+    "Bi+Pb",
+]
 
 
 def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
@@ -525,6 +551,97 @@ def capture_chemistry_value_from_page(*, page: DocumentPage, payload: ChemistryC
         value=fallback_value,
         raw_text=_string_or_none(fallback_text),
         bbox=f"{left},{top},{right},{bottom}",
+    )
+
+
+def _ocr_crop_lines(crop: Image.Image) -> list[str]:
+    seen: set[str] = set()
+    lines: list[str] = []
+    for config in ("--psm 6", "--psm 4", "--psm 11"):
+        try:
+            text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config=config)
+        except (OSError, pytesseract.TesseractNotFoundError):
+            continue
+        for raw_line in text.splitlines():
+            cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_line))
+            if cleaned is None or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            lines.append(cleaned)
+    return lines
+
+
+def _serialize_chemistry_capture_values(matches: dict[str, dict[str, str | int]]) -> dict[str, str]:
+    serialized: dict[str, str] = {}
+    for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER:
+        payload = matches.get(field_name)
+        if payload is None:
+            continue
+        final_value = _string_or_none(cast(str | None, payload.get("final"))) or _string_or_none(cast(str | None, payload.get("raw")))
+        normalized = _normalize_chemistry_capture_value(final_value)
+        if normalized is None:
+            continue
+        serialized[field_name] = normalized
+    return serialized
+
+
+def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryTableCaptureRequest) -> ChemistryTableCaptureResponse:
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            left_ratio = min(payload.x1_ratio, payload.x2_ratio)
+            right_ratio = max(payload.x1_ratio, payload.x2_ratio)
+            top_ratio = min(payload.y1_ratio, payload.y2_ratio)
+            bottom_ratio = max(payload.y1_ratio, payload.y2_ratio)
+            left = max(0, min(int(width * left_ratio), width - 1))
+            top = max(0, min(int(height * top_ratio), height - 1))
+            right = min(width, max(int(width * right_ratio), left + 1))
+            bottom = min(height, max(int(height * bottom_ratio), top + 1))
+            crop = image.crop((left, top, right, bottom))
+    except OSError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
+
+    lines = _ocr_crop_lines(crop)
+    horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
+    vertical_matches = _parse_vertical_chemistry_from_lines(lines, page.id)
+    horizontal_count = len(horizontal_matches)
+    vertical_count = len(vertical_matches)
+
+    if horizontal_count > vertical_count:
+        orientation = "horizontal"
+        chosen = horizontal_matches
+    elif vertical_count > horizontal_count:
+        orientation = "vertical"
+        chosen = vertical_matches
+    else:
+        orientation = "unknown" if horizontal_count == 0 else "horizontal"
+        chosen = horizontal_matches or vertical_matches
+
+    logger.warning(
+        "chemistry_table_capture_debug page_id=%s bbox=%s,%s,%s,%s horizontal=%s vertical=%s orientation=%s raw_lines=%s values=%s",
+        page.id,
+        left,
+        top,
+        right,
+        bottom,
+        horizontal_count,
+        vertical_count,
+        orientation,
+        lines,
+        list(_serialize_chemistry_capture_values(chosen).keys()),
+    )
+
+    return ChemistryTableCaptureResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        orientation=orientation,
+        bbox=f"{left},{top},{right},{bottom}",
+        raw_lines=lines,
+        values=_serialize_chemistry_capture_values(chosen),
     )
 
 
@@ -12335,6 +12452,8 @@ CHEMISTRY_FIELD_SET = {
     "Ni",
     "Zn",
     "Ti",
+    "Cd",
+    "Hg",
     "Pb",
     "V",
     "Bi",
@@ -13068,7 +13187,7 @@ def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dic
         if measurement_line is None:
             continue
 
-        values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", measurement_line, flags=re.IGNORECASE)
+        values = _extract_horizontal_chemistry_values(measurement_line, len(elements))
         if len(values) < len(elements):
             continue
 
@@ -13086,9 +13205,82 @@ def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dic
                     "final": standardized,
                 },
             )
+    if not matches:
+        for field_name, payload in _parse_headerless_horizontal_chemistry_from_lines(lines, page_id).items():
+            matches.setdefault(field_name, payload)
     for field_name, payload in _parse_vertical_chemistry_from_lines(lines, page_id).items():
         matches.setdefault(field_name, payload)
     return matches
+
+
+def _parse_headerless_horizontal_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    measured_candidates = choose_measured_lines(lines)
+    fallback_orders = (
+        ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Cd", "Hg", "Pb"],
+        ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Mn+Cr", "Cd", "Hg", "Pb"],
+    )
+
+    for candidate in measured_candidates:
+        lowered = candidate.lower()
+        if "remainder" not in lowered and "other" not in lowered:
+            continue
+
+        values = _extract_horizontal_chemistry_values(candidate, 99)
+        numeric_values = [value for value in values if value not in {"/", "Other", "other"}]
+        if len(numeric_values) < 6:
+            continue
+
+        chosen_order = next((order for order in fallback_orders if len(order) == len(numeric_values)), None)
+        if chosen_order is None:
+            continue
+
+        matches: dict[str, dict[str, str | int]] = {}
+        for field_name, raw_value in zip(chosen_order, numeric_values):
+            standardized = _normalize_numeric_value(raw_value) or raw_value.replace(",", ".")
+            matches.setdefault(
+                field_name,
+                {
+                    "page_id": page_id,
+                    "snippet": candidate,
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+        if matches:
+            return matches
+
+    return {}
+
+
+def _extract_horizontal_chemistry_values(line: str, expected_count: int) -> list[str]:
+    sanitized_line = re.sub(r"^\s*[A-Z]?\d{5,}[A-Z0-9()/-]*\s+", "", line.strip(), flags=re.IGNORECASE)
+    raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?|/|Other", sanitized_line, flags=re.IGNORECASE)
+    if len(raw_values) <= expected_count:
+        return raw_values
+
+    # Scarta eventuali token iniziali del charge/identificativo riga finché i valori
+    # successivi iniziano a somigliare davvero a percentuali chimiche.
+    for start_index in range(0, len(raw_values) - expected_count + 1):
+        candidate = raw_values[start_index : start_index + expected_count]
+        numeric_candidate = [value for value in candidate if value not in {"/", "Other", "other"}]
+        if len(numeric_candidate) < max(3, expected_count // 2):
+            continue
+        plausible = 0
+        for value in numeric_candidate:
+            normalized = _normalize_numeric_value(value)
+            if normalized is None:
+                continue
+            try:
+                numeric = float(normalized)
+            except ValueError:
+                continue
+            if 0 <= numeric <= 100:
+                plausible += 1
+        if plausible >= max(3, len(numeric_candidate) - 1):
+            return candidate
+
+    return raw_values[:expected_count]
 
 
 def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
@@ -13140,7 +13332,7 @@ def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict
 
 
 def _extract_chemistry_header(line: str) -> list[str]:
-    if any(marker in line.lower() for marker in ("chemical composition", "composizione chimica", "alloy", "charge", "notes", "mechanical")):
+    if any(marker in line.lower() for marker in ("chemical composition", "composizione chimica", "alloy", "notes", "mechanical")):
         return []
     tokens = re.findall(r"[A-Z][a-z]?(?:\+[A-Z][a-z]?)?", line)
     elements = [token for token in tokens if token in CHEMISTRY_FIELD_SET]
@@ -13358,7 +13550,17 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
     window = lines[start_index : min(start_index + 6, len(lines))]
     for candidate in choose_measured_lines(window):
         lowered = candidate.lower()
-        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "charge", "notes", "mechanical")):
+        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
+            continue
+        values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
+        if len(values) >= min(expected_count, 3):
+            return candidate
+
+    for candidate in window:
+        lowered = candidate.lower()
+        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
+            continue
+        if any(marker in lowered for marker in ("min", "max")):
             continue
         values = re.findall(r"\d+(?:[.,]\d+)?|/|Other", candidate, flags=re.IGNORECASE)
         if len(values) >= min(expected_count, 3):

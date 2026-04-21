@@ -40,6 +40,8 @@ const CHEMISTRY_FIELD_ORDER = [
   "Ni",
   "Zn",
   "Ti",
+  "Cd",
+  "Hg",
   "Pb",
   "V",
   "Bi",

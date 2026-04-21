@@ -14,6 +14,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowUpdateRequest,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
+    ChemistryTableCaptureRequest,
+    ChemistryTableCaptureResponse,
     DocumentBatchUploadResponse,
     CurrentUploadBatchResponse,
     DocumentCreateRequest,
@@ -38,6 +40,7 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
+    capture_chemistry_table_from_page,
     create_evidence,
     discard_current_upload_batch,
     detect_chemistry,
@@ -272,6 +275,17 @@ def capture_chemistry_value_route(
 ) -> ChemistryCaptureResponse:
     page = get_document_page(db, page_id)
     return capture_chemistry_value_from_page(page=page, payload=payload)
+
+
+@router.post("/document-pages/{page_id}/chemistry-table-capture", response_model=ChemistryTableCaptureResponse)
+def capture_chemistry_table_route(
+    page_id: int,
+    payload: ChemistryTableCaptureRequest,
+    _: CurrentUser,
+    db: DbSession,
+) -> ChemistryTableCaptureResponse:
+    page = get_document_page(db, page_id)
+    return capture_chemistry_table_from_page(page=page, payload=payload)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)

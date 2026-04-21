@@ -13,6 +13,8 @@ const CHEMISTRY_FIELD_ORDER = [
   "Ni",
   "Zn",
   "Ti",
+  "Cd",
+  "Hg",
   "Pb",
   "V",
   "Bi",
@@ -132,10 +134,13 @@ function calculatedValueForField(field, draft) {
   return formatDerivedNumber(numbers[0] + numbers[1]);
 }
 
-function sourceLabel(value, field, draft) {
+function sourceLabel(value, field, draft, sessionSourceOverrides) {
   const calculatedValue = calculatedValueForField(field, draft);
   if (calculatedValue && normalizeDisplayValue(draft[field]) === normalizeDisplayValue(calculatedValue)) {
     return "calcolato";
+  }
+  if (sessionSourceOverrides[field] === "manuale") {
+    return "manuale";
   }
   if (!value) {
     return "certificato - AI";
@@ -152,11 +157,20 @@ function sourceLabel(value, field, draft) {
   return value.fonte_documentale || "manuale";
 }
 
-function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, onCaptureValue, token }) {
+function ChemistryPdfPanel({
+  captureField,
+  certificateDocument,
+  onCaptureError,
+  onCaptureValue,
+  onTableCaptureProposal,
+  tableCaptureActive,
+  token,
+}) {
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
+  const [selection, setSelection] = useState(null);
 
   useEffect(() => {
     let ignore = false;
@@ -214,7 +228,6 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
     const yRatio = Math.min(Math.max((event.clientY - rect.top) / rect.height, 0), 1);
 
     setCaptureBusyPageId(page.id);
-    setError("");
     try {
       const capture = await apiRequest(
         `/acquisition/document-pages/${page.id}/chemistry-capture`,
@@ -230,19 +243,117 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
 
       if (!capture?.value) {
         const message = "Nessun valore chimico leggibile vicino al punto cliccato.";
-        setError(message);
         onCaptureError?.(message);
         return;
       }
 
       onCaptureValue(captureField, capture.value);
     } catch (requestError) {
-      setError(requestError.message);
       onCaptureError?.(requestError.message);
     } finally {
       setCaptureBusyPageId(null);
     }
   }
+
+  function handleSelectionStart(page, event) {
+    if (!tableCaptureActive || captureField) {
+      return;
+    }
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    setSelection({
+      pageId: page.id,
+      pageNumber: page.numero_pagina,
+      originX: x,
+      originY: y,
+      currentX: x,
+      currentY: y,
+      rectWidth: rect.width,
+      rectHeight: rect.height,
+    });
+  }
+
+  function handleSelectionMove(page, event) {
+    if (!selection || selection.pageId !== page.id) {
+      return;
+    }
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    setSelection((current) =>
+      current && current.pageId === page.id
+        ? {
+            ...current,
+            currentX: x,
+            currentY: y,
+            rectWidth: rect.width,
+            rectHeight: rect.height,
+          }
+        : current,
+    );
+  }
+
+  async function handleSelectionEnd(page) {
+    if (!selection || selection.pageId !== page.id) {
+      return;
+    }
+
+    const x1 = Math.min(selection.originX, selection.currentX);
+    const x2 = Math.max(selection.originX, selection.currentX);
+    const y1 = Math.min(selection.originY, selection.currentY);
+    const y2 = Math.max(selection.originY, selection.currentY);
+    const width = x2 - x1;
+    const height = y2 - y1;
+    const rectWidth = selection.rectWidth || 1;
+    const rectHeight = selection.rectHeight || 1;
+    setSelection(null);
+
+    if (width < 12 || height < 12) {
+      return;
+    }
+
+    setCaptureBusyPageId(page.id);
+    try {
+      const proposal = await apiRequest(
+        `/acquisition/document-pages/${page.id}/chemistry-table-capture`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            x1_ratio: x1 / rectWidth,
+            y1_ratio: y1 / rectHeight,
+            x2_ratio: x2 / rectWidth,
+            y2_ratio: y2 / rectHeight,
+          }),
+        },
+        token,
+      );
+
+      if (!proposal?.values || !Object.keys(proposal.values).length) {
+        const message = "Nessun valore chimico leggibile nel rettangolo selezionato.";
+        onCaptureError?.(message);
+        return;
+      }
+
+      onTableCaptureProposal?.(proposal);
+    } catch (requestError) {
+      onCaptureError?.(requestError.message);
+    } finally {
+      setCaptureBusyPageId(null);
+    }
+  }
+
+  const selectionStyle =
+    selection && selection.pageId
+      ? {
+          left: `${Math.min(selection.originX, selection.currentX)}px`,
+          top: `${Math.min(selection.originY, selection.currentY)}px`,
+          width: `${Math.abs(selection.currentX - selection.originX)}px`,
+          height: `${Math.abs(selection.currentY - selection.originY)}px`,
+        }
+      : null;
 
   return (
     <div className="rounded-2xl border border-border bg-white p-4">
@@ -276,17 +387,30 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
-              <div className="mx-auto w-fit" key={page.id}>
+              <div className="relative mx-auto w-fit" key={page.id}>
                 <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
                   Pagina {page.numero_pagina}
                 </p>
                 <img
                   alt={`Certificato pagina ${page.numero_pagina}`}
-                  className={`block rounded-xl border border-slate-200 bg-white shadow-sm ${captureField ? "cursor-crosshair" : "cursor-default"}`}
-                  onClick={(event) => handlePageClick(page, event)}
+                  className="block rounded-xl border border-slate-200 bg-white shadow-sm"
+                  draggable={false}
                   src={page.src}
-                  style={{ width: `${zoom}%`, minWidth: "100%" }}
+                  style={{ width: `${zoom}%`, minWidth: "100%", userSelect: "none" }}
                 />
+                <div
+                  className={`${captureField || tableCaptureActive ? "cursor-crosshair" : "cursor-default"} absolute inset-0`}
+                  onClick={(event) => handlePageClick(page, event)}
+                  onMouseDown={(event) => handleSelectionStart(page, event)}
+                  onMouseMove={(event) => handleSelectionMove(page, event)}
+                  onMouseUp={() => void handleSelectionEnd(page)}
+                />
+                {selection && selection.pageId === page.id && selectionStyle ? (
+                  <div
+                    className="pointer-events-none absolute rounded-lg border-2 border-sky-400 bg-sky-200/20"
+                    style={selectionStyle}
+                  />
+                ) : null}
                 {captureBusyPageId === page.id ? (
                   <p className="mt-2 text-center text-xs font-medium text-sky-700">Cattura in corso...</p>
                 ) : null}
@@ -309,20 +433,29 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
 export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow }) {
   const chemistryValues = useMemo(() => (row?.values || []).filter((value) => value.blocco === "chimica"), [row]);
   const fieldList = useMemo(() => buildFieldList(chemistryValues), [chemistryValues]);
-  const initialDraft = useMemo(() => buildInitialDraft(chemistryValues), [chemistryValues]);
+  const persistedInitialDraft = useMemo(() => buildInitialDraft(chemistryValues), [chemistryValues]);
   const valueMap = useMemo(() => new Map(chemistryValues.map((value) => [value.campo, value])), [chemistryValues]);
-  const [draft, setDraft] = useState(initialDraft);
+  const [sessionInitialDraft, setSessionInitialDraft] = useState(() => ({ ...persistedInitialDraft }));
+  const [draft, setDraft] = useState(() => ({ ...persistedInitialDraft }));
+  const [sessionSourceOverrides, setSessionSourceOverrides] = useState(() => ({}));
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [captureField, setCaptureField] = useState("");
   const [tableCaptureActive, setTableCaptureActive] = useState(false);
+  const [tableCaptureProposal, setTableCaptureProposal] = useState(null);
 
   useEffect(() => {
-    setDraft(initialDraft);
-  }, [initialDraft]);
+    const nextInitial = { ...persistedInitialDraft };
+    setSessionInitialDraft(nextInitial);
+    setDraft(nextInitial);
+    setSessionSourceOverrides({});
+  }, [persistedInitialDraft]);
 
-  const effectiveDraft = useMemo(() => buildEffectiveDraft(initialDraft, draft), [initialDraft, draft]);
-  const hasUnsavedChanges = useMemo(() => !draftsEqual(initialDraft, effectiveDraft, fieldList), [effectiveDraft, fieldList, initialDraft]);
+  const effectiveDraft = useMemo(() => buildEffectiveDraft(sessionInitialDraft, draft), [sessionInitialDraft, draft]);
+  const hasUnsavedChanges = useMemo(
+    () => !draftsEqual(sessionInitialDraft, effectiveDraft, fieldList),
+    [effectiveDraft, fieldList, sessionInitialDraft],
+  );
 
   useBeforeUnload(
     (event) => {
@@ -335,29 +468,56 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     { capture: true },
   );
 
-  function updateField(field, value) {
+  function updateField(field, value, options = {}) {
+    const { markTouched = true } = options;
     setDraft((current) => ({
       ...current,
       [field]: value,
     }));
+    if (markTouched) {
+      setSessionSourceOverrides((current) => ({
+        ...current,
+        [field]: "manuale",
+      }));
+    }
+  }
+
+  function refreshSessionSourceOverrides(nextDraft) {
+    setSessionSourceOverrides((current) => {
+      const next = {};
+      Object.entries(current).forEach(([field, source]) => {
+        if (normalizeDisplayValue(nextDraft[field]) !== normalizeDisplayValue(sessionInitialDraft[field])) {
+          next[field] = source;
+        }
+      });
+      return next;
+    });
   }
 
   function resetToInitialValues() {
-    setDraft(initialDraft);
+    const nextDraft = { ...sessionInitialDraft };
+    setDraft(nextDraft);
+    setSessionSourceOverrides({});
     setError("");
     setCaptureField("");
     setTableCaptureActive(false);
+    setTableCaptureProposal(null);
   }
 
   function handleCaptureValue(field, value) {
-    updateField(field, value);
+    updateField(field, value, { markTouched: true });
     setCaptureField("");
+    setError("");
+  }
+
+  function handleTableCaptureProposal(proposal) {
+    setTableCaptureProposal(proposal);
     setError("");
   }
 
   async function persistDraft() {
     const changedFields = fieldList.filter(
-      (field) => normalizeDisplayValue(initialDraft[field]) !== normalizeDisplayValue(effectiveDraft[field]),
+      (field) => normalizeDisplayValue(sessionInitialDraft[field]) !== normalizeDisplayValue(effectiveDraft[field]),
     );
 
     if (!changedFields.length) {
@@ -440,12 +600,37 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
 
   function handleToggleCapture(field) {
     setTableCaptureActive(false);
+    setTableCaptureProposal(null);
+    setError("");
     setCaptureField((current) => (current === field ? "" : field));
   }
 
   function handleToggleTableCapture() {
     setCaptureField("");
+    setTableCaptureProposal(null);
+    setError("");
     setTableCaptureActive((current) => !current);
+  }
+
+  function applyTableCaptureProposal() {
+    if (!tableCaptureProposal?.values) {
+      return;
+    }
+    const nextDraft = {
+      ...draft,
+      ...tableCaptureProposal.values,
+    };
+    setDraft(nextDraft);
+    setSessionSourceOverrides((current) => {
+      const next = { ...current };
+      Object.keys(tableCaptureProposal.values || {}).forEach((field) => {
+        next[field] = "manuale";
+      });
+      return next;
+    });
+    setTableCaptureActive(false);
+    setTableCaptureProposal(null);
+    setError("");
   }
 
   return (
@@ -455,6 +640,8 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         certificateDocument={certificateDocument}
         onCaptureError={setError}
         onCaptureValue={handleCaptureValue}
+        onTableCaptureProposal={handleTableCaptureProposal}
+        tableCaptureActive={tableCaptureActive}
         token={token}
       />
 
@@ -516,7 +703,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
           <div className="flex min-h-[28px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
             <div className="min-w-0 text-sm font-medium text-sky-700">
               {tableCaptureActive ? (
-                <span>Cattura tabella attiva: il prossimo passo sarà selezionare un rettangolo sulla tabella chimica.</span>
+                <span>Cattura tabella attiva: seleziona un rettangolo sopra la tabella chimica.</span>
               ) : captureField ? (
                 <span>Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.</span>
               ) : (
@@ -528,6 +715,44 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             </div>
           </div>
         </div>
+        {tableCaptureProposal ? (
+          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-sky-800">
+                  Proposta tabella:{" "}
+                  {tableCaptureProposal.orientation === "horizontal"
+                    ? "orizzontale"
+                    : tableCaptureProposal.orientation === "vertical"
+                      ? "verticale"
+                      : "incerta"}
+                </p>
+                <p className="mt-1 text-xs text-sky-700">
+                  Campi trovati:{" "}
+                  {Object.entries(tableCaptureProposal.values)
+                    .map(([field, value]) => `${field} ${value}`)
+                    .join(" · ")}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100"
+                  onClick={() => setTableCaptureProposal(null)}
+                  type="button"
+                >
+                  Scarta proposta
+                </button>
+                <button
+                  className="rounded-xl bg-sky-700 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-800"
+                  onClick={applyTableCaptureProposal}
+                  type="button"
+                >
+                  Applica proposta
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="rounded-2xl border border-border bg-white p-4">
@@ -558,7 +783,9 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
                       value={currentValue}
                     />
                     <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Origine</p>
-                    <p className="mt-0.5 text-[11px] font-medium leading-tight text-slate-600">{sourceLabel(existingValue, field, effectiveDraft)}</p>
+                    <p className="mt-0.5 text-[11px] font-medium leading-tight text-slate-600">
+                      {sourceLabel(existingValue, field, effectiveDraft, sessionSourceOverrides)}
+                    </p>
                     <button
                       className={`mt-2 w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
                         captureField === field
