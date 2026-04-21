@@ -482,12 +482,26 @@ Regole obbligatorie:
 * il `campo chimico` deve appartenere al vocabolario controllato iniziale
 * salvare solo il valore effettivo/misurato riferito alla riga/cast/charge/colata corretta
 * NON salvare in `proprietachimiche` righe `min`, `max`, limiti, target o richiami normativi
-* NON calcolare in `acquisition` campi combinati assenti nel certificato
-* campi come `Zr+Ti`, `Mn+Cr`, `Bi+Pb` si salvano solo se compaiono davvero nel certificato
+* in lettura automatica iniziale NON calcolare in `acquisition` campi combinati assenti nel certificato
+* campi come `Zr+Ti`, `Mn+Cr`, `Bi+Pb` si salvano se:
+  - compaiono davvero nel certificato
+  - oppure vengono costruiti nel workspace `Chimica` e confermati dall'utente come valori `calcolato`
 * il `valore_grezzo` puo' contenere `%`, testo di riga o frammenti del certificato
 * il `valore_standardizzato` e il `valore_finale` devono contenere solo il numero, senza `%`
 * se il certificato contiene piu' analisi, piu' colate o piu' righe chimiche, va scelta solo quella coerente con la riga acquisition
 * se questa coerenza non e' chiara, il blocco `chimica` non deve essere considerato robusto automaticamente
+
+Origini ammesse rilevanti per il blocco `chimica`:
+
+* `certificato`
+* `utente`
+* `calcolato`
+
+Regola specifica workspace `Chimica`:
+
+* `certificato` = valore letto dal caricamento automatico
+* `utente` = valore inserito o corretto manualmente
+* `calcolato` = valore derivato costruito nel workspace e confermato dall'utente
 
 Unità implicita di sistema:
 

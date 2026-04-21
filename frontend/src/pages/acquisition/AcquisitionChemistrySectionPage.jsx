@@ -30,12 +30,31 @@ const DERIVED_FIELDS = {
   "Bi+Pb": ["Bi", "Pb"],
 };
 
+const BASE_CHEMISTRY_FIELDS = CHEMISTRY_FIELD_ORDER.filter((field) => !Object.prototype.hasOwnProperty.call(DERIVED_FIELDS, field));
+
 function normalizeDisplayValue(value) {
   return (value || "").trim();
 }
 
+function formatChemistryDisplayValue(value) {
+  const raw = normalizeDisplayValue(value);
+  if (!raw) {
+    return "";
+  }
+
+  const simpleNumeric = raw.match(/^([<>]=?\s*)?(\d+)([.,](\d+))?$/);
+  if (simpleNumeric) {
+    const prefix = simpleNumeric[1] || "";
+    const integerPart = simpleNumeric[2] || "";
+    const decimalPart = simpleNumeric[4] || "";
+    return decimalPart ? `${prefix}${integerPart},${decimalPart}` : `${prefix}${integerPart}`;
+  }
+
+  return raw.replace(/(\d)\.(\d)/g, "$1,$2");
+}
+
 function chemistryDisplayValue(value) {
-  return normalizeDisplayValue(value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "");
+  return formatChemistryDisplayValue(value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "");
 }
 
 function parseLocalizedNumber(value) {
@@ -224,6 +243,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [draft, setDraft] = useState(initialDraft);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [captureField, setCaptureField] = useState("");
 
   useEffect(() => {
     setDraft(initialDraft);
@@ -253,6 +273,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   function resetToInitialValues() {
     setDraft(initialDraft);
     setError("");
+    setCaptureField("");
   }
 
   async function persistDraft() {
@@ -270,12 +291,13 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       for (const field of changedFields) {
         const existingValue = valueMap.get(field);
         const nextValue = normalizeDisplayValue(effectiveDraft[field]);
+        const persistedValue = formatChemistryDisplayValue(nextValue);
         const calculatedValue = calculatedValueForField(field, effectiveDraft);
-        const isCalculated = Boolean(calculatedValue) && nextValue === normalizeDisplayValue(calculatedValue);
-        const sourceType = isCalculated ? "calcolato" : "manuale";
+        const isCalculated = Boolean(calculatedValue) && persistedValue === formatChemistryDisplayValue(calculatedValue);
+        const sourceType = isCalculated ? "calcolato" : "utente";
         const readMethod = isCalculated ? "calcolato" : "utente";
 
-        if (!nextValue) {
+        if (!persistedValue) {
           await apiRequest(
             `/acquisition/rows/${rowId}/values`,
             {
@@ -305,9 +327,9 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             body: JSON.stringify({
               blocco: "chimica",
               campo: field,
-              valore_grezzo: existingValue?.valore_grezzo || nextValue,
-              valore_standardizzato: nextValue,
-              valore_finale: nextValue,
+              valore_grezzo: existingValue?.valore_grezzo || persistedValue,
+              valore_standardizzato: persistedValue,
+              valore_finale: persistedValue,
               stato: "confermato",
               document_evidence_id: existingValue?.document_evidence_id || null,
               metodo_lettura: readMethod,
@@ -335,6 +357,10 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
 
   function handleDiscard() {
     resetToInitialValues();
+  }
+
+  function handleToggleCapture(field) {
+    setCaptureField((current) => (current === field ? "" : field));
   }
 
   return (
@@ -376,6 +402,11 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             </button>
           </div>
         </div>
+        {captureField ? (
+          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700">
+            Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.
+          </div>
+        ) : null}
         {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
       </div>
 
@@ -408,6 +439,19 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
                     />
                     <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Origine</p>
                     <p className="mt-0.5 text-[11px] font-medium leading-tight text-slate-600">{sourceLabel(existingValue, field, effectiveDraft)}</p>
+                    {BASE_CHEMISTRY_FIELDS.includes(field) ? (
+                      <button
+                        className={`mt-2 w-full rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                          captureField === field
+                            ? "border-sky-300 bg-sky-100 text-sky-700"
+                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                        onClick={() => handleToggleCapture(field)}
+                        type="button"
+                      >
+                        {captureField === field ? "Cattura attiva" : "Cattura"}
+                      </button>
+                    ) : null}
                   </div>
                 );
               })}
