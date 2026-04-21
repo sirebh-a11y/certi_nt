@@ -584,25 +584,41 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   async function persistDraft() {
-    const changedFields = fieldList.filter(
-      (field) => normalizeDisplayValue(sessionInitialDraft[field]) !== normalizeDisplayValue(effectiveDraft[field]),
-    );
+    const fieldsToPersist = fieldList.filter((field) => {
+      const existingValue = valueMap.get(field);
+      const initialValue = normalizeDisplayValue(sessionInitialDraft[field]);
+      const currentValue = normalizeDisplayValue(effectiveDraft[field]);
+      const valueChanged = initialValue !== currentValue;
+      const sourceChanged = initialSources[field] !== currentSources[field];
+      const hasExistingPayload = Boolean(existingValue && chemistryDisplayValue(existingValue));
+      const hasCurrentPayload = Boolean(currentValue);
+      return valueChanged || sourceChanged || hasExistingPayload || hasCurrentPayload;
+    });
 
-    if (!changedFields.length) {
+    if (!fieldsToPersist.length) {
       return true;
     }
 
     setSubmitting(true);
     setError("");
     try {
-      for (const field of changedFields) {
+      for (const field of fieldsToPersist) {
         const existingValue = valueMap.get(field);
         const nextValue = normalizeDisplayValue(effectiveDraft[field]);
         const persistedValue = formatChemistryDisplayValue(nextValue);
         const calculatedValue = calculatedValueForField(field, effectiveDraft);
         const isCalculated = Boolean(calculatedValue) && persistedValue === formatChemistryDisplayValue(calculatedValue);
-        const sourceType = isCalculated ? "calcolato" : "utente";
-        const readMethod = isCalculated ? "sistema" : "utente";
+        const sourceChangedToManual = sessionSourceOverrides[field] === "manuale";
+        const sourceType = isCalculated
+          ? "calcolato"
+          : sourceChangedToManual
+            ? "utente"
+            : existingValue?.fonte_documentale || "certificato";
+        const readMethod = isCalculated
+          ? "sistema"
+          : sourceChangedToManual
+            ? "utente"
+            : existingValue?.metodo_lettura || "pdf_text";
 
         if (!persistedValue) {
           await apiRequest(

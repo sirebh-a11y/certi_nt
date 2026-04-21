@@ -22,6 +22,13 @@ function activityLabelFromState(state) {
   return "da fare";
 }
 
+function blockActivityLabel(block, state) {
+  if (block === "chimica" && state === "verde") {
+    return "confermato";
+  }
+  return activityLabelFromState(state);
+}
+
 function compactMatchReference(row) {
   if (!row.certificate_file_name) {
     return activityLabelFromState(row.block_states?.match || "rosso");
@@ -279,11 +286,11 @@ function rowFieldSortValue(row, field) {
     case "match":
       return compactMatchReference(row);
     case "chimica":
-      return activityRank(activityLabelFromState(row.block_states?.chimica || "rosso"));
+      return activityRank(blockActivityLabel("chimica", row.block_states?.chimica || "rosso"));
     case "proprieta":
-      return activityRank(activityLabelFromState(row.block_states?.proprieta || "rosso"));
+      return activityRank(blockActivityLabel("proprieta", row.block_states?.proprieta || "rosso"));
     case "note":
-      return row.note_documento || activityLabelFromState(row.block_states?.note || "rosso");
+      return row.note_documento || blockActivityLabel("note", row.block_states?.note || "rosso");
     case "stato":
       return activityRank(rowActivityState(row).label);
     default:
@@ -836,24 +843,24 @@ export default function AcquisitionListPage() {
                         state={row.block_states?.match || "rosso"}
                       />
                     </td>
-                    <td className="px-0 py-0">
-                      <BlockCell
-                        label={BLOCK_LABELS.chimica}
-                        onClick={() => openSection(row.id, "chemistry")}
-                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "chemistry")}
-                        secondary={activityLabelFromState(row.block_states?.chimica || "rosso")}
-                        state={row.block_states?.chimica || "rosso"}
-                      />
-                    </td>
-                    <td className="px-0 py-0">
-                      <BlockCell
-                        label={BLOCK_LABELS.proprieta}
-                        onClick={() => openSection(row.id, "properties")}
-                        onKeyDown={(event) => handleSectionKeyDown(event, row.id, "properties")}
-                        secondary={activityLabelFromState(row.block_states?.proprieta || "rosso")}
-                        state={row.block_states?.proprieta || "rosso"}
-                      />
-                    </td>
+                      <td className="px-0 py-0">
+                        <BlockCell
+                          label={BLOCK_LABELS.chimica}
+                          onClick={() => openSection(row.id, "chemistry")}
+                          onKeyDown={(event) => handleSectionKeyDown(event, row.id, "chemistry")}
+                          secondary={blockActivityLabel("chimica", row.block_states?.chimica || "rosso")}
+                          state={row.block_states?.chimica || "rosso"}
+                        />
+                      </td>
+                      <td className="px-0 py-0">
+                        <BlockCell
+                          label={BLOCK_LABELS.proprieta}
+                          onClick={() => openSection(row.id, "properties")}
+                          onKeyDown={(event) => handleSectionKeyDown(event, row.id, "properties")}
+                          secondary={blockActivityLabel("proprieta", row.block_states?.proprieta || "rosso")}
+                          state={row.block_states?.proprieta || "rosso"}
+                        />
+                      </td>
                     <td className="px-0 py-0">
                       <BlockCell
                         label={BLOCK_LABELS.note}
