@@ -456,7 +456,7 @@ function ChemistryPdfPanel({
   );
 }
 
-export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow }) {
+export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
   const chemistryValues = useMemo(() => (row?.values || []).filter((value) => value.blocco === "chimica"), [row]);
   const fieldList = useMemo(() => buildFieldList(chemistryValues), [chemistryValues]);
   const persistedInitialDraft = useMemo(() => buildInitialDraft(chemistryValues), [chemistryValues]);
@@ -469,6 +469,8 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [captureField, setCaptureField] = useState("");
   const [tableCaptureActive, setTableCaptureActive] = useState(false);
   const [tableCaptureProposal, setTableCaptureProposal] = useState(null);
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const workspaceRef = useRef(null);
 
   useEffect(() => {
@@ -483,6 +485,11 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     () => !draftsEqual(sessionInitialDraft, effectiveDraft, fieldList),
     [effectiveDraft, fieldList, sessionInitialDraft],
   );
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+    return () => onDirtyChange?.(false);
+  }, [hasUnsavedChanges, onDirtyChange]);
 
   useBeforeUnload(
     (event) => {
@@ -531,6 +538,13 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setTableCaptureProposal(null);
   }
 
+  function handleWorkspaceError(message) {
+    setError(message);
+    requestAnimationFrame(() => {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   function handleCaptureValue(field, value) {
     updateField(field, value, { markTouched: true });
     setCaptureField("");
@@ -565,7 +579,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         const calculatedValue = calculatedValueForField(field, effectiveDraft);
         const isCalculated = Boolean(calculatedValue) && persistedValue === formatChemistryDisplayValue(calculatedValue);
         const sourceType = isCalculated ? "calcolato" : "utente";
-        const readMethod = isCalculated ? "calcolato" : "utente";
+        const readMethod = isCalculated ? "sistema" : "utente";
 
         if (!persistedValue) {
           await apiRequest(
@@ -611,6 +625,15 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         );
       }
 
+      const confirmedDraft = { ...effectiveDraft };
+      setSessionInitialDraft(confirmedDraft);
+      setDraft(confirmedDraft);
+      setSessionSourceOverrides({});
+      setCaptureField("");
+      setTableCaptureActive(false);
+      setTableCaptureProposal(null);
+      setError("");
+
       await onRefreshRow();
       return true;
     } catch (requestError) {
@@ -622,11 +645,18 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   async function handleConfirm() {
-    await persistDraft();
+    if (submitting || confirmDialogOpen) {
+      return;
+    }
+    setConfirmDialogOpen(true);
   }
 
-  function handleDiscard() {
-    resetToInitialValues();
+  async function handleConfirmAccepted() {
+    setConfirmDialogOpen(false);
+    const saved = await persistDraft();
+    if (!saved) {
+      setConfirmDialogOpen(true);
+    }
   }
 
   function handleToggleCapture(field) {
@@ -676,17 +706,8 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         token={token}
       />
 
-      <div className="rounded-2xl border border-border bg-white p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Elementi chimici</p>
-            <p className="mt-1 text-sm text-slate-500">Griglia compatta. I campi derivati vengono completati solo se mancanti e se i campi base ci sono.</p>
-          </div>
-          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${hasUnsavedChanges ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
-            {hasUnsavedChanges ? "Modifiche non confermate" : "Allineato ai valori persistiti"}
-          </span>
-        </div>
-        <div className="overflow-hidden rounded-2xl border border-border">
+      <div className="rounded-2xl border border-slate-500 bg-slate-600 p-4">
+        <div className="overflow-hidden rounded-2xl border border-slate-400 bg-slate-50">
           <div className="overflow-x-auto">
             <div className="grid auto-cols-[82px] grid-flow-col gap-0 border-b border-slate-200">
               {fieldList.map((field) => {
@@ -756,18 +777,10 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             <button
               className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={!hasUnsavedChanges || submitting}
-              onClick={resetToInitialValues}
+              onClick={() => setResetDialogOpen(true)}
               type="button"
             >
               Valori iniziali
-            </button>
-            <button
-              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-              disabled={!hasUnsavedChanges || submitting}
-              onClick={handleDiscard}
-              type="button"
-            >
-              Non salvare
             </button>
             <button
               className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
@@ -835,12 +848,64 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         ) : null}
       </div>
 
+      {confirmDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <p className="text-lg font-semibold text-slate-900">Stai confermando la Chimica</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Stai confermando questa pagina. I valori correnti verranno salvati e i valori iniziali di questa sessione andranno persi.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => setConfirmDialogOpen(false)}
+                type="button"
+              >
+                Continua a modificare
+              </button>
+              <button
+                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                disabled={submitting}
+                onClick={handleConfirmAccepted}
+                type="button"
+              >
+                {submitting ? "Conferma..." : "Conferma"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {resetDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <p className="text-lg font-semibold text-slate-900">Tornerai ai valori iniziali</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Se continui perderai le modifiche non confermate di questa sessione e la Chimica tornerà ai valori persistiti presenti quando sei entrato nella pagina.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => setResetDialogOpen(false)}
+                type="button"
+              >
+                Continua a modificare
+              </button>
+              <button
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-100"
+                onClick={() => {
+                  setResetDialogOpen(false);
+                  resetToInitialValues();
+                }}
+                type="button"
+              >
+                Valori iniziali
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
     </div>
   );
 }
-  function handleWorkspaceError(message) {
-    setError(message);
-    requestAnimationFrame(() => {
-      workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
