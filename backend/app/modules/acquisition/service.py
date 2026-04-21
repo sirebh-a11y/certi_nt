@@ -7353,68 +7353,242 @@ def _extract_ocr_line_blocks(image: Image.Image) -> list[dict[str, int | str]]:
     return lines
 
 
+def _extract_ocr_word_blocks(image: Image.Image) -> list[dict[str, int | str | tuple[int, int, int]]]:
+    try:
+        data = pytesseract.image_to_data(image, lang="eng+ita+deu", output_type=pytesseract.Output.DICT)
+    except (OSError, pytesseract.TesseractNotFoundError):
+        return []
+
+    tokens = data.get("text") or []
+    block_nums = data.get("block_num") or []
+    par_nums = data.get("par_num") or []
+    line_nums = data.get("line_num") or []
+    lefts = data.get("left") or []
+    tops = data.get("top") or []
+    widths = data.get("width") or []
+    heights = data.get("height") or []
+
+    words: list[dict[str, int | str | tuple[int, int, int]]] = []
+    for index, token in enumerate(tokens):
+        normalized = re.sub(r"\s+", " ", (_string_or_none(token) or "").upper()).strip()
+        if not normalized:
+            continue
+        try:
+            line_key = (int(block_nums[index]), int(par_nums[index]), int(line_nums[index]))
+            x0 = int(lefts[index])
+            y0 = int(tops[index])
+            width = int(widths[index])
+            height = int(heights[index])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        words.append(
+            {
+                "text": normalized,
+                "left": x0,
+                "top": y0,
+                "right": x0 + width,
+                "bottom": y0 + height,
+                "line_key": line_key,
+            }
+        )
+    words.sort(key=lambda item: (int(item["top"]), int(item["left"])))
+    return words
+
+
+def _group_ocr_words_by_line(
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+) -> dict[tuple[int, int, int], list[dict[str, int | str | tuple[int, int, int]]]]:
+    line_map: dict[tuple[int, int, int], list[dict[str, int | str | tuple[int, int, int]]]] = {}
+    for word in words:
+        line_key = cast(tuple[int, int, int], word["line_key"])
+        line_map.setdefault(line_key, []).append(word)
+    for line_words in line_map.values():
+        line_words.sort(key=lambda item: int(item["left"]))
+    return line_map
+
+
+def _mask_word_group(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    left_limit: int | None = None,
+    right_limit: int | None = None,
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+    left_extra: int = 0,
+    right_extra: int = 0,
+) -> None:
+    if not words:
+        return
+    left = max(0, min(int(word["left"]) for word in words) - max(8, image.width // 260) - left_extra)
+    top = max(0, min(int(word["top"]) for word in words) - max(6, image.height // 320) - top_extra)
+    right = min(
+        image.width - 1,
+        max(int(word["right"]) for word in words) + max(10, image.width // 220) + right_extra,
+    )
+    bottom = min(
+        image.height - 1,
+        max(int(word["bottom"]) for word in words) + max(8, image.height // 260) + bottom_extra,
+    )
+    if left_limit is not None:
+        left = max(left, left_limit)
+    if right_limit is not None:
+        right = min(right, right_limit)
+    if right <= left or bottom <= top:
+        return
+    ImageDraw.Draw(image).rectangle((left, top, right, bottom), fill="black")
+
+
+def _mask_words_before_anchor(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    anchor_terms: tuple[str, ...],
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+) -> bool:
+    texts = [str(word["text"]).upper() for word in words]
+    anchor_index = next(
+        (
+            index
+            for index, text in enumerate(texts)
+            if any(term in text for term in anchor_terms)
+        ),
+        None,
+    )
+    if anchor_index is None or anchor_index <= 0:
+        return False
+    _mask_word_group(
+        image,
+        words[:anchor_index],
+        top_extra=top_extra,
+        bottom_extra=bottom_extra,
+    )
+    return True
+
+
+def _mask_words_from_anchor(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    anchor_terms: tuple[str, ...],
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+) -> bool:
+    texts = [str(word["text"]).upper() for word in words]
+    anchor_index = next(
+        (
+            index
+            for index, text in enumerate(texts)
+            if any(term in text for term in anchor_terms)
+        ),
+        None,
+    )
+    if anchor_index is None:
+        return False
+    _mask_word_group(
+        image,
+        words[anchor_index:],
+        top_extra=top_extra,
+        bottom_extra=bottom_extra,
+    )
+    return True
+
+
+def _mask_words_between_anchors(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    start_terms: tuple[str, ...],
+    stop_terms: tuple[str, ...],
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+) -> bool:
+    texts = [str(word["text"]).upper() for word in words]
+    start_index = next(
+        (
+            index
+            for index, text in enumerate(texts)
+            if any(term in text for term in start_terms)
+        ),
+        None,
+    )
+    if start_index is None:
+        return False
+    stop_index = next(
+        (
+            index
+            for index, text in enumerate(texts[start_index + 1 :], start=start_index + 1)
+            if any(term in text for term in stop_terms)
+        ),
+        None,
+    )
+    if stop_index is None or stop_index <= start_index:
+        return False
+    _mask_word_group(
+        image,
+        words[start_index:stop_index],
+        top_extra=top_extra,
+        bottom_extra=bottom_extra,
+    )
+    return True
+
+
+def _mask_contiguous_words_from_anchor(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    anchor_terms: tuple[str, ...],
+    stop_terms: tuple[str, ...] = (),
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+    max_gap: int | None = None,
+) -> bool:
+    texts = [str(word["text"]).upper() for word in words]
+    start_index = next(
+        (
+            index
+            for index, text in enumerate(texts)
+            if any(term in text for term in anchor_terms)
+        ),
+        None,
+    )
+    if start_index is None:
+        return False
+    if max_gap is None:
+        max_gap = max(14, image.width // 45)
+    end_index = start_index
+    previous_right = int(words[start_index]["right"])
+    for index in range(start_index + 1, len(words)):
+        text = texts[index]
+        if any(term in text for term in stop_terms):
+            break
+        gap = int(words[index]["left"]) - previous_right
+        if gap > max_gap:
+            break
+        end_index = index
+        previous_right = int(words[index]["right"])
+    _mask_word_group(
+        image,
+        words[start_index : end_index + 1],
+        top_extra=top_extra,
+        bottom_extra=bottom_extra,
+    )
+    return True
+
+
 def _mask_impol_customer_occurrence_blocks(
     image: Image.Image,
     lines: list[dict[str, int | str]],
 ) -> None:
-    stop_terms = (
-        "RECEIVER",
-        "PACKING LIST",
-        "DELIVERY TERMS",
-        "TRUCK",
-        "CONTAINER",
-        "CUSTOMER ORDER",
-        "SUPPLIER ORDER",
-        "PRODUCT DESCRIPTION",
-        "CHEMICAL COMPOSITION",
-    )
-    candidates = [
-        line
-        for line in lines
-        if "FORGIALLUMINIO" in str(line["text"]).upper()
-        and not any(term in str(line["text"]).upper() for term in stop_terms)
-    ]
-    if not candidates:
+    words = _extract_ocr_word_blocks(image)
+    if not lines or not words:
         return
-    for start_line in candidates:
-        left = int(start_line["left"])
-        is_header = left <= int(image.width * 0.4) and int(start_line["top"]) <= int(image.height * 0.28)
-        if left <= int(image.width * 0.4):
-            right_limit = int(image.width * 0.52)
-            left_limit = 0
-            max_lines = 8
-        else:
-            left_limit = max(0, left - image.width // 14)
-            right_limit = min(image.width - 1, int(start_line["right"]) + image.width // 8)
-            max_lines = 6
-        cluster = _collect_occurrence_cluster(
-            image,
-            lines,
-            start_line,
-            stop_terms=stop_terms,
-            stop_on_label=True,
-            max_preceding_lines=0,
-            max_following_lines=max_lines,
-            left_limit=left_limit,
-            right_limit=right_limit,
-            max_vertical_gap=max(30, image.height // 24),
-        )
-        if cluster:
-            _mask_line_cluster(
-                image,
-                cluster,
-                left_limit=left_limit if left > int(image.width * 0.4) else None,
-                right_limit=right_limit,
-                top_extra=max(8, image.height // 120) if is_header else 0,
-                bottom_extra=max(48, image.height // 16) if is_header else max(14, image.height // 90),
-            )
-
-
-def _mask_impol_supplier_occurrence_blocks(
-    image: Image.Image,
-    lines: list[dict[str, int | str]],
-) -> None:
-    stop_terms = (
+    line_map = _group_ocr_words_by_line(words)
+    is_certificate_page = any("INSPECTION CERTIFICATE" in str(line["text"]).upper() for line in lines)
+    keep_stop_terms = (
         "PACKING LIST",
         "CUSTOMER ORDER",
         "SUPPLIER ORDER",
@@ -7422,43 +7596,146 @@ def _mask_impol_supplier_occurrence_blocks(
         "CHEMICAL COMPOSITION",
         "MECHANICAL PROPERTIES",
         "ISSUE DATE",
+        "DELIVERY TERMS",
+        "TRUCK / CONTAINER",
     )
-    candidates = [
+    customer_terms = ("FORGIALLUMINIO", "ORGIALLUMINIO", "RGIALLUMINIO")
+    address_terms = ("VIA", "PEDAVENA", "FERMI", "32034")
+
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        line_top = int(line_words[0]["top"])
+        line_left = int(line_words[0]["left"])
+        line_height = max(int(w["bottom"]) for w in line_words) - min(int(w["top"]) for w in line_words)
+        line_extra = max(2, int(line_height * 0.15))
+
+        if "RECEIVER" in line_text and "PACKING" in line_text:
+            _mask_words_before_anchor(
+                image,
+                line_words,
+                anchor_terms=("PACKING",),
+                top_extra=line_extra,
+                bottom_extra=line_extra,
+            )
+            continue
+
+        if (
+            line_left <= int(image.width * 0.32)
+            and line_top <= int(image.height * 0.42)
+            and (
+                any(term in line_text for term in customer_terms)
+                or any(term in line_text for term in address_terms)
+            )
+            and not any(term in line_text for term in keep_stop_terms)
+        ):
+            if any(term in line_text for term in customer_terms):
+                if is_certificate_page:
+                    right_limit = int(image.width * 0.52) if "VIA" in line_text else int(image.width * 0.42)
+                    _mask_word_group(
+                        image,
+                        line_words,
+                        right_limit=right_limit,
+                        top_extra=line_extra,
+                        bottom_extra=line_extra,
+                    )
+                else:
+                    _mask_word_group(
+                        image,
+                        line_words,
+                        right_limit=int(image.width * 0.36),
+                        top_extra=line_extra,
+                        bottom_extra=line_extra,
+                    )
+            else:
+                right_limit = int(image.width * 0.22) if is_certificate_page else int(image.width * 0.30)
+                _mask_word_group(
+                    image,
+                    line_words,
+                    right_limit=right_limit,
+                    top_extra=line_extra,
+                    bottom_extra=line_extra,
+                )
+            continue
+
+        if line_top >= int(image.height * 0.84) and any(term in line_text for term in customer_terms + ("PEDAVENA",)):
+            _mask_word_group(
+                image,
+                line_words,
+                top_extra=line_extra,
+                bottom_extra=line_extra,
+            )
+
+
+def _mask_impol_supplier_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    words = _extract_ocr_word_blocks(image)
+    if not lines or not words:
+        return
+    line_map = _group_ocr_words_by_line(words)
+    is_certificate_page = any("INSPECTION CERTIFICATE" in str(line["text"]).upper() for line in lines)
+    supplier_terms = (
+        "IMPOL",
+        "IMPOL GROUP",
+        "ALUMINIUM",
+        "INDUSTRY",
+        "PARTIZANSKA",
+        "SLOVENSKA",
+        "BISTRICA",
+        "SLOVENIA",
+        "TEL.:",
+        "FAX:",
+        "INFO@IMPOL",
+        "WWW.IMPOL",
+    )
+
+    header_candidates = [
         line
         for line in lines
-        if "IMPOL" in str(line["text"]).upper()
+        if int(line["top"]) <= int(image.height * 0.24)
+        and int(line["left"]) >= int(image.width * 0.68)
+        and any(term in str(line["text"]).upper() for term in ("IMPOL", "GROUP", "ALUMINIUM", "INDUSTRY"))
         and "IMPOL PRODUCT CODE" not in str(line["text"]).upper()
-        and (
-            (int(line["top"]) <= int(image.height * 0.38) and int(line["left"]) >= int(image.width * 0.45))
-            or int(line["top"]) >= int(image.height * 0.68)
-        )
     ]
-    if not candidates:
-        return
-    for start_line in candidates:
-        is_header = int(start_line["top"]) <= int(image.height * 0.38)
-        left_limit = max(int(image.width * 0.42), int(start_line["left"]) - image.width // 12)
-        cluster = _collect_occurrence_cluster(
+    if header_candidates:
+        raw_height = max(int(line["bottom"]) for line in header_candidates) - min(int(line["top"]) for line in header_candidates)
+        vertical_extra = max(2, int(raw_height * 0.15))
+        _mask_line_cluster(
             image,
-            lines,
-            start_line,
-            stop_terms=stop_terms,
-            stop_on_label=True,
-            max_preceding_lines=2 if is_header else 1,
-            max_following_lines=8 if is_header else 5,
-            left_limit=left_limit,
-            right_limit=image.width - 1,
-            max_vertical_gap=max(34, image.height // 20) if is_header else max(26, image.height // 28),
+            header_candidates,
+            left_limit=int(image.width * 0.56),
+            top_extra=max(vertical_extra, image.height // 35),
+            bottom_extra=vertical_extra,
+            left_extra=max(60, image.width // 9),
+            right_extra=max(10, image.width // 60),
         )
-        if cluster:
-            _mask_line_cluster(
+
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        line_top = int(line_words[0]["top"])
+        line_left = int(line_words[0]["left"])
+        line_height = max(int(w["bottom"]) for w in line_words) - min(int(w["top"]) for w in line_words)
+        line_extra = max(2, int(line_height * 0.15))
+        if "IMPOL PRODUCT CODE" in line_text:
+            continue
+        if (
+            line_left >= int(image.width * 0.68)
+            and line_top <= int(image.height * 0.35)
+            and any(term in line_text for term in supplier_terms)
+        ):
+            left_extra = 0
+            left_limit = int(image.width * 0.68)
+            if "IMPOL GROUP" in line_text or "IMPOL D." in line_text or "ALUMINIUM INDUSTRY" in line_text:
+                left_extra = max(36, image.width // 14) if is_certificate_page else max(24, image.width // 18)
+                left_limit = int(image.width * 0.64) if is_certificate_page else int(image.width * 0.68)
+            _mask_word_group(
                 image,
-                cluster,
+                line_words,
                 left_limit=left_limit,
-                top_extra=max(34, image.height // 10) if is_header else max(8, image.height // 80),
-                left_extra=max(42, image.width // 8) if is_header else max(10, image.width // 120),
-                right_extra=max(22, image.width // 32) if is_header else max(14, image.width // 70),
-                bottom_extra=max(16, image.height // 70),
+                top_extra=line_extra,
+                bottom_extra=line_extra,
+                left_extra=left_extra,
             )
 
 
@@ -7573,111 +7850,204 @@ def _mask_metalba_supplier_occurrence_blocks(
                 right_extra=max(16, image.width // 80),
             )
 
+    footer_terms = ("METALBA", "ALUMINIUM", "S.P.A")
+    footer_lines = [
+        line
+        for line in lines
+        if any(term in str(line["text"]).upper() for term in footer_terms)
+        and int(line["top"]) >= int(image.height * 0.72)
+    ]
+    if footer_lines:
+        left = max(0, min(int(line["left"]) for line in footer_lines) - max(16, image.width // 80))
+        top = max(0, min(int(line["top"]) for line in footer_lines) - max(10, image.height // 120))
+        right = min(image.width - 1, max(int(line["right"]) for line in footer_lines) + max(24, image.width // 60))
+        bottom = min(image.height - 1, max(int(line["bottom"]) for line in footer_lines) + max(18, image.height // 60))
+        if right > left and bottom > top:
+            ImageDraw.Draw(image).rectangle((left, top, right, bottom), fill="black")
+
 
 def _mask_leichtmetall_customer_occurrence_blocks(
     image: Image.Image,
     lines: list[dict[str, int | str]],
 ) -> None:
-    stop_terms = (
-        "PURCHASE NUMBER",
-        "ORDER CONFIRMATION",
-        "PO-NO",
-        "CHARGE",
-        "CAST NO",
-        "CHEMICAL",
-        "MECHANICAL",
-        "QUANTITY",
-        "BATCH",
-        "ALLOY",
-        "DIAMETER",
-    )
-    candidates = [
-        line
-        for line in lines
-        if "FORGIALLUMINIO" in str(line["text"]).upper()
-        and not any(term in str(line["text"]).upper() for term in stop_terms)
-    ]
-    if not candidates:
+    del lines
+    words = _extract_ocr_word_blocks(image)
+    if not words:
         return
-    for start_line in candidates:
-        left = int(start_line["left"])
-        if left <= int(image.width * 0.55):
-            left_limit = 0
-            right_limit = min(image.width - 1, int(image.width * 0.64))
-        else:
-            left_limit = max(0, left - image.width // 14)
-            right_limit = min(image.width - 1, int(start_line["right"]) + image.width // 8)
-        cluster = _collect_occurrence_cluster(
-            image,
-            lines,
-            start_line,
-            stop_terms=stop_terms,
-            stop_on_label=True,
-            max_preceding_lines=1,
-            max_following_lines=8,
-            left_limit=left_limit,
-            right_limit=right_limit,
-            max_vertical_gap=max(30, image.height // 24),
-        )
-        if cluster:
-            _mask_line_cluster(
+    line_map = _group_ocr_words_by_line(words)
+    customer_tokens = ("FORGIALLUMINIO", "ORGIALLUMINIO", "RGIALLUMINIO")
+    mixed_stop_tokens = ("PACKING", "DELIVERY", "TRANSPORTNUMMER", "DATE")
+    address_tokens = ("VIA", "PEDAVENA", "ITALY")
+    contact_tokens = ("CUSTOMER NUMBER", "UST-ID", "CONTACT PERSON", "TEL.", "@LEICHTMETALL")
+    top_pad = max(2, int(max(4, image.height // 180) * 0.8))
+    bottom_pad = max(6, int(max(8, image.height // 120) * 0.8))
+
+    for line_words in line_map.values():
+        texts = [str(word["text"]).upper() for word in line_words]
+        line_text = " ".join(texts)
+        top = int(line_words[0]["top"])
+
+        if any(token in line_text for token in customer_tokens):
+            if not _mask_words_between_anchors(
                 image,
-                cluster,
-                left_limit=left_limit,
-                right_limit=right_limit,
-                top_extra=max(8, image.height // 110),
-                bottom_extra=max(18, image.height // 60),
-            )
+                line_words,
+                start_terms=customer_tokens,
+                stop_terms=mixed_stop_tokens,
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                if not _mask_words_from_anchor(
+                    image,
+                    line_words,
+                    anchor_terms=customer_tokens,
+                    top_extra=top_pad,
+                    bottom_extra=bottom_pad,
+                ):
+                    _mask_word_group(
+                        image,
+                        line_words,
+                        top_extra=top_pad,
+                        bottom_extra=bottom_pad,
+                    )
+            if top <= int(image.height * 0.14):
+                sensitive_words = [
+                    word for word in line_words if any(token in str(word["text"]).upper() for token in customer_tokens)
+                ]
+                if sensitive_words:
+                    top_limit = 0
+                    bottom_limit = min(
+                        image.height - 1,
+                        max(int(word["bottom"]) for word in sensitive_words) + max(10, int(max(14, image.height // 90) * 0.8)),
+                    )
+                    right_limit = min(
+                        image.width - 1,
+                        max(int(word["right"]) for word in sensitive_words) + max(14, image.width // 110),
+                    )
+                    if right_limit > 0 and bottom_limit > top_limit:
+                        ImageDraw.Draw(image).rectangle((0, top_limit, right_limit, bottom_limit), fill="black")
+            continue
+
+        if top <= int(image.height * 0.34) and any(token in line_text for token in address_tokens):
+            if not _mask_words_before_anchor(
+                image,
+                line_words,
+                anchor_terms=mixed_stop_tokens,
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                _mask_word_group(
+                    image,
+                    line_words,
+                    right_limit=min(image.width - 1, int(image.width * 0.45)),
+                    top_extra=top_pad,
+                    bottom_extra=bottom_pad,
+                )
+            continue
+
+        if any(token in line_text for token in contact_tokens):
+            if not _mask_words_from_anchor(
+                image,
+                line_words,
+                anchor_terms=("CUSTOMER", "UST-ID", "CONTACT", "TEL.", "@LEICHTMETALL"),
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                _mask_word_group(
+                    image,
+                    line_words,
+                    left_limit=int(image.width * 0.50),
+                    top_extra=top_pad,
+                    bottom_extra=bottom_pad,
+                )
 
 
 def _mask_leichtmetall_supplier_occurrence_blocks(
     image: Image.Image,
     lines: list[dict[str, int | str]],
 ) -> None:
-    stop_terms = (
-        "PURCHASE NUMBER",
-        "ORDER CONFIRMATION",
-        "PO-NO",
-        "CHARGE",
-        "CAST NO",
-        "CHEMICAL",
-        "MECHANICAL",
-        "QUANTITY",
-        "BATCH",
-        "ALLOY",
-        "DIAMETER",
-    )
-    candidates = [
-        line
-        for line in lines
-        if ("LEICHTMETALL" in str(line["text"]).upper() or "HANNOVER" in str(line["text"]).upper())
-        and int(line["top"]) <= int(image.height * 0.42)
-    ]
-    if not candidates:
+    del lines
+    words = _extract_ocr_word_blocks(image)
+    if not words:
         return
-    for start_line in candidates:
-        left_limit = 0 if int(start_line["left"]) <= int(image.width * 0.55) else max(0, int(start_line["left"]) - image.width // 14)
-        right_limit = min(image.width - 1, max(int(image.width * 0.52), int(start_line["right"]) + image.width // 10))
-        cluster = _collect_occurrence_cluster(
-            image,
-            lines,
-            start_line,
-            stop_terms=stop_terms,
-            stop_on_label=True,
-            max_preceding_lines=1,
-            max_following_lines=9,
-            left_limit=left_limit,
-            right_limit=right_limit,
-            max_vertical_gap=max(32, image.height // 22),
-        )
-        if cluster:
-            _mask_line_cluster(
+    line_map = _group_ocr_words_by_line(words)
+    header_address_tokens = ("GOTINGER", "CHAUSSEE")
+    header_logo_tokens = ("EGA", "LEICHTMETALL")
+    producer_tokens = ("PRODUCER", "HERSTELLER", "GIESSEREI", "GMBH", "HANNOVER")
+    footer_tokens = (
+        "LEICHTMETALL",
+        "ALUMINIUM GIESSEREI",
+        "HANNOVER GMBH",
+        "MANAGING DIRECTOR",
+        "THOMAS WITTE",
+        "REGISTRY COURT",
+        "HRB",
+        "COMMERZBANK",
+        "IBAN",
+        "SWIFT:",
+        "REGISTERGERICHT",
+        "GESCHAFTSFUHRER",
+        "QUALITY MANAGER",
+        "SITZ:",
+    )
+    top_pad = max(2, int(max(4, image.height // 180) * 0.8))
+    bottom_pad = max(6, int(max(8, image.height // 120) * 0.8))
+
+    for line_words in line_map.values():
+        texts = [str(word["text"]).upper() for word in line_words]
+        line_text = " ".join(texts)
+        top = int(line_words[0]["top"])
+        right = max(int(word["right"]) for word in line_words)
+
+        if any(token in line_text for token in header_address_tokens):
+            _mask_words_before_anchor(
                 image,
-                cluster,
-                left_limit=left_limit,
-                right_limit=right_limit,
-                top_extra=max(8, image.height // 110),
-                bottom_extra=max(18, image.height // 60),
+                line_words,
+                anchor_terms=("PACKING",),
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            )
+            continue
+
+        if top <= int(image.height * 0.20) and any(token in line_text for token in header_logo_tokens) and right >= int(image.width * 0.65):
+            if not _mask_words_from_anchor(
+                image,
+                line_words,
+                anchor_terms=header_logo_tokens,
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                _mask_word_group(
+                    image,
+                    line_words,
+                    left_limit=max(int(image.width * 0.60), min(int(word["left"]) for word in line_words)),
+                    right_limit=image.width - 1,
+                    top_extra=top_pad,
+                    bottom_extra=bottom_pad,
+                )
+            continue
+
+        if top <= int(image.height * 0.32) and any(token in line_text for token in producer_tokens):
+            if not _mask_words_from_anchor(
+                image,
+                line_words,
+                anchor_terms=("PRODUCER", "HERSTELLER", "LEICHTMETALL", "GIESSEREI", "GMBH", "HANNOVER"),
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                _mask_word_group(
+                    image,
+                    line_words,
+                    top_extra=top_pad,
+                    bottom_extra=bottom_pad,
+                )
+            continue
+
+        if top >= int(image.height * 0.68) and any(token in line_text for token in footer_tokens):
+            _mask_word_group(
+                image,
+                line_words,
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
             )
 
 
