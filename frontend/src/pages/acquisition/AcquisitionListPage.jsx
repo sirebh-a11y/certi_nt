@@ -636,12 +636,13 @@ export default function AcquisitionListPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <SummaryCell label="Righe" value={summary.total} />
-        <SummaryCell label="Aperte" value={summary.open} />
-        <SummaryCell label="Logica attività" value="Placeholder" />
-        <SummaryCell label="Masking e nuovo OCR icone" value="Placeholder" />
-      </div>
+        <div className="flex flex-wrap gap-2">
+          <SummaryCell label="Righe" value={summary.total} />
+          <SummaryCell label="Aperte" value={summary.open} />
+          <SummaryCell label="Logica attività" value="Placeholder" />
+          <SummaryCell label="Masking e nuovo OCR icone" value="Placeholder" />
+          <SummaryCell label="Aggiungi nuovo elemento chimico" value="Placeholder" />
+        </div>
 
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
         <div className="min-w-[220px] max-w-[220px]">
