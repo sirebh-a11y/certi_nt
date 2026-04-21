@@ -844,7 +844,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         captureField={captureField}
         certificateDocument={certificateDocument}
         footerContent={
-          <div className="space-y-2">
+          <div className="space-y-2" ref={workspaceRef}>
             {workspaceStatusBar}
             {chemistryControls}
           </div>
@@ -855,9 +855,6 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         tableCaptureActive={tableCaptureActive}
         token={token}
       />
-
-      <div className="rounded-2xl border border-border bg-white p-4" ref={workspaceRef}>
-      </div>
 
       {tableCaptureProposal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
