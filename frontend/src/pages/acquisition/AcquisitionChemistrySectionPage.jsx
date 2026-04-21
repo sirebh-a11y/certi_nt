@@ -300,11 +300,8 @@ function ChemistryPdfPanel({ captureField, certificateDocument, onCaptureError, 
         )}
       </div>
       {captureField ? (
-        <p className="mt-3 text-xs font-medium text-sky-700">
-          Modalità cattura attiva su {formatChemistryFieldLabel(captureField)}. Clicca il valore nella pagina del certificato.
-        </p>
+        <div className="sr-only">Modalità cattura attiva su {formatChemistryFieldLabel(captureField)}</div>
       ) : null}
-      {error ? <p className="mt-2 text-sm text-rose-600">{error}</p> : null}
     </div>
   );
 }
@@ -461,7 +458,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
               Modifichi tutta la pagina in bozza e confermi solo alla fine. I valori iniziali sono quelli persistiti quando entri.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
             <button
               className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={!hasUnsavedChanges || submitting}
@@ -488,12 +485,20 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             </button>
           </div>
         </div>
-        {captureField ? (
-          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700">
-            Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.
+        <div className="mt-3 min-h-[44px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="flex min-h-[28px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
+            <div className="min-w-0 text-sm font-medium text-sky-700">
+              {captureField ? (
+                <span>Cattura attiva: {formatChemistryFieldLabel(captureField)}. Il click sul PDF compilerà questo campo nella bozza, senza confermare.</span>
+              ) : (
+                <span className="invisible">Cattura attiva: spazio riservato.</span>
+              )}
+            </div>
+            <div className="min-w-0 text-sm text-rose-600 md:text-right">
+              {error ? <span>{error}</span> : <span className="invisible">Nessun errore</span>}
+            </div>
           </div>
-        ) : null}
-        {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
+        </div>
       </div>
 
       <div className="rounded-2xl border border-border bg-white p-4">
