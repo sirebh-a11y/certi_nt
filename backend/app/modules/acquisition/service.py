@@ -4369,7 +4369,7 @@ def _extract_metalba_certificate_payload_from_openai(
                 "commessa_raw: estrai il valore del campo Commessa. "
                 "product_description_raw: estrai l'intero contenuto raw del blocco Product description; se il contenuto e spezzato su piu righe ma appartiene allo stesso blocco o cella, unisci le righe con uno spazio. "
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come BARRA TONDA DIAM. "
-                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
@@ -4377,8 +4377,8 @@ def _extract_metalba_certificate_payload_from_openai(
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"commessa_raw\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
-                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
-                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
@@ -4424,7 +4424,7 @@ def _normalize_metalba_certificate_ai_payload(
                 "evidence": _string_or_none(chemistry_payload.get(field_name)),
                 "source_crop": next(iter(page_images.keys()), None),
             }
-            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
         },
         {
             next(iter(page_images.keys()), "page1"): {
@@ -8973,7 +8973,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "considera valido il numero piu vicino al label nella stessa riga, cella o area visiva; "
                 "non confondere questo campo con altri pesi, quantita o valori tabellari; "
                 "non restituire null se il label e presente e un numero e chiaramente associato nella stessa area. "
-                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; "
                 "restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
                 "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
@@ -8982,8 +8982,8 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
-                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
-                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
@@ -9078,7 +9078,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
                 "evidence": _string_or_none(chemistry_payload.get(field_name)),
                 "source_crop": next(iter(page_images.keys()), None),
             }
-            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
         },
         {
             next(iter(page_images.keys()), "page1"): {
@@ -9249,7 +9249,7 @@ def _extract_impol_certificate_payload_from_openai(
                 "supplier_order_no: estrai il valore del campo Supplier Order No. "
                 "product_description_raw: estrai l'intero contenuto raw del blocco Product description; se il contenuto e spezzato su piu righe ma appartiene allo stesso blocco o cella, unisci le righe con uno spazio. "
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come DIA. "
-                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
@@ -9257,8 +9257,8 @@ def _extract_impol_certificate_payload_from_openai(
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"packing_list_no\":\"string|null\",\"supplier_order_no\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
-                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
-                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
@@ -9312,7 +9312,7 @@ def _normalize_impol_certificate_ai_payload(
                 "evidence": _string_or_none(chemistry_payload.get(field_name)),
                 "source_crop": next(iter(page_images.keys()), None),
             }
-            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
         },
         {
             next(iter(page_images.keys()), "page1"): {
@@ -10191,7 +10191,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "alloy_raw: estrai il valore raw della lega. "
                 "diameter_raw: estrai il diametro raw del materiale. "
                 "weight_raw: estrai il peso raw del materiale. "
-                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
@@ -10199,8 +10199,8 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"po_no\":\"string|null\",\"charge_cast_no\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
-                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Pb\":\"string|null\",\"V\":\"string|null\","
-                "\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
@@ -10254,7 +10254,7 @@ def _normalize_leichtmetall_certificate_ai_payload(
                 "evidence": _string_or_none(chemistry_payload.get(field_name)),
                 "source_crop": next(iter(page_images.keys()), None),
             }
-            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
         },
         {
             next(iter(page_images.keys()), "page1"): {
@@ -12674,7 +12674,7 @@ def _detect_chemistry_matches_with_vision(
         }
     if not crops:
         return {}
-    chemistry_fields = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb"]
+    chemistry_fields = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb"]
     extracted = _extract_certificate_fields_from_openai(
         crops,
         openai_api_key=openai_api_key,
@@ -12682,7 +12682,7 @@ def _detect_chemistry_matches_with_vision(
         instruction=(
             "Leggi la tabella di composizione chimica del certificato materiale. "
             "La tabella puo essere orizzontale o verticale. "
-            "Usa solo questi elementi: Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb. "
+            "Usa solo questi elementi: Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb. "
             "Ignora righe o colonne Min e Max. "
             "Riporta solo i valori misurati chiaramente leggibili."
         ),
