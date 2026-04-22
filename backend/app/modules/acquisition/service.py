@@ -1353,6 +1353,7 @@ def _persist_split_candidate_values(
     actor_id: int,
 ) -> None:
     candidate_values = {
+        "ddt": candidate.ddt_number,
         "cdq": candidate.cdq,
         "profile_code": candidate.profile_code,
         "article_code": candidate.article_code,
@@ -9519,6 +9520,8 @@ def _extract_metalba_ddt_row_groups_with_vision(
     if fallback_ddt is None:
         local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="metalba")
         fallback_ddt = _split_plan_match_value(local_matches, "ddt")
+    if fallback_ddt is None:
+        fallback_ddt = _sanitize_metalba_ddt_number_candidate(Path(ddt_document.nome_file_originale).stem)
 
     ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_metalba_ddt_row_groups_from_openai(
         crop_definitions,
@@ -9589,7 +9592,8 @@ def _extract_metalba_ddt_row_groups_from_openai(
                 "Per l'ordine cliente utile al match usa solo il valore associato a Vs. Rif. "
                 "Non usare Rif. Ord. come ordine cliente. "
                 "Le annotazioni a penna non fanno parte del documento tecnico e non devono essere usate. "
-                "ddt_number_raw deve essere il numero completo del documento letto da DDT. "
+                "ddt_number_raw deve essere il valore raw letto sotto il campo NUMERO nella testata del documento. "
+                "Esempio valido di valore raw: DDT26-01083. "
                 "vs_rif_raw deve essere il valore raw completo del campo Vs. Rif. della stessa riga logica. "
                 "rif_ord_raw deve essere il valore raw del campo Rif. Ord. della stessa riga, se presente. "
                 "article_code_raw deve essere il valore raw del codice articolo della riga, se presente. "
@@ -10057,7 +10061,7 @@ def _sanitize_metalba_ddt_number_candidate(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    match = re.search(r"\b(\d{2}[-/]\d{5})\b", cleaned.upper())
+    match = re.search(r"\b(?:DDT\s*)?(\d{2}[-/]\d{5})\b", cleaned.upper())
     if match is None:
         return None
     return match.group(1).replace("/", "-")
