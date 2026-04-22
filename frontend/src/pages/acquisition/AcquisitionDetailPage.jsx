@@ -163,6 +163,51 @@ function readValueStateLabel(block, field, value) {
   return "da verificare";
 }
 
+function sourceDisplayLabel(block, value) {
+  if (!value || value.__missing) {
+    return "manuale";
+  }
+
+  const source = value.fonte_documentale || BLOCK_DEFAULT_SOURCE[block] || "utente";
+  const method = value.metodo_lettura || "pdf_text";
+
+  if (method === "utente" || source === "utente") {
+    return "manuale";
+  }
+
+  if (method === "calcolato" || source === "calcolato") {
+    return "calcolato";
+  }
+
+  if (method === "chatgpt") {
+    if (source === "certificato") {
+      return "certificato - AI";
+    }
+    if (source === "ddt") {
+      return "ddt - AI";
+    }
+    if (source === "ddt_certificato") {
+      return "ddt/certificato - AI";
+    }
+    return "AI";
+  }
+
+  if (source === "certificato") {
+    return "certificato";
+  }
+  if (source === "ddt") {
+    return "ddt";
+  }
+  if (source === "ddt_certificato") {
+    return "ddt/certificato";
+  }
+  if (source === "db_esterno") {
+    return "db esterno";
+  }
+
+  return source;
+}
+
 export default function AcquisitionDetailPage() {
   const { token } = useAuth();
   const { rowId } = useParams();
@@ -871,7 +916,7 @@ function BlockPanel({
                 </span>
               </td>
               <td className="px-3 py-3 text-xs text-slate-500">
-                {!isMissing ? `${value.fonte_documentale} · ${value.metodo_lettura}` : "manuale"}
+                {sourceDisplayLabel(block, value)}
               </td>
               <td className="px-3 py-3">
                 <div className="flex flex-wrap gap-2">
