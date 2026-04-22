@@ -2535,11 +2535,11 @@ def detect_chemistry(
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="chimica")
     supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
     matches = _detect_chemistry_matches(certificate_document.pages, supplier_name=supplier_name)
-    if openai_api_key and len(matches) < 4:
+    if openai_api_key:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
-            template = resolve_supplier_template(supplier_name) if supplier_name else None
             if template is not None and _supplier_supports_ai_vision_pipeline(template.supplier_key):
                 payload = _get_supplier_certificate_ai_payload(
                     db=db,
@@ -2556,8 +2556,11 @@ def detect_chemistry(
                     supplier_key=template.supplier_key if template is not None else None,
                 )
             if vision_matches:
-                for field_name, match in vision_matches.items():
-                    matches.setdefault(field_name, match)
+                if template is not None and template.supplier_key == "metalba":
+                    matches = vision_matches
+                elif len(matches) < 4:
+                    for field_name, match in vision_matches.items():
+                        matches.setdefault(field_name, match)
     if not matches:
         _record_history_event(
             db=db,
@@ -2630,11 +2633,11 @@ def detect_properties(
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="proprieta")
     supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
     matches = _detect_property_matches(certificate_document.pages, supplier_name=supplier_name)
-    if openai_api_key and len(matches) < 3:
+    if openai_api_key:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
-            template = resolve_supplier_template(supplier_name) if supplier_name else None
             if template is not None and _supplier_supports_ai_vision_pipeline(template.supplier_key):
                 payload = _get_supplier_certificate_ai_payload(
                     db=db,
@@ -2651,8 +2654,11 @@ def detect_properties(
                     supplier_key=template.supplier_key if template is not None else None,
                 )
             if vision_matches:
-                for field_name, match in vision_matches.items():
-                    matches.setdefault(field_name, match)
+                if template is not None and template.supplier_key == "metalba":
+                    matches = vision_matches
+                elif len(matches) < 3:
+                    for field_name, match in vision_matches.items():
+                        matches.setdefault(field_name, match)
     if not matches:
         _record_history_event(
             db=db,
@@ -3432,7 +3438,10 @@ def _sanitize_impol_ai_row_groups(
         product_code_raw = _string_or_none(raw_row.get("product_code_raw"))
         product_description_raw = _string_or_none(raw_row.get("product_description_raw"))
         alloy_raw = _string_or_none(raw_row.get("alloy_raw")) or product_description_raw
-        diameter_raw = _string_or_none(raw_row.get("diameter_raw")) or product_description_raw
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
+        diameter_context = " ".join(
+            part for part in (product_description_raw, diameter_raw) if _string_or_none(part) is not None
+        ) or product_description_raw or diameter_raw
         cast_raw = _string_or_none(raw_row.get("cast_raw"))
         net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
         source_crops = cast(list[str], raw_row.get("source_crops") or [])
@@ -4494,7 +4503,10 @@ def _normalize_metalba_certificate_ai_payload(
 
     commessa_raw = _string_or_none(core_payload.get("commessa_raw"))
     product_description_raw = _string_or_none(core_payload.get("product_description_raw"))
-    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or product_description_raw
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw"))
+    diameter_context = " ".join(
+        part for part in (product_description_raw, diameter_raw) if _string_or_none(part) is not None
+    ) or product_description_raw or diameter_raw
     weight_raw = _string_or_none(core_payload.get("peso_netto"))
 
     return {
@@ -4510,7 +4522,7 @@ def _normalize_metalba_certificate_ai_payload(
             ),
             "commessa_root": _normalize_commessa_root(commessa_raw),
             "product_description_raw": product_description_raw,
-            "diameter": _normalize_metalba_diameter_from_text(diameter_raw),
+            "diameter": _normalize_metalba_diameter_from_text(diameter_context),
             "net_weight": _normalize_weight_value(weight_raw),
         },
         "core_fields": core_fields,
@@ -4528,10 +4540,14 @@ def _sanitize_metalba_vision_certificate_fields(
     certificate_raw = _string_or_none(core_payload.get("numero_certificato"))
     order_raw = _string_or_none(core_payload.get("ordine_cliente"))
     article_raw = _string_or_none(core_payload.get("articolo"))
-    alloy_raw = _string_or_none(core_payload.get("lega")) or _string_or_none(core_payload.get("product_description_raw"))
+    product_description_raw = _string_or_none(core_payload.get("product_description_raw"))
+    alloy_raw = _string_or_none(core_payload.get("lega")) or product_description_raw
     cast_raw = _string_or_none(core_payload.get("colata"))
     weight_raw = _string_or_none(core_payload.get("peso_netto"))
-    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("product_description_raw"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw"))
+    diameter_context = " ".join(
+        part for part in (product_description_raw, diameter_raw) if _string_or_none(part) is not None
+    ) or product_description_raw or diameter_raw
 
     def _payload(value: str | None) -> dict[str, str | None]:
         return {"value": value, "evidence": value, "source_crop": source_crop}
@@ -4551,7 +4567,7 @@ def _sanitize_metalba_vision_certificate_fields(
             _extract_token_from_value_or_evidence(order_raw, order_raw, r"\b\d{1,3}/\d{2}\b")
         ),
         "lega_certificato": _payload(_normalize_metalba_alloy_from_text(alloy_raw)),
-        "diametro_certificato": _payload(_normalize_metalba_diameter_from_text(diameter_raw)),
+        "diametro_certificato": _payload(_normalize_metalba_diameter_from_text(diameter_context)),
         "colata_certificato": _payload(
             _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{5}[A-Z]\b", disallow={"10204"})
         ),
@@ -5503,6 +5519,7 @@ def _ensure_certificate_first_rows(
             certificate_customer_order = (
                 _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(ai_supplier_fields.get("customer_order_no"))
+                or (_string_or_none(ai_supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(ai_match_values.get("ordine_cliente_certificato"))
             )
             certificate_packing_list = _string_or_none(ai_supplier_fields.get("packing_list_no"))
@@ -5527,11 +5544,18 @@ def _ensure_certificate_first_rows(
             certificate_customer_order = (
                 _string_or_none(supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(supplier_fields.get("customer_order_no"))
+                or (_string_or_none(supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(supplier_fields.get("po_no"))
             )
             if supplier_key == "impol":
                 certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_cast = certificate_cast or _string_or_none(supplier_fields.get("charge"))
+                certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("net_weight"))
+            elif supplier_key == "metalba":
+                certificate_alloy = certificate_alloy or _normalize_metalba_alloy_from_text(
+                    _string_or_none(supplier_fields.get("product_description_raw")) or _string_or_none(supplier_fields.get("alloy"))
+                )
+                certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("net_weight"))
             certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
             certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
@@ -5624,7 +5648,7 @@ def _ensure_certificate_first_rows(
                 diametro=certificate_diameter,
                 colata=certificate_cast,
                 peso=certificate_weight,
-                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol"} else None,
+                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol", "metalba"} else None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -9699,7 +9723,10 @@ def _sanitize_metalba_ai_row_groups(
         customer_code_raw = _string_or_none(raw_row.get("customer_code_raw"))
         length_raw = _string_or_none(raw_row.get("length_raw"))
         alloy_raw = _string_or_none(raw_row.get("alloy_raw")) or product_description_raw
-        diameter_raw = _string_or_none(raw_row.get("diameter_raw")) or product_description_raw
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
+        diameter_context = " ".join(
+            part for part in (product_description_raw, diameter_raw) if _string_or_none(part) is not None
+        ) or product_description_raw or diameter_raw
         net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
         source_crops = cast(list[str], raw_row.get("source_crops") or [])
 
@@ -9710,7 +9737,7 @@ def _sanitize_metalba_ai_row_groups(
             r"\bA[0-9A-Z]{5,}\b",
         )
         alloy_value = _normalize_metalba_alloy_from_text(alloy_raw)
-        diameter_value = _normalize_metalba_diameter_from_text(diameter_raw)
+        diameter_value = _normalize_metalba_diameter_from_text(diameter_context)
         weight_value = _normalize_value_for_field("ddt", "peso", net_weight_raw)
 
         raw_payload = dict(raw_row)

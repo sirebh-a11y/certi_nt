@@ -453,6 +453,8 @@ def _build_row_split_candidates(document: Document | None, template) -> list[Rea
 
     if template.supplier_key == "impol":
         return _build_impol_row_split_candidates(lines, template.supplier_key)
+    if template.supplier_key == "metalba":
+        return _build_metalba_row_split_candidates(lines, template.supplier_key)
     if template.supplier_key == "leichtmetall":
         return _build_leichtmetall_row_split_candidates(document, template.supplier_key)
     if template.supplier_key == "grupa_kety":
@@ -676,6 +678,46 @@ def _build_impol_row_split_candidates(lines: list[str], supplier_key: str) -> li
             candidates.append(candidate)
 
     return candidates
+
+
+def _build_metalba_row_split_candidates(lines: list[str], supplier_key: str) -> list[ReaderRowSplitCandidateResponse]:
+    normalized_lines = [_normalize_line(line) for line in lines]
+
+    ddt_number = _extract_metalba_ddt_number(normalized_lines)
+    customer_order_no = _extract_metalba_vs_rif(normalized_lines)
+    rif_ord = _extract_metalba_rif_ord(normalized_lines)
+    alloy = _extract_metalba_candidate_alloy(normalized_lines)
+    diameter = _extract_metalba_candidate_diameter(normalized_lines)
+    weight = _extract_metalba_candidate_weight(normalized_lines)
+    customer_code = _extract_metalba_customer_code(normalized_lines)
+    colata = _extract_metalba_candidate_cast(normalized_lines)
+    snippets = [snippet for snippet in lines if snippet.strip()][:8]
+
+    candidate = ReaderRowSplitCandidateResponse(
+        candidate_index=1,
+        supplier_key=supplier_key,
+        ddt_number=ddt_number,
+        lega=alloy,
+        diametro=diameter,
+        peso_netto=weight,
+        colata=colata,
+        customer_order_no=customer_order_no,
+        customer_code=customer_code,
+        snippets=snippets,
+        ai_row_payload_raw=(
+            f'{{"vs_rif_raw":"{customer_order_no or ""}","rif_ord_raw":"{rif_ord or ""}",'
+            f'"customer_code_raw":"{customer_code or ""}","alloy_raw":"{alloy or ""}",'
+            f'"diameter_raw":"{diameter or ""}","net_weight_raw":"{weight or ""}",'
+            f'"cast_raw":"{colata or ""}"}}'
+        ),
+    )
+
+    strong_signal_count = sum(
+        1 for field_name in ("customer_order_no", "lega", "diametro", "peso_netto") if getattr(candidate, field_name) is not None
+    )
+    if strong_signal_count < 3:
+        return []
+    return [candidate]
 
 
 def _build_leichtmetall_row_split_candidates(
@@ -1135,6 +1177,92 @@ def _collect_grupa_kety_snippets(lines: list[str], candidate_line: str) -> list[
 
 def _normalize_line(line: str) -> str:
     return " ".join(line.upper().replace("_", " ").split())
+
+
+def _extract_metalba_ddt_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bDDT\s*([0-9]{2}[-/][0-9]{5})\b", line)
+        if match is not None:
+            return match.group(1).replace("/", "-")
+    return None
+
+
+def _extract_metalba_vs_rif(lines: list[str]) -> str | None:
+    for line in lines:
+        matches = re.findall(r"\b\d{1,3}/\d{2}\b", line)
+        if matches and ("VS. RIF" in line or "DDT" in line or "LISTA IMBALLI" in line):
+            return matches[0]
+    return None
+
+
+def _extract_metalba_rif_ord(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\b(\d{2}/\d{4})\b", line)
+        if match is not None and ("RIF. ORD" in line or "DDT" in line or "LISTA IMBALLI" in line):
+            return match.group(1)
+    return None
+
+
+def _extract_metalba_candidate_alloy(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bESTRUSO\s+A\.A\.\s*([1-9][0-9]{3}[A-Z]?)\s+(F|T\d+[A-Z0-9/-]*)\b", line)
+        if match is not None:
+            return f"{match.group(1)} {match.group(2)}"
+    return None
+
+
+def _extract_metalba_candidate_diameter(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bBARRA\s+TONDA\s+DIAM\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return match.group(1).replace(",", ".")
+    return None
+
+
+def _extract_metalba_candidate_weight(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bPESO\s+NETTO\s+KG\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\b", line)
+        if match is not None:
+            return _normalize_split_weight(match.group(1))
+    for line in lines:
+        if "TOTALI" not in line:
+            continue
+        matches = re.findall(r"[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?", line)
+        if matches:
+            return _normalize_split_weight(matches[0])
+    return None
+
+
+def _extract_metalba_customer_code(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bVOSTRO\s+CODICE\s*:?\s*(A[0-9A-Z]{5,})\b", line)
+        if match is not None:
+            return match.group(1)
+    for line in lines:
+        match = re.search(r"\b(A[0-9A-Z]{5,})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_metalba_candidate_cast(lines: list[str]) -> str | None:
+    cast_candidates: list[str] = []
+    for line in lines:
+        for token in re.findall(r"\b\d{5}[A-Z]\b", line):
+            cast_candidates.append(token)
+    return cast_candidates[-1] if cast_candidates else None
+
+
+def _normalize_split_weight(value: str) -> str:
+    token = value.replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?", token):
+        if token.count(",") == 1 and token.rfind(",") > token.rfind("."):
+            integer_part, decimal_part = token.rsplit(",", 1)
+            if len(decimal_part) == 2:
+                integer_part = integer_part.replace(".", "").replace(",", "")
+                return integer_part
+        return re.sub(r"[.,]", "", token)
+    return token.replace(",", ".")
 
 
 def _extract_aluminium_bozen_ddt_number(document: Document | None, lines: list[str]) -> str | None:

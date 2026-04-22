@@ -121,17 +121,7 @@ def extract_supplier_match_fields(
         return {}
 
     supplier_match_extractor = {
-        "metalba": lambda current_lines, current_type: (
-            {
-                "vs_rif": (values := _extract_metalba_ddt_reference_values(current_lines))[0],
-                "rif_ord_root": _normalize_commessa_root(values[1]),
-            }
-            if current_type == "ddt"
-            else {
-                "ordine_cliente": (values := _extract_metalba_certificate_reference_values(current_lines))[0],
-                "commessa_root": _normalize_commessa_root(values[1]),
-            }
-        ),
+        "metalba": lambda current_lines, current_type: _extract_metalba_match_fields(current_lines, document_type=current_type),
         "aww": lambda current_lines, current_type: (
             {
                 "your_part_number": _extract_value_near_anchor(current_lines, ("your part number",)),
@@ -723,6 +713,7 @@ def detect_certificate_core_matches(
     supplier_detector = {
         "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
         "leichtmetall": _detect_leichtmetall_certificate_core_matches,
+        "metalba": _detect_metalba_certificate_core_matches,
     }.get(supplier_key)
     if supplier_detector is not None:
         matches.update(supplier_detector(pages))
@@ -768,6 +759,42 @@ def _detect_leichtmetall_certificate_core_matches(
         if "peso_certificato" not in matches and supplier_fields.get("weight"):
             snippet = _find_line_containing_token(lines, "WEIGHT") or supplier_fields["weight"]
             matches["peso_certificato"] = _build_match(page.id, snippet, supplier_fields["weight"])
+    return matches
+
+
+def _detect_metalba_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        supplier_fields = _extract_metalba_match_fields(lines, document_type="certificato")
+        if "ordine_cliente_certificato" not in matches and supplier_fields.get("ordine_cliente"):
+            snippet = _find_line_containing_token(lines, supplier_fields["ordine_cliente"]) or supplier_fields["ordine_cliente"]
+            matches["ordine_cliente_certificato"] = _build_match(page.id, snippet, supplier_fields["ordine_cliente"])
+        if "lega_certificato" not in matches and supplier_fields.get("alloy"):
+            snippet = (
+                _find_line_containing_token(lines, "BARRA TONDA")
+                or _find_line_containing_token(lines, "ESTRUSO")
+                or supplier_fields.get("product_description_raw")
+                or supplier_fields["alloy"]
+            )
+            matches["lega_certificato"] = _build_match(page.id, snippet, supplier_fields["alloy"])
+        if "diametro_certificato" not in matches and supplier_fields.get("diameter"):
+            snippet = (
+                _find_line_containing_token(lines, "BARRA TONDA")
+                or supplier_fields.get("product_description_raw")
+                or supplier_fields["diameter"]
+            )
+            matches["diametro_certificato"] = _build_match(page.id, snippet, supplier_fields["diameter"])
+        if "peso_certificato" not in matches and supplier_fields.get("net_weight"):
+            snippet = (
+                _find_line_containing_token(lines, "NETTO")
+                or _find_line_containing_token(lines, "PESO")
+                or _find_line_containing_token(lines, "WEIGHT")
+                or supplier_fields["net_weight"]
+            )
+            matches["peso_certificato"] = _build_match(page.id, snippet, supplier_fields["net_weight"])
     return matches
 
 
@@ -2175,6 +2202,85 @@ def _extract_metalba_certificate_reference_values(lines: list[str]) -> tuple[str
             if ordine_cliente or commessa:
                 return ordine_cliente, commessa
     return None, None
+
+
+def _extract_metalba_match_fields(lines: list[str], document_type: str) -> dict[str, str]:
+    if document_type == "ddt":
+        values = _extract_metalba_ddt_reference_values(lines)
+        payload = {
+            "vs_rif": values[0] or "",
+            "rif_ord_root": _normalize_commessa_root(values[1]) or "",
+        }
+        return {key: value for key, value in payload.items() if value}
+
+    ordine_cliente, commessa = _extract_metalba_certificate_reference_values(lines)
+    product_description_raw = _extract_metalba_certificate_product_description(lines)
+    diameter = _extract_metalba_certificate_diameter(lines)
+    net_weight = _extract_metalba_certificate_net_weight(lines)
+    alloy = _normalize_metalba_certificate_alloy(product_description_raw)
+    payload = {
+        "ordine_cliente": ordine_cliente or "",
+        "commessa_root": _normalize_commessa_root(commessa) or "",
+        "product_description_raw": product_description_raw or "",
+        "diameter": diameter or "",
+        "net_weight": net_weight or "",
+        "alloy": alloy or "",
+    }
+    return {key: value for key, value in payload.items() if value}
+
+
+def _extract_metalba_certificate_product_description(lines: list[str]) -> str | None:
+    alloy_pattern = re.compile(r"\b[1-9][0-9]{3}[A-Z]?\s+(?:F|T\d+[A-Z0-9/-]*)\b", re.IGNORECASE)
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        if "BARRA TONDA" in normalized and alloy_pattern.search(normalized):
+            return line.strip()
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        if "ESTRUSO" in normalized and alloy_pattern.search(normalized):
+            return line.strip()
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        if alloy_pattern.search(normalized):
+            return line.strip()
+    return None
+
+
+def _normalize_metalba_certificate_alloy(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"\s+", " ", cleaned.upper())
+    match = re.search(r"\b([1-9][0-9]{3}[A-Z]?)\s+(F|T\d+[A-Z0-9/-]*)\b", normalized)
+    if match is None:
+        return None
+    return f"{match.group(1)} {match.group(2)}"
+
+
+def _extract_metalba_certificate_diameter(lines: list[str]) -> str | None:
+    patterns = (
+        r"\bBARRA\s+TONDA\s+DIAM\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*MM)?\b",
+        r"\bDIAM\s*([0-9]+(?:[.,][0-9]+)?)(?:\s*MM)?\b",
+    )
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match is not None:
+                return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_metalba_certificate_net_weight(lines: list[str]) -> str | None:
+    weight_pattern = re.compile(r"([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)")
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line).upper()
+        if "NETTO" not in normalized and "PESO" not in normalized and "WEIGHT" not in normalized and "KG" not in normalized:
+            continue
+        matches = weight_pattern.findall(normalized)
+        if matches:
+            return _normalize_weight(matches[-1])
+    return None
 
 
 def _normalize_mojibake_numeric_text(value: str) -> str:
