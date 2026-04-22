@@ -1834,7 +1834,7 @@ def run_autonomous_processing(
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
         certificate_ai_cache: dict[int, dict[str, object]] = {}
-        if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(supplier_key):
+        if use_ai_intervention and openai_api_key:
             for certificate_document in certificate_documents:
                 template = resolve_supplier_template(
                     certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
@@ -2471,6 +2471,8 @@ def detect_standard_notes(
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
     for field_name, match in matches.items():
+        extraction_method = str(match.get("method") or "pdf_text")
+        confidence = 0.76 if extraction_method == "chatgpt" else 0.9
         evidence = DocumentEvidence(
             document_id=certificate_document.id,
             document_page_id=match["page_id"],
@@ -2480,9 +2482,9 @@ def detect_standard_notes(
             bbox=None,
             testo_grezzo=match["snippet"],
             storage_key_derivato=None,
-            metodo_estrazione="pdf_text",
+            metodo_estrazione=extraction_method,
             mascherato=False,
-            confidenza=0.9,
+            confidenza=confidence,
             utente_creazione_id=actor_id,
         )
         db.add(evidence)
@@ -2498,9 +2500,9 @@ def detect_standard_notes(
             valore_finale=match["final"],
             stato="proposto",
             document_evidence_id=evidence.id,
-            metodo_lettura="pdf_text",
+            metodo_lettura=extraction_method,
             fonte_documentale="certificato",
-            confidenza=0.9,
+            confidenza=confidence,
             actor_id=actor_id,
         )
 
