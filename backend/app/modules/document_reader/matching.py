@@ -1123,7 +1123,14 @@ def _parse_weight_number(value: str | None) -> float | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    match = re.search(r"\d+(?:[.,]\d+)?", cleaned.replace(" ", ""))
+    token = cleaned.replace(" ", "")
+    thousand_token = re.search(r"\d{1,3}(?:[.,]\d{3})+", token)
+    if thousand_token is not None:
+        try:
+            return float(re.sub(r"[.,]", "", thousand_token.group(0)))
+        except ValueError:
+            return None
+    match = re.search(r"\d+(?:[.,]\d+)?", token)
     if match is None:
         return None
     try:

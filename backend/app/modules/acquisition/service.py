@@ -4511,7 +4511,7 @@ def _normalize_metalba_certificate_ai_payload(
             "commessa_root": _normalize_commessa_root(commessa_raw),
             "product_description_raw": product_description_raw,
             "diameter": _normalize_metalba_diameter_from_text(diameter_raw),
-            "net_weight": _normalize_numeric_value(weight_raw),
+            "net_weight": _normalize_weight_value(weight_raw),
         },
         "core_fields": core_fields,
         "chemistry": chemistry_matches,
@@ -4555,7 +4555,7 @@ def _sanitize_metalba_vision_certificate_fields(
         "colata_certificato": _payload(
             _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{5}[A-Z]\b", disallow={"10204"})
         ),
-        "peso_certificato": _payload(_normalize_numeric_value(weight_raw)),
+        "peso_certificato": _payload(_normalize_weight_value(weight_raw)),
     }
 
 
@@ -8848,7 +8848,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
         )
 
     def _normalize_weight(value: str | None, evidence: str | None) -> str | None:
-        return _normalize_numeric_value(value) or _normalize_numeric_value(evidence)
+        return _normalize_weight_value(value) or _normalize_weight_value(evidence)
 
     field_mapping = {
         "numero_certificato_certificato": ("certificate_number_raw", _normalize_certificate_number),
@@ -9404,7 +9404,7 @@ def _normalize_impol_certificate_ai_payload(
             "product_description_raw": product_description_raw,
             "charge": _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{6}\b", disallow={"10204"}),
             "diameter": _normalize_impol_diameter_from_text(diameter_raw),
-            "net_weight": _normalize_numeric_value(weight_raw),
+            "net_weight": _normalize_weight_value(weight_raw),
         },
         "core_fields": core_fields,
         "chemistry": chemistry_matches,
@@ -9452,7 +9452,7 @@ def _sanitize_impol_vision_certificate_fields(
         "colata_certificato": _payload(
             _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{6}\b", disallow={"10204"})
         ),
-        "peso_certificato": _payload(_normalize_numeric_value(weight_raw)),
+        "peso_certificato": _payload(_normalize_weight_value(weight_raw)),
     }
 
 
@@ -10341,7 +10341,7 @@ def _normalize_leichtmetall_certificate_ai_payload(
             "charge_cast_no": _normalize_leichtmetall_batch_token(charge_cast_raw),
             "alloy": _normalize_leichtmetall_alloy_from_text(alloy_raw),
             "diameter": _normalize_leichtmetall_diameter_from_text(diameter_raw),
-            "weight": _normalize_numeric_value(weight_raw),
+            "weight": _normalize_weight_value(weight_raw),
         },
         "core_fields": core_fields,
         "chemistry": chemistry_matches,
@@ -10368,7 +10368,7 @@ def _sanitize_leichtmetall_vision_certificate_fields(
     normalized_cast = _normalize_leichtmetall_batch_token(cast_raw)
     normalized_alloy = _normalize_leichtmetall_alloy_from_text(alloy_raw)
     normalized_diameter = _normalize_leichtmetall_diameter_from_text(diameter_raw)
-    normalized_weight = _normalize_numeric_value(weight_raw)
+    normalized_weight = _normalize_weight_value(weight_raw)
 
     return {
         "numero_certificato_certificato": _payload(normalized_cast),
@@ -12537,6 +12537,17 @@ def _extract_numeric_token(value: str | None) -> str | None:
     return match.group(0)
 
 
+def _normalize_weight_value(value: str | None) -> str | None:
+    token = _extract_numeric_token(value)
+    if token is None:
+        return None
+    sign = "-" if token.startswith("-") else ""
+    unsigned = token[1:] if sign else token
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", unsigned):
+        return sign + re.sub(r"[.,]", "", unsigned)
+    return sign + unsigned.replace(",", ".")
+
+
 def _normalize_numeric_value(value: str | None) -> str | None:
     token = _extract_numeric_token(value)
     if token is None:
@@ -12579,6 +12590,8 @@ def _normalize_value_for_field(blocco: str, campo: str, value: str | None) -> st
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
+    if blocco == "ddt" and campo == "peso":
+        return _normalize_weight_value(cleaned) or cleaned
     if not _is_numeric_standardized_field(blocco, campo):
         return cleaned
     return _normalize_numeric_value(cleaned) or cleaned
