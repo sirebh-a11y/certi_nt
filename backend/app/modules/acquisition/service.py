@@ -1512,41 +1512,52 @@ def _find_existing_certificate_first_row_for_split_candidate(
             row_supplier_order = _normalize_row_signature_token(supplier_fields.get("supplier_order_no"))
             row_product_code = _normalize_row_signature_token(supplier_fields.get("product_code"))
 
-            row_alloy = _normalize_row_signature_token(row.lega_base)
-            row_diameter = _normalize_row_signature_token(row.diametro)
-            row_cast = _normalize_row_signature_token(row.colata)
-            row_weight = _normalize_row_signature_token(row.peso)
+            row_alloy_raw = _string_or_none(row.lega_base)
+            row_diameter_raw = _string_or_none(row.diametro)
+            row_cast_raw = _string_or_none(row.colata)
+            row_weight_raw = _string_or_none(row.peso)
+            row_alloy = _normalize_row_signature_token(row_alloy_raw) if row_alloy_raw is not None else None
+            row_diameter = _normalize_row_signature_token(row_diameter_raw) if row_diameter_raw is not None else None
+            row_cast = _normalize_row_signature_token(row_cast_raw) if row_cast_raw is not None else None
 
             material_match_count = 0
-            available_material_signals = 0
+            comparable_material_signals = 0
 
             if normalized_lega:
-                available_material_signals += 1
                 if row_alloy is None or row_alloy != normalized_lega:
-                    continue
-                score += 80
-                material_match_count += 1
+                    if row_alloy is not None:
+                        continue
+                else:
+                    comparable_material_signals += 1
+                    score += 80
+                    material_match_count += 1
 
             if normalized_diameter:
-                available_material_signals += 1
                 if row_diameter is None or row_diameter != normalized_diameter:
-                    continue
-                score += 80
-                material_match_count += 1
+                    if row_diameter is not None:
+                        continue
+                else:
+                    comparable_material_signals += 1
+                    score += 80
+                    material_match_count += 1
 
             if normalized_colata:
-                available_material_signals += 1
                 if row_cast is None or row_cast != normalized_colata:
-                    continue
-                score += 110
-                material_match_count += 1
+                    if row_cast is not None:
+                        continue
+                else:
+                    comparable_material_signals += 1
+                    score += 110
+                    material_match_count += 1
 
             if normalized_peso:
-                available_material_signals += 1
-                if row_weight is None or not reader_weights_are_compatible(row.peso, candidate.peso_netto):
-                    continue
-                score += 70
-                material_match_count += 1
+                if row_weight_raw is None or not reader_weights_are_compatible(row.peso, candidate.peso_netto):
+                    if row_weight_raw is not None:
+                        continue
+                else:
+                    comparable_material_signals += 1
+                    score += 70
+                    material_match_count += 1
 
             # Packing list identifies the DDT and helps the bridge, but it must
             # not dominate the row match. Keep it as support only.
@@ -1559,7 +1570,9 @@ def _find_existing_certificate_first_row_for_split_candidate(
             if normalized_product_code and row_product_code == normalized_product_code:
                 score += 30
 
-            required_material_matches = min(3, available_material_signals)
+            required_material_matches = min(3, comparable_material_signals)
+            if comparable_material_signals == 0:
+                continue
             if material_match_count < required_material_matches:
                 continue
 
@@ -5497,8 +5510,6 @@ def _ensure_certificate_first_rows(
                 certificate_document.pages,
                 supplier_key=supplier_key,
             )
-            if not certificate_matches:
-                continue
             supplier_fields = reader_extract_supplier_match_fields(
                 certificate_document.pages,
                 supplier_key,
@@ -5516,6 +5527,10 @@ def _ensure_certificate_first_rows(
                 or _string_or_none(supplier_fields.get("customer_order_no"))
                 or _string_or_none(supplier_fields.get("po_no"))
             )
+            if supplier_key == "impol":
+                certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
+                certificate_cast = certificate_cast or _string_or_none(supplier_fields.get("charge"))
+                certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("net_weight"))
             certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
             certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
 
@@ -5607,7 +5622,7 @@ def _ensure_certificate_first_rows(
                 diametro=certificate_diameter,
                 colata=certificate_cast,
                 peso=certificate_weight,
-                ordine=certificate_customer_order if supplier_key == "leichtmetall" else None,
+                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol"} else None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",

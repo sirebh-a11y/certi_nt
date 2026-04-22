@@ -662,10 +662,17 @@ def _build_impol_row_split_candidates(lines: list[str], supplier_key: str) -> li
             product_code=_extract_impol_candidate_product_code(section_normalized),
             snippets=[snippet for snippet in section_original if snippet.strip()][:6],
         )
-        if any(
-            getattr(candidate, field) is not None
-            for field in ("lega", "diametro", "peso_netto", "colata", "customer_order_no", "supplier_order_no", "product_code")
-        ):
+        strong_signal_count = sum(
+            1
+            for field in ("lega", "colata", "supplier_order_no", "product_code")
+            if getattr(candidate, field) is not None
+        )
+        support_signal_count = sum(
+            1
+            for field in ("diametro", "peso_netto", "customer_order_no")
+            if getattr(candidate, field) is not None
+        )
+        if strong_signal_count >= 1 and (strong_signal_count + support_signal_count) >= 2:
             candidates.append(candidate)
 
     return candidates
