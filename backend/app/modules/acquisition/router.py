@@ -29,6 +29,10 @@ from app.modules.acquisition.schemas import (
     DocumentSplitRowsCreateResponse,
     MatchResponse,
     MatchUpsertRequest,
+    PropertiesCaptureRequest,
+    PropertiesCaptureResponse,
+    PropertiesTableCaptureRequest,
+    PropertiesTableCaptureResponse,
     ReadValueResponse,
     ReadValueUpsertRequest,
 )
@@ -41,6 +45,8 @@ from app.modules.acquisition.service import (
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
     capture_chemistry_table_from_page,
+    capture_properties_value_from_page,
+    capture_properties_table_from_page,
     create_evidence,
     discard_current_upload_batch,
     detect_chemistry,
@@ -286,6 +292,28 @@ def capture_chemistry_table_route(
 ) -> ChemistryTableCaptureResponse:
     page = get_document_page(db, page_id)
     return capture_chemistry_table_from_page(page=page, payload=payload)
+
+
+@router.post("/document-pages/{page_id}/properties-capture", response_model=PropertiesCaptureResponse)
+def capture_properties_value_route(
+    page_id: int,
+    payload: PropertiesCaptureRequest,
+    _: CurrentUser,
+    db: DbSession,
+) -> PropertiesCaptureResponse:
+    page = get_document_page(db, page_id)
+    return capture_properties_value_from_page(page=page, payload=payload)
+
+
+@router.post("/document-pages/{page_id}/properties-table-capture", response_model=PropertiesTableCaptureResponse)
+def capture_properties_table_route(
+    page_id: int,
+    payload: PropertiesTableCaptureRequest,
+    _: CurrentUser,
+    db: DbSession,
+) -> PropertiesTableCaptureResponse:
+    page = get_document_page(db, page_id)
+    return capture_properties_table_from_page(page=page, payload=payload)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)

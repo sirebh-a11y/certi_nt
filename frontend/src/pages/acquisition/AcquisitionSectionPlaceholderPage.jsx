@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import AcquisitionChemistrySectionPage from "./AcquisitionChemistrySectionPage";
+import AcquisitionPropertiesSectionPage from "./AcquisitionPropertiesSectionPage";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 
 const SECTION_TITLES = {
@@ -23,7 +24,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   const [certificateDocument, setCertificateDocument] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [chemistryDirty, setChemistryDirty] = useState(false);
+  const [sectionDirty, setSectionDirty] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("");
 
@@ -82,12 +83,12 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [rowId, token]);
 
   useEffect(() => {
-    if (sectionKey !== "chemistry") {
+    if (!["chemistry", "properties"].includes(sectionKey)) {
       return undefined;
     }
 
     function handleDocumentClick(event) {
-      if (!chemistryDirty) {
+      if (!sectionDirty) {
         return;
       }
       const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
@@ -113,10 +114,10 @@ export default function AcquisitionSectionPlaceholderPage() {
 
     document.addEventListener("click", handleDocumentClick, true);
     return () => document.removeEventListener("click", handleDocumentClick, true);
-  }, [chemistryDirty, location.hash, location.pathname, location.search, sectionKey]);
+  }, [location.hash, location.pathname, location.search, sectionDirty, sectionKey]);
 
   function handleBackToList() {
-    if (sectionKey === "chemistry" && chemistryDirty) {
+    if (["chemistry", "properties"].includes(sectionKey) && sectionDirty) {
       setPendingPath("/acquisition");
       setExitDialogOpen(true);
       return;
@@ -126,7 +127,7 @@ export default function AcquisitionSectionPlaceholderPage() {
 
   function handleLeaveWithoutConfirm() {
     setExitDialogOpen(false);
-    setChemistryDirty(false);
+    setSectionDirty(false);
     navigate(pendingPath || "/acquisition");
   }
 
@@ -156,7 +157,17 @@ export default function AcquisitionSectionPlaceholderPage() {
       {row && sectionKey === "chemistry" ? (
         <AcquisitionChemistrySectionPage
           certificateDocument={certificateDocument}
-          onDirtyChange={setChemistryDirty}
+          onDirtyChange={setSectionDirty}
+          onRefreshRow={loadRow}
+          row={row}
+          rowId={rowId}
+          token={token}
+        />
+      ) : null}
+      {row && sectionKey === "properties" ? (
+        <AcquisitionPropertiesSectionPage
+          certificateDocument={certificateDocument}
+          onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
           row={row}
           rowId={rowId}
@@ -169,7 +180,7 @@ export default function AcquisitionSectionPlaceholderPage() {
           <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
             <p className="text-lg font-semibold text-slate-900">Hai modifiche non confermate</p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Se esci adesso perderai i dati non confermati della sessione Chimica. Vuoi davvero tornare alla lista?
+              Se esci adesso perderai i dati non confermati della sessione {title}. Vuoi davvero tornare alla lista?
             </p>
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button

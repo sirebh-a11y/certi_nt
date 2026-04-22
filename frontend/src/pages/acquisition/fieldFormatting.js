@@ -21,7 +21,7 @@ const CHEMISTRY_NUMERIC_FIELDS = new Set([
   "Mn+Cr",
   "Bi+Pb",
 ]);
-const PROPERTY_NUMERIC_FIELDS = new Set(["HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "IACS%"]);
+const PROPERTY_NUMERIC_FIELDS = new Set(["HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "Rp0.2/Rm", "IACS%"]);
 
 function isNumericField(block, field) {
   if (block === "ddt") {

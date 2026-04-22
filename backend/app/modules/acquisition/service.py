@@ -44,7 +44,12 @@ from app.modules.acquisition.schemas import (
     AcquisitionValueHistoryResponse,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
+    ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    PropertiesCaptureRequest,
+    PropertiesCaptureResponse,
+    PropertiesTableCaptureRequest,
+    PropertiesTableCaptureResponse,
     DocumentSplitRowsCreateResponse,
     DocumentBatchErrorResponse,
     DocumentBatchUploadResponse,
@@ -109,6 +114,7 @@ CHEMISTRY_CAPTURE_FIELD_ORDER = [
     "Mn+Cr",
     "Bi+Pb",
 ]
+PROPERTY_CAPTURE_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 
 
 def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
@@ -416,6 +422,23 @@ def _normalize_chemistry_capture_value(value: str | None) -> str | None:
     return f"{prefix}{number}"
 
 
+def _normalize_property_field_name(field_name: str | None) -> str | None:
+    cleaned = _string_or_none(field_name)
+    if cleaned is None:
+        return None
+    compact = cleaned.replace(" ", "")
+    if compact == "Rp0.2/Rm":
+        return "Rp0.2 / Rm"
+    return cleaned
+
+
+def _normalize_property_capture_value(value: str | None) -> str | None:
+    token = _extract_numeric_token(value)
+    if token is None:
+        return None
+    return token.replace(".", ",")
+
+
 def _extract_capture_candidates_from_crop(
     crop: Image.Image,
     *,
@@ -423,6 +446,7 @@ def _extract_capture_candidates_from_crop(
     click_y: int,
     left_offset: int,
     top_offset: int,
+    normalizer,
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
     seen: set[tuple[str, int, int, int, int]] = set()
@@ -476,7 +500,7 @@ def _extract_capture_candidates_from_crop(
                     previous = str(ordered[idx - 1]["text"]).replace(" ", "")
                     if previous in {"<", "<=", "≤"}:
                         prefixed_text = f"{previous}{raw_text}"
-                normalized_value = _normalize_chemistry_capture_value(prefixed_text) or _normalize_chemistry_capture_value(raw_text)
+                normalized_value = normalizer(prefixed_text) or normalizer(raw_text)
                 if normalized_value is None:
                     continue
 
@@ -529,6 +553,7 @@ def capture_chemistry_value_from_page(*, page: DocumentPage, payload: ChemistryC
         click_y=click_y,
         left_offset=left,
         top_offset=top,
+        normalizer=_normalize_chemistry_capture_value,
     )
     if candidates:
         best = min(candidates, key=lambda item: int(item["distance"]))
@@ -603,6 +628,20 @@ def _serialize_chemistry_capture_values(matches: dict[str, dict[str, str | int]]
     return serialized
 
 
+def _serialize_properties_capture_values(matches: dict[str, dict[str, str | int]]) -> dict[str, str]:
+    serialized: dict[str, str] = {}
+    for field_name in PROPERTY_CAPTURE_FIELD_ORDER:
+        payload = matches.get(field_name)
+        if payload is None:
+            continue
+        final_value = _string_or_none(cast(str | None, payload.get("final"))) or _string_or_none(cast(str | None, payload.get("raw")))
+        normalized = _normalize_property_capture_value(final_value)
+        if normalized is None:
+            continue
+        serialized[field_name] = normalized
+    return serialized
+
+
 def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryTableCaptureRequest) -> ChemistryTableCaptureResponse:
     image_path = get_document_page_image_path(page)
     if not image_path.exists():
@@ -660,6 +699,121 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
         bbox=f"{left},{top},{right},{bottom}",
         raw_lines=lines,
         values=_serialize_chemistry_capture_values(chosen),
+    )
+
+
+def capture_properties_value_from_page(*, page: DocumentPage, payload: PropertiesCaptureRequest) -> PropertiesCaptureResponse:
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            click_x = min(max(int(width * payload.x_ratio), 0), max(width - 1, 0))
+            click_y = min(max(int(height * payload.y_ratio), 0), max(height - 1, 0))
+            half_width = max(140, int(width * 0.08))
+            half_height = max(34, int(height * 0.03))
+            left = max(0, click_x - half_width)
+            top = max(0, click_y - half_height)
+            right = min(width, click_x + half_width)
+            bottom = min(height, click_y + half_height)
+            crop = image.crop((left, top, right, bottom))
+    except OSError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
+
+    candidates = _extract_capture_candidates_from_crop(
+        crop,
+        click_x=click_x,
+        click_y=click_y,
+        left_offset=left,
+        top_offset=top,
+        normalizer=_normalize_property_capture_value,
+    )
+    if candidates:
+        best = min(candidates, key=lambda item: int(item["distance"]))
+        return PropertiesCaptureResponse(
+            page_id=page.id,
+            page_number=page.numero_pagina,
+            value=cast(str | None, best.get("value")),
+            raw_text=cast(str | None, best.get("raw_text")),
+            bbox=cast(str | None, best.get("bbox")),
+        )
+
+    try:
+        fallback_text = pytesseract.image_to_string(crop, lang="eng+ita+deu", config="--psm 6")
+    except (OSError, pytesseract.TesseractNotFoundError):
+        fallback_text = ""
+    fallback_value = _normalize_property_capture_value(fallback_text)
+    return PropertiesCaptureResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        value=fallback_value,
+        raw_text=_string_or_none(fallback_text),
+        bbox=f"{left},{top},{right},{bottom}",
+    )
+
+
+def capture_properties_table_from_page(*, page: DocumentPage, payload: PropertiesTableCaptureRequest) -> PropertiesTableCaptureResponse:
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document page image not available")
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            left_ratio = min(payload.x1_ratio, payload.x2_ratio)
+            right_ratio = max(payload.x1_ratio, payload.x2_ratio)
+            top_ratio = min(payload.y1_ratio, payload.y2_ratio)
+            bottom_ratio = max(payload.y1_ratio, payload.y2_ratio)
+            left = max(0, min(int(width * left_ratio), width - 1))
+            top = max(0, min(int(height * top_ratio), height - 1))
+            right = min(width, max(int(width * right_ratio), left + 1))
+            bottom = min(height, max(int(height * bottom_ratio), top + 1))
+            crop = image.crop((left, top, right, bottom))
+    except OSError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
+
+    lines = _ocr_crop_lines(crop)
+    horizontal_matches: dict[str, dict[str, str | int]] = {}
+    for field_name, payload_match in _parse_properties_from_numeric_cluster(lines, page.id).items():
+        normalized_field_name = _normalize_property_field_name(field_name)
+        if normalized_field_name is not None:
+            horizontal_matches.setdefault(normalized_field_name, payload_match)
+    for field_name, payload_match in _parse_properties_from_compact_lines(lines, page.id).items():
+        normalized_field_name = _normalize_property_field_name(field_name)
+        if normalized_field_name is not None:
+            horizontal_matches.setdefault(normalized_field_name, payload_match)
+    for field_name, payload_match in _parse_properties_from_spec_lines(lines, page.id).items():
+        normalized_field_name = _normalize_property_field_name(field_name)
+        if normalized_field_name is not None:
+            horizontal_matches.setdefault(normalized_field_name, payload_match)
+
+    vertical_matches = {
+        normalized_field_name: payload_match
+        for field_name, payload_match in _parse_vertical_properties_from_lines(lines, page.id).items()
+        if (normalized_field_name := _normalize_property_field_name(field_name)) is not None
+    }
+    horizontal_count = len(horizontal_matches)
+    vertical_count = len(vertical_matches)
+
+    if horizontal_count > vertical_count:
+        orientation = "horizontal"
+        chosen = horizontal_matches
+    elif vertical_count > horizontal_count:
+        orientation = "vertical"
+        chosen = vertical_matches
+    else:
+        orientation = "unknown" if horizontal_count == 0 else "horizontal"
+        chosen = horizontal_matches or vertical_matches
+
+    return PropertiesTableCaptureResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        orientation=orientation,
+        bbox=f"{left},{top},{right},{bottom}",
+        raw_lines=lines,
+        values=_serialize_properties_capture_values(chosen),
     )
 
 
@@ -2672,9 +2826,16 @@ def detect_properties(
         db.commit()
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
-    _prune_unconfirmed_block_values(db=db, row_id=row.id, block="proprieta", keep_fields=set(matches.keys()))
-
+    normalized_matches: dict[str, dict[str, str | int]] = {}
     for field_name, match in matches.items():
+        normalized_field_name = _normalize_property_field_name(field_name)
+        if normalized_field_name is None:
+            continue
+        normalized_matches.setdefault(normalized_field_name, match)
+
+    _prune_unconfirmed_block_values(db=db, row_id=row.id, block="proprieta", keep_fields=set(normalized_matches.keys()))
+
+    for field_name, match in normalized_matches.items():
         extraction_method = str(match.get("method") or "pdf_text")
         confidence = 0.74 if extraction_method == "chatgpt" else 0.86
         evidence = _create_text_evidence(
@@ -2709,7 +2870,7 @@ def detect_properties(
         blocco="proprieta",
         azione="proprieta_rilevate",
         user_id=actor_id,
-        nota_breve=", ".join(sorted(matches.keys())),
+        nota_breve=", ".join(sorted(normalized_matches.keys())),
     )
     _sync_row_statuses(db, row)
     db.commit()
@@ -12542,7 +12703,7 @@ CHEMISTRY_FIELD_SET = {
 }
 
 
-PROPERTY_FIELD_SET = {"HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "IACS%"}
+PROPERTY_FIELD_SET = {"HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "Rp0.2/Rm", "IACS%"}
 
 DDT_NUMERIC_FIELD_SET = {"diametro", "peso"}
 
@@ -12941,7 +13102,7 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
     candidate_line = None
     for line in choose_measured_lines(window):
         lowered = line.lower()
-        if lowered.startswith("spec."):
+        if lowered.startswith("spec.") or "min" in lowered or "max" in lowered:
             continue
         numbers = re.findall(r"\d+(?:[.,]\d+)?", line)
         if len(numbers) >= 4:
@@ -12954,19 +13115,20 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
         return matches
 
     numbers = re.findall(r"\d+(?:[.,]\d+)?", candidate_line)
-    if len(numbers) < 4:
+    candidate_values = _extract_property_candidate_values(numbers)
+    if candidate_values is None:
         for field_name, payload in _parse_vertical_properties_from_lines(window, page_id).items():
             matches.setdefault(field_name, payload)
         return matches
 
     mapping = {
-        "Rm": numbers[0],
-        "Rp0.2": numbers[1],
-        "A%": numbers[2],
-        "HB": numbers[3],
+        "Rm": candidate_values[0],
+        "Rp0.2": candidate_values[1],
+        "A%": candidate_values[2],
+        "HB": candidate_values[3],
     }
-    if len(numbers) >= 5:
-        mapping["IACS%"] = numbers[4]
+    if len(candidate_values) >= 5:
+        mapping["IACS%"] = candidate_values[4]
 
     for field_name, raw_value in mapping.items():
         standardized = raw_value.replace(",", ".")
@@ -13185,16 +13347,10 @@ def _aggregate_measured_property_candidates(
 def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
     for index in range(len(lines)):
         normalized_line = _normalize_mojibake_numeric_text(lines[index])
+        lowered_line = normalized_line.lower()
         inline_values = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
-        if len(inline_values) >= 4:
-            candidate_values = [_normalize_numeric_value(value) or value for value in inline_values[:5]]
-            if len(candidate_values) >= 5 and re.fullmatch(r"\d+", inline_values[0] or ""):
-                try:
-                    first_value = float(candidate_values[0])
-                except ValueError:
-                    first_value = -1
-                if 0 <= first_value <= 10:
-                    candidate_values = candidate_values[1:]
+        if len(inline_values) >= 4 and "min" not in lowered_line and "max" not in lowered_line:
+            candidate_values = _extract_property_candidate_values(inline_values)
             inline_match = _build_property_match_from_candidate_values(candidate_values, page_id)
             if inline_match:
                 return inline_match
@@ -13211,20 +13367,53 @@ def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> di
         if len(cluster) < 4:
             continue
 
-        candidate_values = cluster[:5]
-        if len(candidate_values) >= 5 and re.fullmatch(r"\d+", candidate_values[0] or ""):
-            try:
-                first_value = float(candidate_values[0])
-            except ValueError:
-                first_value = -1
-            if 0 <= first_value <= 10:
-                candidate_values = candidate_values[1:]
+        candidate_values = _extract_property_candidate_values(cluster)
+        if candidate_values is None:
+            continue
 
         cluster_match = _build_property_match_from_candidate_values(candidate_values, page_id)
         if cluster_match:
             return cluster_match
 
     return {}
+
+
+def _extract_property_candidate_values(raw_values: list[str]) -> list[str] | None:
+    normalized_values = [_normalize_numeric_value(value) or value for value in raw_values]
+    best_candidate: list[str] | None = None
+    best_score = -999
+
+    for window_size in (5, 4):
+        if len(normalized_values) < window_size:
+            continue
+        for start_index in range(0, len(normalized_values) - window_size + 1):
+            candidate = normalized_values[start_index : start_index + window_size]
+            rm = _safe_float(candidate[0])
+            rp02 = _safe_float(candidate[1])
+            a_pct = _safe_float(candidate[2])
+            hb = _safe_float(candidate[3])
+            if None in (rm, rp02, a_pct, hb):
+                continue
+            if not (rm >= 100 and rp02 >= 80 and 0 < a_pct <= 60 and 20 <= hb <= 250):
+                continue
+
+            score = 0
+            if rp02 <= rm:
+                score += 4
+            if start_index > 0:
+                score += min(start_index, 3)
+            if window_size == 5:
+                iacs = _safe_float(candidate[4])
+                if iacs is not None and 0 < iacs <= 100:
+                    score += 2
+                else:
+                    score -= 3
+
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+    return best_candidate
 
 
 def _build_property_match_from_candidate_values(
@@ -13372,6 +13561,57 @@ def _extract_horizontal_chemistry_values(line: str, expected_count: int) -> list
     return raw_values[:expected_count]
 
 
+def _score_chemistry_candidate_against_limits(
+    candidate_values: list[str],
+    *,
+    min_values: list[str] | None,
+    max_values: list[str] | None,
+) -> int:
+    score = 0
+    for index, raw_candidate in enumerate(candidate_values):
+        if raw_candidate in {"/", "Other", "other"}:
+            continue
+        candidate_numeric = _safe_float(raw_candidate)
+        if candidate_numeric is None:
+            continue
+
+        min_numeric = _safe_float(min_values[index]) if min_values and index < len(min_values) else None
+        max_numeric = _safe_float(max_values[index]) if max_values and index < len(max_values) else None
+
+        if min_numeric is not None and max_numeric is not None:
+            if min_numeric <= candidate_numeric <= max_numeric:
+                score += 4 if min_numeric < candidate_numeric < max_numeric else 2
+            elif candidate_numeric < min_numeric or candidate_numeric > max_numeric:
+                score -= 6
+        elif min_numeric is not None:
+            score += 2 if candidate_numeric >= min_numeric else -4
+        elif max_numeric is not None:
+            score += 2 if candidate_numeric <= max_numeric else -4
+    return score
+
+
+def _infer_chemistry_limit_lines_from_window(
+    lines: list[str],
+    *,
+    candidate_line: str,
+    expected_count: int,
+) -> tuple[list[str] | None, list[str] | None]:
+    numeric_lines: list[tuple[str, list[str]]] = []
+    for line in lines:
+      values = _extract_horizontal_chemistry_values(line, expected_count)
+      numeric_values = [value for value in values if value not in {"/", "Other", "other"}]
+      if len(numeric_values) >= min(expected_count, 3):
+          numeric_lines.append((line, values))
+
+    candidate_index = next((index for index, item in enumerate(numeric_lines) if item[0] == candidate_line), None)
+    if candidate_index is None or candidate_index < 2:
+        return None, None
+
+    lower_candidate = numeric_lines[candidate_index - 2][1]
+    upper_candidate = numeric_lines[candidate_index - 1][1]
+    return lower_candidate, upper_candidate
+
+
 def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
     anchor_index = None
     for index, line in enumerate(lines):
@@ -13421,7 +13661,8 @@ def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict
 
 
 def _extract_chemistry_header(line: str) -> list[str]:
-    if any(marker in line.lower() for marker in ("chemical composition", "composizione chimica", "alloy", "notes", "mechanical")):
+    lowered = line.lower()
+    if any(marker in lowered for marker in ("chemical composition", "composizione chimica", "notes", "mechanical")):
         return []
     tokens = re.findall(r"[A-Z][a-z]?(?:\+[A-Z][a-z]?)?", line)
     elements = [token for token in tokens if token in CHEMISTRY_FIELD_SET]
@@ -13640,7 +13881,18 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
     best_candidate: str | None = None
     best_score = -999
 
-    for candidate in window:
+    measured_candidates = choose_measured_lines(window)
+    supplemental_candidates = [
+        candidate
+        for candidate in window
+        if re.search(r"\d", candidate)
+        and not any(marker in candidate.lower() for marker in ("min", "max", "spec.", "norm", "alloy", "notes", "mechanical"))
+    ]
+    candidate_pool = list(dict.fromkeys([*measured_candidates, *supplemental_candidates])) or window
+    min_line = next((line for line in window if "min" in line.lower()), None)
+    max_line = next((line for line in window if "max" in line.lower()), None)
+
+    for candidate in candidate_pool:
         lowered = candidate.lower()
         if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
             continue
@@ -13652,13 +13904,24 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
         if len(numeric_values) < min(expected_count, 3):
             continue
 
+        min_values = _extract_horizontal_chemistry_values(min_line, expected_count) if min_line else None
+        max_values = _extract_horizontal_chemistry_values(max_line, expected_count) if max_line else None
+        if min_values is None and max_values is None:
+            inferred_min_values, inferred_max_values = _infer_chemistry_limit_lines_from_window(
+                window,
+                candidate_line=candidate,
+                expected_count=expected_count,
+            )
+            min_values = inferred_min_values
+            max_values = inferred_max_values
+
         score = 0
         if "remainder" in lowered or "other" in lowered:
             score += 6
         if re.match(r"^\s*[A-Z]?\d{3,}[A-Z0-9()/-]*\s+", candidate, re.IGNORECASE):
             score += 5
         if any(marker in lowered for marker in ("min", "max")):
-            score -= 4
+            score -= 8
         else:
             score += 2
         if len(numeric_values) >= expected_count:
@@ -13686,6 +13949,7 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
 
         score += plausible_small
         score -= implausible_large * 3
+        score += _score_chemistry_candidate_against_limits(values, min_values=min_values, max_values=max_values)
 
         if score > best_score:
             best_score = score
@@ -13694,7 +13958,7 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
     if best_candidate is not None:
         return best_candidate
 
-    for candidate in choose_measured_lines(window):
+    for candidate in measured_candidates:
         lowered = candidate.lower()
         if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
             continue

@@ -22,12 +22,12 @@ function activityLabelFromState(state) {
   return "da fare";
 }
 
-function blockActivityLabel(block, state) {
-  if (block === "chimica" && state === "verde") {
-    return "confermato";
+  function blockActivityLabel(block, state) {
+    if ((block === "chimica" || block === "proprieta") && state === "verde") {
+      return "confermato";
+    }
+    return activityLabelFromState(state);
   }
-  return activityLabelFromState(state);
-}
 
 function compactMatchReference(row) {
   if (!row.certificate_file_name) {
