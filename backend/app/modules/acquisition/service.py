@@ -785,9 +785,19 @@ def upload_documents_batch(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided for batch upload")
 
     resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _get_latest_temporary_upload_batch_id(db, actor_id=actor_id) or uuid4().hex
+    existing_batch_ids = {
+        document.id
+        for document in db.query(Document.id)
+        .filter(
+            Document.stato_upload == "temporaneo",
+            Document.upload_batch_id == resolved_upload_batch_id,
+            Document.utente_upload_id == actor_id,
+        )
+        .all()
+    }
     uploaded: list[DocumentResponse] = []
     failed: list[DocumentBatchErrorResponse] = []
-    uploaded_ids: set[int] = set()
+    uploaded_ids: set[int] = set(existing_batch_ids)
 
     for uploaded_file in uploaded_files:
         file_name = Path(uploaded_file.filename or "").name or f"{tipo_documento}.bin"
