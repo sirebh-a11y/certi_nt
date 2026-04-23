@@ -426,9 +426,22 @@ def _normalize_chemistry_capture_value(value: str | None) -> str | None:
         return None
     prefix = match.group("prefix") or ""
     number = (match.group("number") or "").replace(".", ",")
+    if "," not in number and number.startswith("0") and len(number) > 1:
+        number = f"0,{number[1:]}"
     if not number:
         return None
     return f"{prefix}{number}"
+
+
+def _safe_chemistry_float(value: str | None) -> float | None:
+    normalized = _normalize_chemistry_capture_value(value)
+    if normalized is None:
+        return None
+    numeric = normalized.replace("<=", "").replace("<", "").replace("≤", "").replace(",", ".")
+    try:
+        return float(numeric)
+    except ValueError:
+        return None
 
 
 def _normalize_property_field_name(field_name: str | None) -> str | None:
@@ -12892,6 +12905,20 @@ def _normalize_weight_value(value: str | None) -> str | None:
     return sign + unsigned.replace(",", ".")
 
 
+def _normalize_diameter_value(value: str | None) -> str | None:
+    token = _extract_numeric_token(value)
+    if token is None:
+        return None
+    normalized = token.replace(",", ".")
+    try:
+        parsed = float(normalized)
+    except ValueError:
+        return token.replace(".", ",")
+    if parsed.is_integer():
+        return str(int(parsed))
+    return normalized
+
+
 def _normalize_numeric_value(value: str | None) -> str | None:
     token = _extract_numeric_token(value)
     if token is None:
@@ -12936,6 +12963,8 @@ def _normalize_value_for_field(blocco: str, campo: str, value: str | None) -> st
         return None
     if blocco == "ddt" and campo == "peso":
         return _normalize_weight_value(cleaned) or cleaned
+    if blocco == "ddt" and campo == "diametro":
+        return _normalize_diameter_value(cleaned) or cleaned
     if not _is_numeric_standardized_field(blocco, campo):
         return cleaned
     return _normalize_numeric_value(cleaned) or cleaned
@@ -13727,12 +13756,12 @@ def _score_chemistry_candidate_against_limits(
     for index, raw_candidate in enumerate(candidate_values):
         if raw_candidate in {"/", "Other", "other"}:
             continue
-        candidate_numeric = _safe_float(raw_candidate)
+        candidate_numeric = _safe_chemistry_float(raw_candidate)
         if candidate_numeric is None:
             continue
 
-        min_numeric = _safe_float(min_values[index]) if min_values and index < len(min_values) else None
-        max_numeric = _safe_float(max_values[index]) if max_values and index < len(max_values) else None
+        min_numeric = _safe_chemistry_float(min_values[index]) if min_values and index < len(min_values) else None
+        max_numeric = _safe_chemistry_float(max_values[index]) if max_values and index < len(max_values) else None
 
         if min_numeric is not None and max_numeric is not None:
             if min_numeric <= candidate_numeric <= max_numeric:
@@ -13744,6 +13773,91 @@ def _score_chemistry_candidate_against_limits(
         elif max_numeric is not None:
             score += 2 if candidate_numeric <= max_numeric else -4
     return score
+
+
+def _score_chemistry_candidate_between_peer_lines(
+    candidate_values: list[str],
+    *,
+    peer_value_lines: list[list[str]],
+    expected_count: int,
+) -> int:
+    best_strict = -1
+    best_inclusive = -1
+    best_outside = 999
+    best_equal = 999
+
+    for left_index, left_values in enumerate(peer_value_lines):
+        for right_values in peer_value_lines[left_index + 1 :]:
+            strict_between = 0
+            inclusive_between = 0
+            outside = 0
+            equals_limit = 0
+            comparable = 0
+
+            upper_bound = min(len(candidate_values), len(left_values), len(right_values))
+            for index in range(upper_bound):
+                candidate_numeric = _safe_chemistry_float(candidate_values[index])
+                left_numeric = _safe_chemistry_float(left_values[index])
+                right_numeric = _safe_chemistry_float(right_values[index])
+                if candidate_numeric is None or left_numeric is None or right_numeric is None:
+                    continue
+                comparable += 1
+                low = min(left_numeric, right_numeric)
+                high = max(left_numeric, right_numeric)
+                if low < candidate_numeric < high:
+                    strict_between += 1
+                    inclusive_between += 1
+                elif candidate_numeric == low or candidate_numeric == high:
+                    inclusive_between += 1
+                    equals_limit += 1
+                else:
+                    outside += 1
+
+            if comparable < min(expected_count, 3):
+                continue
+
+            if (
+                strict_between > best_strict
+                or (
+                    strict_between == best_strict
+                    and (
+                        inclusive_between > best_inclusive
+                        or (
+                            inclusive_between == best_inclusive
+                            and (outside < best_outside or (outside == best_outside and equals_limit < best_equal))
+                        )
+                    )
+                )
+            ):
+                best_strict = strict_between
+                best_inclusive = inclusive_between
+                best_outside = outside
+                best_equal = equals_limit
+
+    if best_strict < 0:
+        return 0
+
+    score = (best_strict * 8) + (best_inclusive * 2) - (best_outside * 8) - (best_equal * 4)
+    threshold = max(2, min(expected_count, 4) - 1)
+    if best_strict >= threshold:
+        score += 14
+    elif best_strict == 0 and best_equal >= max(2, min(expected_count, 3)):
+        score -= 16
+    return score
+
+
+def _sum_chemistry_numeric_values(values: list[str]) -> float | None:
+    total = 0.0
+    comparable = 0
+    for raw_value in values:
+        numeric = _safe_chemistry_float(raw_value)
+        if numeric is None:
+            continue
+        total += numeric
+        comparable += 1
+    if comparable == 0:
+        return None
+    return total
 
 
 def _infer_chemistry_limit_lines_from_window(
@@ -14037,6 +14151,36 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
     best_candidate: str | None = None
     best_score = -999
 
+    leading_numeric_rows: list[tuple[str, list[str]]] = []
+    for line in window:
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("spec.", "norm", "alloy", "notes", "mechanical")):
+            continue
+        if _extract_chemistry_header(line):
+            continue
+        values = _extract_horizontal_chemistry_values(line, 99)
+        numeric_values = [value for value in values if value not in {"/", "Other", "other"}]
+        if len(numeric_values) < min(expected_count, 3):
+            continue
+        leading_numeric_rows.append((line, values))
+        if len(leading_numeric_rows) >= 3:
+            break
+
+    if len(leading_numeric_rows) >= 3:
+        first_line, first_values = leading_numeric_rows[0]
+        second_line, second_values = leading_numeric_rows[1]
+        third_line, third_values = leading_numeric_rows[2]
+        third_lowered = third_line.lower()
+        if not any(marker in third_lowered for marker in ("min", "max")):
+            first_sum = _sum_chemistry_numeric_values(first_values)
+            second_sum = _sum_chemistry_numeric_values(second_values)
+            third_sum = _sum_chemistry_numeric_values(third_values)
+            if first_sum is not None and second_sum is not None and third_sum is not None:
+                lower_sum = min(first_sum, second_sum)
+                upper_sum = max(first_sum, second_sum)
+                if upper_sum - lower_sum >= 0.2 and lower_sum < third_sum < upper_sum:
+                    return third_line
+
     measured_candidates = choose_measured_lines(window)
     supplemental_candidates = [
         candidate
@@ -14047,6 +14191,13 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
     candidate_pool = list(dict.fromkeys([*measured_candidates, *supplemental_candidates])) or window
     min_line = next((line for line in window if "min" in line.lower()), None)
     max_line = next((line for line in window if "max" in line.lower()), None)
+    numeric_line_values = [
+        _extract_horizontal_chemistry_values(line, 99)
+        for line in window
+        if re.search(r"\d", line)
+        and not _extract_chemistry_header(line)
+        and not any(marker in line.lower() for marker in ("spec.", "norm", "alloy", "notes", "mechanical"))
+    ]
 
     for candidate in candidate_pool:
         lowered = candidate.lower()
@@ -14072,6 +14223,8 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
             max_values = inferred_max_values
 
         score = 0
+        if "ist/act" in lowered or "ist'act" in lowered or "istfact" in lowered or "value" in lowered:
+            score += 10
         if "remainder" in lowered or "other" in lowered:
             score += 6
         if re.match(r"^\s*[A-Z]?\d{3,}[A-Z0-9()/-]*\s+", candidate, re.IGNORECASE):
@@ -14106,6 +14259,11 @@ def _find_chemistry_measurement_line(lines: list[str], start_index: int, expecte
         score += plausible_small
         score -= implausible_large * 3
         score += _score_chemistry_candidate_against_limits(values, min_values=min_values, max_values=max_values)
+        score += _score_chemistry_candidate_between_peer_lines(
+            values,
+            peer_value_lines=[peer for peer in numeric_line_values if peer != values],
+            expected_count=expected_count,
+        )
 
         if score > best_score:
             best_score = score
