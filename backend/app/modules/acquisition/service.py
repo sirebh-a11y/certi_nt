@@ -8527,6 +8527,50 @@ def _mask_words_from_anchor(
     return True
 
 
+def _mask_words_after_anchor(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    *,
+    anchor_terms: tuple[str, ...],
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+    max_gap: int | None = None,
+) -> bool:
+    texts = [str(word["text"]).upper() for word in words]
+    anchor_index = next(
+        (
+            index
+            for index, text in enumerate(texts)
+            if any(term in text for term in anchor_terms)
+        ),
+        None,
+    )
+    if anchor_index is None or anchor_index + 1 >= len(words):
+        return False
+    tail_words = words[anchor_index + 1 :]
+    while tail_words and str(tail_words[0]["text"]).strip() in {":", "-", ".", "/"}:
+        tail_words = tail_words[1:]
+    if not tail_words:
+        return False
+    if max_gap is None:
+        max_gap = max(18, image.width // 35)
+    contiguous_words = [tail_words[0]]
+    previous_right = int(tail_words[0]["right"])
+    for word in tail_words[1:]:
+        gap = int(word["left"]) - previous_right
+        if gap > max_gap:
+            break
+        contiguous_words.append(word)
+        previous_right = int(word["right"])
+    _mask_word_group(
+        image,
+        contiguous_words,
+        top_extra=top_extra,
+        bottom_extra=bottom_extra,
+    )
+    return True
+
+
 def _mask_words_between_anchors(
     image: Image.Image,
     words: list[dict[str, int | str | tuple[int, int, int]]],
@@ -9085,6 +9129,11 @@ def _mask_neuman_customer_occurrence_blocks(
     image: Image.Image,
     lines: list[dict[str, int | str]],
 ) -> None:
+    words = _extract_ocr_word_blocks(image)
+    if not words:
+        return
+    is_certificate_page = any("INSPECTION CERTIFICATE" in str(line["text"]).upper() for line in lines)
+    line_map = _group_ocr_words_by_line(words)
     stop_terms = (
         "DELIVERY NOTE",
         "LOAD",
@@ -9097,44 +9146,81 @@ def _mask_neuman_customer_occurrence_blocks(
         "NET WEIGHT",
         "CHEMICAL",
     )
-    candidates = [
-        line
-        for line in lines
-        if any(token in str(line["text"]).upper() for token in ("FORGIALLUMINIO", "ENRICO FERMI", "PEDAVENA"))
-        and not any(term in str(line["text"]).upper() for term in stop_terms)
-    ]
-    if not candidates:
-        return
-    for start_line in candidates:
-        left_limit = 0
-        right_limit = min(image.width - 1, max(int(image.width * 0.52), int(start_line["right"]) + image.width // 8))
-        cluster = _collect_occurrence_cluster(
-            image,
-            lines,
-            start_line,
-            stop_terms=stop_terms,
-            stop_on_label=True,
-            max_preceding_lines=1,
-            max_following_lines=6,
-            left_limit=left_limit,
-            right_limit=right_limit,
-            max_vertical_gap=max(32, image.height // 22),
-        )
-        if cluster:
-            _mask_line_cluster(
+    customer_tokens = ("FORGIALLUMINIO", "ORGIALLUMINIO", "RGIALLUMINIO")
+    address_tokens = ("ENRICO", "FERMI", "PEDAVENA", "32034", "ITALY", "WALTER")
+    top_pad = max(3, image.height // 220)
+    bottom_pad = max(5, image.height // 170)
+
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        if any(term in line_text for term in stop_terms):
+            continue
+
+        top = int(line_words[0]["top"])
+        if (
+            not is_certificate_page
+            and top <= int(image.height * 0.30)
+            and "CUSTOMER" in line_text
+            and "CUSTOMER ORDER NUMBER" not in line_text
+        ):
+            if _mask_words_after_anchor(
                 image,
-                cluster,
-                left_limit=left_limit,
-                right_limit=right_limit,
-                top_extra=max(8, image.height // 110),
-                bottom_extra=max(18, image.height // 60),
+                line_words,
+                anchor_terms=("CUSTOMER",),
+                top_extra=top_pad,
+                bottom_extra=bottom_pad,
+            ):
+                continue
+
+        sensitive_words = [
+            word
+            for word in line_words
+            if any(token in str(word["text"]).upper() for token in customer_tokens + address_tokens)
+        ]
+        if not sensitive_words:
+            continue
+
+        top = min(int(word["top"]) for word in sensitive_words)
+        left = min(int(word["left"]) for word in sensitive_words)
+        right = max(int(word["right"]) for word in sensitive_words)
+        if not is_certificate_page and top >= int(image.height * 0.68) and right >= int(image.width * 0.72):
+            _mask_word_group(
+                image,
+                sensitive_words,
+                top_extra=max(top_pad, image.height // 180),
+                bottom_extra=max(bottom_pad, image.height // 150),
+                left_extra=max(6, image.width // 320),
+                right_extra=max(8, image.width // 280),
             )
+            continue
+
+        _mask_word_group(
+            image,
+            sensitive_words,
+            top_extra=top_pad,
+            bottom_extra=bottom_pad,
+            left_extra=max(6, image.width // 320),
+            right_extra=max(8, image.width // 280),
+        )
+
+    if not is_certificate_page:
+        stamp_left = max(0, int(image.width * 0.78))
+        stamp_top = max(0, int(image.height * 0.60))
+        stamp_right = min(image.width - 1, int(image.width * 0.98))
+        stamp_bottom = min(image.height - 1, int(image.height * 0.79))
+        if stamp_right > stamp_left and stamp_bottom > stamp_top:
+            ImageDraw.Draw(image).rectangle((stamp_left, stamp_top, stamp_right, stamp_bottom), fill="black")
 
 
 def _mask_neuman_supplier_occurrence_blocks(
     image: Image.Image,
     lines: list[dict[str, int | str]],
 ) -> None:
+    words = _extract_ocr_word_blocks(image)
+    if not words:
+        return
+    is_certificate_page = any("INSPECTION CERTIFICATE" in str(line["text"]).upper() for line in lines)
+    line_map = _group_ocr_words_by_line(words)
     stop_terms = (
         "DELIVERY NOTE",
         "LOAD",
@@ -9146,52 +9232,53 @@ def _mask_neuman_supplier_occurrence_blocks(
         "NET WEIGHT",
         "CHEMICAL",
     )
-    candidates = [
-        line
-        for line in lines
-        if any(
-            token in str(line["text"]).upper()
-            for token in ("NEUMAN", "ALUMINIUM AUSTRIA", "WERKSTRASSE", "MARKTL", "CASTING.OFFICE@NEUMAN", "WWW.NEUMAN.AT")
-        )
-    ]
-    if not candidates:
-        return
-    for start_line in candidates:
-        top = int(start_line["top"])
-        if top <= int(image.height * 0.40):
-            left_limit = max(0, int(start_line["left"]) - image.width // 14)
-            right_limit = image.width - 1
-            cluster = _collect_occurrence_cluster(
-                image,
-                lines,
-                start_line,
-                stop_terms=stop_terms,
-                stop_on_label=True,
-                max_preceding_lines=1,
-                max_following_lines=6,
-                left_limit=left_limit,
-                right_limit=right_limit,
-                max_vertical_gap=max(32, image.height // 22),
-            )
-            if cluster:
-                _mask_line_cluster(
-                    image,
-                    cluster,
-                    left_limit=left_limit,
-                    right_limit=right_limit,
-                    top_extra=max(10, image.height // 100),
-                    bottom_extra=max(18, image.height // 60),
-                )
+    supplier_tokens = ("NEUMAN", "ALUMINIUM", "AUSTRIA", "CASTING", "WERKSTRASSE", "MARKTL", "@NEUMAN", "WWW.NEUMAN.AT")
+    top_pad = max(3, image.height // 220)
+    bottom_pad = max(5, image.height // 170)
+
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        if any(term in line_text for term in stop_terms):
             continue
 
-        _mask_line_cluster(
+        sensitive_words = [
+            word
+            for word in line_words
+            if any(token in str(word["text"]).upper() for token in supplier_tokens)
+        ]
+        if not sensitive_words:
+            continue
+
+        top = min(int(word["top"]) for word in sensitive_words)
+        right = max(int(word["right"]) for word in sensitive_words)
+
+        if top <= int(image.height * 0.22) and right >= int(image.width * 0.55):
+            _mask_word_group(
+                image,
+                sensitive_words,
+                left_extra=max(6, image.width // 320),
+                right_extra=max(10, image.width // 220),
+                top_extra=max(top_pad, image.height // 220),
+                bottom_extra=max(bottom_pad, image.height // 200),
+            )
+            continue
+
+        _mask_word_group(
             image,
-            [start_line],
-            left_limit=max(0, int(start_line["left"]) - image.width // 20),
-            right_limit=image.width - 1,
-            top_extra=max(8, image.height // 110),
-            bottom_extra=max(16, image.height // 70),
+            sensitive_words,
+            top_extra=top_pad,
+            bottom_extra=bottom_pad,
+            left_extra=max(6, image.width // 320),
+            right_extra=max(10, image.width // 220),
         )
+
+    # Keep a small fallback box only around the top-right logo area.
+    logo_left = max(0, int(image.width * 0.62))
+    logo_top = max(0, int(image.height * 0.05))
+    logo_right = min(image.width - 1, int(image.width * 0.95))
+    logo_bottom = min(image.height - 1, int(image.height * (0.145 if is_certificate_page else 0.16)))
+    if logo_right > logo_left and logo_bottom > logo_top:
+        ImageDraw.Draw(image).rectangle((logo_left, logo_top, logo_right, logo_bottom), fill="black")
 
 
 def _collect_occurrence_cluster(
