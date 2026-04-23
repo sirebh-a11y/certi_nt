@@ -84,7 +84,16 @@ from app.modules.document_reader.matching import (
     weights_are_compatible as reader_weights_are_compatible,
 )
 from app.modules.document_reader.schemas import ReaderRowSplitCandidateResponse
-from app.modules.document_reader.service import build_document_row_split_plan
+from app.modules.document_reader.service import (
+    _extract_leichtmetall_batch_groups,
+    _extract_leichtmetall_header_weight,
+    _format_leichtmetall_weight,
+    _merge_snippets,
+    _normalize_line as reader_normalize_line,
+    _page_lines as reader_page_lines,
+    _parse_leichtmetall_weight_token,
+    build_document_row_split_plan,
+)
 from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
@@ -2193,7 +2202,7 @@ def run_autonomous_processing(
                 fase_corrente="certificate_first",
                 messaggio_corrente="Creo righe certificate-first per i certificati non matchati",
             )
-            created_certificate_rows = _ensure_certificate_first_rows(
+            created_certificate_rows, certificate_first_matches = _ensure_certificate_first_rows(
                 db=db,
                 certificate_documents=explicit_certificate_documents,
                 actor_id=actor_id,
@@ -2208,6 +2217,12 @@ def run_autonomous_processing(
                     run,
                     righe_create=run.righe_create + created_certificate_rows,
                     righe_processate=run.righe_processate + created_certificate_rows,
+                )
+            if certificate_first_matches:
+                _save_run(
+                    db,
+                    run,
+                    match_proposti=run.match_proposti + certificate_first_matches,
                 )
 
         _save_run(
@@ -5631,8 +5646,9 @@ def _ensure_certificate_first_rows(
     openai_api_key: str | None,
     use_ai_intervention: bool,
     certificate_ai_cache: dict[int, dict[str, object]] | None = None,
-) -> int:
+) -> tuple[int, int]:
     created_count = 0
+    linked_match_count = 0
     for certificate_document in certificate_documents:
         existing_for_document = (
             db.query(AcquisitionRow)
@@ -5746,10 +5762,26 @@ def _ensure_certificate_first_rows(
         )
         if linked_row is not None:
             if linked_row.document_certificato_id is None:
-                linked_row.document_certificato_id = certificate_document.id
-                _sync_row_cdq_from_certificate_document(db, linked_row, certificate_document)
-                _sync_row_statuses(db, linked_row)
-                db.commit()
+                upsert_match(
+                    db=db,
+                    row=linked_row,
+                    payload=MatchUpsertRequest(
+                        document_certificato_id=certificate_document.id,
+                        stato="proposto",
+                        motivo_breve="Collegato automaticamente da certificate-first",
+                        fonte_proposta="sistema",
+                        candidates=[
+                            MatchCandidateRequest(
+                                document_certificato_id=certificate_document.id,
+                                rank=1,
+                                motivo_breve="Collegato automaticamente da certificate-first",
+                                fonte_proposta="sistema",
+                                stato="scelto",
+                            )
+                        ],
+                    ),
+                    actor_id=actor_id,
+                )
                 if not (use_ai_intervention and openai_api_key):
                     extract_core_fields(db=db, row=get_acquisition_row(db, linked_row.id), actor_id=actor_id)
                 linked_row = _process_certificate_side_blocks(
@@ -5760,6 +5792,7 @@ def _ensure_certificate_first_rows(
                     use_ai_intervention=use_ai_intervention,
                     certificate_ai_cache=certificate_ai_cache,
                 )
+                linked_match_count += 1
             continue
         duplicate_row = next(
             (
@@ -5776,10 +5809,26 @@ def _ensure_certificate_first_rows(
         )
         if duplicate_row is not None:
             if duplicate_row.document_certificato_id is None:
-                duplicate_row.document_certificato_id = certificate_document.id
-                _sync_row_cdq_from_certificate_document(db, duplicate_row, certificate_document)
-                _sync_row_statuses(db, duplicate_row)
-                db.commit()
+                upsert_match(
+                    db=db,
+                    row=duplicate_row,
+                    payload=MatchUpsertRequest(
+                        document_certificato_id=certificate_document.id,
+                        stato="proposto",
+                        motivo_breve="Collegato automaticamente da certificate-first",
+                        fonte_proposta="sistema",
+                        candidates=[
+                            MatchCandidateRequest(
+                                document_certificato_id=certificate_document.id,
+                                rank=1,
+                                motivo_breve="Collegato automaticamente da certificate-first",
+                                fonte_proposta="sistema",
+                                stato="scelto",
+                            )
+                        ],
+                    ),
+                    actor_id=actor_id,
+                )
                 if not (use_ai_intervention and openai_api_key):
                     extract_core_fields(db=db, row=get_acquisition_row(db, duplicate_row.id), actor_id=actor_id)
                 duplicate_row = _process_certificate_side_blocks(
@@ -5826,7 +5875,7 @@ def _ensure_certificate_first_rows(
         )
         created_count += 1
 
-    return created_count
+    return created_count, linked_match_count
 
 
 def _find_existing_aluminium_bozen_row_for_certificate(
@@ -9037,7 +9086,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
         "descrizione_profilo_cliente_certificato": ("profile_customer_description_raw", lambda value, evidence: _string_or_none(value) or _string_or_none(evidence)),
         "ordine_cliente_certificato": ("customer_order_raw", _normalize_customer_order),
         "lega_certificato": ("alloy_raw", _normalize_alloy),
-        "diametro_certificato": ("profile_customer_description_raw", _normalize_diameter),
+        "diametro_certificato": ("diameter_raw", _normalize_diameter),
         "colata_certificato": ("cast_raw", _normalize_cast),
         "peso_certificato": ("net_weight_raw", _normalize_weight),
     }
@@ -9172,6 +9221,10 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "includi anche il numero sotto o dopo la descrizione se appartiene ancora allo stesso blocco visivo; "
                 "fermati solo quando inizia chiaramente un nuovo campo con label distinto; "
                 "esempi frequenti: DESCRIZIONE PROFILO CLIENTE, CUSTOMER'S SECTION DESC., PROFILE CUSTOMER DESC, PROFIL NR. KUNDE. "
+                "Campi raw di supporto da estrarre inoltre. "
+                "product_description_raw: estrai l'intero contenuto raw del blocco descrittivo prodotto o articolo tecnico, se presente; "
+                "unisci le righe che appartengono chiaramente allo stesso blocco visivo. "
+                "diameter_raw: estrai il diametro raw del materiale dal blocco descrittivo prodotto, se compare come numero finale, DIA o forma equivalente. "
                 "colata: estrai il valore del campo che identifica chiaramente colata, batch o charge; "
                 "esempi frequenti: N° COLATA, CAST BATCH N°, CHARGE N°, CAST NO. "
                 "peso_netto: estrai il valore del campo PESO NETTO "
@@ -9179,7 +9232,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "esempi frequenti: PESO NETTO, NET WEIGHT, POIDS NET, NETTOGEWICHT; "
                 "il valore puo essere un numero senza unita; "
                 "considera valido il numero piu vicino al label nella stessa riga, cella o area visiva; "
-                "non confondere questo campo con altri pesi, quantita o valori tabellari; "
+                "non confondere questo campo con altri pesi, quantita, numeri campione o valori tabellari di chimica/proprieta; "
                 "non restituire null se il label e presente e un numero e chiaramente associato nella stessa area. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; "
                 "restituisci solo i valori misurati veri e ignora Min e Max. "
@@ -9188,7 +9241,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
-                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
+                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
                 "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
                 "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
@@ -9261,6 +9314,8 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
         "article_code_raw": ("articolo", "article_code_raw"),
         "alloy_raw": ("lega", "alloy_raw"),
         "profile_customer_description_raw": ("descrizione_profilo_cliente", "profile_customer_description_raw"),
+        "product_description_raw": ("product_description_raw",),
+        "diameter_raw": ("diameter_raw", "product_description_raw"),
         "cast_raw": ("colata", "cast_raw"),
         "net_weight_raw": ("peso_netto", "net_weight_raw"),
     }
@@ -9970,10 +10025,14 @@ def _extract_leichtmetall_ddt_row_groups_with_vision(
         crop_definitions,
         openai_api_key=openai_api_key,
     )
-    return _sanitize_leichtmetall_ai_row_groups(
+    ai_candidates = _sanitize_leichtmetall_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         raw_rows=raw_rows,
         ai_document_payload_raw=ai_document_payload_raw,
+    )
+    return _reconcile_leichtmetall_ai_candidates_with_document(
+        ddt_document=ddt_document,
+        ai_candidates=ai_candidates,
     )
 
 
@@ -10028,7 +10087,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
             "type": "input_text",
             "text": (
                 "Leggi queste immagini di un documento tecnico di trasporto Leichtmetall e ricostruisci tutte le righe logiche materiale presenti. "
-                "Questo DDT puo richiedere piu certificati: se in pagina 2 esistono piu batch o gruppi con peso netto diverso, restituisci una riga logica separata per ogni gruppo batch. "
+                "Questo DDT puo richiedere piu certificati: se nel documento esistono piu batch o gruppi con peso netto diverso, restituisci una riga logica separata per ogni gruppo batch. "
                 "Non unire batch diversi nella stessa riga. Non fare il match con nessun certificato e non normalizzare i valori. "
                 "Per l'ordine utile al match usa il valore del campo Purchase Number. "
                 "Order Confirmation e solo un riferimento di supporto e non sostituisce Purchase Number. "
@@ -10038,7 +10097,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
                 "order_confirmation_raw deve essere il valore raw del campo Order Confirmation. "
                 "alloy_raw deve essere la lega materiale del documento o della stessa riga batch, quando visibile. "
                 "diameter_raw deve essere il diametro del materiale, quando visibile. "
-                "batch_raw deve essere il batch della stessa riga logica, letto dal gruppo pagina 2. "
+                "batch_raw deve essere il batch della stessa riga logica, letto dal gruppo batch o dalla sezione di continuazione in cui compare. "
                 "net_weight_raw deve essere il peso netto del gruppo batch della stessa riga logica. "
                 "Usa solo testo realmente visibile. Non inventare, non inferire e non usare nome file o conoscenza esterna. "
                 "Se un campo non e chiaramente leggibile, restituisci null. "
@@ -10203,6 +10262,104 @@ def _sanitize_leichtmetall_ai_row_groups(
     return sanitized_rows
 
 
+def _reconcile_leichtmetall_ai_candidates_with_document(
+    *,
+    ddt_document: Document,
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ai_candidates:
+        return []
+
+    batch_groups = _extract_leichtmetall_batch_groups(ddt_document)
+    if batch_groups:
+        first_page = next((page for page in ddt_document.pages if page.numero_pagina == 1), ddt_document.pages[0])
+        first_page_lines = [reader_normalize_line(line) for line in reader_page_lines(first_page)]
+        header_weight = _extract_leichtmetall_header_weight(first_page_lines)
+        header_total = _parse_leichtmetall_weight_token(header_weight)
+        if header_total is not None:
+            if len(batch_groups) == 1:
+                only_batch_payload = next(iter(batch_groups.values()))
+                only_batch_payload["weight_total"] = header_total
+            else:
+                grouped_total = sum(int(payload.get("weight_total", 0)) for payload in batch_groups.values())
+                if 0 < grouped_total < header_total:
+                    dominant_batch_payload = max(
+                        batch_groups.values(),
+                        key=lambda payload: (
+                            int(payload.get("weight_total", 0)),
+                            len(list(payload.get("snippets", []))),
+                        ),
+                    )
+                    dominant_batch_payload["weight_total"] = int(dominant_batch_payload.get("weight_total", 0)) + (
+                        header_total - grouped_total
+                    )
+
+    merged: dict[tuple[str | None, str | None, str | None, str | None, str | None], ReaderRowSplitCandidateResponse] = {}
+    merged_raw_payloads: dict[tuple[str | None, str | None, str | None, str | None, str | None], list[object]] = {}
+
+    for candidate in ai_candidates:
+        batch_key = _string_or_none(candidate.colata or candidate.cdq or candidate.lot_batch_no)
+        order_key = _string_or_none(candidate.customer_order_no)
+        alloy_key = _string_or_none(candidate.lega)
+        diameter_key = _string_or_none(candidate.diametro)
+        ddt_key = _string_or_none(candidate.ddt_number)
+        key = (ddt_key, order_key, batch_key, alloy_key, diameter_key)
+
+        reconciled_weight = None
+        if batch_key and batch_key in batch_groups:
+            weight_total = int(batch_groups[batch_key].get("weight_total", 0))
+            if weight_total > 0:
+                reconciled_weight = _format_leichtmetall_weight(weight_total)
+
+        existing = merged.get(key)
+        if existing is None:
+            if reconciled_weight is not None:
+                candidate.peso_netto = reconciled_weight
+            merged[key] = candidate
+            raw_payloads: list[object] = []
+            if candidate.ai_row_payload_raw:
+                try:
+                    raw_payloads.append(json.loads(candidate.ai_row_payload_raw))
+                except json.JSONDecodeError:
+                    raw_payloads.append(candidate.ai_row_payload_raw)
+            merged_raw_payloads[key] = raw_payloads
+            continue
+
+        existing.snippets = _merge_snippets(existing.snippets, candidate.snippets)
+        if reconciled_weight is not None:
+            existing.peso_netto = reconciled_weight
+        elif existing.peso_netto is None and candidate.peso_netto is not None:
+            existing.peso_netto = candidate.peso_netto
+
+        if candidate.ai_row_payload_raw:
+            try:
+                merged_raw_payloads[key].append(json.loads(candidate.ai_row_payload_raw))
+            except json.JSONDecodeError:
+                merged_raw_payloads[key].append(candidate.ai_row_payload_raw)
+
+    reconciled_candidates = list(merged.values())
+    for index, candidate in enumerate(reconciled_candidates, start=1):
+        candidate.candidate_index = index
+        key = (
+            _string_or_none(candidate.ddt_number),
+            _string_or_none(candidate.customer_order_no),
+            _string_or_none(candidate.colata or candidate.cdq or candidate.lot_batch_no),
+            _string_or_none(candidate.lega),
+            _string_or_none(candidate.diametro),
+        )
+        raw_payloads = merged_raw_payloads.get(key, [])
+        if len(raw_payloads) > 1:
+            candidate.ai_row_payload_raw = json.dumps(raw_payloads, ensure_ascii=False)
+        elif len(raw_payloads) == 1:
+            single_payload = raw_payloads[0]
+            candidate.ai_row_payload_raw = (
+                json.dumps(single_payload, ensure_ascii=False)
+                if not isinstance(single_payload, str)
+                else single_payload
+            )
+    return reconciled_candidates
+
+
 def _sanitize_leichtmetall_ddt_number_candidate(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
@@ -10263,10 +10420,10 @@ def _normalize_leichtmetall_diameter_from_text(value: str | None) -> str | None:
     match = re.search(r"\b(?:DIA(?:METER)?|Ø)\s*([0-9]+(?:[.,][0-9]+)?)\b", cleaned.upper())
     if match is not None:
         return _normalize_numeric_value(match.group(1))
-    short_match = re.search(r"\b([0-9]{2,4}(?:[.,][0-9]+)?)\b", cleaned)
-    if short_match is None:
+    direct_match = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*(?:MM)?\s*", cleaned.upper())
+    if direct_match is None:
         return None
-    return _normalize_numeric_value(short_match.group(1))
+    return _normalize_numeric_value(direct_match.group(1))
 
 
 def _normalize_leichtmetall_order_token(value: str | None) -> str | None:
@@ -13024,13 +13181,17 @@ def _normalize_vision_note_matches(
 
         final_value: str | None = None
         if field_name == "nota_us_control_classe":
-            final_value = _detect_us_control_class(evidence.lower())
+            normalized_evidence = evidence.strip().upper()
+            if normalized_evidence in {"A", "B"}:
+                final_value = normalized_evidence
+            else:
+                final_value = _detect_us_control_class(evidence.lower())
         elif field_name == "nota_rohs":
             haystack = evidence.lower()
-            if "rohs" in haystack:
+            if haystack.strip() == "true" or "rohs" in haystack:
                 final_value = "true"
         elif field_name == "nota_radioactive_free":
-            if _is_radioactive_free_line(evidence.lower()):
+            if evidence.strip().lower() == "true" or _is_radioactive_free_line(evidence.lower()):
                 final_value = "true"
 
         if final_value is None:
