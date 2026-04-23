@@ -77,6 +77,8 @@ from app.modules.document_reader.matching import (
     extract_supplier_match_fields as reader_extract_supplier_match_fields,
     extract_row_supplier_match_fields as reader_extract_row_supplier_match_fields,
     merge_row_supplier_fields as reader_merge_row_supplier_fields,
+    neuman_weights_are_compatible as reader_neuman_weights_are_compatible,
+    _normalize_neuman_weight_result as reader_normalize_neuman_weight_result,
     normalize_impol_packing_list_root,
     normalize_match_token as reader_normalize_match_token,
     score_supplier_field_matches as reader_score_supplier_field_matches,
@@ -4516,6 +4518,216 @@ def _score_leichtmetall_ai_group_against_row(
     return score
 
 
+def _apply_neuman_ai_row_groups_to_rows(
+    db: Session,
+    *,
+    ddt_document: Document,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+    actor_id: int,
+) -> int:
+    if not rows or not ai_candidates:
+        return 0
+
+    pairs: list[tuple[int, int, int]] = []
+    row_value_maps = {
+        row.id: {
+            value.campo: _final_value_for_row(value)
+            for value in (
+                db.query(ReadValue)
+                .filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt")
+                .all()
+            )
+        }
+        for row in rows
+    }
+
+    for row in rows:
+        ddt_values = row_value_maps.get(row.id, {})
+        for ai_candidate in ai_candidates:
+            score = _score_neuman_ai_group_against_row(
+                row=row,
+                ddt_values=ddt_values,
+                ai_candidate=ai_candidate,
+            )
+            if score >= 90:
+                pairs.append((score, row.id, ai_candidate.candidate_index))
+
+    pairs.sort(reverse=True)
+    assigned_rows: set[int] = set()
+    assigned_candidates: set[int] = set()
+    ai_by_index = {candidate.candidate_index: candidate for candidate in ai_candidates}
+    applied_rows = 0
+
+    for _, row_id, candidate_index in pairs:
+        if row_id in assigned_rows or candidate_index in assigned_candidates:
+            continue
+        row_model = next((row for row in rows if row.id == row_id), None)
+        ai_candidate = ai_by_index.get(candidate_index)
+        if row_model is None or ai_candidate is None:
+            continue
+        if _apply_neuman_ai_candidate_to_row(
+            db=db,
+            row=row_model,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        ):
+            applied_rows += 1
+        assigned_rows.add(row_id)
+        assigned_candidates.add(candidate_index)
+
+    if applied_rows:
+        db.commit()
+    return applied_rows
+
+
+def _score_neuman_ai_group_against_row(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    ai_candidate: ReaderRowSplitCandidateResponse,
+) -> int:
+    score = 0
+    row_lot = (
+        _string_or_none(ddt_values.get("lot_batch_no"))
+        or _string_or_none(ddt_values.get("cdq"))
+        or _string_or_none(ddt_values.get("colata"))
+        or _string_or_none(row.cdq)
+        or _string_or_none(row.colata)
+    )
+    row_article = _string_or_none(ddt_values.get("article_code"))
+    row_order = _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(row.ordine)
+    row_diameter = _string_or_none(ddt_values.get("diametro")) or _string_or_none(row.diametro)
+    row_alloy = _string_or_none(ddt_values.get("lega")) or _string_or_none(row.lega_base)
+    row_weight = _string_or_none(ddt_values.get("peso")) or _string_or_none(row.peso)
+    row_ddt = _string_or_none(ddt_values.get("ddt")) or _string_or_none(row.ddt)
+
+    lot_match = bool(row_lot and (ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no) and reader_same_token(row_lot, ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no))
+    article_match = bool(row_article and ai_candidate.article_code and reader_same_token(row_article, ai_candidate.article_code))
+    if row_lot and (ai_candidate.colata or ai_candidate.cdq or ai_candidate.lot_batch_no) and not lot_match:
+        return 0
+    if row_article and ai_candidate.article_code and not article_match:
+        return 0
+    if not lot_match or not article_match:
+        return 0
+
+    score += 170
+    if row_alloy and ai_candidate.lega:
+        if reader_same_token(row_alloy, ai_candidate.lega):
+            score += 25
+        else:
+            return 0
+    if row_diameter and ai_candidate.diametro:
+        if _supplier_decimal_tokens_match(row_diameter, ai_candidate.diametro):
+            score += 35
+        else:
+            return 0
+    if row_weight and ai_candidate.peso_netto:
+        if reader_neuman_weights_are_compatible(row_weight, ai_candidate.peso_netto):
+            score += 25
+        else:
+            return 0
+    if row_order and ai_candidate.customer_order_no:
+        if reader_same_token(row_order, ai_candidate.customer_order_no):
+            score += 18
+        else:
+            return 0
+    if row_ddt and ai_candidate.ddt_number and reader_same_token(row_ddt, ai_candidate.ddt_number):
+        score += 12
+
+    return score
+
+
+def _apply_neuman_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    raw_payload: dict[str, object] = {}
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+        try:
+            parsed_payload = json.loads(ai_candidate.ai_row_payload_raw)
+            if isinstance(parsed_payload, dict):
+                raw_payload = parsed_payload
+        except json.JSONDecodeError:
+            raw_payload = {}
+
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "ordine": ai_candidate.customer_order_no,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "article_code": ai_candidate.article_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "peso": ai_candidate.peso_netto,
+        "cdq": ai_candidate.cdq,
+        "colata": ai_candidate.colata,
+        "lot_batch_no": ai_candidate.lot_batch_no,
+        "delivery_note_raw": ai_candidate.ddt_number,
+        "customer_order_raw": _string_or_none(raw_payload.get("customer_order_raw")),
+        "article_number_raw": _string_or_none(raw_payload.get("article_number_raw")),
+        "material_raw": _string_or_none(raw_payload.get("material_raw")),
+        "diameter_raw": _string_or_none(raw_payload.get("diameter_raw")),
+        "lot_raw": _string_or_none(raw_payload.get("lot_raw")),
+        "net_weight_raw": _string_or_none(raw_payload.get("net_weight_raw")),
+    }
+
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+
+    if changed_fields == 0:
+        return False
+
+    _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
 def _get_metalba_certificate_ai_payload(
     db: Session,
     *,
@@ -4777,7 +4989,7 @@ def extract_ddt_fields_with_vision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
     supplier_key = _resolve_row_supplier_key(row)
-    if supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}:
+    if supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman"}:
         sibling_rows = (
             db.query(AcquisitionRow)
             .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
@@ -4808,6 +5020,14 @@ def extract_ddt_fields_with_vision(
             )
         elif supplier_key == "leichtmetall":
             _apply_leichtmetall_ai_row_groups_to_rows(
+                db=db,
+                ddt_document=ddt_document,
+                rows=sibling_rows,
+                ai_candidates=ai_candidates,
+                actor_id=actor_id,
+            )
+        elif supplier_key == "neuman":
+            _apply_neuman_ai_row_groups_to_rows(
                 db=db,
                 ddt_document=ddt_document,
                 rows=sibling_rows,
@@ -5677,7 +5897,7 @@ def _ensure_certificate_first_rows(
             certificate_document.nome_file_originale,
         )
         supplier_key = template.supplier_key if template is not None else None
-        if supplier_key not in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}:
+        if supplier_key not in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman"}:
             continue
 
         if use_ai_intervention and openai_api_key:
@@ -5724,11 +5944,16 @@ def _ensure_certificate_first_rows(
             certificate_diameter = _string_or_none(cast(dict[str, object], certificate_matches.get("diametro_certificato") or {}).get("final"))
             certificate_cast = _string_or_none(cast(dict[str, object], certificate_matches.get("colata_certificato") or {}).get("final"))
             certificate_weight = _string_or_none(cast(dict[str, object], certificate_matches.get("peso_certificato") or {}).get("final"))
-            certificate_article = _string_or_none(supplier_fields.get("article")) or _string_or_none(supplier_fields.get("product_code"))
+            certificate_article = (
+                _string_or_none(supplier_fields.get("article"))
+                or _string_or_none(supplier_fields.get("product_code"))
+                or _string_or_none(supplier_fields.get("customer_material_number"))
+            )
             certificate_profile_code = _string_or_none(supplier_fields.get("profile_code")) or _string_or_none(supplier_fields.get("customer_code"))
             certificate_customer_order = (
                 _string_or_none(supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(supplier_fields.get("customer_order_no"))
+                or (_string_or_none(supplier_fields.get("customer_order_number")) if supplier_key == "neuman" else None)
                 or (_string_or_none(supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(supplier_fields.get("po_no"))
             )
@@ -5742,6 +5967,12 @@ def _ensure_certificate_first_rows(
                 )
                 certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("net_weight"))
+            elif supplier_key == "neuman":
+                certificate_number = certificate_number or _string_or_none(supplier_fields.get("lot_number"))
+                certificate_cast = certificate_cast or _string_or_none(supplier_fields.get("lot_number"))
+                certificate_alloy = certificate_alloy or _string_or_none(supplier_fields.get("alloy"))
+                certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
+                certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("weight"))
             certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
             certificate_supplier_order = _string_or_none(supplier_fields.get("supplier_order_no"))
 
@@ -5866,7 +6097,7 @@ def _ensure_certificate_first_rows(
                 diametro=certificate_diameter,
                 colata=certificate_cast,
                 peso=certificate_weight,
-                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol", "metalba"} else None,
+                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol", "metalba", "neuman"} else None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -6171,6 +6402,116 @@ def _find_existing_metalba_row_for_certificate(
     return None
 
 
+def _find_existing_neuman_row_for_certificate(
+    *,
+    rows: list[AcquisitionRow],
+    article: str | None,
+    customer_order: str | None,
+    alloy: str | None,
+    diameter: str | None,
+    cast: str | None,
+    weight: str | None,
+) -> AcquisitionRow | None:
+    if not rows:
+        return None
+
+    normalized_article = reader_normalize_match_token(article)
+    normalized_customer_order = reader_normalize_match_token(customer_order)
+    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_diameter = reader_normalize_match_token(diameter)
+    normalized_cast = reader_normalize_match_token(cast)
+
+    best_row: AcquisitionRow | None = None
+    best_score = 0
+
+    for row in rows:
+        if row.document_ddt_id is None:
+            continue
+
+        ddt_values = {
+            value.campo: _final_value_for_row(value)
+            for value in row.values
+            if value.blocco == "ddt"
+        }
+        supplier_fields = reader_extract_row_supplier_match_fields(
+            row=row,
+            ddt_values=ddt_values,
+            supplier_key="neuman",
+        )
+
+        material_match_count = 0
+        available_material_signals = 0
+        score = 0
+
+        row_article = reader_normalize_match_token(
+            supplier_fields.get("customer_material_number")
+            or _certificate_first_row_identity_fields(row).get("article")
+        )
+        if normalized_article:
+            available_material_signals += 1
+            if row_article:
+                if row_article != normalized_article:
+                    continue
+                score += 120
+                material_match_count += 1
+
+        row_cast = reader_normalize_match_token(supplier_fields.get("lot_number") or row.colata or row.cdq)
+        if normalized_cast:
+            available_material_signals += 1
+            if row_cast:
+                if row_cast != normalized_cast:
+                    continue
+                score += 120
+                material_match_count += 1
+
+        row_alloy = reader_normalize_match_token(row.lega_base or supplier_fields.get("alloy"))
+        if normalized_alloy:
+            available_material_signals += 1
+            if row_alloy:
+                if row_alloy != normalized_alloy:
+                    continue
+                score += 70
+                material_match_count += 1
+
+        row_diameter = _string_or_none(row.diametro or supplier_fields.get("diameter"))
+        if normalized_diameter:
+            available_material_signals += 1
+            if row_diameter:
+                if not _supplier_decimal_tokens_match(row_diameter, diameter):
+                    continue
+                score += 70
+                material_match_count += 1
+
+        row_weight_raw = _string_or_none(row.peso or supplier_fields.get("weight"))
+        if _string_or_none(weight):
+            available_material_signals += 1
+            if row_weight_raw:
+                if not reader_neuman_weights_are_compatible(row_weight_raw, weight):
+                    continue
+                score += 55
+                material_match_count += 1
+
+        row_customer_order = reader_normalize_match_token(
+            supplier_fields.get("customer_order_number") or row.ordine
+        )
+        if normalized_customer_order and row_customer_order:
+            if row_customer_order != normalized_customer_order:
+                continue
+            score += 30
+
+        required_material_matches = min(4, available_material_signals)
+        if material_match_count < required_material_matches:
+            continue
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 300:
+        return best_row
+    return None
+
+
 def _find_existing_leichtmetall_row_for_certificate(
     *,
     rows: list[AcquisitionRow],
@@ -6328,6 +6669,16 @@ def _find_existing_row_for_certificate(
             customer_order=customer_order,
             alloy=alloy,
             diameter=diameter,
+            weight=weight,
+        )
+    if supplier_key == "neuman":
+        return _find_existing_neuman_row_for_certificate(
+            rows=candidate_rows,
+            article=article,
+            customer_order=customer_order,
+            alloy=alloy,
+            diameter=diameter,
+            cast=cast,
             weight=weight,
         )
     return None
@@ -6613,6 +6964,19 @@ def _score_certificate_candidate(
                 "product_description_raw": _string_or_none(certificate_supplier_fields.get("product_description_raw"))
                 or _string_or_none(ai_supplier_fields.get("product_description_raw")),
             }
+        elif supplier_key == "neuman":
+            certificate_supplier_fields = {
+                "delivery_note_no": _string_or_none(certificate_supplier_fields.get("delivery_note_no")) or _string_or_none(ai_supplier_fields.get("delivery_note_no")),
+                "lot_number": _string_or_none(certificate_supplier_fields.get("lot_number")) or _string_or_none(ai_supplier_fields.get("lot_number")),
+                "customer_material_number": _string_or_none(certificate_supplier_fields.get("customer_material_number"))
+                or _string_or_none(ai_supplier_fields.get("customer_material_number")),
+                "customer_order_number": _string_or_none(certificate_supplier_fields.get("customer_order_number"))
+                or _string_or_none(ai_supplier_fields.get("customer_order_number")),
+                "alloy": _string_or_none(certificate_supplier_fields.get("alloy")) or _string_or_none(ai_supplier_fields.get("alloy")),
+                "diameter": _string_or_none(certificate_supplier_fields.get("diameter")) or _string_or_none(ai_supplier_fields.get("diameter")),
+                "weight": _string_or_none(certificate_supplier_fields.get("weight")) or _string_or_none(ai_supplier_fields.get("weight")),
+                "product_raw": _string_or_none(certificate_supplier_fields.get("product_raw")) or _string_or_none(ai_supplier_fields.get("product_raw")),
+            }
         if "lega_certificato" not in matches and _string_or_none(ai_match_values.get("lega_certificato")) is not None:
             matches["lega_certificato"] = {"final": _string_or_none(ai_match_values.get("lega_certificato"))}
         if "diametro_certificato" not in matches and _string_or_none(ai_match_values.get("diametro_certificato")) is not None:
@@ -6824,6 +7188,60 @@ def _score_certificate_candidate(
         if not order_match:
             return None
         if sum(1 for flag in (diameter_match, alloy_match, weight_match) if flag) < 2:
+            return None
+    elif supplier_key == "neuman":
+        lot_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("lot_number") or row.colata or row.cdq)
+            and reader_normalize_match_token(ddt_supplier_fields.get("lot_number") or row.colata or row.cdq)
+            == reader_normalize_match_token(certificate_supplier_fields.get("lot_number") or certificate_cast)
+        )
+        article_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("customer_material_number"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("customer_material_number"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_material_number"))
+        )
+        alloy_match = bool(
+            reader_normalize_match_token(row.lega_base or ddt_supplier_fields.get("alloy"))
+            and reader_normalize_match_token(row.lega_base or ddt_supplier_fields.get("alloy"))
+            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")) or certificate_supplier_fields.get("alloy"))
+        )
+        diameter_match = bool(
+            _string_or_none(row.diametro or ddt_supplier_fields.get("diameter"))
+            and _supplier_decimal_tokens_match(
+                _string_or_none(row.diametro or ddt_supplier_fields.get("diameter")),
+                _string_or_none(matches.get("diametro_certificato", {}).get("final")) or _string_or_none(certificate_supplier_fields.get("diameter")),
+            )
+        )
+        weight_match = reader_neuman_weights_are_compatible(row.peso or ddt_supplier_fields.get("weight"), certificate_weight or certificate_supplier_fields.get("weight"))
+        delivery_note_match = bool(
+            reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            and reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("delivery_note_no"))
+        )
+        customer_order_match = bool(
+            reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("customer_order_number"))
+            and reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("customer_order_number"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_order_number"))
+        )
+        strong_mismatch = False
+        if (row.colata or row.cdq) and (certificate_supplier_fields.get("lot_number") or certificate_cast) and not lot_match:
+            strong_mismatch = True
+        if ddt_supplier_fields.get("customer_material_number") and certificate_supplier_fields.get("customer_material_number") and not article_match:
+            strong_mismatch = True
+        if (row.lega_base or ddt_supplier_fields.get("alloy")) and (_string_or_none(matches.get("lega_certificato", {}).get("final")) or certificate_supplier_fields.get("alloy")) and not alloy_match:
+            strong_mismatch = True
+        if (row.diametro or ddt_supplier_fields.get("diameter")) and (_string_or_none(matches.get("diametro_certificato", {}).get("final")) or certificate_supplier_fields.get("diameter")) and not diameter_match:
+            strong_mismatch = True
+        if (row.peso or ddt_supplier_fields.get("weight")) and (certificate_weight or certificate_supplier_fields.get("weight")) and not weight_match:
+            strong_mismatch = True
+        if strong_mismatch:
+            return None
+        strong_match_count = sum(1 for flag in (lot_match, article_match, alloy_match, diameter_match, weight_match) if flag)
+        if not lot_match or not article_match:
+            return None
+        if strong_match_count < 4:
+            return None
+        if not (delivery_note_match or customer_order_match or strong_match_count >= 5):
             return None
 
     if score <= 10:
@@ -7420,6 +7838,10 @@ def _build_certificate_safe_crops(
         specialized = _build_leichtmetall_certificate_safe_crops(pages)
         if specialized:
             return specialized
+    if supplier_key == "neuman":
+        specialized = _build_neuman_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
 
     crops: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -7853,6 +8275,52 @@ def _build_leichtmetall_certificate_masked_page(image: Image.Image) -> Image.Ima
     lines = _extract_ocr_line_blocks(masked)
     _mask_leichtmetall_customer_occurrence_blocks(masked, lines)
     _mask_leichtmetall_supplier_occurrence_blocks(masked, lines)
+    return masked
+
+
+def _build_neuman_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_neuman_certificate_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"neuman_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("core_page", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_neuman_certificate_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_neuman_customer_occurrence_blocks(masked, lines)
+    _mask_neuman_supplier_occurrence_blocks(masked, lines)
     return masked
 
 
@@ -8611,6 +9079,119 @@ def _mask_leichtmetall_supplier_occurrence_blocks(
                 top_extra=top_pad,
                 bottom_extra=bottom_pad,
             )
+
+
+def _mask_neuman_customer_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "DELIVERY NOTE",
+        "LOAD",
+        "CUSTOMER ORDER NUMBER",
+        "CONTRACT",
+        "ART-NR",
+        "PRODUCT:",
+        "CUSTOMER MATERIAL NUMBER",
+        "LOT NUMBER",
+        "NET WEIGHT",
+        "CHEMICAL",
+    )
+    candidates = [
+        line
+        for line in lines
+        if any(token in str(line["text"]).upper() for token in ("FORGIALLUMINIO", "ENRICO FERMI", "PEDAVENA"))
+        and not any(term in str(line["text"]).upper() for term in stop_terms)
+    ]
+    if not candidates:
+        return
+    for start_line in candidates:
+        left_limit = 0
+        right_limit = min(image.width - 1, max(int(image.width * 0.52), int(start_line["right"]) + image.width // 8))
+        cluster = _collect_occurrence_cluster(
+            image,
+            lines,
+            start_line,
+            stop_terms=stop_terms,
+            stop_on_label=True,
+            max_preceding_lines=1,
+            max_following_lines=6,
+            left_limit=left_limit,
+            right_limit=right_limit,
+            max_vertical_gap=max(32, image.height // 22),
+        )
+        if cluster:
+            _mask_line_cluster(
+                image,
+                cluster,
+                left_limit=left_limit,
+                right_limit=right_limit,
+                top_extra=max(8, image.height // 110),
+                bottom_extra=max(18, image.height // 60),
+            )
+
+
+def _mask_neuman_supplier_occurrence_blocks(
+    image: Image.Image,
+    lines: list[dict[str, int | str]],
+) -> None:
+    stop_terms = (
+        "DELIVERY NOTE",
+        "LOAD",
+        "CUSTOMER ORDER NUMBER",
+        "CONTRACT",
+        "ART-NR",
+        "PRODUCT:",
+        "LOT NUMBER",
+        "NET WEIGHT",
+        "CHEMICAL",
+    )
+    candidates = [
+        line
+        for line in lines
+        if any(
+            token in str(line["text"]).upper()
+            for token in ("NEUMAN", "ALUMINIUM AUSTRIA", "WERKSTRASSE", "MARKTL", "CASTING.OFFICE@NEUMAN", "WWW.NEUMAN.AT")
+        )
+    ]
+    if not candidates:
+        return
+    for start_line in candidates:
+        top = int(start_line["top"])
+        if top <= int(image.height * 0.40):
+            left_limit = max(0, int(start_line["left"]) - image.width // 14)
+            right_limit = image.width - 1
+            cluster = _collect_occurrence_cluster(
+                image,
+                lines,
+                start_line,
+                stop_terms=stop_terms,
+                stop_on_label=True,
+                max_preceding_lines=1,
+                max_following_lines=6,
+                left_limit=left_limit,
+                right_limit=right_limit,
+                max_vertical_gap=max(32, image.height // 22),
+            )
+            if cluster:
+                _mask_line_cluster(
+                    image,
+                    cluster,
+                    left_limit=left_limit,
+                    right_limit=right_limit,
+                    top_extra=max(10, image.height // 100),
+                    bottom_extra=max(18, image.height // 60),
+                )
+            continue
+
+        _mask_line_cluster(
+            image,
+            [start_line],
+            left_limit=max(0, int(start_line["left"]) - image.width // 20),
+            right_limit=image.width - 1,
+            top_extra=max(8, image.height // 110),
+            bottom_extra=max(16, image.height // 70),
+        )
 
 
 def _collect_occurrence_cluster(
@@ -10373,6 +10954,326 @@ def _reconcile_leichtmetall_ai_candidates_with_document(
     return reconciled_candidates
 
 
+def _extract_neuman_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_neuman_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare Neuman DDT row-group crops for AI",
+        )
+
+    local_plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
+    fallback_ddt = next(
+        (_string_or_none(candidate.ddt_number) for candidate in local_plan.row_split_candidates if candidate.ddt_number),
+        None,
+    )
+
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_neuman_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_neuman_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
+def _build_neuman_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_neuman_ddt_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"neuman_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_neuman_ddt_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    lines = _extract_ocr_line_blocks(masked)
+    _mask_neuman_customer_occurrence_blocks(masked, lines)
+    _mask_neuman_supplier_occurrence_blocks(masked, lines)
+    return masked
+
+
+def _extract_neuman_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un Delivery Note Neuman e ricostruisci tutte le righe logiche materiale presenti. "
+                "Il documento puo avere piu pagine e piu gruppi prodotto/lotto. "
+                "Una riga logica coincide con un gruppo coerente prodotto + Lot. "
+                "I colli HU dello stesso Lot vanno sommati e net_weight_raw deve essere il netto totale del gruppo Lot, non il peso di un singolo collo. "
+                "Delivery Note e il numero DDT. Load non e il numero DDT. "
+                "Art-Nr. e il codice materiale del DDT. Werkstoff e il materiale/lega. "
+                "diameter_raw deve venire dal simbolo Ø o dal testo prodotto che contiene il diametro, senza dipendere dalla parola barra. "
+                "customer_order_raw deve essere il valore del campo Customer Order Number, quando visibile. "
+                "lot_raw deve essere il Lot della stessa riga logica. "
+                "Non fare il match con alcun certificato e non normalizzare i valori. "
+                "Usa solo testo realmente visibile. Non inventare, non inferire e non usare nome file o conoscenza esterna. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"customer_order_raw\":\"string|null\",\"article_number_raw\":\"string|null\","
+                "\"material_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"lot_raw\":\"string|null\","
+                "\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Page label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{encoded}",
+                "detail": "high",
+            }
+        )
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Neuman DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_neuman_row_groups(response.output_text), response.output_text)
+
+
+def _parse_openai_json_payload_for_neuman_row_groups(
+    payload: str,
+) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Neuman DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Neuman DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Neuman DDT row-group AI payload")
+
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Neuman DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        raw_row_index = raw_row.get("row_index")
+        try:
+            normalized_row_index = int(raw_row_index) if raw_row_index is not None else index
+        except (TypeError, ValueError):
+            normalized_row_index = index
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (
+                _string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else [])
+            )
+            if item is not None
+        ]
+        normalized_rows.append(
+            {
+                "row_index": normalized_row_index,
+                "customer_order_raw": _string_or_none(raw_row.get("customer_order_raw")),
+                "article_number_raw": _string_or_none(raw_row.get("article_number_raw")),
+                "material_raw": _string_or_none(raw_row.get("material_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "lot_raw": _string_or_none(raw_row.get("lot_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+
+    return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _sanitize_neuman_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
+    normalized_ddt = _sanitize_neuman_ddt_number_candidate(ddt_number_raw)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        customer_order_raw = _string_or_none(raw_row.get("customer_order_raw"))
+        article_number_raw = _string_or_none(raw_row.get("article_number_raw"))
+        material_raw = _string_or_none(raw_row.get("material_raw"))
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
+        lot_raw = _string_or_none(raw_row.get("lot_raw"))
+        net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
+        source_crops = cast(list[str], raw_row.get("source_crops") or [])
+
+        order_value = _normalize_neuman_customer_order_token(customer_order_raw)
+        article_value = _normalize_neuman_article_from_text(article_number_raw)
+        alloy_value = _normalize_neuman_alloy_from_text(material_raw)
+        diameter_value = _normalize_neuman_diameter_from_text(diameter_raw)
+        lot_value = _normalize_neuman_lot_token(lot_raw)
+        weight_value = reader_normalize_neuman_weight_result(net_weight_raw)
+
+        raw_payload = dict(raw_row)
+        raw_payload["customer_order_raw"] = customer_order_raw
+        raw_payload["article_number_raw"] = article_number_raw
+        raw_payload["material_raw"] = material_raw
+        raw_payload["diameter_raw"] = diameter_raw
+        raw_payload["lot_raw"] = lot_raw
+        raw_payload["net_weight_raw"] = net_weight_raw
+
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="neuman",
+            ddt_number=normalized_ddt,
+            cdq=lot_value,
+            article_code=article_value,
+            lega=alloy_value,
+            diametro=diameter_value,
+            peso_netto=weight_value,
+            colata=lot_value,
+            lot_batch_no=lot_value,
+            customer_order_no=order_value,
+            snippets=source_crops[:6],
+            ai_row_payload_raw=json.dumps(raw_payload, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in ("ddt_number", "cdq", "article_code", "lega", "diametro", "peso_netto", "customer_order_no")
+        ):
+            sanitized_rows.append(candidate)
+
+    return sanitized_rows
+
+
+def _sanitize_neuman_ddt_number_candidate(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{6,9})\b", cleaned)
+    if match is not None:
+        return match.group(1)
+    return _sanitize_ddt_number_candidate(value, None)
+
+
+def _normalize_neuman_lot_token(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\b\d{5}\b")
+
+
+def _normalize_neuman_article_from_text(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\bA\d[0-9A-Z]{4,}\b")
+
+
+def _normalize_neuman_customer_order_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    explicit = re.search(r"\b([0-9]{1,6})\s+OF\s+\d{2}\.\d{2}\.\d{4}\b", cleaned.upper())
+    if explicit is not None:
+        return explicit.group(1)
+    direct = re.search(r"\b([0-9]{1,6})\b", cleaned)
+    if direct is not None:
+        return direct.group(1)
+    return cleaned
+
+
+def _normalize_neuman_alloy_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"\s+", " ", cleaned.upper()).strip()
+    match = re.search(r"\bEN\s+AW[-\s]*([0-9]{4}[A-Z]{0,3})\b", normalized)
+    if match is not None:
+        return match.group(1)
+    fallback = re.search(r"\b([1-9][0-9]{3}[A-Z]{0,3})\b", normalized)
+    if fallback is not None:
+        return fallback.group(1)
+    return None
+
+
+def _normalize_neuman_diameter_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"\s+", " ", cleaned.upper()).strip()
+    match = re.search(r"[Ø@]\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b", normalized)
+    if match is not None:
+        return _normalize_numeric_value(match.group(1))
+    match = re.search(r"[Ø@]\s*([0-9]+(?:[.,][0-9]+)?)\b", normalized)
+    if match is not None:
+        return _normalize_numeric_value(match.group(1))
+    direct = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*(?:MM)?\s*", normalized)
+    if direct is not None:
+        return _normalize_numeric_value(direct.group(1))
+    return None
+
+
 def _sanitize_leichtmetall_ddt_number_candidate(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
@@ -10698,7 +11599,7 @@ def _normalize_leichtmetall_certificate_ai_payload(
             "charge_cast_no": _normalize_leichtmetall_batch_token(charge_cast_raw),
             "alloy": _normalize_leichtmetall_alloy_from_text(alloy_raw),
             "diameter": _normalize_leichtmetall_diameter_from_text(diameter_raw),
-            "weight": _normalize_weight_value(weight_raw),
+            "weight": reader_normalize_neuman_weight_result(weight_raw),
         },
         "core_fields": core_fields,
         "chemistry": chemistry_matches,
@@ -10725,7 +11626,7 @@ def _sanitize_leichtmetall_vision_certificate_fields(
     normalized_cast = _normalize_leichtmetall_batch_token(cast_raw)
     normalized_alloy = _normalize_leichtmetall_alloy_from_text(alloy_raw)
     normalized_diameter = _normalize_leichtmetall_diameter_from_text(diameter_raw)
-    normalized_weight = _normalize_weight_value(weight_raw)
+    normalized_weight = reader_normalize_neuman_weight_result(weight_raw)
 
     return {
         "numero_certificato_certificato": _payload(normalized_cast),
@@ -10735,6 +11636,260 @@ def _sanitize_leichtmetall_vision_certificate_fields(
         "lega_certificato": _payload(normalized_alloy),
         "descrizione_profilo_cliente_certificato": _payload(None),
         "colata_certificato": _payload(normalized_cast),
+        "peso_certificato": _payload(normalized_weight),
+        "diametro_certificato": _payload(normalized_diameter),
+    }
+
+
+def _get_neuman_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="neuman")
+    page_images = _select_neuman_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    raw_payload = _extract_neuman_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
+    )
+    payload = _normalize_neuman_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _select_neuman_certificate_document_images(
+    crops: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    return _select_impol_certificate_document_images(crops)
+
+
+def _extract_neuman_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato materiale Neuman. "
+                "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica e note tecniche rilevanti per il match con il DDT. "
+                "Per questo fornitore Lot number e il riferimento tecnico forte e puo essere trattato anche come cdq e colata. "
+                "Delivery note e il numero DDT. Customer material number e il codice articolo lato certificato. Material identifica la lega. "
+                "diameter_raw deve venire dal simbolo Ø o dal Product, senza dipendere dalla parola barra. "
+                "net_weight_raw deve essere il Net weight [kg] del materiale, non la Length o altri numeri vicini. "
+                "Se il certificato riporta solo limiti richiesti o conferme di compliance meccanica, non inventare valori misurati: mechanical_raw.measured_rows deve essere una lista vuota. "
+                "Usa solo testo realmente visibile nel documento. Non inventare, non inferire e non normalizzare. "
+                "Se un campo non e chiaramente leggibile, restituisci null. "
+                "Campi core da estrarre. "
+                "numero_certificato: per questo fornitore usa il valore di Lot number. "
+                "ordine_cliente: estrai il Customer order number solo se esiste chiaramente nel certificato, altrimenti null. "
+                "articolo: estrai Customer material number. "
+                "lega: estrai il materiale dal campo Material. "
+                "descrizione_profilo_cliente: usa null se non esiste un campo separato equivalente. "
+                "colata: estrai il valore di Lot number. "
+                "peso_netto: estrai il valore di Net weight [kg]. "
+                "Campi runtime di supporto da estrarre inoltre. "
+                "delivery_note_raw: estrai Delivery note. "
+                "lot_number_raw: estrai Lot number. "
+                "customer_material_number_raw: estrai Customer material number. "
+                "customer_order_number_raw: estrai Customer order number se presente. "
+                "material_raw: estrai Material. "
+                "product_raw: estrai Product. "
+                "diameter_raw: estrai il diametro raw dal Product o dal simbolo Ø. "
+                "net_weight_raw: estrai il Net weight [kg]. "
+                "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri della riga lotto e ignora Min e Max. "
+                "Proprieta meccaniche: se non esiste una vera riga misurata, restituisci measured_rows vuoto. "
+                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
+                "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
+                "\"delivery_note_raw\":\"string|null\",\"lot_number_raw\":\"string|null\",\"customer_material_number_raw\":\"string|null\","
+                "\"customer_order_number_raw\":\"string|null\",\"material_raw\":\"string|null\",\"product_raw\":\"string|null\","
+                "\"diameter_raw\":\"string|null\",\"net_weight_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
+                "\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
+                "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Image label: {image_label}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Neuman certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_neuman_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_neuman_vision_certificate_fields(core_payload, next(iter(page_images.keys()), None))
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": next(iter(page_images.keys()), None),
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            next(iter(page_images.keys()), "page1"): {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+
+    measured_rows_payload = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows_payload if isinstance(measured_rows_payload, list) else [],
+        page_id=first_page_id,
+    )
+
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    delivery_note_raw = _string_or_none(core_payload.get("delivery_note_raw"))
+    lot_raw = _string_or_none(core_payload.get("lot_number_raw")) or _string_or_none(core_payload.get("colata")) or _string_or_none(core_payload.get("numero_certificato"))
+    article_raw = _string_or_none(core_payload.get("customer_material_number_raw")) or _string_or_none(core_payload.get("articolo"))
+    customer_order_raw = _string_or_none(core_payload.get("customer_order_number_raw")) or _string_or_none(core_payload.get("ordine_cliente"))
+    material_raw = _string_or_none(core_payload.get("material_raw")) or _string_or_none(core_payload.get("lega"))
+    product_raw = _string_or_none(core_payload.get("product_raw"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or product_raw
+    weight_raw = _string_or_none(core_payload.get("net_weight_raw")) or _string_or_none(core_payload.get("peso_netto"))
+
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in core_fields.items()
+        },
+        "supplier_fields": {
+            "delivery_note_no": _sanitize_neuman_ddt_number_candidate(delivery_note_raw),
+            "lot_number": _normalize_neuman_lot_token(lot_raw),
+            "customer_material_number": _normalize_neuman_article_from_text(article_raw),
+            "customer_order_number": _normalize_neuman_customer_order_token(customer_order_raw),
+            "alloy": _normalize_neuman_alloy_from_text(material_raw),
+            "diameter": _normalize_neuman_diameter_from_text(diameter_raw),
+            "weight": _normalize_weight_value(weight_raw),
+            "product_raw": _string_or_none(product_raw),
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_neuman_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    lot_raw = _string_or_none(core_payload.get("lot_number_raw")) or _string_or_none(core_payload.get("colata")) or _string_or_none(core_payload.get("numero_certificato"))
+    article_raw = _string_or_none(core_payload.get("customer_material_number_raw")) or _string_or_none(core_payload.get("articolo"))
+    order_raw = _string_or_none(core_payload.get("customer_order_number_raw")) or _string_or_none(core_payload.get("ordine_cliente"))
+    material_raw = _string_or_none(core_payload.get("material_raw")) or _string_or_none(core_payload.get("lega"))
+    diameter_raw = _string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("product_raw"))
+    weight_raw = _string_or_none(core_payload.get("net_weight_raw")) or _string_or_none(core_payload.get("peso_netto"))
+
+    def _payload(value: str | None) -> dict[str, str | None]:
+        return {"value": value, "evidence": value, "source_crop": source_crop}
+
+    normalized_lot = _normalize_neuman_lot_token(lot_raw)
+    normalized_order = _normalize_neuman_customer_order_token(order_raw)
+    normalized_article = _normalize_neuman_article_from_text(article_raw)
+    normalized_alloy = _normalize_neuman_alloy_from_text(material_raw)
+    normalized_diameter = _normalize_neuman_diameter_from_text(diameter_raw)
+    normalized_weight = _normalize_weight_value(weight_raw)
+
+    return {
+        "numero_certificato_certificato": _payload(normalized_lot),
+        "ordine_cliente_certificato": _payload(normalized_order),
+        "articolo_certificato": _payload(normalized_article),
+        "codice_cliente_certificato": _payload(None),
+        "lega_certificato": _payload(normalized_alloy),
+        "descrizione_profilo_cliente_certificato": _payload(None),
+        "colata_certificato": _payload(normalized_lot),
         "peso_certificato": _payload(normalized_weight),
         "diametro_certificato": _payload(normalized_diameter),
     }
@@ -10833,7 +11988,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
-    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall"}
+    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman"}
 
 
 def _get_supplier_certificate_ai_payload(
@@ -10867,6 +12022,13 @@ def _get_supplier_certificate_ai_payload(
         )
     if supplier_key == "leichtmetall":
         return _get_leichtmetall_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    if supplier_key == "neuman":
+        return _get_neuman_certificate_ai_payload(
             db=db,
             certificate_document=certificate_document,
             openai_api_key=openai_api_key,
@@ -10912,6 +12074,12 @@ def _extract_supplier_ddt_row_groups_with_vision(
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
         )
+    if supplier_key == "neuman":
+        return _extract_neuman_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
     return []
 
 
@@ -10941,6 +12109,14 @@ def _apply_supplier_ai_candidate_to_row(
         )
     if ai_candidate.supplier_key == "leichtmetall":
         return _apply_leichtmetall_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
+    if ai_candidate.supplier_key == "neuman":
+        return _apply_neuman_ai_candidate_to_row(
             db=db,
             row=row,
             ai_candidate=ai_candidate,

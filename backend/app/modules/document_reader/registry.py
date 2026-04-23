@@ -59,12 +59,15 @@ TEMPLATE_REGISTRY: tuple[SupplierReaderTemplate, ...] = (
     SupplierReaderTemplate(
         supplier_key="neuman",
         display_name="Neuman",
-        ddt_template_id="neuman_delivery_note_v1",
-        certificate_template_id="neuman_certificate_v1",
-        aliases=("neuman",),
+        ddt_template_id="neuman_delivery_note_lot_based_v1",
+        certificate_template_id="neuman_inspection_certificate_round_bars_v1",
+        aliases=("neuman", "neumann"),
         openai_double_check_blocks=("ddt_core", "match", "chemistry", "properties", "notes"),
-        strong_match_fields=("delivery_note", "customer_material", "lot", "diameter", "alloy"),
-        notes=("Match forte su lotto e materiale cliente.",),
+        strong_match_fields=("lot", "customer_material", "alloy", "diameter", "weight"),
+        notes=(
+            "Match forte su lotto, materiale cliente, lega, diametro e peso.",
+            "Delivery Note identifica il DDT ma non chiude da solo il match.",
+        ),
     ),
     SupplierReaderTemplate(
         supplier_key="metalba",

@@ -147,7 +147,7 @@ def extract_supplier_match_fields(
         "leichtmetall": lambda current_lines, current_type: _extract_leichtmetall_match_fields(current_lines, document_type=current_type),
         "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
         "arconic_hannover": lambda current_lines, current_type: _extract_arconic_hannover_match_fields(current_lines),
-        "neuman": lambda current_lines, current_type: _extract_neuman_match_fields(current_lines),
+        "neuman": lambda current_lines, current_type: _extract_neuman_match_fields(current_lines, document_type=current_type),
         "grupa_kety": lambda current_lines, current_type: _extract_grupa_kety_match_fields(current_lines, document_type=current_type),
         "impol": lambda current_lines, current_type: _extract_impol_match_fields(current_lines, document_type=current_type),
     }.get(supplier_key)
@@ -598,8 +598,12 @@ def _detect_arconic_hannover_ddt_core_matches(pages: list[DocumentPage]) -> dict
 
 def _detect_neuman_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
+    lines: list[str] = []
+    first_page_id = pages[0].id if pages else 0
     for page in pages:
-        for line in _page_lines(page):
+        page_lines = _page_lines(page)
+        lines.extend(page_lines)
+        for line in page_lines:
             normalized = _normalize_mojibake_numeric_text(line)
             lowered = normalized.casefold()
             if "ddt" not in matches:
@@ -607,13 +611,56 @@ def _detect_neuman_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict
                 if delivery_match is not None:
                     matches["ddt"] = _build_match(page.id, line, delivery_match.group(1))
             if "ordine" not in matches:
-                order_match = re.search(r"\bcustomer\s+order\s+number\s*:\s*([0-9]{1,6})\b", normalized, re.IGNORECASE)
+                order_match = re.search(r"\bcustomer\s+order\s+number\s*:?\s*([0-9]{1,6})\b", normalized, re.IGNORECASE)
                 if order_match is not None:
                     matches["ordine"] = _build_match(page.id, line, order_match.group(1))
+                else:
+                    inline_order = re.search(r"\b([0-9]{1,6})\s+OF\s+\d{2}\.\d{2}\.\d{4}\b", normalized.upper())
+                    if inline_order is not None:
+                        matches["ordine"] = _build_match(page.id, line, inline_order.group(1))
             if "diametro" not in matches:
-                diameter_match = re.search(r"\brundstangen\s*:\s*@\s*([0-9]+(?:[.,][0-9]+)?)\s*mm\b", lowered)
+                diameter_match = re.search(r"(?:[Ø@]\s*|DIAMETER\s+)([0-9]+(?:[.,][0-9]+)?)\s*(?:MM\b|±)", normalized, re.IGNORECASE)
                 if diameter_match is not None:
                     matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
+            if "lega" not in matches:
+                alloy_match = re.search(r"\b(?:WERKSTOFF|MATERIAL)\s*:?\s*EN\s+AW[-\s]*([0-9]{4}[A-Z]{0,3})\b", normalized, re.IGNORECASE)
+                if alloy_match is not None:
+                    matches["lega"] = _build_match(page.id, line, alloy_match.group(1))
+    supplier_fields = _extract_neuman_match_fields(lines, document_type="ddt")
+    lot_value = _string_or_none(supplier_fields.get("lot_number"))
+    if "colata" not in matches and lot_value is not None:
+        matches["colata"] = _build_match(first_page_id, lot_value, lot_value)
+        matches["cdq"] = _build_match(first_page_id, lot_value, lot_value)
+    if "peso" not in matches and supplier_fields.get("weight"):
+        snippet = next((line for line in lines if "LOT:" in line.upper() and "NET" in line.upper()), supplier_fields["weight"])
+        matches["peso"] = _build_match(first_page_id, snippet, supplier_fields["weight"])
+    return matches
+
+
+def _detect_neuman_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        supplier_fields = _extract_neuman_match_fields(lines, document_type="certificato")
+        lot_value = _string_or_none(supplier_fields.get("lot_number"))
+        if lot_value is not None:
+            if "numero_certificato_certificato" not in matches:
+                snippet = _find_line_containing_token(lines, "LOT NUMBER") or lot_value
+                matches["numero_certificato_certificato"] = _build_match(page.id, snippet, lot_value)
+            if "colata_certificato" not in matches:
+                snippet = _find_line_containing_token(lines, "LOT NUMBER") or lot_value
+                matches["colata_certificato"] = _build_match(page.id, snippet, lot_value)
+        if "lega_certificato" not in matches and supplier_fields.get("alloy"):
+            snippet = _find_line_containing_token(lines, "MATERIAL") or supplier_fields["alloy"]
+            matches["lega_certificato"] = _build_match(page.id, snippet, supplier_fields["alloy"])
+        if "diametro_certificato" not in matches and supplier_fields.get("diameter"):
+            snippet = _find_line_containing_token(lines, "PRODUCT") or _find_line_containing_token(lines, "DIAMETER") or supplier_fields["diameter"]
+            matches["diametro_certificato"] = _build_match(page.id, snippet, supplier_fields["diameter"])
+        if "peso_certificato" not in matches and supplier_fields.get("weight"):
+            snippet = _find_line_containing_token(lines, "NET WEIGHT") or _find_line_containing_token(lines, "TOTAL") or supplier_fields["weight"]
+            matches["peso_certificato"] = _build_match(page.id, snippet, supplier_fields["weight"])
     return matches
 
 
@@ -714,6 +761,7 @@ def detect_certificate_core_matches(
         "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
         "leichtmetall": _detect_leichtmetall_certificate_core_matches,
         "metalba": _detect_metalba_certificate_core_matches,
+        "neuman": _detect_neuman_certificate_core_matches,
     }.get(supplier_key)
     if supplier_detector is not None:
         matches.update(supplier_detector(pages))
@@ -1015,6 +1063,24 @@ def extract_row_supplier_match_fields(
             "customer_order_normalized": _string_or_none(ddt_values.get("customer_order_no")),
         }
 
+    if supplier_key == "neuman":
+        lot_token = (
+            _string_or_none(row.colata)
+            or _string_or_none(row.cdq)
+            or _string_or_none(ddt_values.get("lot_batch_no"))
+            or _string_or_none(ddt_values.get("colata"))
+            or _string_or_none(ddt_values.get("cdq"))
+        )
+        return {
+            "delivery_note_no": _string_or_none(row.ddt) or _string_or_none(ddt_values.get("ddt")),
+            "lot_number": lot_token,
+            "customer_material_number": _string_or_none(ddt_values.get("article_code")) or _string_or_none(ddt_values.get("product_code")),
+            "customer_order_number": _string_or_none(row.ordine) or _string_or_none(ddt_values.get("customer_order_no")) or _string_or_none(ddt_values.get("ordine")),
+            "alloy": _string_or_none(row.lega_base) or _string_or_none(ddt_values.get("lega")),
+            "diameter": _string_or_none(row.diametro) or _string_or_none(ddt_values.get("diametro")),
+            "weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
+        }
+
     return {}
 
 
@@ -1075,14 +1141,20 @@ def score_supplier_field_matches(
         if same_token(ddt_supplier_fields.get("cast_job_number"), certificate_supplier_fields.get("cast_job_number")):
             add_reason(110, "Cast/Job coerente")
     elif supplier_key == "neuman":
-        if same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
-            add_reason(120, "Delivery note coerente")
         if same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
             add_reason(110, "Lot coerente")
         if same_token(ddt_supplier_fields.get("customer_material_number"), certificate_supplier_fields.get("customer_material_number")):
             add_reason(110, "Customer material number coerente")
+        if same_token(ddt_supplier_fields.get("alloy"), certificate_supplier_fields.get("alloy")):
+            add_reason(90, "Materiale coerente")
+        if same_token(ddt_supplier_fields.get("diameter"), certificate_supplier_fields.get("diameter")):
+            add_reason(90, "Diametro coerente")
+        if neuman_weights_are_compatible(ddt_supplier_fields.get("weight"), certificate_supplier_fields.get("weight")):
+            add_reason(70, "Peso coerente")
+        if same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
+            add_reason(45, "Delivery note coerente")
         if same_token(ddt_supplier_fields.get("customer_order_number"), certificate_supplier_fields.get("customer_order_number")):
-            add_reason(80, "Customer order number coerente")
+            add_reason(35, "Customer order number coerente")
     elif supplier_key == "grupa_kety":
         if same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
             add_reason(120, "Delivery note coerente")
@@ -1135,6 +1207,48 @@ def weights_are_compatible(row_weight: str | None, certificate_weight: str | Non
     return abs(left - right) <= tolerance
 
 
+def neuman_weights_are_compatible(row_weight: str | None, certificate_weight: str | None) -> bool:
+    left = _parse_neuman_weight_number(row_weight)
+    right = _parse_neuman_weight_number(certificate_weight)
+    if left is None or right is None:
+        return False
+    if abs(left - right) <= 1.0:
+        return True
+    return int(left) == int(right)
+
+
+def _normalize_neuman_weight_result(value: str | None) -> str | None:
+    parsed = _parse_neuman_weight_number(value)
+    if parsed is None:
+        return None
+    return str(int(round(parsed)))
+
+
+def _parse_neuman_weight_number(value: str | None) -> float | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    token = cleaned.replace(" ", "")
+    match = re.search(r"(?<!\d)-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?(?!\d)|(?<!\d)-?\d+(?:[.,]\d+)?(?!\d)", token)
+    if match is None:
+        return None
+    number_token = match.group(0)
+
+    if re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+,\d+", number_token):
+        normalized = number_token.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"-?\d{1,3}(?:,\d{3})+\.\d+", number_token):
+        normalized = number_token.replace(",", "")
+    elif re.fullmatch(r"-?\d{1,3}(?:[.,]\d{3})+", number_token):
+        normalized = re.sub(r"[.,]", "", number_token)
+    else:
+        normalized = number_token.replace(",", ".")
+
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
 def document_contains_token(pages: list[DocumentPage], token: str | None) -> bool:
     cleaned_token = normalize_match_token(token)
     if cleaned_token is None:
@@ -1151,13 +1265,27 @@ def _parse_weight_number(value: str | None) -> float | None:
     if cleaned is None:
         return None
     token = cleaned.replace(" ", "")
-    thousand_token = re.search(r"\d{1,3}(?:[.,]\d{3})+", token)
+
+    # Prefer full-token parsing first so values like 3498.000 are interpreted
+    # as decimals and not as the substring 498.000 matched as a thousands token.
+    if re.fullmatch(r"-?\d{1,3}(?:[.,]\d{3})+", token):
+        try:
+            return float(re.sub(r"[.,]", "", token))
+        except ValueError:
+            return None
+    if re.fullmatch(r"-?\d+(?:[.,]\d+)?", token):
+        try:
+            return float(token.replace(",", "."))
+        except ValueError:
+            return None
+
+    thousand_token = re.search(r"(?<!\d)-?\d{1,3}(?:[.,]\d{3})+(?!\d)", token)
     if thousand_token is not None:
         try:
             return float(re.sub(r"[.,]", "", thousand_token.group(0)))
         except ValueError:
             return None
-    match = re.search(r"\d+(?:[.,]\d+)?", token)
+    match = re.search(r"(?<!\d)-?\d+(?:[.,]\d+)?(?!\d)", token)
     if match is None:
         return None
     try:
@@ -1816,20 +1944,15 @@ def _normalize_arconic_cast_job_tokens(lines: list[str]) -> str | None:
     return cast_token or job_token
 
 
-def _extract_neuman_match_fields(lines: list[str]) -> dict[str, str]:
+def _extract_neuman_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
     return {
         "delivery_note_no": _extract_neuman_delivery_note(lines),
-        "lot_number": _extract_neuman_lot_number(lines),
-        "customer_material_number": _extract_value_near_anchor(
-            lines,
-            ("customer material number", "art-nr."),
-            pattern=r"\bA[0-9A-Z]{5,}\b",
-        ),
-        "customer_order_number": _extract_value_near_anchor(
-            lines,
-            ("customer order number",),
-            pattern=r"\b[0-9]{1,6}\b",
-        ),
+        "lot_number": _extract_neuman_lot_number(lines, document_type=document_type),
+        "customer_material_number": _extract_neuman_customer_material_number(lines, document_type=document_type),
+        "customer_order_number": _extract_neuman_customer_order_number(lines),
+        "alloy": _extract_neuman_alloy(lines),
+        "diameter": _extract_neuman_diameter(lines),
+        "weight": _extract_neuman_weight(lines, document_type=document_type),
     }
 
 
@@ -1841,18 +1964,147 @@ def _extract_neuman_delivery_note(lines: list[str]) -> str | None:
     return None
 
 
-def _extract_neuman_lot_number(lines: list[str]) -> str | None:
+def _extract_neuman_lot_number(lines: list[str], *, document_type: str) -> str | None:
     normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    if document_type == "certificato":
+        for index, line in enumerate(normalized_lines):
+            if "LOT NUMBER" not in line:
+                continue
+            for candidate in normalized_lines[index : min(index + 4, len(normalized_lines))]:
+                match = re.search(r"\bLOT\s+NUMBER\s*:?\s*(\d{5})\b", candidate)
+                if match is None:
+                    match = re.search(r"\b(\d{5})\b", candidate)
+                if match is not None:
+                    return match.group(1)
+        return None
     lot_candidates: list[str] = []
     for index, line in enumerate(normalized_lines):
         if "LOT" not in line:
             continue
-        lot_candidates.extend(re.findall(r"\b(\d{5})\b", line))
+        same_line_match = re.search(r"\bLOT\s*:?\s*(\d{5})\b", line)
+        if same_line_match is not None:
+            lot_candidates.append(same_line_match.group(1))
         for candidate in normalized_lines[index + 1 : min(index + 3, len(normalized_lines))]:
-            lot_candidates.extend(re.findall(r"\b(\d{5})\b", candidate))
+            candidate_match = re.search(r"\bLOT\s*:?\s*(\d{5})\b", candidate)
+            if candidate_match is not None:
+                lot_candidates.append(candidate_match.group(1))
     unique_candidates = sorted(set(lot_candidates))
     if len(unique_candidates) == 1:
         return unique_candidates[0]
+    return None
+
+
+def _extract_neuman_customer_material_number(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    anchors = ("CUSTOMER MATERIAL NUMBER",) if document_type == "certificato" else ("ART-NR", "ARTIKELNR")
+    for index, line in enumerate(normalized_lines):
+        if not any(anchor in line for anchor in anchors):
+            continue
+        window = normalized_lines[index : min(index + 3, len(normalized_lines))]
+        for candidate in window:
+            match = re.search(r"\b(A\d[0-9A-Z]{4,})\b", candidate)
+            if match is not None:
+                return match.group(1)
+    return None
+
+
+def _extract_neuman_customer_order_number(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for index, line in enumerate(normalized_lines):
+        if "CUSTOMER ORDER NUMBER" not in line:
+            continue
+        match = re.search(r"\bCUSTOMER\s+ORDER\s+NUMBER\s*:?\s*([0-9]{1,6})\b", line)
+        if match is not None:
+            return match.group(1)
+        for candidate in normalized_lines[index : min(index + 4, len(normalized_lines))]:
+            inline = re.search(r"\b([0-9]{1,6})\s+OF\s+\d{2}\.\d{2}\.\d{4}\b", candidate)
+            if inline is not None:
+                return inline.group(1)
+    return None
+
+
+def _extract_neuman_alloy(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for line in normalized_lines:
+        match = re.search(r"\b(?:WERKSTOFF|MATERIAL)\s*:?\s*EN\s+AW[-\s]*([0-9]{4}[A-Z]{0,3})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_neuman_diameter(lines: list[str]) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    for line in normalized_lines:
+        match = re.search(r"[Ø@]\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    for line in normalized_lines:
+        if "RUNDSTANGEN" not in line:
+            continue
+        match = re.search(r"RUNDSTANGEN.*?\b([0-9]{2,3}(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    for line in normalized_lines:
+        match = re.search(r"\bDIAMETER\s+([0-9]+(?:[.,][0-9]+)?)\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_neuman_weight(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
+    if document_type == "certificato":
+        for index, line in enumerate(normalized_lines):
+            if "NET WEIGHT" not in line:
+                continue
+            same_line = re.search(r"\b([0-9]{1,3}(?:[.,][0-9]{3})+|\d+[.,]\d{3})\b", line)
+            if same_line is not None:
+                return _normalize_neuman_weight_result(same_line.group(1))
+            for candidate in normalized_lines[index + 1 : min(index + 6, len(normalized_lines))]:
+                if "TOTAL" in candidate:
+                    total_matches = re.findall(r"\b([0-9]{1,3}(?:[.,][0-9]{3})+|\d+[.,]\d{3})\b", candidate)
+                    if total_matches:
+                        return _normalize_neuman_weight_result(total_matches[-1])
+                candidate_matches = re.findall(r"\b([0-9]{1,3}(?:[.,][0-9]{3})+|\d+[.,]\d{3})\b", candidate)
+                if candidate_matches:
+                    return _normalize_neuman_weight_result(candidate_matches[-1])
+        return None
+
+    explicit_lot_weights: dict[str, str] = {}
+    hu_weights: dict[str, float] = {}
+    section_net_weights: list[str] = []
+    for line in normalized_lines:
+        if "LOT COUNT" in line or "LINE COUNT" in line or "TOTAL COLLI" in line:
+            continue
+        generic_weight_match = re.search(r"\bNET\s*:?\s*([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s*KG\b", line)
+        if generic_weight_match is not None:
+            normalized_generic_weight = _normalize_neuman_weight_result(generic_weight_match.group(1))
+            if normalized_generic_weight is not None:
+                section_net_weights.append(normalized_generic_weight)
+        lot_match = re.search(r"\bLOT\s*:?\s*(\d{5})\b", line)
+        weight_match = generic_weight_match
+        if lot_match is None or weight_match is None:
+            continue
+        lot_token = lot_match.group(1)
+        normalized_weight = _normalize_neuman_weight_result(weight_match.group(1))
+        if normalized_weight is None:
+            continue
+        if "HU:" in line:
+            parsed = _parse_weight_number(normalized_weight)
+            if parsed is not None:
+                hu_weights[lot_token] = hu_weights.get(lot_token, 0.0) + parsed
+            continue
+        explicit_lot_weights[lot_token] = normalized_weight
+    if len(explicit_lot_weights) == 1:
+        return next(iter(explicit_lot_weights.values()))
+    if not explicit_lot_weights and len(hu_weights) == 1:
+        return str(int(round(next(iter(hu_weights.values())))))
+    unique_lot = _extract_neuman_lot_number(lines, document_type="ddt")
+    if unique_lot is not None and section_net_weights:
+        try:
+            return str(max(int(weight) for weight in section_net_weights))
+        except ValueError:
+            return None
     return None
 
 

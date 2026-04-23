@@ -385,6 +385,8 @@ def _build_row_split_hint(document: Document | None, template) -> ReaderRowSplit
         return _build_impol_row_split_hint(lines)
     if template.supplier_key == "leichtmetall":
         return _build_leichtmetall_row_split_hint(document, lines)
+    if template.supplier_key == "neuman":
+        return _build_neuman_row_split_hint(document, lines)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_hint(lines)
     if template.supplier_key == "aluminium_bozen":
@@ -441,6 +443,18 @@ def _build_leichtmetall_row_split_hint(document: Document | None, lines: list[st
     return ReaderRowSplitHintResponse(needed=False, estimated_rows=max(candidate_count, 1), signals=[])
 
 
+def _build_neuman_row_split_hint(document: Document | None, lines: list[str]) -> ReaderRowSplitHintResponse:
+    candidate_count = len(_build_neuman_row_split_candidates(document, "neuman"))
+    if candidate_count > 1:
+        return ReaderRowSplitHintResponse(
+            needed=True,
+            estimated_rows=candidate_count,
+            reason="Il DDT Neuman contiene piu gruppi lotto/prodotto e va scisso in piu righe acquisition.",
+            signals=[f"candidate={candidate_count}"],
+        )
+    return ReaderRowSplitHintResponse(needed=False, estimated_rows=max(candidate_count, 1), signals=[])
+
+
 def _build_row_split_candidates(document: Document | None, template) -> list[ReaderRowSplitCandidateResponse]:
     if document is None or template is None:
         return []
@@ -457,6 +471,8 @@ def _build_row_split_candidates(document: Document | None, template) -> list[Rea
         return _build_metalba_row_split_candidates(lines, template.supplier_key)
     if template.supplier_key == "leichtmetall":
         return _build_leichtmetall_row_split_candidates(document, template.supplier_key)
+    if template.supplier_key == "neuman":
+        return _build_neuman_row_split_candidates(document, template.supplier_key)
     if template.supplier_key == "grupa_kety":
         return _build_grupa_kety_row_split_candidates(lines, template.supplier_key)
     if template.supplier_key == "aluminium_bozen":
@@ -718,6 +734,228 @@ def _build_metalba_row_split_candidates(lines: list[str], supplier_key: str) -> 
     if strong_signal_count < 3:
         return []
     return [candidate]
+
+
+def _build_neuman_row_split_candidates(
+    document: Document | None,
+    supplier_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if document is None or not document.pages:
+        return []
+
+    all_lines = [line for page in document.pages for line in _page_lines(page)]
+    normalized_all_lines = [_normalize_line(line) for line in all_lines]
+
+    ddt_number = _extract_neuman_delivery_note_number(normalized_all_lines)
+    customer_order_no = _extract_neuman_customer_order_number(normalized_all_lines)
+
+    section_ranges = _extract_neuman_section_ranges(normalized_all_lines)
+    if not section_ranges:
+        section_ranges = [(0, len(all_lines))]
+
+    candidates: list[ReaderRowSplitCandidateResponse] = []
+    for start_index, end_index in section_ranges:
+        section_raw = all_lines[start_index:end_index]
+        section_normalized = normalized_all_lines[start_index:end_index]
+        article_code = _extract_neuman_article_number(section_normalized)
+        lega = _extract_neuman_alloy(section_normalized) or _extract_neuman_alloy(normalized_all_lines)
+        diametro = _extract_neuman_diameter(section_normalized) or _extract_neuman_diameter(normalized_all_lines)
+        section_order = _extract_neuman_customer_order_number(section_normalized) or customer_order_no
+        lot_groups = _extract_neuman_lot_groups(section_raw, section_normalized)
+
+        for lot_token, payload in lot_groups.items():
+            snippets = list(payload.get("snippets", []))[:6]
+            candidates.append(
+                ReaderRowSplitCandidateResponse(
+                    candidate_index=len(candidates) + 1,
+                    supplier_key=supplier_key,
+                    ddt_number=ddt_number,
+                    cdq=lot_token,
+                    article_code=article_code,
+                    lega=lega,
+                    diametro=diametro,
+                    peso_netto=_normalize_text(str(payload.get("weight"))) if payload.get("weight") is not None else None,
+                    colata=lot_token,
+                    lot_batch_no=lot_token,
+                    customer_order_no=section_order,
+                    snippets=snippets,
+                )
+            )
+
+    if candidates:
+        return candidates
+
+    if not any((ddt_number, customer_order_no)):
+        return []
+
+    return [
+        ReaderRowSplitCandidateResponse(
+            candidate_index=1,
+            supplier_key=supplier_key,
+            ddt_number=ddt_number,
+            customer_order_no=customer_order_no,
+            lega=_extract_neuman_alloy(normalized_all_lines),
+            diametro=_extract_neuman_diameter(normalized_all_lines),
+            snippets=all_lines[:6],
+        )
+    ]
+
+
+def _extract_neuman_section_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    anchors = [index for index, line in enumerate(lines) if _is_neuman_product_anchor_line(line)]
+    if not anchors:
+        return []
+    ranges: list[tuple[int, int]] = []
+    for offset, start_index in enumerate(anchors):
+        end_index = anchors[offset + 1] if offset + 1 < len(anchors) else len(lines)
+        ranges.append((start_index, end_index))
+    return ranges
+
+
+def _is_neuman_product_anchor_line(line: str) -> bool:
+    if "RUNDSTANGEN" in line and ("@" in line or "Ø" in line or " MM" in line):
+        return True
+    return False
+
+
+def _extract_neuman_delivery_note_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bDELIVERY\s+NOTE\s+(\d{6,})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_neuman_customer_order_number(lines: list[str]) -> str | None:
+    for index, line in enumerate(lines):
+        if "CUSTOMER ORDER NUMBER" not in line:
+            continue
+        same_line_match = re.search(r"\bCUSTOMER\s+ORDER\s+NUMBER\s*:?\s*([0-9]{1,6})\b", line)
+        if same_line_match is not None:
+            return same_line_match.group(1)
+        for candidate in lines[index : min(index + 4, len(lines))]:
+            inline_match = re.search(r"\b([0-9]{1,6})\s+OF\s+\d{2}\.\d{2}\.\d{4}\b", candidate)
+            if inline_match is not None:
+                return inline_match.group(1)
+    return None
+
+
+def _extract_neuman_article_number(lines: list[str]) -> str | None:
+    for line in lines:
+        if "ART-NR" not in line and "ARTIKELNR" not in line:
+            continue
+        match = re.search(r"\b(A\d[0-9A-Z]{4,})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_neuman_alloy(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bWERKSTOFF\s*:?\s*EN\s+AW\s*([0-9]{4}[A-Z]{0,3})\b", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_neuman_diameter(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"[@Ø]\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    for line in lines:
+        if "RUNDSTANGEN" not in line:
+            continue
+        match = re.search(r"RUNDSTANGEN.*?\b([0-9]{2,3}(?:[.,][0-9]+)?)\s*MM\b", line)
+        if match is not None:
+            return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_neuman_lot_groups(
+    raw_lines: list[str],
+    normalized_lines: list[str],
+) -> dict[str, dict[str, object]]:
+    lot_totals: dict[str, dict[str, object]] = {}
+    hu_totals: dict[str, dict[str, object]] = {}
+    section_net_weights: list[int] = []
+    section_lot_tokens: set[str] = set()
+
+    for raw_line, normalized_line in zip(raw_lines, normalized_lines, strict=False):
+        if "LOT COUNT" in normalized_line or "LINE COUNT" in normalized_line or "TOTAL COLLI" in normalized_line:
+            continue
+        lot_match = re.search(r"\bLOT\s*:?\s*(\d{5})\b", normalized_line)
+        weight_match = re.search(r"\bNET\s*:?\s*([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s*KG\b", normalized_line)
+        if weight_match is not None:
+            generic_weight = _parse_neuman_document_weight(weight_match.group(1))
+            if generic_weight is not None:
+                section_net_weights.append(int(round(generic_weight)))
+        if lot_match is None or weight_match is None:
+            if lot_match is not None:
+                section_lot_tokens.add(lot_match.group(1))
+            continue
+        lot_token = lot_match.group(1)
+        section_lot_tokens.add(lot_token)
+        parsed_direct_weight = _parse_neuman_document_weight(weight_match.group(1))
+        if parsed_direct_weight is None:
+            continue
+        normalized_weight = str(int(round(parsed_direct_weight)))
+        if "HU:" in normalized_line:
+            parsed_weight = int(round(parsed_direct_weight))
+            if parsed_weight is None:
+                continue
+            entry = hu_totals.setdefault(lot_token, {"weight_total": 0, "snippets": []})
+            entry["weight_total"] = int(entry["weight_total"]) + parsed_weight
+            entry["snippets"] = _merge_snippets(entry["snippets"], [raw_line])
+            continue
+        lot_totals[lot_token] = {
+            "weight": normalized_weight,
+            "snippets": [raw_line],
+        }
+
+    if lot_totals:
+        return lot_totals
+
+    normalized_groups: dict[str, dict[str, object]] = {}
+    for lot_token, payload in hu_totals.items():
+        normalized_groups[lot_token] = {
+            "weight": str(int(payload.get("weight_total", 0))),
+            "snippets": list(payload.get("snippets", [])),
+        }
+    if not normalized_groups and len(section_lot_tokens) == 1 and section_net_weights:
+        only_lot = next(iter(section_lot_tokens))
+        normalized_groups[only_lot] = {
+            "weight": str(max(section_net_weights)),
+            "snippets": raw_lines[:6],
+        }
+    return normalized_groups
+
+
+def _parse_neuman_split_weight(value: str | None) -> int | None:
+    parsed = _parse_neuman_document_weight(value)
+    if parsed is None:
+        return None
+    return int(round(parsed))
+
+
+def _parse_neuman_document_weight(value: str | None) -> float | None:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return None
+    token = normalized.replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token):
+        try:
+            return float(re.sub(r"[.,]", "", token))
+        except ValueError:
+            return None
+    if re.fullmatch(r"\d+[.,]\d{3}", token):
+        try:
+            return float(token.replace(",", "."))
+        except ValueError:
+            return None
+    if re.fullmatch(r"\d+", token):
+        return float(token)
+    return None
 
 
 def _build_leichtmetall_row_split_candidates(
