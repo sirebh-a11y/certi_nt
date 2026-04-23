@@ -3146,47 +3146,38 @@ def _build_aluminium_bozen_ddt_group_crops(
     pages: list[DocumentPage],
 ) -> dict[str, dict[str, str | int]]:
     crops: dict[str, dict[str, str | int]] = {}
-    if not pages:
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
         return crops
 
-    sorted_pages = sorted(pages, key=lambda item: item.numero_pagina)
-    first_page = sorted_pages[0]
-
-    crop_specs: list[tuple[DocumentPage, str, str, float, float, float, float]] = [
-        (first_page, "group_header_num", "header_num", 0.04, 0.18, 0.05, 0.95),
-        (first_page, "group_rows_overview", "row_groups_overview", 0.16, 0.92, 0.03, 0.97),
-        (first_page, "group_material_rows", "material_rows", 0.18, 0.76, 0.03, 0.97),
-        (first_page, "group_packing_rows", "packing_rows", 0.52, 0.96, 0.02, 0.98),
-    ]
-
-    for page in sorted_pages[1:]:
-        crop_specs.append(
-            (
-                page,
-                f"group_packing_rows_p{page.numero_pagina}",
-                "packing_rows",
-                0.12,
-                0.96,
-                0.02,
-                0.98,
-            )
-        )
-
-    for page, suffix, role, top_ratio, bottom_ratio, left_ratio, right_ratio in crop_specs:
-        crop_definition = _create_dynamic_page_crop(
-            page,
-            suffix=suffix,
-            role=role,
-            top_ratio=top_ratio,
-            bottom_ratio=bottom_ratio,
-            left_ratio=left_ratio,
-            right_ratio=right_ratio,
-            save_crop=_save_ddt_crop,
-        )
-        if crop_definition is not None:
-            crops[str(crop_definition["label"])] = crop_definition
-
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_aluminium_bozen_ddt_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"aluminium_bozen_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
     return crops
+
+
+def _build_aluminium_bozen_ddt_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    _mask_aluminium_bozen_customer_name(masked)
+    return masked
 
 
 def _build_impol_ddt_group_crops(
@@ -3240,7 +3231,9 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
             "type": "input_text",
             "text": (
                 "Leggi queste immagini di un documento tecnico di trasporto e ricostruisci tutte le righe logiche materiale presenti. "
-                "Una riga logica puo essere distribuita tra il blocco materiale della prima pagina e uno o piu blocchi packing nelle pagine successive. "
+                "Le immagini rappresentano pagine intere mascherate dello stesso DDT. "
+                "Il documento puo distribuire numero DDT, blocco materiale e informazioni packing su piu pagine. "
+                "Una riga logica puo essere distribuita tra blocco materiale e uno o piu blocchi packing anche su pagine diverse. "
                 "Se il documento contiene 3 righe logiche, restituisci 3 elementi; se ne contiene 5, restituisci 5 elementi. "
                 "Non unire dati di righe diverse e non inventare valori mancanti. "
                 "Non fare il match con nessun certificato e non normalizzare i valori. "
@@ -3249,9 +3242,9 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Lo stesso ordine cliente puo comparire su piu righe diverse dello stesso DDT: se e chiaramente riferito a piu righe, riportalo in ogni riga interessata. "
                 "customer_order_raw deve contenere il testo raw completo del campo ordine cliente della riga, letto solo da Vs. Odv o Rif. ordine cliente. "
                 "Se sono presenti numero e data, riportali entrambi; se il riferimento cliente e leggibile ma la data manca, restituisci comunque il valore raw visibile. "
-                "certificate_no_raw deve essere il valore del Cert. N. della stessa riga logica, quando visibile nel packing group collegato. "
+                "certificate_no_raw deve essere il valore del Cert. N. della stessa riga logica, quando visibile nel blocco packing collegato. "
                 "Non saltare certificate_no_raw se e presente; non usare numeri di norme come EN 10204 3.1 o simili. "
-                "Se la stessa riga logica appare tra material_rows e packing_rows, unisci quei dati nello stesso elemento rows. "
+                "Se la stessa riga logica appare tra blocco materiale e blocchi packing, o in piu pagine del documento, unisci quei dati nello stesso elemento rows. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
@@ -3270,7 +3263,7 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
             {
                 "type": "input_text",
                 "text": (
-                    f"Crop label: {crop_label}; "
+                    f"Page label: {crop_label}; "
                     f"role: {crop.get('role') or 'unknown'}; "
                     f"page_number: {crop.get('page_number') or 'unknown'}"
                 ),
@@ -3898,6 +3891,7 @@ def _apply_aluminium_bozen_ai_candidate_to_row(
         return False
 
     _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
     _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
@@ -9040,6 +9034,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
         "numero_certificato_certificato": ("certificate_number_raw", _normalize_certificate_number),
         "articolo_certificato": ("article_code_raw", _normalize_article_code),
         "codice_cliente_certificato": ("profile_customer_description_raw", _normalize_profile_code),
+        "descrizione_profilo_cliente_certificato": ("profile_customer_description_raw", lambda value, evidence: _string_or_none(value) or _string_or_none(evidence)),
         "ordine_cliente_certificato": ("customer_order_raw", _normalize_customer_order),
         "lega_certificato": ("alloy_raw", _normalize_alloy),
         "diametro_certificato": ("profile_customer_description_raw", _normalize_diameter),
