@@ -45,6 +45,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionValueHistoryResponse,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
+    ChemistryOverlayPreviewItemResponse,
+    ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
     PropertiesCaptureRequest,
@@ -978,6 +980,260 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
         raw_lines=lines,
         values=_serialize_properties_capture_values(chosen),
     )
+
+
+def build_chemistry_overlay_preview(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> ChemistryOverlayPreviewResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        return ChemistryOverlayPreviewResponse(items=[])
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+
+    field_values: dict[str, str] = {}
+    for value in row.values:
+        if value.blocco != "chimica":
+            continue
+        if "+" in value.campo:
+            continue
+        normalized = _normalize_chemistry_capture_value(
+            value.valore_finale or value.valore_standardizzato or value.valore_grezzo
+        )
+        if normalized is None:
+            continue
+        field_values[value.campo] = normalized
+
+    if not field_values:
+        return ChemistryOverlayPreviewResponse(items=[])
+
+    best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
+    best_score: tuple[int, int, int] = (0, 0, 0)
+    for page in certificate_document.pages:
+        if not page.immagine_pagina_storage_key:
+            continue
+        line_boxes, image_width, image_height = _extract_ocr_line_boxes(page)
+        for line_box in line_boxes:
+            matched_fields = _match_chemistry_overlay_fields(field_values, line_box)
+            if not matched_fields:
+                continue
+            non_zero_matches = _count_non_zero_chemistry_overlay_matches(field_values, matched_fields)
+            penalty = _chemistry_overlay_line_penalty(line_box)
+            score = (non_zero_matches, len(matched_fields), -penalty)
+            if score > best_score:
+                best_score = score
+                best_match = (page, line_box, matched_fields, image_width, image_height)
+
+    if best_match is None or best_score[1] < 3:
+        return ChemistryOverlayPreviewResponse(items=[])
+
+    page, line_box, matched_fields, image_width, image_height = best_match
+    items = _build_chemistry_overlay_items(
+        page=page,
+        line_box=line_box,
+        field_values=field_values,
+        matched_fields=matched_fields,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    return ChemistryOverlayPreviewResponse(items=items)
+
+
+def _extract_ocr_line_boxes(page: DocumentPage) -> tuple[list[dict[str, object]], int, int]:
+    image_path = get_document_page_image_path(page)
+    with Image.open(image_path) as image:
+        image_width, image_height = image.size
+        all_lines: list[dict[str, object]] = []
+        seen_keys: set[tuple[int, int, int, int, str]] = set()
+        for psm in (6, 4):
+            data = pytesseract.image_to_data(
+                image,
+                lang="eng+ita+deu",
+                config=f"--psm {psm}",
+                output_type=pytesseract.Output.DICT,
+            )
+            grouped: dict[tuple[int, int, int], dict[str, object]] = {}
+            texts = data.get("text", [])
+            for index, raw_text in enumerate(texts):
+                text = _string_or_none(raw_text)
+                if text is None:
+                    continue
+                normalized_token = _normalize_chemistry_overlay_token(text)
+                if normalized_token is None:
+                    continue
+
+                left = int(data["left"][index])
+                top = int(data["top"][index])
+                width = int(data["width"][index])
+                height = int(data["height"][index])
+                if width <= 0 or height <= 0:
+                    continue
+
+                key = (
+                    int(data["block_num"][index]),
+                    int(data["par_num"][index]),
+                    int(data["line_num"][index]),
+                )
+                line_entry = grouped.setdefault(
+                    key,
+                    {
+                        "words": [],
+                        "x0": left,
+                        "y0": top,
+                        "x1": left + width,
+                        "y1": top + height,
+                    },
+                )
+                words = cast(list[dict[str, object]], line_entry["words"])
+                words.append(
+                    {
+                        "text": text,
+                        "normalized": normalized_token,
+                        "left": left,
+                        "top": top,
+                        "width": width,
+                        "height": height,
+                    }
+                )
+                line_entry["x0"] = min(int(line_entry["x0"]), left)
+                line_entry["y0"] = min(int(line_entry["y0"]), top)
+                line_entry["x1"] = max(int(line_entry["x1"]), left + width)
+                line_entry["y1"] = max(int(line_entry["y1"]), top + height)
+
+            for line_entry in grouped.values():
+                words = cast(list[dict[str, object]], line_entry["words"])
+                raw_text = " ".join(str(word.get("text") or "") for word in words).strip().lower()
+                dedupe_key = (
+                    int(line_entry["x0"]),
+                    int(line_entry["y0"]),
+                    int(line_entry["x1"]),
+                    int(line_entry["y1"]),
+                    raw_text,
+                )
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                all_lines.append(line_entry)
+
+    return all_lines, image_width, image_height
+
+
+def _normalize_chemistry_overlay_token(value: str | None) -> str | None:
+    cleaned = _string_or_none(_normalize_mojibake_numeric_text(value))
+    if cleaned is None:
+        return None
+    cleaned = cleaned.strip().strip("|[](){};:")
+    return _normalize_chemistry_capture_value(cleaned)
+
+
+def _chemistry_overlay_match_keys(value: str | None) -> set[str]:
+    normalized = _normalize_chemistry_capture_value(value)
+    if normalized is None:
+        return set()
+    keys = {normalized}
+    compact = normalized
+    for marker in ("<=", "<", "≤"):
+        compact = compact.replace(marker, "")
+    compact = compact.replace(",", "").replace(".", "").strip()
+    if compact:
+        keys.add(compact)
+    return keys
+
+
+def _match_chemistry_overlay_fields(
+    field_values: dict[str, str],
+    line_box: dict[str, object],
+) -> list[str]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    available_tokens: set[str] = set()
+    for word in words:
+        available_tokens.update(_chemistry_overlay_match_keys(cast(str | None, word.get("text"))))
+        available_tokens.update(_chemistry_overlay_match_keys(cast(str | None, word.get("normalized"))))
+    matched_fields: list[str] = []
+    for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        if _chemistry_overlay_match_keys(target_value) & available_tokens:
+            matched_fields.append(field_name)
+    return matched_fields
+
+
+def _count_non_zero_chemistry_overlay_matches(field_values: dict[str, str], matched_fields: list[str]) -> int:
+    count = 0
+    for field_name in matched_fields:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        parsed = _safe_chemistry_float(target_value)
+        if parsed is not None and abs(parsed) > 1e-9:
+            count += 1
+    return count
+
+
+def _chemistry_overlay_line_penalty(line_box: dict[str, object]) -> int:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    text = " ".join(str(word.get("text") or "") for word in words).lower()
+    penalty = 0
+    if any(token in text for token in ("min", "max", "limit", "norma", "norme", "soll", "set value")):
+        penalty += 3
+    if "sample" in text or "charge" in text or "coul" in text:
+        penalty -= 1
+    return penalty
+
+
+def _build_chemistry_overlay_items(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    field_values: dict[str, str],
+    matched_fields: list[str],
+    image_width: int,
+    image_height: int,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    used_indexes: set[int] = set()
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+
+    for field_name in matched_fields:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        target_keys = _chemistry_overlay_match_keys(target_value)
+        matched_index: int | None = None
+        for index, word in enumerate(words):
+            if index in used_indexes:
+                continue
+            word_keys = _chemistry_overlay_match_keys(cast(str | None, word.get("text")))
+            word_keys.update(_chemistry_overlay_match_keys(cast(str | None, word.get("normalized"))))
+            if target_keys & word_keys:
+                matched_index = index
+                break
+        if matched_index is None:
+            continue
+        used_indexes.add(matched_index)
+        word = words[matched_index]
+        left = int(word["left"])
+        top = int(word["top"])
+        width = int(word["width"])
+        height = int(word["height"])
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+
+    return items
 
 
 def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, actor_email: str) -> DocumentResponse:

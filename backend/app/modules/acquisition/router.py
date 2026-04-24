@@ -15,6 +15,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowUpdateRequest,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
+    ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
     DocumentBatchUploadResponse,
@@ -45,6 +46,7 @@ from app.modules.acquisition.service import (
     create_document_page,
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
+    build_chemistry_overlay_preview,
     capture_chemistry_table_from_page,
     capture_properties_value_from_page,
     capture_properties_table_from_page,
@@ -294,6 +296,16 @@ def capture_chemistry_table_route(
 ) -> ChemistryTableCaptureResponse:
     page = get_document_page(db, page_id)
     return capture_chemistry_table_from_page(page=page, payload=payload)
+
+
+@router.get("/rows/{row_id}/chemistry-overlay-preview", response_model=ChemistryOverlayPreviewResponse)
+def chemistry_overlay_preview_route(
+    row_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> ChemistryOverlayPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_chemistry_overlay_preview(db=db, row=row)
 
 
 @router.post("/document-pages/{page_id}/properties-capture", response_model=PropertiesCaptureResponse)

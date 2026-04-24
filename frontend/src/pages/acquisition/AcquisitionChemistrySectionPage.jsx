@@ -173,6 +173,7 @@ function ChemistryPdfPanel({
   footerContent,
   onCaptureError,
   onCaptureValue,
+  overlayPreviewItems,
   onTableCaptureProposal,
   tableCaptureActive,
   token,
@@ -385,6 +386,17 @@ function ChemistryPdfPanel({
         }
       : null;
 
+  const previewItemsByPage = useMemo(() => {
+    const grouped = new Map();
+    (overlayPreviewItems || []).forEach((item) => {
+      const key = item.page_id;
+      const items = grouped.get(key) || [];
+      items.push(item);
+      grouped.set(key, items);
+    });
+    return grouped;
+  }, [overlayPreviewItems]);
+
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -441,6 +453,36 @@ function ChemistryPdfPanel({
                     onMouseMove={(event) => handleSelectionMove(page, event)}
                     onMouseUp={() => void handleSelectionEnd(page)}
                   />
+                  {(previewItemsByPage.get(page.id) || []).map((item, index) => {
+                    const [left, top, right, bottom] = String(item.bbox || "")
+                      .split(",")
+                      .map((part) => Number.parseFloat(part));
+                    const imageWidth = Number(item.image_width || 0);
+                    const imageHeight = Number(item.image_height || 0);
+                    if (
+                      !Number.isFinite(left) ||
+                      !Number.isFinite(top) ||
+                      !Number.isFinite(right) ||
+                      !Number.isFinite(bottom) ||
+                      imageWidth <= 0 ||
+                      imageHeight <= 0
+                    ) {
+                      return null;
+                    }
+                    return (
+                      <div
+                        className="pointer-events-none absolute rounded border border-sky-500 bg-sky-400/20 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]"
+                        key={`${page.id}-${item.field}-${index}`}
+                        title={`${formatChemistryFieldLabel(item.field)} evidenza preview`}
+                        style={{
+                          left: `${(left / imageWidth) * 100}%`,
+                          top: `${(top / imageHeight) * 100}%`,
+                          width: `${((right - left) / imageWidth) * 100}%`,
+                          height: `${((bottom - top) / imageHeight) * 100}%`,
+                        }}
+                      />
+                    );
+                  })}
                   {selection && selection.pageId === page.id && selectionStyle ? (
                     <div
                       className="pointer-events-none absolute rounded-lg border-2 border-sky-400 bg-sky-200/20"
@@ -481,6 +523,8 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [captureField, setCaptureField] = useState("");
   const [tableCaptureActive, setTableCaptureActive] = useState(false);
   const [tableCaptureProposal, setTableCaptureProposal] = useState(null);
+  const [overlayPreviewItems, setOverlayPreviewItems] = useState([]);
+  const [overlayBusy, setOverlayBusy] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const workspaceRef = useRef(null);
@@ -591,6 +635,31 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     requestAnimationFrame(() => {
       workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  }
+
+  async function handleToggleOverlayPreview() {
+    if (overlayBusy) {
+      return;
+    }
+    if (overlayPreviewItems.length) {
+      setOverlayPreviewItems([]);
+      return;
+    }
+    setOverlayBusy(true);
+    try {
+      const response = await apiRequest(`/acquisition/rows/${rowId}/chemistry-overlay-preview`, {}, token);
+      setOverlayPreviewItems(Array.isArray(response?.items) ? response.items : []);
+      if (!response?.items?.length) {
+        setError("Nessun overlay disponibile per questo certificato.");
+      } else {
+        setError("");
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+      setOverlayPreviewItems([]);
+    } finally {
+      setOverlayBusy(false);
+    }
   }
 
   async function persistDraft() {
@@ -832,7 +901,19 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const workspaceStatusBar = (
     <div className="min-h-[32px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
       <div className="flex min-h-[18px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
-        <div className="min-w-0 text-sm font-medium text-sky-700">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-sky-700">
+          <button
+            className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
+              overlayPreviewItems.length
+                ? "border-sky-400 bg-sky-100 text-sky-800"
+                : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
+            } disabled:cursor-wait disabled:opacity-60`}
+            disabled={overlayBusy}
+            onClick={() => void handleToggleOverlayPreview()}
+            type="button"
+          >
+            {overlayBusy ? "..." : overlayPreviewItems.length ? "Overlay off" : "Overlay"}
+          </button>
           {tableCaptureActive ? (
             <span>Cattura tabella attiva: seleziona un rettangolo sopra la tabella chimica.</span>
           ) : captureField ? (
@@ -861,6 +942,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
         }
       onCaptureError={handleWorkspaceError}
       onCaptureValue={handleCaptureValue}
+      overlayPreviewItems={overlayPreviewItems}
       onTableCaptureProposal={handleTableCaptureProposal}
       tableCaptureActive={tableCaptureActive}
       token={token}

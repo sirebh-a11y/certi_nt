@@ -130,6 +130,19 @@ class ChemistryTableCaptureResponse(BaseModel):
     values: dict[str, str]
 
 
+class ChemistryOverlayPreviewItemResponse(BaseModel):
+    page_id: int
+    page_number: int
+    field: str
+    bbox: str
+    image_width: int
+    image_height: int
+
+
+class ChemistryOverlayPreviewResponse(BaseModel):
+    items: list[ChemistryOverlayPreviewItemResponse]
+
+
 class PropertiesTableCaptureRequest(BaseModel):
     x1_ratio: float = Field(ge=0, le=1)
     y1_ratio: float = Field(ge=0, le=1)
