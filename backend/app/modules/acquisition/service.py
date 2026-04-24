@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import pytesseract
+from functools import lru_cache
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -1015,17 +1016,13 @@ def build_chemistry_overlay_preview(
     for page in certificate_document.pages:
         if not page.immagine_pagina_storage_key:
             continue
-        line_boxes, image_width, image_height = _extract_ocr_line_boxes(page)
-        for line_box in line_boxes:
-            matched_fields = _match_chemistry_overlay_fields(field_values, line_box)
-            if not matched_fields:
-                continue
-            non_zero_matches = _count_non_zero_chemistry_overlay_matches(field_values, matched_fields)
-            penalty = _chemistry_overlay_line_penalty(line_box)
-            score = (non_zero_matches, len(matched_fields), -penalty)
-            if score > best_score:
-                best_score = score
-                best_match = (page, line_box, matched_fields, image_width, image_height)
+        staged_match = _find_best_chemistry_overlay_match(page=page, field_values=field_values)
+        if staged_match is None:
+            continue
+        line_box, matched_fields, image_width, image_height, score = staged_match
+        if score > best_score:
+            best_score = score
+            best_match = (page, line_box, matched_fields, image_width, image_height)
 
     if best_match is None or best_score[1] < 3:
         return ChemistryOverlayPreviewResponse(items=[])
@@ -1042,13 +1039,65 @@ def build_chemistry_overlay_preview(
     return ChemistryOverlayPreviewResponse(items=items)
 
 
-def _extract_ocr_line_boxes(page: DocumentPage) -> tuple[list[dict[str, object]], int, int]:
+def _find_best_chemistry_overlay_match(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
+    primary = _score_chemistry_overlay_lines(page=page, field_values=field_values, psms=(4,))
+    if primary is not None and (primary[4][0] >= 3 or primary[4][1] >= 6):
+        return primary
+    fallback = _score_chemistry_overlay_lines(page=page, field_values=field_values, psms=(4, 6))
+    if fallback is not None:
+        return fallback
+    return primary
+
+
+def _score_chemistry_overlay_lines(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+    psms: tuple[int, ...],
+) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=psms)
+    best_line: dict[str, object] | None = None
+    best_fields: list[str] = []
+    best_score: tuple[int, int, int] = (0, 0, 0)
+    for line_box in line_boxes:
+        matched_fields = _match_chemistry_overlay_fields(field_values, line_box)
+        if not matched_fields:
+            continue
+        non_zero_matches = _count_non_zero_chemistry_overlay_matches(field_values, matched_fields)
+        penalty = _chemistry_overlay_line_penalty(line_box)
+        score = (non_zero_matches, len(matched_fields), -penalty)
+        if score > best_score:
+            best_score = score
+            best_line = line_box
+            best_fields = matched_fields
+    if best_line is None or best_score[1] < 3:
+        return None
+    return best_line, best_fields, image_width, image_height, best_score
+
+
+def _extract_ocr_line_boxes(page: DocumentPage, *, psms: tuple[int, ...] = (4, 6)) -> tuple[list[dict[str, object]], int, int]:
     image_path = get_document_page_image_path(page)
+    image_mtime_ns = image_path.stat().st_mtime_ns
+    return _extract_ocr_line_boxes_cached(str(image_path), image_mtime_ns, psms)
+
+
+@lru_cache(maxsize=256)
+def _extract_ocr_line_boxes_cached(
+    image_path_str: str,
+    image_mtime_ns: int,
+    psms: tuple[int, ...],
+) -> tuple[list[dict[str, object]], int, int]:
+    del image_mtime_ns
+    image_path = Path(image_path_str)
     with Image.open(image_path) as image:
         image_width, image_height = image.size
         all_lines: list[dict[str, object]] = []
         seen_keys: set[tuple[int, int, int, int, str]] = set()
-        for psm in (6, 4):
+        for psm in psms:
             data = pytesseract.image_to_data(
                 image,
                 lang="eng+ita+deu",
@@ -1062,8 +1111,6 @@ def _extract_ocr_line_boxes(page: DocumentPage) -> tuple[list[dict[str, object]]
                 if text is None:
                     continue
                 normalized_token = _normalize_chemistry_overlay_token(text)
-                if normalized_token is None:
-                    continue
 
                 left = int(data["left"][index])
                 top = int(data["top"][index])
@@ -1122,24 +1169,45 @@ def _extract_ocr_line_boxes(page: DocumentPage) -> tuple[list[dict[str, object]]
 
 
 def _normalize_chemistry_overlay_token(value: str | None) -> str | None:
-    cleaned = _string_or_none(_normalize_mojibake_numeric_text(value))
+    raw_value = _string_or_none(value)
+    if raw_value is None:
+        return None
+    cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_value))
     if cleaned is None:
         return None
     cleaned = cleaned.strip().strip("|[](){};:")
     return _normalize_chemistry_capture_value(cleaned)
 
 
-def _chemistry_overlay_match_keys(value: str | None) -> set[str]:
-    normalized = _normalize_chemistry_capture_value(value)
-    if normalized is None:
+def _chemistry_overlay_token_candidates(value: str | None) -> set[str]:
+    raw_value = _string_or_none(value)
+    if raw_value is None:
         return set()
-    keys = {normalized}
-    compact = normalized
-    for marker in ("<=", "<", "≤"):
-        compact = compact.replace(marker, "")
-    compact = compact.replace(",", "").replace(".", "").strip()
-    if compact:
-        keys.add(compact)
+    cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_value))
+    if cleaned is None:
+        return set()
+    cleaned = cleaned.strip().strip("|[](){};:")
+    candidates: set[str] = set()
+    direct = _normalize_chemistry_capture_value(cleaned)
+    if direct is not None:
+        candidates.add(direct)
+    for raw_part in re.findall(r"(?:<=|<|≤)?\s*\d+(?:[.,]\d+)?", cleaned):
+        normalized_part = _normalize_chemistry_capture_value(raw_part)
+        if normalized_part is not None:
+            candidates.add(normalized_part)
+    return candidates
+
+
+def _chemistry_overlay_match_keys(value: str | None) -> set[str]:
+    keys: set[str] = set()
+    for normalized in _chemistry_overlay_token_candidates(value):
+        keys.add(normalized)
+        compact = normalized
+        for marker in ("<=", "<", "≤"):
+            compact = compact.replace(marker, "")
+        compact = compact.replace(",", "").replace(".", "").strip()
+        if compact:
+            keys.add(compact)
     return keys
 
 
