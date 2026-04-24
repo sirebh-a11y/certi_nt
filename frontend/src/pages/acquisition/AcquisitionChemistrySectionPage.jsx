@@ -135,14 +135,14 @@ function calculatedValueForField(field, draft) {
 }
 
 function sourceLabel(value, field, draft, sessionSourceOverrides) {
-  const calculatedValue = calculatedValueForField(field, draft);
-  if (calculatedValue && normalizeDisplayValue(draft[field]) === normalizeDisplayValue(calculatedValue)) {
-    return "calcolato";
-  }
   if (sessionSourceOverrides[field] === "manuale") {
     return "manuale";
   }
   if (!value) {
+    const calculatedValue = calculatedValueForField(field, draft);
+    if (calculatedValue && normalizeDisplayValue(draft[field]) === normalizeDisplayValue(calculatedValue)) {
+      return "calcolato";
+    }
     return "certificato - AI";
   }
   if (value.metodo_lettura === "utente") {
@@ -151,7 +151,17 @@ function sourceLabel(value, field, draft, sessionSourceOverrides) {
   if (value.metodo_lettura === "calcolato" || value.fonte_documentale === "calcolato") {
     return "calcolato";
   }
-  if ((value.fonte_documentale || "certificato") === "certificato" || !chemistryDisplayValue(value)) {
+  if (value && chemistryDisplayValue(value)) {
+    if ((value.fonte_documentale || "certificato") === "certificato") {
+      return "certificato - AI";
+    }
+    return value.fonte_documentale || "manuale";
+  }
+  const calculatedValue = calculatedValueForField(field, draft);
+  if (calculatedValue && normalizeDisplayValue(draft[field]) === normalizeDisplayValue(calculatedValue)) {
+    return "calcolato";
+  }
+  if ((value.fonte_documentale || "certificato") === "certificato") {
     return "certificato - AI";
   }
   return value.fonte_documentale || "manuale";
@@ -849,11 +859,11 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             {chemistryControls}
           </div>
         }
-        onCaptureError={handleWorkspaceError}
-        onCaptureValue={handleCaptureValue}
-        onTableCaptureProposal={handleTableCaptureProposal}
-        tableCaptureActive={tableCaptureActive}
-        token={token}
+      onCaptureError={handleWorkspaceError}
+      onCaptureValue={handleCaptureValue}
+      onTableCaptureProposal={handleTableCaptureProposal}
+      tableCaptureActive={tableCaptureActive}
+      token={token}
       />
 
       {tableCaptureProposal ? (
