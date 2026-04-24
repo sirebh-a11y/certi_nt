@@ -1000,8 +1000,6 @@ def build_chemistry_overlay_preview(
     for value in row.values:
         if value.blocco != "chimica":
             continue
-        if "+" in value.campo:
-            continue
         normalized = _normalize_chemistry_capture_value(
             value.valore_finale or value.valore_standardizzato or value.valore_grezzo
         )
