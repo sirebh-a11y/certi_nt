@@ -122,23 +122,7 @@ def extract_supplier_match_fields(
 
     supplier_match_extractor = {
         "metalba": lambda current_lines, current_type: _extract_metalba_match_fields(current_lines, document_type=current_type),
-        "aww": lambda current_lines, current_type: (
-            {
-                "your_part_number": _extract_value_near_anchor(current_lines, ("your part number",)),
-                "part_number": _extract_code_pattern(current_lines, r"\bP3-\d{5}-\d{4}\b"),
-                "order_confirmation_root": _normalize_order_confirmation_root(
-                    _extract_value_near_anchor(current_lines, ("batch number (oc)", "batch number oc"))
-                ),
-            }
-            if current_type == "ddt"
-            else {
-                "kunden_teile_nr": _extract_value_near_anchor(current_lines, ("kunden-teile-nr", "customer part number")),
-                "artikel_nr": _extract_value_near_anchor(current_lines, ("artikel-nr", "article no", "article number")),
-                "auftragsbestaetigung_root": _normalize_order_confirmation_root(
-                    _extract_value_near_anchor(current_lines, ("auftragsbestätigung", "auftragsbestatigung", "order confirmation"))
-                ),
-            }
-        ),
+        "aww": lambda current_lines, current_type: _extract_aww_match_fields(current_lines, document_type=current_type),
         "aluminium_bozen": lambda current_lines, current_type: {
             "article": _extract_code_pattern(current_lines, r"\b14BT[0-9A-Z-]+\b"),
             "profile_code": _extract_aluminium_bozen_profile_code(current_lines),
@@ -477,6 +461,37 @@ def _detect_aww_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[st
     return matches
 
 
+def _detect_aww_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        lines = _page_lines(page)
+        supplier_fields = _extract_aww_match_fields(lines, document_type="certificato")
+        certificate_no = _extract_aww_certificate_number(lines)
+        charge_no = _extract_aww_charge_number(lines)
+        if certificate_no is not None and "numero_certificato_certificato" not in matches:
+            snippet = _find_line_containing_token(lines, "ZEUGNIS-NR") or certificate_no
+            matches["numero_certificato_certificato"] = _build_match(page.id, snippet, certificate_no)
+        if charge_no is not None and "colata_certificato" not in matches:
+            snippet = _find_line_containing_token(lines, "CHARGE NR") or charge_no
+            matches["colata_certificato"] = _build_match(page.id, snippet, charge_no)
+        if supplier_fields.get("alloy") and "lega_certificato" not in matches:
+            snippet = _find_line_containing_token(lines, "WERKSTOFF") or supplier_fields["alloy"]
+            matches["lega_certificato"] = _build_match(page.id, snippet, supplier_fields["alloy"])
+        if supplier_fields.get("diameter") and "diametro_certificato" not in matches:
+            snippet = _find_line_containing_token(lines, "ABMESSUNG") or supplier_fields["diameter"]
+            matches["diametro_certificato"] = _build_match(page.id, snippet, supplier_fields["diameter"])
+        if supplier_fields.get("weight") and "peso_certificato" not in matches:
+            snippet = (
+                _find_line_containing_token(lines, "NET WEIGHT")
+                or _find_line_containing_token(lines, "DELIVERY QUANTITY")
+                or supplier_fields["weight"]
+            )
+            matches["peso_certificato"] = _build_match(page.id, snippet, supplier_fields["weight"])
+    return matches
+
+
 def _detect_aluminium_bozen_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     packing_section_active = False
@@ -759,6 +774,7 @@ def detect_certificate_core_matches(
     matches: dict[str, dict[str, str | int]] = {}
     supplier_detector = {
         "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
+        "aww": _detect_aww_certificate_core_matches,
         "leichtmetall": _detect_leichtmetall_certificate_core_matches,
         "metalba": _detect_metalba_certificate_core_matches,
         "neuman": _detect_neuman_certificate_core_matches,
@@ -1020,6 +1036,20 @@ def extract_row_supplier_match_fields(
             "customer_part_number": _string_or_none(ddt_values.get("product_code")),
         }
 
+    if supplier_key == "aww":
+        return {
+            "your_part_number": _string_or_none(ddt_values.get("article_code")),
+            "part_number": _string_or_none(ddt_values.get("profile_code")) or _string_or_none(ddt_values.get("product_code")),
+            "order_confirmation_root": _normalize_order_confirmation_root(
+                _string_or_none(ddt_values.get("order_confirmation_root"))
+                or _string_or_none(ddt_values.get("supplier_order_no"))
+                or _string_or_none(ddt_values.get("batch_number_oc_raw"))
+            ),
+            "alloy": _string_or_none(row.lega_base) or _string_or_none(ddt_values.get("lega")),
+            "diameter": _string_or_none(row.diametro) or _string_or_none(ddt_values.get("diametro")),
+            "weight": _string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")),
+        }
+
     if supplier_key == "impol":
         return {
             "packing_list_no": normalize_impol_packing_list_root(row.ddt) or _string_or_none(ddt_values.get("ddt")),
@@ -1113,6 +1143,12 @@ def score_supplier_field_matches(
             add_reason(100, "Part number / Artikel-Nr. coerenti")
         if same_token(ddt_supplier_fields.get("order_confirmation_root"), certificate_supplier_fields.get("auftragsbestaetigung_root")):
             add_reason(95, "Order confirmation root coerente")
+        if same_token(ddt_supplier_fields.get("alloy"), certificate_supplier_fields.get("alloy")):
+            add_reason(55, "Lega coerente")
+        if same_token(ddt_supplier_fields.get("diameter"), certificate_supplier_fields.get("diameter")):
+            add_reason(45, "Diametro coerente")
+        if aww_weights_are_compatible(ddt_supplier_fields.get("weight"), certificate_supplier_fields.get("weight")):
+            add_reason(25, "Peso coerente")
     elif supplier_key == "aluminium_bozen":
         if same_token(ddt_supplier_fields.get("article"), certificate_supplier_fields.get("article")):
             add_reason(100, "Article coerente")
@@ -1207,6 +1243,16 @@ def weights_are_compatible(row_weight: str | None, certificate_weight: str | Non
     return abs(left - right) <= tolerance
 
 
+def aww_weights_are_compatible(row_weight: str | None, certificate_weight: str | None) -> bool:
+    left = _parse_aww_weight_number(row_weight)
+    right = _parse_aww_weight_number(certificate_weight)
+    if left is None or right is None:
+        return False
+    if abs(left - right) <= 1.0:
+        return True
+    return int(left) == int(right)
+
+
 def neuman_weights_are_compatible(row_weight: str | None, certificate_weight: str | None) -> bool:
     left = _parse_neuman_weight_number(row_weight)
     right = _parse_neuman_weight_number(certificate_weight)
@@ -1222,6 +1268,17 @@ def _normalize_neuman_weight_result(value: str | None) -> str | None:
     if parsed is None:
         return None
     return str(int(round(parsed)))
+
+
+def _normalize_aww_weight_result(value: str | None) -> str | None:
+    parsed = _parse_aww_weight_number(value)
+    if parsed is None:
+        return None
+    return str(int(parsed))
+
+
+def _parse_aww_weight_number(value: str | None) -> float | None:
+    return _parse_neuman_weight_number(value)
 
 
 def _parse_neuman_weight_number(value: str | None) -> float | None:
@@ -1534,6 +1591,141 @@ def _normalize_order_confirmation_root(value: str | None) -> str | None:
     if match is None:
         return None
     return match.group(0)
+
+
+def _extract_aww_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
+    if document_type == "ddt":
+        alloy_temper_raw = _extract_aww_ddt_alloy_temper(lines)
+        return {
+            "your_part_number": _normalize_aww_customer_material_number(
+                _extract_value_near_anchor(lines, ("your part number",))
+            ),
+            "part_number": _normalize_aww_part_number(
+                _extract_value_near_anchor(lines, ("part number",)) or _extract_code_pattern(lines, r"\bP3-\d{5}-\d{4}\b")
+            ),
+            "order_confirmation_root": _normalize_order_confirmation_root(
+                _extract_value_near_anchor(lines, ("batch number (oc)", "batch number oc"))
+                or _extract_value_near_anchor(lines, ("order confirmation",))
+            ),
+            "alloy": _normalize_aww_alloy(alloy_temper_raw),
+            "diameter": _extract_aww_diameter(lines, document_type=document_type),
+            "weight": _extract_aww_weight(lines, document_type=document_type),
+        }
+
+    material_raw = _extract_value_near_anchor(lines, ("werkstoff", "material"))
+    temper_raw = _extract_value_near_anchor(lines, ("zustand", "temper"))
+    return {
+        "kunden_teile_nr": _normalize_aww_customer_material_number(
+            _extract_value_near_anchor(lines, ("kunden-teile-nr", "customer part number"))
+        ),
+        "artikel_nr": _normalize_aww_part_number(
+            _extract_value_near_anchor(lines, ("artikel-nr", "article no", "article number", "part no"))
+        ),
+        "auftragsbestaetigung_root": _normalize_order_confirmation_root(
+            _extract_value_near_anchor(lines, ("auftragsbestätigung", "auftragsbestatigung", "order confirmation"))
+        ),
+        "alloy": _normalize_aww_alloy(" ".join(item for item in (material_raw, temper_raw) if item)),
+        "diameter": _extract_aww_diameter(lines, document_type=document_type),
+        "weight": _extract_aww_weight(lines, document_type=document_type),
+    }
+
+
+def _normalize_aww_customer_material_number(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\bA[0-9A-Z]{6,}\b", cleaned.upper())
+    return match.group(0) if match is not None else None
+
+
+def _normalize_aww_part_number(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\bP3-\d{5}-\d{4}\b", cleaned.upper())
+    return match.group(0) if match is not None else None
+
+
+def _normalize_aww_alloy(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = re.sub(r"\s+", " ", cleaned.upper()).strip()
+    base: str | None = None
+    if "6082A" in normalized or "ALSI1MGMN(A)" in normalized:
+        base = "6082A"
+    elif "6082" in normalized or "ALSI1MGMN" in normalized:
+        base = "6082"
+    temper_match = re.search(r"\bT\d+[A-Z0-9/-]*\b", normalized)
+    temper = temper_match.group(0) if temper_match is not None else None
+    if base and temper:
+        return f"{base} {temper}"
+    return base or temper
+
+
+def _extract_aww_diameter(lines: list[str], *, document_type: str) -> str | None:
+    patterns = (
+        r"\bOUTER\s*[ØO]?\s*[:=]?\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b",
+        r"\bABMESSUNG\b.*?[ØO]\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b",
+        r"[ØO]\s*([0-9]+(?:[.,][0-9]+)?)\s*MM\b",
+        r"\b([0-9]+(?:[.,][0-9]+)?)\s*MM\b",
+    )
+    for line in lines:
+        upper_line = line.upper()
+        if document_type == "ddt" and not any(
+            token in upper_line for token in ("OUTER", "RUNDRSTANGE", "RUNDSTANGE", "YOUR PART NUMBER", "PART NUMBER")
+        ):
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, upper_line)
+            if match is not None:
+                return _normalize_decimal_value(match.group(1))
+    return None
+
+
+def _extract_aww_weight(lines: list[str], *, document_type: str) -> str | None:
+    anchor_terms = (
+        ("NET WEIGHT", "NET WEIGHT"),
+        ("DELIVERY QUANTITY", "DELIVERY QUANTITY"),
+        ("NET KG", "NET KG"),
+    )
+    for line in lines:
+        upper_line = line.upper()
+        if document_type == "ddt" and "NET WEIGHT" not in upper_line:
+            continue
+        if document_type == "certificato" and not any(term in upper_line for term in ("NET WEIGHT", "DELIVERY QUANTITY")):
+            continue
+        matches = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?", upper_line)
+        if matches:
+            return _normalize_weight(matches[-1])
+    return None
+
+
+def _extract_aww_certificate_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\b(?:ZEUGNIS-NR|CERTIFICATE NO)\.?\s*[:.]?\s*([A-Z0-9-]{5,})\b", line.upper())
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_aww_charge_number(lines: list[str]) -> str | None:
+    for line in lines:
+        match = re.search(r"\bCHARGE\s+NR\.?\s*([0-9]{5,})\b", line.upper())
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _extract_aww_ddt_alloy_temper(lines: list[str]) -> str | None:
+    value = _extract_value_near_anchor(lines, ("legierung/zustand", "legierung", "zustand"))
+    if value is not None:
+        return value
+    for line in lines:
+        upper_line = line.upper()
+        if "EN AW-" in upper_line and "/T" in upper_line:
+            return upper_line
+    return None
 
 
 def _extract_code_pattern(lines: list[str], pattern: str) -> str | None:
