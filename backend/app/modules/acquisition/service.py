@@ -13302,7 +13302,7 @@ def _normalize_neuman_certificate_ai_payload(
             "customer_order_number": _normalize_neuman_customer_order_token(customer_order_raw),
             "alloy": _normalize_neuman_alloy_from_text(material_raw),
             "diameter": _normalize_neuman_diameter_from_text(diameter_raw),
-            "weight": _normalize_weight_value(weight_raw),
+            "weight": reader_normalize_neuman_weight_result(weight_raw),
             "product_raw": _string_or_none(product_raw),
         },
         "core_fields": core_fields,
@@ -13332,7 +13332,7 @@ def _sanitize_neuman_vision_certificate_fields(
     normalized_article = _normalize_neuman_article_from_text(article_raw)
     normalized_alloy = _normalize_neuman_alloy_from_text(material_raw)
     normalized_diameter = _normalize_neuman_diameter_from_text(diameter_raw)
-    normalized_weight = _normalize_weight_value(weight_raw)
+    normalized_weight = reader_normalize_neuman_weight_result(weight_raw)
 
     return {
         "numero_certificato_certificato": _payload(normalized_lot),
