@@ -20,6 +20,8 @@ from app.modules.acquisition.models import (  # noqa: F401
     DocumentPage,
     ReadValue,
 )
+from app.modules.notes.models import NoteTemplate  # noqa: F401
+from app.modules.notes.service import seed_note_templates
 from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
@@ -33,6 +35,7 @@ def initialize_application() -> None:
         bootstrap_admin_user(db)
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
+        seed_note_templates(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()

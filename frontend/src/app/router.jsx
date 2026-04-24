@@ -16,6 +16,7 @@ import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import LogsPage from "../pages/logs/LogsPage";
+import NotesPage from "../pages/notes/NotesPage";
 import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
 import SuppliersListPage from "../pages/suppliers/SuppliersListPage";
@@ -94,6 +95,14 @@ function LogsRoute() {
   );
 }
 
+function NotesRoute() {
+  return (
+    <RoleGuard allowedRoles={["admin"]}>
+      <NotesPage />
+    </RoleGuard>
+  );
+}
+
 export function AppRouter() {
   return (
     <Routes>
@@ -118,6 +127,7 @@ export function AppRouter() {
           <Route path="/suppliers/new" element={<NewSupplierPage />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
+          <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>
             <Route index element={<UsersListPage />} />
