@@ -689,6 +689,78 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
 
     lines = _ocr_crop_lines(crop)
+    supplier_name = None
+    if page.document is not None:
+        supplier_name = (
+            page.document.supplier.ragione_sociale
+            if page.document.supplier is not None
+            else page.document.nome_file_originale
+        )
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
+
+    if template is not None and template.supplier_key == "metalba":
+        metalba_matches = _parse_metalba_chemistry_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if len(metalba_matches) < 5:
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_metalba_chemistry_from_lines(page_lines, page.id)
+                if len(page_matches) > len(metalba_matches):
+                    metalba_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if metalba_matches:
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=_serialize_chemistry_capture_values(metalba_matches),
+            )
+
+    if template is not None and template.supplier_key == "neuman":
+        neuman_matches = _parse_neuman_chemistry_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if len(neuman_matches) < 5:
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_neuman_chemistry_from_lines(page_lines, page.id)
+                if len(page_matches) > len(neuman_matches):
+                    neuman_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if neuman_matches:
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=_serialize_chemistry_capture_values(neuman_matches),
+            )
+
+    if template is not None and template.supplier_key == "aww":
+        aww_matches = _parse_aww_chemistry_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if len(aww_matches) < 5:
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_aww_chemistry_from_lines(page_lines, page.id)
+                if len(page_matches) > len(aww_matches):
+                    aww_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if aww_matches:
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=_serialize_chemistry_capture_values(aww_matches),
+            )
+
     horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
     vertical_matches = _parse_vertical_chemistry_from_lines(lines, page.id)
     horizontal_count = len(horizontal_matches)
@@ -829,6 +901,27 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
                 values=_serialize_properties_capture_values(neuman_matches),
+            )
+
+    if template is not None and template.supplier_key == "aww":
+        aww_matches = _parse_aww_properties_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if not _has_complete_measured_properties(aww_matches):
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_aww_properties_from_lines(page_lines, page.id)
+                if len(page_matches) > len(aww_matches):
+                    aww_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if aww_matches:
+            return PropertiesTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=_serialize_properties_capture_values(aww_matches),
             )
 
     horizontal_matches: dict[str, dict[str, str | int]] = {}
@@ -15826,6 +15919,18 @@ def _detect_chemistry_matches(
             page_matches = _parse_aluminium_bozen_chemistry_from_lines(lines, page.id)
             if not page_matches:
                 page_matches = _parse_chemistry_from_lines(lines, page.id)
+        elif template is not None and template.supplier_key == "metalba":
+            page_matches = _parse_metalba_chemistry_from_lines(lines, page.id)
+            if not page_matches:
+                page_matches = _parse_chemistry_from_lines(lines, page.id)
+        elif template is not None and template.supplier_key == "neuman":
+            page_matches = _parse_neuman_chemistry_from_lines(lines, page.id)
+            if not page_matches:
+                page_matches = _parse_chemistry_from_lines(lines, page.id)
+        elif template is not None and template.supplier_key == "aww":
+            page_matches = _parse_aww_chemistry_from_lines(lines, page.id)
+            if not page_matches:
+                page_matches = _parse_chemistry_from_lines(lines, page.id)
         else:
             page_matches = _parse_chemistry_from_lines(lines, page.id)
         for field_name, payload in page_matches.items():
@@ -15861,6 +15966,13 @@ def _detect_property_matches(
 
         if template is not None and template.supplier_key == "neuman":
             page_matches = _parse_neuman_properties_from_lines(lines, page.id)
+            if page_matches:
+                for field_name, payload in page_matches.items():
+                    matches.setdefault(field_name, payload)
+                continue
+
+        if template is not None and template.supplier_key == "aww":
+            page_matches = _parse_aww_properties_from_lines(lines, page.id)
             if page_matches:
                 for field_name, payload in page_matches.items():
                     matches.setdefault(field_name, payload)
@@ -15983,6 +16095,554 @@ def _parse_neuman_properties_from_lines(lines: list[str], page_id: int) -> dict[
         result["Rm"] = _payload(rm_token)
 
     return result
+
+
+def _parse_aww_properties_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    def _payload(raw_value: str, snippet: str) -> dict[str, str | int]:
+        standardized = _normalize_numeric_value(raw_value) or raw_value
+        return {
+            "page_id": page_id,
+            "snippet": snippet,
+            "raw": standardized,
+            "standardized": standardized,
+            "final": standardized,
+        }
+
+    simulated_index = None
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if "mech. eigensch. sim" in lowered or "sim. heat treatm" in lowered:
+            simulated_index = index
+            break
+
+    if simulated_index is not None:
+        block = normalized_lines[simulated_index : min(simulated_index + 18, len(normalized_lines))]
+        for line in block:
+            numeric_tokens = re.findall(r"\d+(?:[.,]\d+)?", line)
+            if len(numeric_tokens) < 5:
+                continue
+            mapped_tokens = [_normalize_numeric_value(token) or token for token in numeric_tokens]
+            values = [(_safe_float(token), token) for token in mapped_tokens]
+            row_candidates = [
+                token
+                for value, token in values
+                if value is not None and (
+                    200 <= value <= 500
+                    or 8 <= value <= 30
+                    or 80 <= value <= 180
+                )
+            ]
+            if len(row_candidates) < 4:
+                continue
+
+            rp_candidates = [token for token in row_candidates if (value := _safe_float(token)) is not None and 200 <= value <= 450]
+            a_candidates = [token for token in row_candidates if (value := _safe_float(token)) is not None and 8 <= value <= 30]
+            hb_candidates = [token for token in row_candidates if (value := _safe_float(token)) is not None and 80 <= value <= 180]
+            if len(rp_candidates) < 2 or not a_candidates or not hb_candidates:
+                continue
+
+            ordered_strength = sorted(rp_candidates, key=lambda token: _safe_float(token) or 0.0)
+            rp_token = ordered_strength[0]
+            rm_token = ordered_strength[-1]
+            a_token = max(a_candidates, key=lambda token: _safe_float(token) or 0.0)
+            hb_token = max(hb_candidates, key=lambda token: _safe_float(token) or 0.0)
+            return {
+                "Rp0.2": _payload(rp_token, line),
+                "Rm": _payload(rm_token, line),
+                "A%": _payload(a_token, line),
+                "HB": _payload(hb_token, line),
+            }
+
+    standard_index = None
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if "mechanische eigenschaften" in lowered or "mechanical properties" in lowered:
+            standard_index = index
+            break
+
+    if standard_index is None:
+        return {}
+
+    block = normalized_lines[standard_index : min(standard_index + 14, len(normalized_lines))]
+    for line in block:
+        numeric_tokens = re.findall(r"\d+(?:[.,]\d+)?", line)
+        for token in numeric_tokens:
+            value = _safe_float(token)
+            if value is None:
+                continue
+            if 20 <= value <= 180 and abs(value - 95.0) > 0.001 and abs(value - 100.0) > 0.001:
+                return {"HB": _payload(token, line)}
+
+    return {}
+
+
+def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    chemistry_order = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Pb"]
+    chemistry_field_ceiling = {
+        "Si": 2.0,
+        "Fe": 1.0,
+        "Cu": 0.2,
+        "Mn": 1.5,
+        "Mg": 1.5,
+        "Cr": 0.5,
+        "Zn": 0.5,
+        "Ti": 0.2,
+        "Pb": 0.1,
+    }
+    stop_markers = ("mechanische eigenschaften", "mechanical properties", "mech. eigensch")
+    anchor_markers = ("chemische zusammensetzung", "chemical composition", "composition chimique")
+
+    start_index = 0
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if any(marker in lowered for marker in anchor_markers):
+            start_index = index
+            break
+
+    window: list[str] = []
+    for line in normalized_lines[start_index:]:
+        lowered = line.lower()
+        if any(marker in lowered for marker in stop_markers):
+            break
+        window.append(line)
+    if not window:
+        window = normalized_lines
+
+    def _payload(raw_value: str, snippet: str) -> dict[str, str | int]:
+        standardized = (_normalize_chemistry_capture_value(raw_value) or raw_value).replace(",", ".")
+        return {
+            "page_id": page_id,
+            "snippet": snippet,
+            "raw": raw_value,
+            "standardized": standardized,
+            "final": standardized,
+        }
+
+    def _normalize_aww_chemistry_token(
+        raw_value: str,
+        field_name: str,
+        *,
+        min_value: str | None = None,
+        max_value: str | None = None,
+    ) -> str:
+        cleaned = _string_or_none(raw_value) or raw_value
+        direct = _normalize_chemistry_capture_value(cleaned) or (_normalize_numeric_value(cleaned) or cleaned)
+        digits = "".join(char for char in cleaned if char.isdigit())
+        candidates: list[str] = [direct]
+        if digits:
+            for decimals in range(1, min(len(digits), 3) + 1):
+                left = digits[:-decimals] or "0"
+                right = digits[-decimals:]
+                candidates.append(f"{left},{right}")
+
+        min_numeric = _safe_chemistry_float(min_value)
+        max_numeric = _safe_chemistry_float(max_value)
+        ceiling = chemistry_field_ceiling.get(field_name, 2.0)
+        raw_has_separator = any(separator in cleaned for separator in (",", "."))
+
+        best_candidate = direct
+        best_score = -10_000.0
+        seen_candidates: set[str] = set()
+        for candidate in candidates:
+            normalized_candidate = _normalize_chemistry_capture_value(candidate)
+            if normalized_candidate is None or normalized_candidate in seen_candidates:
+                continue
+            seen_candidates.add(normalized_candidate)
+            numeric_value = _safe_chemistry_float(normalized_candidate)
+            if numeric_value is None:
+                continue
+
+            score = 0.0
+            if min_numeric is not None and max_numeric is not None:
+                if min_numeric < numeric_value < max_numeric:
+                    score += 80
+                elif min_numeric <= numeric_value <= max_numeric:
+                    score += 65
+                else:
+                    score -= 80
+            elif min_numeric is not None:
+                if numeric_value > min_numeric:
+                    score += 35
+                elif numeric_value == min_numeric:
+                    score += 18
+                else:
+                    score -= 50
+            elif max_numeric is not None:
+                if numeric_value < max_numeric:
+                    score += 35
+                elif numeric_value == max_numeric:
+                    score += 18
+                else:
+                    score -= 50
+
+            if 0 <= numeric_value <= ceiling:
+                score += 35 + numeric_value
+            else:
+                score -= 35 + abs(numeric_value - ceiling) * 10
+
+            if not raw_has_separator and "," in normalized_candidate:
+                score += 4
+            if raw_has_separator and normalized_candidate == direct:
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_candidate = normalized_candidate
+        return best_candidate
+
+    def _extract_row_values_after_marker(line: str, marker: str, *, field_names: list[str]) -> list[str]:
+        lowered = line.lower()
+        marker_index = lowered.find(marker)
+        if marker_index < 0:
+            return []
+        raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line[marker_index + len(marker) :])
+        normalized_values: list[str] = []
+        for field_name, raw_token in zip(field_names, raw_values[: len(field_names)]):
+            normalized_values.append(_normalize_aww_chemistry_token(raw_token, field_name))
+        return normalized_values
+
+    def _extract_measured_values(line: str) -> list[str]:
+        charge_match = re.search(r"(?<!\d)(\d{5,})(?!\d)(.*)$", line)
+        if not charge_match:
+            return []
+        raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", charge_match.group(2))
+        return raw_values[: len(chemistry_order)]
+
+    min_values: list[str] | None = None
+    max_values: list[str] | None = None
+    candidate_rows: list[tuple[str, list[str]]] = []
+
+    for line in window:
+        lowered = line.lower()
+        if "soll min" in lowered:
+            values = _extract_row_values_after_marker(line, "soll min", field_names=chemistry_order)
+            if len(values) >= len(chemistry_order):
+                min_values = values[: len(chemistry_order)]
+            continue
+        if "set value max" in lowered:
+            values = _extract_row_values_after_marker(line, "set value max", field_names=chemistry_order)
+            if len(values) >= len(chemistry_order):
+                max_values = values[: len(chemistry_order)]
+            continue
+        measured_values = _extract_measured_values(line)
+        if len(measured_values) < len(chemistry_order):
+            continue
+        candidate_rows.append((line, measured_values[: len(chemistry_order)]))
+
+    if not candidate_rows:
+        return {}
+
+    def _candidate_quality(item: tuple[str, list[str]]) -> tuple[int, int, int]:
+        line, values = item
+        score = _score_chemistry_candidate_against_limits(values, min_values=min_values, max_values=max_values)
+        decimalish = sum(1 for value in values if "," in value or "." in value)
+        separators = line.count("|")
+        return (score, decimalish, separators)
+
+    best_line, best_values = max(candidate_rows, key=lambda item: (_candidate_quality(item), len(item[0])))
+
+    matches: dict[str, dict[str, str | int]] = {}
+    for index, (field_name, raw_value) in enumerate(zip(chemistry_order, best_values)):
+        normalized_value = _normalize_aww_chemistry_token(
+            raw_value,
+            field_name,
+            min_value=min_values[index] if min_values and index < len(min_values) else None,
+            max_value=max_values[index] if max_values and index < len(max_values) else None,
+        )
+        matches.setdefault(field_name, _payload(normalized_value, best_line))
+    return matches
+
+
+def _parse_neuman_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    chemistry_order = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti"]
+    chemistry_field_ceiling = {
+        "Si": 2.0,
+        "Fe": 1.0,
+        "Cu": 0.2,
+        "Mn": 1.5,
+        "Mg": 1.5,
+        "Cr": 0.5,
+        "Zn": 0.5,
+        "Ti": 0.2,
+    }
+    stop_markers = ("hardness and mechanical properties", "after simulated heat treatment", "mechanical properties")
+    anchor_markers = ("chemical composition", "chemische zusammensetzung", "composition chimique")
+
+    start_index = 0
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if any(marker in lowered for marker in anchor_markers):
+            start_index = index
+            break
+
+    window: list[str] = []
+    for line in normalized_lines[start_index:]:
+        lowered = line.lower()
+        if any(marker in lowered for marker in stop_markers):
+            break
+        window.append(line)
+    if not window:
+        window = normalized_lines
+
+    def _payload(raw_value: str, snippet: str) -> dict[str, str | int]:
+        standardized = (_normalize_chemistry_capture_value(raw_value) or raw_value).replace(",", ".")
+        return {
+            "page_id": page_id,
+            "snippet": snippet,
+            "raw": raw_value,
+            "standardized": standardized,
+            "final": standardized,
+        }
+
+    def _normalize_neuman_chemistry_token(
+        raw_value: str,
+        field_name: str,
+        *,
+        min_value: str | None = None,
+        max_value: str | None = None,
+    ) -> str:
+        cleaned = _string_or_none(raw_value) or raw_value
+        direct = _normalize_chemistry_capture_value(cleaned) or (_normalize_numeric_value(cleaned) or cleaned)
+        digits = "".join(char for char in cleaned if char.isdigit())
+        candidates: list[str] = [direct]
+        if digits:
+            for decimals in range(1, min(len(digits), 3) + 1):
+                left = digits[:-decimals] or "0"
+                right = digits[-decimals:]
+                candidates.append(f"{left},{right}")
+
+        min_numeric = _safe_chemistry_float(min_value)
+        max_numeric = _safe_chemistry_float(max_value)
+        ceiling = chemistry_field_ceiling.get(field_name, 2.0)
+        raw_has_separator = any(separator in cleaned for separator in (",", "."))
+
+        best_candidate = direct
+        best_score = -10_000.0
+        seen_candidates: set[str] = set()
+        for candidate in candidates:
+            normalized_candidate = _normalize_chemistry_capture_value(candidate)
+            if normalized_candidate is None or normalized_candidate in seen_candidates:
+                continue
+            seen_candidates.add(normalized_candidate)
+            numeric_value = _safe_chemistry_float(normalized_candidate)
+            if numeric_value is None:
+                continue
+
+            score = 0.0
+            if min_numeric is not None and max_numeric is not None:
+                if min_numeric < numeric_value < max_numeric:
+                    score += 80
+                elif min_numeric <= numeric_value <= max_numeric:
+                    score += 65
+                else:
+                    score -= 80
+            elif min_numeric is not None:
+                if numeric_value > min_numeric:
+                    score += 35
+                elif numeric_value == min_numeric:
+                    score += 18
+                else:
+                    score -= 50
+            elif max_numeric is not None:
+                if numeric_value < max_numeric:
+                    score += 35
+                elif numeric_value == max_numeric:
+                    score += 18
+                else:
+                    score -= 50
+
+            if 0 <= numeric_value <= ceiling:
+                score += 35 + numeric_value
+            else:
+                score -= 35 + abs(numeric_value - ceiling) * 10
+
+            if not raw_has_separator and "," in normalized_candidate:
+                score += 4
+            if raw_has_separator and normalized_candidate == direct:
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_candidate = normalized_candidate
+        return best_candidate
+
+    def _extract_limit_values(line: str, marker: str) -> list[str]:
+        lowered = line.lower()
+        marker_index = lowered.find(marker)
+        if marker_index < 0:
+            return []
+        raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line[marker_index + len(marker) :])
+        return raw_values[: len(chemistry_order)]
+
+    def _extract_measured_values(line: str) -> list[str]:
+        charge_match = re.search(r"(?<!\d)(\d{5,})(?!\d)(.*)$", line)
+        if not charge_match:
+            return []
+        raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", charge_match.group(2))
+        return raw_values[: len(chemistry_order)]
+
+    min_values: list[str] | None = None
+    max_values: list[str] | None = None
+    candidate_rows: list[tuple[str, list[str]]] = []
+
+    for line in window:
+        lowered = line.lower()
+        if lowered.startswith("min") or lowered.startswith("mn ") or "min |" in lowered:
+            values = _extract_limit_values(line, "min")
+            if len(values) >= len(chemistry_order):
+                min_values = values[: len(chemistry_order)]
+            continue
+        if lowered.startswith("max") or "max |" in lowered or "ma." in lowered:
+            values = _extract_limit_values(line, "max")
+            if len(values) >= len(chemistry_order):
+                max_values = values[: len(chemistry_order)]
+            continue
+        measured_values = _extract_measured_values(line)
+        if len(measured_values) < len(chemistry_order):
+            continue
+        candidate_rows.append((line, measured_values[: len(chemistry_order)]))
+
+    if not candidate_rows:
+        return {}
+
+    matches: dict[str, dict[str, str | int]] = {}
+    fallback_line, fallback_values = max(
+        candidate_rows,
+        key=lambda item: (
+            _score_chemistry_candidate_against_limits(item[1], min_values=min_values, max_values=max_values),
+            sum(1 for value in item[1] if "," in value or "." in value),
+            item[0].count("|"),
+            len(item[0]),
+        ),
+    )
+
+    for index, field_name in enumerate(chemistry_order):
+        min_value = min_values[index] if min_values and index < len(min_values) else None
+        max_value = max_values[index] if max_values and index < len(max_values) else None
+
+        chosen_line = fallback_line
+        chosen_value = _normalize_neuman_chemistry_token(
+            fallback_values[index],
+            field_name,
+            min_value=min_value,
+            max_value=max_value,
+        )
+        best_score = -10_000.0
+        best_decimalish = -1
+        best_separators = -1
+        best_numeric_value = _safe_chemistry_float(chosen_value) or 0.0
+
+        for line, values in candidate_rows:
+            if index >= len(values):
+                continue
+            normalized_value = _normalize_neuman_chemistry_token(
+                values[index],
+                field_name,
+                min_value=min_value,
+                max_value=max_value,
+            )
+            numeric_value = _safe_chemistry_float(normalized_value)
+            if numeric_value is None:
+                continue
+
+            score = 0
+            if min_value is not None or max_value is not None:
+                score = _score_chemistry_candidate_against_limits(
+                    [normalized_value],
+                    min_values=[min_value] if min_value is not None else None,
+                    max_values=[max_value] if max_value is not None else None,
+                )
+            decimalish = 1 if ("," in values[index] or "." in values[index] or "," in normalized_value) else 0
+            separators = line.count("|")
+            if (
+                score > best_score
+                or (
+                    score == best_score
+                    and (
+                        decimalish > best_decimalish
+                        or (
+                            decimalish == best_decimalish
+                            and (
+                                separators > best_separators
+                                or (separators == best_separators and numeric_value > best_numeric_value)
+                            )
+                        )
+                    )
+                )
+            ):
+                best_score = score
+                best_decimalish = decimalish
+                best_separators = separators
+                best_numeric_value = numeric_value
+                chosen_line = line
+                chosen_value = normalized_value
+
+        matches.setdefault(field_name, _payload(chosen_value, chosen_line))
+    return matches
+
+
+def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    anchor_index = None
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if "analisi chimica" in lowered or "chemical composition" in lowered:
+            anchor_index = index
+            break
+    if anchor_index is None:
+        return {}
+
+    chemistry_order = ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr"]
+    window = normalized_lines[anchor_index + 1 : min(anchor_index + 36, len(normalized_lines))]
+    for line in window:
+        lowered = line.lower()
+        if any(marker in lowered for marker in ("min ", "max ", "each", "total", "remain")):
+            pass
+        if lowered.startswith("max") or lowered.startswith("min"):
+            continue
+        if not re.match(r"^[A-Z0-9./ -]{2,}\s+[A-Z]?\d{4,}[A-Z]?", line, re.IGNORECASE):
+            continue
+
+        number_tokens = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
+        if len(number_tokens) < len(chemistry_order) + 2:
+            continue
+
+        value_tokens = number_tokens[2 : 2 + len(chemistry_order)]
+        if len(value_tokens) < len(chemistry_order):
+            continue
+
+        matches: dict[str, dict[str, str | int]] = {}
+        for field_name, raw_value in zip(chemistry_order, value_tokens):
+            standardized = _normalize_numeric_value(raw_value) or raw_value
+            matches.setdefault(
+                field_name,
+                {
+                    "page_id": page_id,
+                    "snippet": line,
+                    "raw": raw_value,
+                    "standardized": standardized,
+                    "final": standardized,
+                },
+            )
+        if matches:
+            return matches
+
+    return {}
 
 
 def _extract_aluminium_bozen_mechanical_crop_lines(page: DocumentPage) -> list[str]:
@@ -16488,6 +17148,8 @@ def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> di
         inline_values = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
         if len(inline_values) >= 4 and "min" not in lowered_line and "max" not in lowered_line:
             candidate_values = _extract_property_candidate_values(inline_values)
+            if candidate_values is None:
+                continue
             inline_match = _build_property_match_from_candidate_values(candidate_values, page_id)
             if inline_match:
                 return inline_match
