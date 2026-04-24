@@ -16311,10 +16311,40 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
 
     def _extract_measured_values(line: str) -> list[str]:
         charge_match = re.search(r"(?<!\d)(\d{5,})(?!\d)(.*)$", line)
-        if not charge_match:
-            return []
-        raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", charge_match.group(2))
+        if charge_match:
+            raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", charge_match.group(2))
+        else:
+            if "|" not in line:
+                return []
+            raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
         return raw_values[: len(chemistry_order)]
+
+    def _extract_stacked_measured_values() -> tuple[str, list[str]] | None:
+        for start in range(0, len(window) - len(chemistry_order) + 1):
+            candidate_lines = window[start : start + len(chemistry_order)]
+            normalized_values: list[str] = []
+            for field_name, raw_line in zip(chemistry_order, candidate_lines):
+                single_token = _string_or_none(raw_line)
+                if single_token is None:
+                    normalized_values = []
+                    break
+                if not re.fullmatch(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", single_token):
+                    normalized_values = []
+                    break
+                normalized_values.append(_normalize_aww_chemistry_token(single_token, field_name))
+            if len(normalized_values) != len(chemistry_order):
+                continue
+            plausible = 0
+            for field_name, value in zip(chemistry_order, normalized_values):
+                numeric_value = _safe_chemistry_float(value)
+                if numeric_value is None:
+                    continue
+                ceiling = chemistry_field_ceiling.get(field_name, 2.0)
+                if 0 <= numeric_value <= ceiling:
+                    plausible += 1
+            if plausible >= len(chemistry_order) - 1:
+                return (" | ".join(candidate_lines), normalized_values)
+        return None
 
     min_values: list[str] | None = None
     max_values: list[str] | None = None
@@ -16337,27 +16367,59 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
             continue
         candidate_rows.append((line, measured_values[: len(chemistry_order)]))
 
+    stacked_values = _extract_stacked_measured_values()
+    if stacked_values is not None:
+        stacked_line, stacked_row = stacked_values
+        matches: dict[str, dict[str, str | int]] = {}
+        for field_name, raw_value in zip(chemistry_order, stacked_row):
+            matches.setdefault(field_name, _payload(raw_value, stacked_line))
+        return matches
+
     if not candidate_rows:
         return {}
 
-    def _candidate_quality(item: tuple[str, list[str]]) -> tuple[int, int, int]:
+    normalized_candidate_rows: list[tuple[str, list[str]]] = []
+    for line, values in candidate_rows:
+        normalized_values: list[str] = []
+        for index, (field_name, raw_value) in enumerate(zip(chemistry_order, values)):
+            normalized_values.append(
+                _normalize_aww_chemistry_token(
+                    raw_value,
+                    field_name,
+                    min_value=min_values[index] if min_values and index < len(min_values) else None,
+                    max_value=max_values[index] if max_values and index < len(max_values) else None,
+                )
+            )
+        normalized_candidate_rows.append((line, normalized_values))
+
+    def _candidate_quality(item: tuple[str, list[str]]) -> tuple[int, int, int, int, int]:
         line, values = item
-        score = _score_chemistry_candidate_against_limits(values, min_values=min_values, max_values=max_values)
+        score_limits = _score_chemistry_candidate_against_limits(values, min_values=min_values, max_values=max_values)
+        score_between = _score_chemistry_candidate_between_peer_lines(
+            values,
+            peer_value_lines=[peer_values for peer_line, peer_values in normalized_candidate_rows if peer_line != line],
+            expected_count=len(chemistry_order),
+        )
+        ceiling_hits = 0
+        for index, (field_name, value) in enumerate(zip(chemistry_order, values)):
+            numeric_value = _safe_chemistry_float(value)
+            if numeric_value is None:
+                continue
+            max_numeric = _safe_chemistry_float(max_values[index]) if max_values and index < len(max_values) else None
+            reference = max_numeric if max_numeric is not None else chemistry_field_ceiling.get(field_name)
+            if reference is None:
+                continue
+            if abs(numeric_value - reference) <= 0.0001:
+                ceiling_hits += 1
         decimalish = sum(1 for value in values if "," in value or "." in value)
         separators = line.count("|")
-        return (score, decimalish, separators)
+        return (score_limits, score_between, -ceiling_hits, decimalish, separators)
 
-    best_line, best_values = max(candidate_rows, key=lambda item: (_candidate_quality(item), len(item[0])))
+    best_line, best_values = max(normalized_candidate_rows, key=lambda item: (_candidate_quality(item), len(item[0])))
 
     matches: dict[str, dict[str, str | int]] = {}
     for index, (field_name, raw_value) in enumerate(zip(chemistry_order, best_values)):
-        normalized_value = _normalize_aww_chemistry_token(
-            raw_value,
-            field_name,
-            min_value=min_values[index] if min_values and index < len(min_values) else None,
-            max_value=max_values[index] if max_values and index < len(max_values) else None,
-        )
-        matches.setdefault(field_name, _payload(normalized_value, best_line))
+        matches.setdefault(field_name, _payload(raw_value, best_line))
     return matches
 
 
