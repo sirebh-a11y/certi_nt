@@ -17,6 +17,9 @@ const SYSTEM_NOTE_LABELS = {
   radioactive_free: "Material free from radioactive contamination",
 };
 
+const CHECKBOX_CLASSNAME =
+  "mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 p-0 text-accent focus:ring-2 focus:ring-accent/20";
+
 function NotePdfPanel({ certificateDocument, footerContent, token }) {
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
@@ -352,21 +355,43 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
   );
 
   const notesControls = (
-    <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
-        <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-slate-400 bg-slate-50 p-4">
-          <div className="space-y-5">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-sm font-semibold text-slate-800">U.S. control</p>
-              <div className="mt-3 grid gap-3">
+    <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3 sm:p-4">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-slate-300 bg-white p-4 sm:p-5">
+          <div className="mb-4 flex flex-col gap-1 border-b border-slate-200 pb-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Note</p>
+            <p className="text-sm text-slate-600">
+              Conferma le note di sistema e aggiungi eventuali note custom senza modificare il flusso AI.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="mb-3">
+                <p className="text-sm font-semibold text-slate-800">U.S. control</p>
+                <p className="mt-1 text-xs text-slate-500">Scegli una sola classe tra le due disponibili.</p>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
                 {["us_control_class_a", "us_control_class_b"].map((code) => {
                   const template = systemNotesByCode[code];
                   const checked = draft.usClass === (code.endsWith("_a") ? "A" : "B");
                   return (
-                    <label className="flex items-start gap-3 rounded-lg border border-slate-200 px-3 py-3" key={code}>
-                      <input checked={checked} onChange={() => setUsClass(code.endsWith("_a") ? "A" : "B")} type="checkbox" />
-                      <div>
-                        <p className="text-sm font-semibold text-slate-700">{SYSTEM_NOTE_LABELS[code]}</p>
+                    <label
+                      className={`flex gap-3 rounded-xl border px-4 py-3 transition ${
+                        checked
+                          ? "border-accent/30 bg-accent/5 shadow-sm"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                      key={code}
+                    >
+                      <input
+                        checked={checked}
+                        className={CHECKBOX_CLASSNAME}
+                        onChange={() => setUsClass(code.endsWith("_a") ? "A" : "B")}
+                        type="checkbox"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">{SYSTEM_NOTE_LABELS[code]}</p>
                         <p className="mt-1 text-sm leading-6 text-slate-600">{template?.text || "-"}</p>
                       </div>
                     </label>
@@ -375,29 +400,42 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
               </div>
             </div>
 
-            {["rohs", "radioactive_free"].map((code) => {
-              const template = systemNotesByCode[code];
-              const field = code === "rohs" ? "rohs" : "radioactiveFree";
-              return (
-                <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-4" key={code}>
-                  <input
-                    checked={draft[field]}
-                    onChange={(event) => setBooleanField(field, event.target.checked)}
-                    type="checkbox"
-                  />
-                  <div>
-                    <p className="text-sm font-semibold text-slate-700">{SYSTEM_NOTE_LABELS[code]}</p>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">{template?.text || "-"}</p>
-                  </div>
-                </label>
-              );
-            })}
+            <div className="grid gap-3">
+              {["rohs", "radioactive_free"].map((code) => {
+                const template = systemNotesByCode[code];
+                const field = code === "rohs" ? "rohs" : "radioactiveFree";
+                return (
+                  <label
+                    className={`flex gap-3 rounded-xl border px-4 py-3 transition ${
+                      draft[field]
+                        ? "border-accent/30 bg-accent/5 shadow-sm"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                    key={code}
+                  >
+                    <input
+                      checked={draft[field]}
+                      className={CHECKBOX_CLASSNAME}
+                      onChange={(event) => setBooleanField(field, event.target.checked)}
+                      type="checkbox"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-800">{SYSTEM_NOTE_LABELS[code]}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">{template?.text || "-"}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-sm font-semibold text-slate-800">Note aggiuntive</p>
-              <div className="mt-3 flex flex-col gap-3 md:flex-row">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="mb-3">
+                <p className="text-sm font-semibold text-slate-800">Note aggiuntive</p>
+                <p className="mt-1 text-xs text-slate-500">Aggiungi altre note dal catalogo disponibile.</p>
+              </div>
+              <div className="flex flex-col gap-3 md:flex-row">
                 <select
-                  className="min-w-0 flex-1 rounded-xl border border-border bg-white px-4 py-3 text-sm text-ink"
+                  className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-ink"
                   onChange={(event) => setSelectedCustomId(event.target.value)}
                   value={selectedCustomId}
                 >
@@ -409,7 +447,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
                   ))}
                 </select>
                 <button
-                  className="rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                  className="rounded-xl border border-sky-200 bg-white px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-60"
                   disabled={!selectedCustomId}
                   onClick={addCustomNote}
                   type="button"
@@ -421,13 +459,16 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
               <div className="mt-4 space-y-2">
                 {selectedCustomNotes.length ? (
                   selectedCustomNotes.map((item) => (
-                    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3" key={item.id}>
+                    <div
+                      className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
+                      key={item.id}
+                    >
                       <label className="flex items-start gap-3">
-                        <input checked readOnly type="checkbox" />
+                        <input checked className={CHECKBOX_CLASSNAME} readOnly type="checkbox" />
                         <span className="text-sm leading-6 text-slate-700">{item.text}</span>
                       </label>
                       <button
-                        className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                        className="self-start rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
                         onClick={() => removeCustomNote(item.id)}
                         type="button"
                       >
@@ -443,7 +484,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
           </div>
         </div>
 
-        <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[230px] xl:self-start">
+        <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[220px] xl:self-start">
           <button
             className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
             disabled={!hasUnsavedChanges || submitting}
