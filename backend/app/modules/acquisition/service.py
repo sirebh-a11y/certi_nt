@@ -18146,14 +18146,15 @@ def _detect_us_control_class(line: str) -> str | None:
 def _is_radioactive_free_line(line: str) -> bool:
     if "radio" not in line:
         return False
-    if "free from radioactive contamination" in line:
+    normalized = " ".join(line.split())
+    if re.search(r"free\s+(?:from|of)\s+radioactive\s+(?:contamination|contaminants?|radiation)\b", normalized):
         return True
-    if "free of radioactive contaminants" in line:
+    if "contaminazione radioattiva" in normalized:
         return True
-    if "contaminazione radioattiva" in line:
+    if "radiazioni radioattive" in normalized or "radiazione radioattiva" in normalized:
         return True
-    if "radioaktiver kontamination" in line:
+    if "radioaktiver kontamination" in normalized or "radioaktiver strahlung" in normalized:
         return True
-    if "contamination radioactive" in line:
+    if "contamination radioactive" in normalized:
         return True
     return False
