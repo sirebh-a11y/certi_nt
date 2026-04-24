@@ -801,6 +801,36 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
 
     lines = _ocr_crop_lines(crop)
+    supplier_name = None
+    if page.document is not None:
+        supplier_name = (
+            page.document.supplier.ragione_sociale
+            if page.document.supplier is not None
+            else page.document.nome_file_originale
+        )
+    template = resolve_supplier_template(supplier_name) if supplier_name else None
+
+    if template is not None and template.supplier_key == "neuman":
+        neuman_matches = _parse_neuman_properties_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if not _has_complete_measured_properties(neuman_matches):
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_neuman_properties_from_lines(page_lines, page.id)
+                if len(page_matches) > len(neuman_matches):
+                    neuman_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if neuman_matches:
+            return PropertiesTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=_serialize_properties_capture_values(neuman_matches),
+            )
+
     horizontal_matches: dict[str, dict[str, str | int]] = {}
     for field_name, payload_match in _parse_properties_from_numeric_cluster(lines, page.id).items():
         normalized_field_name = _normalize_property_field_name(field_name)
@@ -7929,7 +7959,14 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
         "match": _compute_match_block_state(row),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
-        "note": _compute_value_block_state(values_by_block.get("note", [])),
+        "note": _compute_note_block_state(
+            values_by_block.get("note", []),
+            processed=_row_has_block_history_event(
+                row,
+                blocco="note",
+                actions=("note_rilevate", "note_non_rilevate"),
+            ),
+        ),
     }
 
 
@@ -7951,7 +7988,15 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
         "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
-        "note": _compute_value_block_state(values_by_block.get("note", [])),
+        "note": _compute_note_block_state(
+            values_by_block.get("note", []),
+            processed=_db_has_block_history_event(
+                db,
+                acquisition_row_id=row.id,
+                blocco="note",
+                actions=("note_rilevate", "note_non_rilevate"),
+            ),
+        ),
     }
 
 
@@ -7979,6 +8024,47 @@ def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso",
     if all(value.stato == "confermato" for value in effective_values):
         return "verde"
     return "giallo"
+
+
+def _compute_note_block_state(values: list[ReadValue], *, processed: bool) -> str:
+    state = _compute_value_block_state(values)
+    if state != "rosso":
+        return state
+    return "giallo" if processed else "rosso"
+
+
+def _row_has_block_history_event(
+    row: AcquisitionRow,
+    *,
+    blocco: str,
+    actions: tuple[str, ...],
+) -> bool:
+    history_events = getattr(row, "history_events", None) or []
+    for event in history_events:
+        if _string_or_none(getattr(event, "blocco", None)) != blocco:
+            continue
+        if _string_or_none(getattr(event, "azione", None)) in actions:
+            return True
+    return False
+
+
+def _db_has_block_history_event(
+    db: Session,
+    *,
+    acquisition_row_id: int,
+    blocco: str,
+    actions: tuple[str, ...],
+) -> bool:
+    return (
+        db.query(AcquisitionHistoryEvent.id)
+        .filter(
+            AcquisitionHistoryEvent.acquisition_row_id == acquisition_row_id,
+            AcquisitionHistoryEvent.blocco == blocco,
+            AcquisitionHistoryEvent.azione.in_(actions),
+        )
+        .first()
+        is not None
+    )
 
 
 def _compute_ddt_block_state(
@@ -11765,11 +11851,12 @@ def _extract_aww_ddt_row_groups_with_vision(
         crop_definitions,
         openai_api_key=openai_api_key,
     )
-    return _sanitize_aww_ai_row_groups(
+    candidates = _sanitize_aww_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         raw_rows=raw_rows,
         ai_document_payload_raw=ai_document_payload_raw,
     )
+    return _enrich_aww_ai_row_groups_from_pages(candidates, ddt_document.pages)
 
 
 def _build_aww_ddt_group_crops(
@@ -11875,7 +11962,9 @@ def _extract_aww_ddt_row_groups_from_openai(
                 "your_part_number_raw deve essere lo Your part number della stessa posizione. "
                 "order_confirmation_raw deve essere il valore di Order confirmation o il root del Batch number (OC) della stessa posizione. "
                 "batch_number_oc_raw deve essere il Batch number (OC) completo della stessa posizione. "
-                "alloy_temper_raw deve essere il valore di Legierung/Zustand della stessa posizione. "
+                "alloy_temper_raw deve essere il valore di Legierung/Zustand o alloy code AWW della stessa posizione. "
+                "Non usare Your part number, Profilzeichnung o altri codici prodotto al posto della lega/stato. "
+                "Se il documento mostra EN AW-6082A/535/T1, restituisci proprio quel raw completo. "
                 "diameter_raw deve essere il diametro preso dal simbolo Ø o da outer Ø della stessa posizione, senza dipendere dalla parola barra. "
                 "length_raw deve essere la lunghezza raw della stessa posizione, quando visibile. "
                 "Non fare il match con alcun certificato e non normalizzare i valori. "
@@ -12052,6 +12141,29 @@ def _sanitize_aww_ai_row_groups(
     return sanitized_rows
 
 
+def _enrich_aww_ai_row_groups_from_pages(
+    candidates: list[ReaderRowSplitCandidateResponse],
+    pages: list[DocumentPage],
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not candidates or not pages:
+        return candidates
+    page_texts = _document_page_text_map(pages)
+    for candidate in candidates:
+        if _string_or_none(candidate.lega) is not None:
+            continue
+        raw_payload = _load_json_dict(candidate.ai_row_payload_raw)
+        source_pages = _source_crop_page_numbers(cast(list[str], raw_payload.get("source_crops") or []))
+        fallback_text = _collect_page_text_subset(page_texts, source_pages)
+        alloy_raw = _extract_aww_alloy_from_document_text(fallback_text)
+        alloy_value = _normalize_aww_alloy_from_text(alloy_raw)
+        if alloy_value is None:
+            continue
+        candidate.lega = alloy_value
+        raw_payload["alloy_temper_raw"] = alloy_raw
+        candidate.ai_row_payload_raw = json.dumps(raw_payload, ensure_ascii=False)
+    return candidates
+
+
 def _sanitize_aww_ddt_number_candidate(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
@@ -12100,7 +12212,7 @@ def _normalize_aww_alloy_from_text(value: str | None) -> str | None:
     temper = temper_match.group(0) if temper_match is not None else None
     if base and temper:
         return f"{base} {temper}"
-    return base or temper
+    return base
 
 
 def _normalize_aww_diameter_from_text(value: str | None) -> str | None:
@@ -12117,6 +12229,74 @@ def _normalize_aww_diameter_from_text(value: str | None) -> str | None:
     direct = re.fullmatch(r"\s*([0-9]{2,3}(?:[.,][0-9]+)?)\s*", normalized)
     if direct is not None:
         return _normalize_diameter_value(direct.group(1))
+    return None
+
+
+def _document_page_text_map(pages: list[DocumentPage]) -> dict[int, str]:
+    page_texts: dict[int, str] = {}
+    for page in pages:
+        text = _string_or_none(page.ocr_text) or _string_or_none(page.testo_estratto)
+        if text is None:
+            continue
+        page_texts[int(page.numero_pagina)] = text
+    return page_texts
+
+
+def _source_crop_page_numbers(source_crops: list[str]) -> list[int]:
+    page_numbers: list[int] = []
+    for label in source_crops:
+        cleaned = _string_or_none(label)
+        if cleaned is None:
+            continue
+        match = re.search(r"page[_-]?(\d+)", cleaned, re.IGNORECASE)
+        if match is None:
+            continue
+        page_number = int(match.group(1))
+        if page_number not in page_numbers:
+            page_numbers.append(page_number)
+    return page_numbers
+
+
+def _collect_page_text_subset(page_texts: dict[int, str], page_numbers: list[int]) -> str:
+    if page_numbers:
+        texts = [page_texts[number] for number in page_numbers if number in page_texts]
+        if texts:
+            return "\n".join(texts)
+    return "\n".join(page_texts[number] for number in sorted(page_texts))
+
+
+def _load_json_dict(raw_payload: str | None) -> dict[str, object]:
+    cleaned = _string_or_none(raw_payload)
+    if cleaned is None:
+        return {}
+    try:
+        parsed = json.loads(cleaned)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_aww_alloy_from_document_text(text: str | None) -> str | None:
+    cleaned = _string_or_none(text)
+    if cleaned is None:
+        return None
+    match = re.search(r"alloy\s+code\s+aww\s*:\s*([^\n\r]+)", cleaned, re.IGNORECASE)
+    if match is None:
+        return None
+    return _string_or_none(match.group(1))
+
+
+def _extract_aww_dimension_context_from_document_text(text: str | None) -> str | None:
+    cleaned = _string_or_none(text)
+    if cleaned is None:
+        return None
+    match = re.search(
+        r"((?:rundstange|round\s*bar)\s*[0-9]{2,3}(?:[.,][0-9]+)?)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if match is not None:
+        return _string_or_none(match.group(1))
     return None
 
 
@@ -12840,6 +13020,7 @@ def _get_aww_certificate_ai_payload(
         openai_api_key=openai_api_key,
     )
     payload = _normalize_aww_certificate_ai_payload(page_images, raw_payload)
+    payload = _enrich_aww_certificate_ai_payload_from_pages(payload, certificate_document.pages)
     if certificate_ai_cache is not None:
         certificate_ai_cache[certificate_document.id] = payload
     return payload
@@ -12867,8 +13048,11 @@ def _extract_aww_certificate_payload_from_openai(
                 "Kunden-Teile-Nr. corrisponde al customer material number. Artikel-Nr. corrisponde al part number. "
                 "Auftragsbestätigung deve essere letto dal campo Auftragsbestätigung e restituito anche come root numerico. "
                 "La lega deve essere costruita leggendo Werkstoff/Material e Zustand/Temper insieme, senza inventare. "
-                "diameter_raw deve venire dal simbolo Ø o da Abmessung/Product, senza dipendere dalla parola barra. "
+                "product_raw deve essere il raw del blocco prodotto o della riga Abmessung/dimension, quando li compare il diametro del materiale. "
+                "diameter_raw deve venire dal simbolo Ø o dal campo Abmessung/dimension o Product, senza dipendere dalla parola barra. "
+                "Nei certificati AWW piu vecchi il diametro puo comparire solo come 'Rundstange 40,00' dentro Abmessung/dimension: in quel caso restituisci quel raw in product_raw e il numero in diameter_raw. "
                 "weight_raw deve essere il peso netto / delivery quantity del materiale, non altri numeri tabellari. "
+                "Se il certificato indica 'siehe Lieferschein' o 'see delivery note', restituisci quel raw in weight_raw invece di inventare un numero. "
                 "Charge No. della tabella chimica e la riga misurata vera. Ignora Soll min e Set value max. "
                 "Le proprieta meccaniche hanno due blocchi distinti: blocco standard e blocco simulated heat treatment. "
                 "Non fonderli mai. Se il blocco standard ha una vera riga misurata di Charge No., estraila in standard_measured_row. "
@@ -13012,6 +13196,39 @@ def _normalize_aww_certificate_ai_payload(
         "notes": note_matches,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
+
+
+def _enrich_aww_certificate_ai_payload_from_pages(
+    payload: dict[str, object],
+    pages: list[DocumentPage],
+) -> dict[str, object]:
+    if not pages:
+        return payload
+    supplier_fields = cast(dict[str, object], payload.get("supplier_fields") or {})
+    if _string_or_none(cast(str | None, supplier_fields.get("diameter"))) is not None:
+        return payload
+
+    fallback_text = _collect_page_text_subset(_document_page_text_map(pages), [])
+    dimension_context = _extract_aww_dimension_context_from_document_text(fallback_text)
+    normalized_diameter = _normalize_aww_diameter_from_text(dimension_context)
+    if normalized_diameter is None:
+        return payload
+
+    supplier_fields["diameter"] = normalized_diameter
+    payload["supplier_fields"] = supplier_fields
+
+    core_fields = cast(dict[str, dict[str, str | None]], payload.get("core_fields") or {})
+    core_fields["diametro_certificato"] = {
+        "value": normalized_diameter,
+        "evidence": dimension_context,
+        "source_crop": next(iter(core_fields.values()), {}).get("source_crop") if core_fields else None,
+    }
+    payload["core_fields"] = core_fields
+
+    match_values = cast(dict[str, str | None], payload.get("match_values") or {})
+    match_values["diametro_certificato"] = normalized_diameter
+    payload["match_values"] = match_values
+    return payload
 
 
 def _sanitize_aww_vision_certificate_fields(
@@ -13174,7 +13391,13 @@ def _extract_neuman_certificate_payload_from_openai(
                 "diameter_raw: estrai il diametro raw dal Product o dal simbolo Ø. "
                 "net_weight_raw: estrai il Net weight [kg]. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri della riga lotto e ignora Min e Max. "
-                "Proprieta meccaniche: se non esiste una vera riga misurata, restituisci measured_rows vuoto. "
+                "Proprieta meccaniche: se il certificato mostra un vero blocco misurato di Hardness and mechanical properties, "
+                "estrai una measured_rows con i valori misurati reali. "
+                "Per questo fornitore il blocco misurato puo apparire in forma compatta vicino a 'after simulated heat treatment acc. customer requirements' "
+                "e a 'Hardness and mechanical properties', con i quattro valori misurati del lotto per HB, A%, Rp0.2 e Rm. "
+                "Usa i label e le unita vicine ([HB], [%], [MPa]) per associare correttamente i valori; "
+                "non trattare i limiti min/max come valori misurati. "
+                "Se non esiste una vera riga o un vero blocco misurato, restituisci measured_rows vuoto. "
                 "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
@@ -15636,6 +15859,13 @@ def _detect_property_matches(
                     matches.setdefault(field_name, payload)
                 continue
 
+        if template is not None and template.supplier_key == "neuman":
+            page_matches = _parse_neuman_properties_from_lines(lines, page.id)
+            if page_matches:
+                for field_name, payload in page_matches.items():
+                    matches.setdefault(field_name, payload)
+                continue
+
         spec_matches = _parse_properties_from_spec_lines(lines, page.id)
         compact_matches = _parse_properties_from_compact_lines(lines, page.id)
         cluster_matches = _parse_properties_from_numeric_cluster(lines, page.id)
@@ -15648,6 +15878,111 @@ def _detect_property_matches(
 
 def _has_complete_measured_properties(matches: dict[str, dict[str, str | int]]) -> bool:
     return all(field_name in matches for field_name in ("Rm", "Rp0.2", "A%", "HB"))
+
+
+def _parse_neuman_properties_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    start_index = None
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if "after simulated heat treatment" in lowered or "hardness and mechanical properties" in lowered:
+            start_index = index
+            break
+    if start_index is None:
+        return {}
+
+    stop_markers = (
+        "we confirm",
+        "authorised inspection representative",
+        "no signature",
+        "neuman aluminium",
+    )
+    skip_markers = (
+        "the following tests confirm compliance",
+        "100% us testing",
+        "surface roughness",
+        "diameter ",
+        "products are free",
+        "hydrogen content",
+        "delivery note",
+        "customer material number",
+        "inspection certificate",
+        "chemical composition",
+    )
+    block_lines: list[str] = []
+    for line in normalized_lines[max(0, start_index - 1) :]:
+        lowered = line.lower()
+        if block_lines and any(marker in lowered for marker in stop_markers):
+            break
+        if any(marker in lowered for marker in skip_markers):
+            continue
+        block_lines.append(line)
+
+    if not block_lines:
+        return {}
+
+    numeric_tokens = [
+        _normalize_numeric_value(match.group(0)) or match.group(0)
+        for line in block_lines
+        for match in re.finditer(r"\d+(?:[.,]\d+)?", line)
+    ]
+    numeric_values = [(_safe_float(token), token) for token in numeric_tokens]
+
+    hb_candidates = [
+        token
+        for value, token in numeric_values
+        if value is not None and 90 <= value <= 180 and abs(value - 100.0) > 0.001
+    ]
+    a_candidates = [
+        token
+        for value, token in numeric_values
+        if value is not None and 6 < value <= 30 and abs(value - 8.0) > 0.001
+    ]
+    strength_candidates = sorted(
+        {
+            token
+            for value, token in numeric_values
+            if value is not None and 280 <= value <= 450 and abs(value - 310.0) > 0.001 and abs(value - 260.0) > 0.001
+        },
+        key=lambda token: _safe_float(token) or 0.0,
+    )
+
+    if not hb_candidates and not a_candidates and len(strength_candidates) < 2:
+        return {}
+
+    simulated_anchor = next(
+        (line for line in block_lines if "after simulated heat treatment" in line.lower()),
+        block_lines[0],
+    )
+
+    result: dict[str, dict[str, str | int]] = {}
+
+    def _payload(raw_value: str) -> dict[str, str | int]:
+        standardized = _normalize_numeric_value(raw_value) or raw_value
+        return {
+            "page_id": page_id,
+            "snippet": simulated_anchor,
+            "raw": standardized,
+            "standardized": standardized,
+            "final": standardized,
+        }
+
+    if hb_candidates:
+        hb_token = max(hb_candidates, key=lambda token: _safe_float(token) or 0.0)
+        result["HB"] = _payload(hb_token)
+    if a_candidates:
+        a_token = max(a_candidates, key=lambda token: _safe_float(token) or 0.0)
+        result["A%"] = _payload(a_token)
+    if len(strength_candidates) >= 2:
+        rp_token = strength_candidates[0]
+        rm_token = strength_candidates[-1]
+        result["Rp0.2"] = _payload(rp_token)
+        result["Rm"] = _payload(rm_token)
+
+    return result
 
 
 def _extract_aluminium_bozen_mechanical_crop_lines(page: DocumentPage) -> list[str]:
