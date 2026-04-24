@@ -21,14 +21,14 @@ SYSTEM_NOTE_SEEDS = [
         "code": "us_control_class_a",
         "note_key": "nota_us_control_classe",
         "note_value": "A",
-        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class A",
+        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class A.",
         "sort_order": 10,
     },
     {
         "code": "us_control_class_b",
         "note_key": "nota_us_control_classe",
         "note_value": "B",
-        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class B",
+        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class B.",
         "sort_order": 20,
     },
     {
@@ -38,7 +38,7 @@ SYSTEM_NOTE_SEEDS = [
         "text": (
             "We hereby declare that material is in compliance with DIRECTIVE 2011/65/EU OF THE "
             "EUROPEAN PARLIAMENT AND OF THE COUNCIL of 8 June 2011 on the restriction of the use "
-            "of certain hazardous substances (ROHS II) in electrical and electronic equipment"
+            "of certain hazardous substances (ROHS II) in electrical and electronic equipment."
         ),
         "sort_order": 30,
     },
@@ -46,7 +46,7 @@ SYSTEM_NOTE_SEEDS = [
         "code": "radioactive_free",
         "note_key": "nota_radioactive_free",
         "note_value": "true",
-        "text": "Material free from radioactive contamination",
+        "text": "Material free from radioactive contamination.",
         "sort_order": 40,
     },
 ]
@@ -158,4 +158,3 @@ def _slugify(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", normalized)
     normalized = normalized.strip("_")
     return normalized[:120]
-
