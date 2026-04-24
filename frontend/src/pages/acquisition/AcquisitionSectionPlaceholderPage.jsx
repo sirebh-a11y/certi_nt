@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import AcquisitionChemistrySectionPage from "./AcquisitionChemistrySectionPage";
+import AcquisitionNotesSectionPage from "./AcquisitionNotesSectionPage";
 import AcquisitionPropertiesSectionPage from "./AcquisitionPropertiesSectionPage";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 
@@ -83,7 +84,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [rowId, token]);
 
   useEffect(() => {
-    if (!["chemistry", "properties"].includes(sectionKey)) {
+    if (!["chemistry", "properties", "notes"].includes(sectionKey)) {
       return undefined;
     }
 
@@ -117,7 +118,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [location.hash, location.pathname, location.search, sectionDirty, sectionKey]);
 
   function handleBackToList() {
-    if (["chemistry", "properties"].includes(sectionKey) && sectionDirty) {
+    if (["chemistry", "properties", "notes"].includes(sectionKey) && sectionDirty) {
       setPendingPath("/acquisition");
       setExitDialogOpen(true);
       return;
@@ -166,6 +167,16 @@ export default function AcquisitionSectionPlaceholderPage() {
       ) : null}
       {row && sectionKey === "properties" ? (
         <AcquisitionPropertiesSectionPage
+          certificateDocument={certificateDocument}
+          onDirtyChange={setSectionDirty}
+          onRefreshRow={loadRow}
+          row={row}
+          rowId={rowId}
+          token={token}
+        />
+      ) : null}
+      {row && sectionKey === "notes" ? (
+        <AcquisitionNotesSectionPage
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}

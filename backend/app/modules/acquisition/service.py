@@ -35,6 +35,7 @@ from app.modules.acquisition.models import (
     ReadValue,
 )
 from app.modules.acquisition.schemas import (
+    AcquisitionNotesSectionUpdateRequest,
     AcquisitionHistoryEventResponse,
     AutonomousRunResponse,
     AutonomousRunStartRequest,
@@ -69,6 +70,8 @@ from app.modules.acquisition.schemas import (
     ReadValueResponse,
     ReadValueUpsertRequest,
 )
+from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
+from app.modules.notes.service import serialize_note_template
 from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.matching import (
     aww_weights_are_compatible as reader_aww_weights_are_compatible,
@@ -348,6 +351,17 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         certificate_document=serialize_document_summary(row.certificate_document) if row.certificate_document else None,
         evidences=[serialize_evidence(evidence) for evidence in row.evidences],
         values=[serialize_read_value(value) for value in row.values],
+        custom_note_templates=[
+            serialize_note_template(link.note_template)
+            for link in sorted(
+                row.custom_note_links,
+                key=lambda item: (
+                    item.note_template.sort_order if item.note_template is not None else 9999,
+                    item.note_template_id,
+                ),
+            )
+            if link.note_template is not None
+        ],
         certificate_match=serialize_match(row.certificate_match) if row.certificate_match else None,
         history_events=[serialize_history_event(event) for event in row.history_events],
         value_history=[serialize_value_history(entry) for entry in row.value_history],
@@ -2560,6 +2574,7 @@ def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
             joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
             selectinload(AcquisitionRow.evidences),
             selectinload(AcquisitionRow.values),
+            selectinload(AcquisitionRow.custom_note_links).joinedload(AcquisitionRowNoteTemplate.note_template),
             selectinload(AcquisitionRow.certificate_match).selectinload(CertificateMatch.candidates),
             selectinload(AcquisitionRow.history_events),
             selectinload(AcquisitionRow.value_history),
@@ -2664,6 +2679,115 @@ def update_acquisition_row(
     updated_row = get_acquisition_row(db, row.id)
     log_service.record("acquisition", f"Acquisition row updated: {updated_row.id}", actor_email)
     return serialize_acquisition_row_detail(updated_row)
+
+
+def save_notes_section(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionNotesSectionUpdateRequest,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
+    _reopen_row_if_validated(db, row, actor_id=actor_id, reason="note")
+
+    requested_ids = list(dict.fromkeys(payload.custom_note_template_ids))
+    custom_templates: list[NoteTemplate] = []
+    if requested_ids:
+        custom_templates = (
+            db.query(NoteTemplate)
+            .filter(NoteTemplate.id.in_(requested_ids), NoteTemplate.is_system.is_(False))
+            .all()
+        )
+        found_ids = {template.id for template in custom_templates}
+        missing_ids = [note_id for note_id in requested_ids if note_id not in found_ids]
+        if missing_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Una o piu note custom non sono disponibili")
+
+    existing_values = {
+        value.campo: value
+        for value in row.values
+        if value.blocco == "note"
+    }
+    _upsert_read_value_model(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="note",
+        campo="nota_us_control_classe",
+        valore_grezzo=payload.nota_us_control_classe,
+        valore_standardizzato=payload.nota_us_control_classe,
+        valore_finale=payload.nota_us_control_classe,
+        stato="confermato",
+        document_evidence_id=existing_values.get("nota_us_control_classe").document_evidence_id if existing_values.get("nota_us_control_classe") else None,
+        metodo_lettura="utente",
+        fonte_documentale="utente",
+        confidenza=existing_values.get("nota_us_control_classe").confidenza if existing_values.get("nota_us_control_classe") else None,
+        actor_id=actor_id,
+    )
+    rohs_value = "true" if payload.nota_rohs else None
+    _upsert_read_value_model(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="note",
+        campo="nota_rohs",
+        valore_grezzo=rohs_value,
+        valore_standardizzato=rohs_value,
+        valore_finale=rohs_value,
+        stato="confermato",
+        document_evidence_id=existing_values.get("nota_rohs").document_evidence_id if existing_values.get("nota_rohs") else None,
+        metodo_lettura="utente",
+        fonte_documentale="utente",
+        confidenza=existing_values.get("nota_rohs").confidenza if existing_values.get("nota_rohs") else None,
+        actor_id=actor_id,
+    )
+    radioactive_value = "true" if payload.nota_radioactive_free else None
+    _upsert_read_value_model(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="note",
+        campo="nota_radioactive_free",
+        valore_grezzo=radioactive_value,
+        valore_standardizzato=radioactive_value,
+        valore_finale=radioactive_value,
+        stato="confermato",
+        document_evidence_id=existing_values.get("nota_radioactive_free").document_evidence_id if existing_values.get("nota_radioactive_free") else None,
+        metodo_lettura="utente",
+        fonte_documentale="utente",
+        confidenza=existing_values.get("nota_radioactive_free").confidenza if existing_values.get("nota_radioactive_free") else None,
+        actor_id=actor_id,
+    )
+
+    existing_links = {link.note_template_id: link for link in row.custom_note_links}
+    requested_set = set(requested_ids)
+    for note_template_id, link in list(existing_links.items()):
+        if note_template_id not in requested_set:
+            db.delete(link)
+    for template in custom_templates:
+        if template.id in existing_links:
+            continue
+        db.add(
+            AcquisitionRowNoteTemplate(
+                acquisition_row_id=row.id,
+                note_template_id=template.id,
+            )
+        )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="note",
+        azione="note_confermate",
+        user_id=actor_id,
+        nota_breve=(
+            f"US={payload.nota_us_control_classe or '-'}; "
+            f"RoHS={'Y' if payload.nota_rohs else 'N'}; "
+            f"Radio={'Y' if payload.nota_radioactive_free else 'N'}; "
+            f"custom={len(requested_ids)}"
+        ),
+    )
+    _sync_row_statuses(db, row)
+    db.add(row)
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
 def create_evidence(

@@ -22,7 +22,7 @@ AdminUser = Annotated[User, Depends(require_roles("admin"))]
 
 
 @router.get("", response_model=NoteTemplateListResponse)
-def list_note_templates_route(_: AdminUser, db: DbSession) -> NoteTemplateListResponse:
+def list_note_templates_route(_: CurrentUser, db: DbSession) -> NoteTemplateListResponse:
     return list_note_templates(db)
 
 

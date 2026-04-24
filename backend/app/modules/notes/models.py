@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -26,4 +26,23 @@ class NoteTemplate(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    row_links: Mapped[list["AcquisitionRowNoteTemplate"]] = relationship(
+        "AcquisitionRowNoteTemplate",
+        back_populates="note_template",
+        cascade="all, delete-orphan",
+    )
 
+
+class AcquisitionRowNoteTemplate(Base):
+    __tablename__ = "acquisition_row_note_templates"
+    __table_args__ = (
+        UniqueConstraint("acquisition_row_id", "note_template_id", name="uq_acquisition_row_note_template"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    acquisition_row_id: Mapped[int] = mapped_column(ForeignKey("datimaterialeincoming.id"), nullable=False, index=True)
+    note_template_id: Mapped[int] = mapped_column(ForeignKey("note_templates.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    acquisition_row = relationship("AcquisitionRow", back_populates="custom_note_links")
+    note_template = relationship("NoteTemplate", back_populates="row_links")

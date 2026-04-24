@@ -154,6 +154,11 @@ class AcquisitionRow(Base):
         cascade="all, delete-orphan",
         order_by="AcquisitionValueHistory.timestamp.desc()",
     )
+    custom_note_links: Mapped[list["AcquisitionRowNoteTemplate"]] = relationship(
+        "AcquisitionRowNoteTemplate",
+        back_populates="acquisition_row",
+        cascade="all, delete-orphan",
+    )
 
 
 class DocumentEvidence(Base):

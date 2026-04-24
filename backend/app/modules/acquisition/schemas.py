@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.notes.schemas import NoteTemplateResponse
+
 
 DocumentType = Literal["ddt", "certificato"]
 DocumentStatus = Literal["caricato", "indicizzato", "letto", "errore"]
@@ -508,9 +510,28 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
     certificate_document: DocumentSummaryResponse | None
     evidences: list[DocumentEvidenceResponse]
     values: list[ReadValueResponse]
+    custom_note_templates: list[NoteTemplateResponse]
     certificate_match: MatchResponse | None
     history_events: list[AcquisitionHistoryEventResponse]
     value_history: list[AcquisitionValueHistoryResponse]
+
+
+class AcquisitionNotesSectionUpdateRequest(BaseModel):
+    nota_us_control_classe: str | None = Field(default=None, max_length=1)
+    nota_rohs: bool = False
+    nota_radioactive_free: bool = False
+    custom_note_template_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("nota_us_control_classe")
+    @classmethod
+    def validate_us_control_class(cls, value: str | None) -> str | None:
+        normalized = normalize_optional_text(value)
+        if normalized is None:
+            return None
+        upper = normalized.upper()
+        if upper not in {"A", "B"}:
+            raise ValueError("La classe US control deve essere A oppure B")
+        return upper
 
 
 class AcquisitionRowListResponse(BaseModel):

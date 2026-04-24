@@ -11,6 +11,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowCreateRequest,
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
+    AcquisitionNotesSectionUpdateRequest,
     AcquisitionRowUpdateRequest,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
@@ -66,6 +67,7 @@ from app.modules.acquisition.service import (
     process_row_minimal,
     prepare_document_for_reader,
     run_ai_intervention,
+    save_notes_section,
     run_autonomous_processing,
     serialize_acquisition_row_detail,
     serialize_document_detail,
@@ -371,6 +373,17 @@ def update_acquisition_row_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return update_acquisition_row(db=db, row=row, payload=payload, actor_id=current_user.id, actor_email=current_user.email)
+
+
+@router.put("/rows/{row_id}/notes-section", response_model=AcquisitionRowDetailResponse)
+def save_notes_section_route(
+    row_id: int,
+    payload: AcquisitionNotesSectionUpdateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return save_notes_section(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/evidences", response_model=DocumentEvidenceResponse)
