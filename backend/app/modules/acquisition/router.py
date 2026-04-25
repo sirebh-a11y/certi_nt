@@ -31,6 +31,7 @@ from app.modules.acquisition.schemas import (
     DocumentSplitRowsCreateResponse,
     MatchResponse,
     MatchUpsertRequest,
+    NoteOverlayPreviewResponse,
     PropertiesCaptureRequest,
     PropertiesCaptureResponse,
     PropertiesOverlayPreviewResponse,
@@ -48,6 +49,7 @@ from app.modules.acquisition.service import (
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
     build_chemistry_overlay_preview,
+    build_notes_overlay_preview,
     capture_chemistry_table_from_page,
     build_properties_overlay_preview,
     capture_properties_value_from_page,
@@ -340,6 +342,16 @@ def properties_overlay_preview_route(
 ) -> PropertiesOverlayPreviewResponse:
     row = get_acquisition_row(db, row_id)
     return build_properties_overlay_preview(db=db, row=row)
+
+
+@router.get("/rows/{row_id}/notes-overlay-preview", response_model=NoteOverlayPreviewResponse)
+def notes_overlay_preview_route(
+    row_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> NoteOverlayPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_notes_overlay_preview(db=db, row=row)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)

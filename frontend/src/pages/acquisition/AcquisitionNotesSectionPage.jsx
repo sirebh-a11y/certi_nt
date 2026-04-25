@@ -49,27 +49,6 @@ function renderOverlayBox({ item, imageHeight, imageWidth, key, title }) {
   );
 }
 
-function buildPersistedNoteOverlayItems(row) {
-  const evidences = Array.isArray(row?.evidences) ? row.evidences : [];
-  const evidenceMap = new Map(evidences.map((evidence) => [evidence.id, evidence]));
-  return (Array.isArray(row?.values) ? row.values : [])
-    .filter((value) => value?.blocco === "note" && value?.document_evidence_id)
-    .map((value) => {
-      const evidence = evidenceMap.get(value.document_evidence_id);
-      if (!evidence?.bbox || !evidence?.document_page_id) {
-        return null;
-      }
-      return {
-        field: value.campo,
-        page_id: evidence.document_page_id,
-        bbox: evidence.bbox,
-        image_width: 0,
-        image_height: 0,
-      };
-    })
-    .filter(Boolean);
-}
-
 function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems, token }) {
   const [pageImages, setPageImages] = useState([]);
   const [pageImageSizes, setPageImageSizes] = useState({});
@@ -273,8 +252,8 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [overlayPreviewItems, setOverlayPreviewItems] = useState([]);
+  const [overlayBusy, setOverlayBusy] = useState(false);
   const workspaceRef = useRef(null);
-  const persistedNoteOverlayItems = useMemo(() => buildPersistedNoteOverlayItems(row), [row]);
 
   useEffect(() => {
     let ignore = false;
@@ -299,6 +278,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
     setSessionInitialDraft(nextInitial);
     setDraft(nextInitial);
     setSelectedCustomId("");
+    setOverlayPreviewItems([]);
     onDirtyChange?.(false);
   }, [row]);
 
@@ -343,8 +323,25 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
     });
   }
 
-  function handleToggleOverlayPreview() {
-    setOverlayPreviewItems((current) => (current.length ? [] : persistedNoteOverlayItems));
+  async function handleToggleOverlayPreview() {
+    if (overlayBusy) {
+      return;
+    }
+    if (overlayPreviewItems.length) {
+      setOverlayPreviewItems([]);
+      return;
+    }
+    setOverlayBusy(true);
+    try {
+      const response = await apiRequest(`/acquisition/rows/${rowId}/notes-overlay-preview`, {}, token);
+      setOverlayPreviewItems(Array.isArray(response?.items) ? response.items : []);
+      setError("");
+    } catch (requestError) {
+      setError(requestError.message);
+      setOverlayPreviewItems([]);
+    } finally {
+      setOverlayBusy(false);
+    }
   }
 
   function setUsClass(value) {
@@ -446,10 +443,11 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
                 ? "border-sky-400 bg-sky-100 text-sky-700"
                 : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
             }`}
-            onClick={handleToggleOverlayPreview}
+            disabled={overlayBusy}
+            onClick={() => void handleToggleOverlayPreview()}
             type="button"
           >
-            {overlayPreviewItems.length ? "Overlay off" : "Overlay"}
+            {overlayBusy ? "..." : overlayPreviewItems.length ? "Overlay off" : "Overlay"}
           </button>
           <span>Le spunte aggiornano solo la bozza locale. La sezione Note diventa definitiva con Conferma.</span>
         </div>

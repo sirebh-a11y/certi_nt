@@ -174,6 +174,19 @@ class PropertiesOverlayPreviewResponse(BaseModel):
     items: list[PropertiesOverlayPreviewItemResponse]
 
 
+class NoteOverlayPreviewItemResponse(BaseModel):
+    page_id: int
+    page_number: int
+    field: str
+    bbox: str
+    image_width: int
+    image_height: int
+
+
+class NoteOverlayPreviewResponse(BaseModel):
+    items: list[NoteOverlayPreviewItemResponse]
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

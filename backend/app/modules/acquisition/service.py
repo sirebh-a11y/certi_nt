@@ -51,6 +51,8 @@ from app.modules.acquisition.schemas import (
     ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    NoteOverlayPreviewItemResponse,
+    NoteOverlayPreviewResponse,
     PropertiesCaptureRequest,
     PropertiesCaptureResponse,
     PropertiesOverlayPreviewItemResponse,
@@ -1160,6 +1162,42 @@ def build_properties_overlay_preview(
     return PropertiesOverlayPreviewResponse(items=items)
 
 
+def build_notes_overlay_preview(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> NoteOverlayPreviewResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        return NoteOverlayPreviewResponse(items=[])
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+
+    pages_by_id = {page.id: page for page in certificate_document.pages}
+    items: list[NoteOverlayPreviewItemResponse] = []
+    for value in row.values:
+        if value.blocco != "note" or value.document_evidence_id is None:
+            continue
+        evidence = db.get(DocumentEvidence, value.document_evidence_id)
+        if evidence is None or evidence.document_page_id is None:
+            continue
+        page = pages_by_id.get(evidence.document_page_id)
+        if page is None or not page.immagine_pagina_storage_key:
+            continue
+        item = _build_note_overlay_item_from_evidence(
+            page=page,
+            field=value.campo,
+            evidence=evidence,
+        )
+        if item is not None:
+            items.append(item)
+
+    return NoteOverlayPreviewResponse(items=items)
+
+
 def _build_properties_overlay_preview_items_for_page(
     *,
     page: DocumentPage,
@@ -1185,6 +1223,132 @@ def _build_properties_overlay_preview_items_for_page(
     if items:
         return items
     return _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values)
+
+
+def _build_note_overlay_item_from_evidence(
+    *,
+    page: DocumentPage,
+    field: str,
+    evidence: DocumentEvidence,
+) -> NoteOverlayPreviewItemResponse | None:
+    image_path = get_document_page_image_path(page)
+    with Image.open(image_path) as image:
+        image_width, image_height = image.size
+
+    if evidence.bbox:
+        return NoteOverlayPreviewItemResponse(
+            page_id=page.id,
+            page_number=page.numero_pagina,
+            field=field,
+            bbox=evidence.bbox,
+            image_width=image_width,
+            image_height=image_height,
+        )
+
+    snippet = _string_or_none(evidence.testo_grezzo)
+    if snippet is None:
+        return None
+
+    line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+    best_bbox = _find_best_note_overlay_bbox(
+        field=field,
+        snippet=snippet,
+        line_boxes=line_boxes,
+    )
+    if best_bbox is None:
+        return None
+
+    return NoteOverlayPreviewItemResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        field=field,
+        bbox=best_bbox,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+def _find_best_note_overlay_bbox(
+    *,
+    field: str,
+    snippet: str,
+    line_boxes: list[dict[str, object]],
+) -> str | None:
+    if not line_boxes:
+        return None
+    tokens = _tokenize_note_overlay_text(snippet)
+    if not tokens:
+        return None
+
+    best_bbox: str | None = None
+    best_score = 0
+    max_window = min(3, len(line_boxes))
+    for window_size in range(1, max_window + 1):
+        for start in range(0, len(line_boxes) - window_size + 1):
+            window = line_boxes[start : start + window_size]
+            score = _score_note_overlay_window(field=field, tokens=tokens, line_boxes=window)
+            if score > best_score:
+                left = min(int(box.get("x0") or 0) for box in window)
+                top = min(int(box.get("y0") or 0) for box in window)
+                right = max(int(box.get("x1") or 0) for box in window)
+                bottom = max(int(box.get("y1") or 0) for box in window)
+                if right > left and bottom > top:
+                    best_score = score
+                    best_bbox = f"{left},{top},{right},{bottom}"
+
+    if best_bbox is None or best_score < 6:
+        return None
+    return best_bbox
+
+
+def _tokenize_note_overlay_text(value: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", _normalize_mojibake_numeric_text(value).upper()).strip()
+    raw_tokens = re.findall(r"[A-Z0-9/%.-]+", normalized)
+    tokens: list[str] = []
+    for token in raw_tokens:
+        cleaned = token.strip(".-")
+        if not cleaned:
+            continue
+        if cleaned in {"THE", "AND", "WITH", "ON", "OF", "TO", "IS", "ARE", "WE", "HEREBY", "THAT"}:
+            continue
+        if len(cleaned) >= 4 or re.search(r"\d", cleaned) or cleaned in {"A", "B", "US"}:
+            tokens.append(cleaned)
+    return list(dict.fromkeys(tokens))
+
+
+def _score_note_overlay_window(
+    *,
+    field: str,
+    tokens: list[str],
+    line_boxes: list[dict[str, object]],
+) -> int:
+    combined = " ".join(
+        " ".join(str(word.get("text") or "").upper() for word in cast(list[dict[str, object]], line_box.get("words") or []))
+        for line_box in line_boxes
+    )
+    normalized = re.sub(r"\s+", " ", _normalize_mojibake_numeric_text(combined).upper()).strip()
+    score = sum(4 for token in tokens if token in normalized)
+    score += sum(2 for token in tokens if len(token) >= 6 and token in normalized)
+
+    if field == "nota_us_control_classe":
+        if "CLASS A" in normalized or "CLASS B" in normalized:
+            score += 8
+        if "AMS" in normalized or "ASTM" in normalized:
+            score += 4
+        if "US" in normalized:
+            score += 2
+    elif field == "nota_rohs":
+        if "ROHS" in normalized:
+            score += 10
+        if "DIRECTIVE" in normalized:
+            score += 4
+    elif field == "nota_radioactive_free":
+        if "RADIOACTIVE" in normalized:
+            score += 10
+        if "FREE" in normalized or "CONTAMINATION" in normalized or "RADIATION" in normalized:
+            score += 4
+
+    return score
 
 
 def _find_best_properties_overlay_match(
