@@ -16977,6 +16977,7 @@ def _parse_neuman_properties_from_lines(lines: list[str], page_id: int) -> dict[
         for value, token in numeric_values
         if value is not None and 6 < value <= 30 and abs(value - 8.0) > 0.001
     ]
+    a_decimal_candidates = [token for token in a_candidates if "," in token or "." in token]
     strength_candidates = sorted(
         {
             token
@@ -17010,7 +17011,8 @@ def _parse_neuman_properties_from_lines(lines: list[str], page_id: int) -> dict[
         hb_token = max(hb_candidates, key=lambda token: _safe_float(token) or 0.0)
         result["HB"] = _payload(hb_token)
     if a_candidates:
-        a_token = max(a_candidates, key=lambda token: _safe_float(token) or 0.0)
+        ranked_a_candidates = a_decimal_candidates or a_candidates
+        a_token = max(ranked_a_candidates, key=lambda token: _safe_float(token) or 0.0)
         result["A%"] = _payload(a_token)
     if len(strength_candidates) >= 2:
         rp_token = strength_candidates[0]
