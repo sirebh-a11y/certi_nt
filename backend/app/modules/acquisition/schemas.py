@@ -128,6 +128,7 @@ class ChemistryTableCaptureResponse(BaseModel):
     bbox: str
     raw_lines: list[str]
     values: dict[str, str]
+    items: list["ChemistryOverlayPreviewItemResponse"] = Field(default_factory=list)
 
 
 class ChemistryOverlayPreviewItemResponse(BaseModel):

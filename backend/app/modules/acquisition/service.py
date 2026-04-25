@@ -727,13 +727,15 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
                     metalba_matches = page_matches
                     raw_lines_for_response = page_lines
         if metalba_matches:
+            values = _serialize_chemistry_capture_values(metalba_matches)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 orientation="horizontal",
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
-                values=_serialize_chemistry_capture_values(metalba_matches),
+                values=values,
+                items=_build_chemistry_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
     if template is not None and template.supplier_key == "neuman":
@@ -748,13 +750,15 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
                     neuman_matches = page_matches
                     raw_lines_for_response = page_lines
         if neuman_matches:
+            values = _serialize_chemistry_capture_values(neuman_matches)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 orientation="horizontal",
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
-                values=_serialize_chemistry_capture_values(neuman_matches),
+                values=values,
+                items=_build_chemistry_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
     if template is not None and template.supplier_key == "aww":
@@ -769,13 +773,15 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
                     aww_matches = page_matches
                     raw_lines_for_response = page_lines
         if aww_matches:
+            values = _serialize_chemistry_capture_values(aww_matches)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 orientation="horizontal",
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
-                values=_serialize_chemistry_capture_values(aww_matches),
+                values=values,
+                items=_build_chemistry_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
     horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
@@ -807,13 +813,16 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
         list(_serialize_chemistry_capture_values(chosen).keys()),
     )
 
+    values = _serialize_chemistry_capture_values(chosen)
+
     return ChemistryTableCaptureResponse(
         page_id=page.id,
         page_number=page.numero_pagina,
         orientation=orientation,
         bbox=f"{left},{top},{right},{bottom}",
         raw_lines=lines,
-        values=_serialize_chemistry_capture_values(chosen),
+        values=values,
+        items=_build_chemistry_overlay_preview_items_for_page(page=page, field_values=values),
     )
 
 
@@ -1037,6 +1046,29 @@ def build_chemistry_overlay_preview(
         image_height=image_height,
     )
     return ChemistryOverlayPreviewResponse(items=items)
+
+
+def _build_chemistry_overlay_preview_items_for_page(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    if not field_values or not page.immagine_pagina_storage_key:
+        return []
+    staged_match = _find_best_chemistry_overlay_match(page=page, field_values=field_values)
+    if staged_match is None:
+        return []
+    line_box, matched_fields, image_width, image_height, score = staged_match
+    if score[1] < 3:
+        return []
+    return _build_chemistry_overlay_items(
+        page=page,
+        line_box=line_box,
+        field_values=field_values,
+        matched_fields=matched_fields,
+        image_width=image_width,
+        image_height=image_height,
+    )
 
 
 def _find_best_chemistry_overlay_match(

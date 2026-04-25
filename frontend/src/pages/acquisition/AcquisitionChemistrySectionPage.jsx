@@ -1017,7 +1017,14 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       });
       return next;
     });
-    if (tableCaptureProposal?.bbox && tableCaptureProposal?.page_id) {
+    if (Array.isArray(tableCaptureProposal?.items) && tableCaptureProposal.items.length) {
+      setDraftOverlayItems((current) => {
+        const next = current.filter(
+          (item) => !Object.prototype.hasOwnProperty.call(tableCaptureProposal.values || {}, item.field),
+        );
+        return [...next, ...tableCaptureProposal.items];
+      });
+    } else if (tableCaptureProposal?.bbox && tableCaptureProposal?.page_id) {
       setDraftOverlayItems((current) => [
         ...current.filter((item) => item.field !== "__table__"),
         {
