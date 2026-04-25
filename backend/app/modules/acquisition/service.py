@@ -1149,15 +1149,21 @@ def build_properties_overlay_preview(
             image_width=image_width,
             image_height=image_height,
         )
-    if not items:
+    if _count_overlay_fields(items) < len(field_values):
         for page in certificate_document.pages:
             if not page.immagine_pagina_storage_key:
                 continue
-            items = _build_properties_overlay_items_from_page_words(page=page, field_values=field_values)
-            if len(items) >= 2:
+            items = _merge_overlay_preview_items(
+                items,
+                _build_properties_overlay_items_from_page_words(page=page, field_values=field_values),
+            )
+            if _count_overlay_fields(items) >= len(field_values):
                 break
-            items = _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values)
-            if len(items) >= 2:
+            items = _merge_overlay_preview_items(
+                items,
+                _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values),
+            )
+            if _count_overlay_fields(items) >= len(field_values):
                 break
     return PropertiesOverlayPreviewResponse(items=items)
 
@@ -1206,6 +1212,7 @@ def _build_properties_overlay_preview_items_for_page(
     if not field_values or not page.immagine_pagina_storage_key:
         return []
     staged_match = _find_best_properties_overlay_match(page=page, field_values=field_values)
+    items: list[PropertiesOverlayPreviewItemResponse] = []
     if staged_match is not None:
         line_box, matched_fields, image_width, image_height, score = staged_match
         if score[1] >= 2:
@@ -1217,12 +1224,30 @@ def _build_properties_overlay_preview_items_for_page(
                 image_width=image_width,
                 image_height=image_height,
             )
-            if items:
-                return items
-    items = _build_properties_overlay_items_from_page_words(page=page, field_values=field_values)
-    if items:
-        return items
-    return _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values)
+    if _count_overlay_fields(items) < len(field_values):
+        items = _merge_overlay_preview_items(
+            items,
+            _build_properties_overlay_items_from_page_words(page=page, field_values=field_values),
+        )
+    if _count_overlay_fields(items) < len(field_values):
+        items = _merge_overlay_preview_items(
+            items,
+            _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values),
+        )
+    return items
+
+
+def _count_overlay_fields(items: list[object]) -> int:
+    return len({getattr(item, "field", None) for item in items if getattr(item, "field", None)})
+
+
+def _merge_overlay_preview_items(primary: list[PropertiesOverlayPreviewItemResponse], secondary: list[PropertiesOverlayPreviewItemResponse]) -> list[PropertiesOverlayPreviewItemResponse]:
+    merged: dict[str, PropertiesOverlayPreviewItemResponse] = {}
+    for item in primary:
+        merged[item.field] = item
+    for item in secondary:
+        merged.setdefault(item.field, item)
+    return list(merged.values())
 
 
 def _build_note_overlay_item_from_evidence(
