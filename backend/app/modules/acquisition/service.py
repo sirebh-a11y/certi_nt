@@ -1672,27 +1672,47 @@ def _build_property_overlay_item_from_click(
         return None
     half_width = max(140, int(image.width * 0.08))
     half_height = max(34, int(image.height * 0.03))
-    left = max(0, click_x - half_width)
-    top = max(0, click_y - half_height)
-    right = min(image.width, click_x + half_width)
-    bottom = min(image.height, click_y + half_height)
-    crop = image.crop((left, top, right, bottom))
-    candidates = _extract_capture_candidates_from_crop(
-        crop,
-        click_x=click_x,
-        click_y=click_y,
-        left_offset=left,
-        top_offset=top,
-        normalizer=_normalize_property_capture_value,
-    )
-    matching_candidates = [
-        candidate
-        for candidate in candidates
-        if _normalize_property_capture_value(cast(str | None, candidate.get("value"))) == target_normalized
+    probe_points = [
+        (click_x, click_y, 0),
+        (click_x, min(image.height - 1, click_y + half_height), 1),
+        (click_x, max(0, click_y - half_height), 1),
+        (click_x, min(image.height - 1, click_y + half_height * 2), 2),
+        (click_x, max(0, click_y - half_height * 2), 2),
+        (min(image.width - 1, click_x + half_width), click_y, 1),
+        (max(0, click_x - half_width), click_y, 1),
+        (min(image.width - 1, click_x + half_width * 2), click_y, 2),
+        (max(0, click_x - half_width * 2), click_y, 2),
     ]
-    if not matching_candidates:
+
+    best: dict[str, object] | None = None
+    best_score: tuple[int, int] | None = None
+    for probe_x, probe_y, step_penalty in probe_points:
+        left = max(0, probe_x - half_width)
+        top = max(0, probe_y - half_height)
+        right = min(image.width, probe_x + half_width)
+        bottom = min(image.height, probe_y + half_height)
+        crop = image.crop((left, top, right, bottom))
+        candidates = _extract_capture_candidates_from_crop(
+            crop,
+            click_x=probe_x,
+            click_y=probe_y,
+            left_offset=left,
+            top_offset=top,
+            normalizer=_normalize_property_capture_value,
+        )
+        matching_candidates = [
+            candidate
+            for candidate in candidates
+            if _normalize_property_capture_value(cast(str | None, candidate.get("value"))) == target_normalized
+        ]
+        for candidate in matching_candidates:
+            candidate_score = (step_penalty, int(candidate.get("distance") or 0))
+            if best_score is None or candidate_score < best_score:
+                best_score = candidate_score
+                best = candidate
+
+    if best is None:
         return None
-    best = min(matching_candidates, key=lambda item: int(item.get("distance") or 0))
     bbox = cast(str | None, best.get("bbox"))
     if bbox is None:
         return None
