@@ -642,6 +642,11 @@ export default function AcquisitionListPage() {
           <SummaryCell label="Logica attività" value="Placeholder" />
           <SummaryCell label="Masking e nuovo OCR icone" value="Placeholder" />
           <SummaryCell label="Aggiungi nuovo elemento chimico" value="Placeholder" />
+          <SummaryCell
+            label="Import fornitori DB terzo"
+            value="Placeholder"
+            note="Tema aperto: vedi docs/modules/supplier_third_party_import_placeholder.md"
+          />
         </div>
 
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
@@ -888,11 +893,12 @@ export default function AcquisitionListPage() {
   );
 }
 
-function SummaryCell({ label, value }) {
+function SummaryCell({ label, value, note = null }) {
   return (
     <div className="rounded-lg border border-border bg-white px-2.5 py-2">
       <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-0.5 text-base font-semibold text-slate-900">{value}</div>
+      {note ? <div className="mt-1 max-w-[240px] text-[10px] leading-4 text-slate-500">{note}</div> : null}
     </div>
   );
 }
