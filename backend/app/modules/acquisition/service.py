@@ -1190,11 +1190,8 @@ def build_notes_overlay_preview(
         evidence = db.get(DocumentEvidence, value.document_evidence_id)
         if evidence is None or evidence.document_page_id is None:
             continue
-        page = pages_by_id.get(evidence.document_page_id)
-        if page is None or not page.immagine_pagina_storage_key:
-            continue
         item = _build_note_overlay_item_from_evidence(
-            page=page,
+            pages=certificate_document.pages,
             field=value.campo,
             evidence=evidence,
         )
@@ -1252,37 +1249,58 @@ def _merge_overlay_preview_items(primary: list[PropertiesOverlayPreviewItemRespo
 
 def _build_note_overlay_item_from_evidence(
     *,
-    page: DocumentPage,
+    pages: list[DocumentPage],
     field: str,
     evidence: DocumentEvidence,
 ) -> NoteOverlayPreviewItemResponse | None:
-    image_path = get_document_page_image_path(page)
-    with Image.open(image_path) as image:
-        image_width, image_height = image.size
-
-    if evidence.bbox:
+    snippet = _string_or_none(evidence.testo_grezzo)
+    page_by_id = {page.id: page for page in pages}
+    evidence_page = page_by_id.get(evidence.document_page_id) if evidence.document_page_id is not None else None
+    if evidence.bbox and evidence_page is not None and evidence_page.immagine_pagina_storage_key:
+        image_path = get_document_page_image_path(evidence_page)
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
         return NoteOverlayPreviewItemResponse(
-            page_id=page.id,
-            page_number=page.numero_pagina,
+            page_id=evidence_page.id,
+            page_number=evidence_page.numero_pagina,
             field=field,
             bbox=evidence.bbox,
             image_width=image_width,
             image_height=image_height,
         )
 
-    snippet = _string_or_none(evidence.testo_grezzo)
     if snippet is None:
         return None
 
-    line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
-    best_bbox = _find_best_note_overlay_bbox(
-        field=field,
-        snippet=snippet,
-        line_boxes=line_boxes,
-    )
-    if best_bbox is None:
+    ordered_pages: list[DocumentPage] = []
+    if evidence_page is not None:
+        ordered_pages.append(evidence_page)
+    ordered_pages.extend(page for page in pages if evidence_page is None or page.id != evidence_page.id)
+
+    best_result: tuple[DocumentPage, str, int, int, int] | None = None
+    for priority, page in enumerate(ordered_pages):
+        if not page.immagine_pagina_storage_key:
+            continue
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
+        line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+        match = _find_best_note_overlay_match(
+            field=field,
+            snippet=snippet,
+            line_boxes=line_boxes,
+        )
+        if match is None:
+            continue
+        bbox, score = match
+        candidate = (page, bbox, score, image_width, image_height)
+        if best_result is None or score > best_result[2] or (score == best_result[2] and priority == 0):
+            best_result = candidate
+
+    if best_result is None:
         return None
 
+    page, best_bbox, _, image_width, image_height = best_result
     return NoteOverlayPreviewItemResponse(
         page_id=page.id,
         page_number=page.numero_pagina,
@@ -1293,12 +1311,12 @@ def _build_note_overlay_item_from_evidence(
     )
 
 
-def _find_best_note_overlay_bbox(
+def _find_best_note_overlay_match(
     *,
     field: str,
     snippet: str,
     line_boxes: list[dict[str, object]],
-) -> str | None:
+) -> tuple[str, int] | None:
     if not line_boxes:
         return None
     tokens = _tokenize_note_overlay_text(snippet)
@@ -1323,7 +1341,7 @@ def _find_best_note_overlay_bbox(
 
     if best_bbox is None or best_score < 6:
         return None
-    return best_bbox
+    return best_bbox, best_score
 
 
 def _tokenize_note_overlay_text(value: str) -> list[str]:
