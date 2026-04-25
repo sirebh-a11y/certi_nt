@@ -124,17 +124,103 @@ function sourceLabel(value, field, draft, sessionSourceOverrides) {
   return value.fonte_documentale || "manuale";
 }
 
+function renderOverlayBox({ item, color, imageWidth, imageHeight, title, key }) {
+  const [left, top, right, bottom] = String(item?.bbox || "")
+    .split(",")
+    .map((part) => Number.parseFloat(part));
+  if (
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
+    !Number.isFinite(right) ||
+    !Number.isFinite(bottom) ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return null;
+  }
+  const palette =
+    color === "green"
+      ? "border-emerald-500 bg-emerald-400/50 shadow-[0_0_0_1px_rgba(16,185,129,0.3)]"
+      : "border-sky-500 bg-sky-400/20 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]";
+  return (
+    <div
+      className={`pointer-events-none absolute rounded border ${palette}`}
+      key={key}
+      title={title}
+      style={{
+        left: `${(left / imageWidth) * 100}%`,
+        top: `${(top / imageHeight) * 100}%`,
+        width: `${((right - left) / imageWidth) * 100}%`,
+        height: `${((bottom - top) / imageHeight) * 100}%`,
+      }}
+    />
+  );
+}
+
+function buildPropertiesPersistedSignature(values) {
+  return JSON.stringify(
+    (values || [])
+      .map((value) => ({
+        campo: canonicalPropertyField(value.campo),
+        grezzo: value.valore_grezzo || "",
+        standardizzato: value.valore_standardizzato || "",
+        finale: value.valore_finale || "",
+        metodo: value.metodo_lettura || "",
+        fonte: value.fonte_documentale || "",
+        evidence: value.document_evidence_id || null,
+      }))
+      .sort((left, right) => String(left.campo).localeCompare(String(right.campo))),
+  );
+}
+
+function buildPersistedUserOverlayItems(row) {
+  const evidences = Array.isArray(row?.evidences) ? row.evidences : [];
+  const evidenceMap = new Map(evidences.map((evidence) => [evidence.id, evidence]));
+  return (Array.isArray(row?.values) ? row.values : [])
+    .filter((value) => value?.blocco === "proprieta" && value?.metodo_lettura === "utente" && value?.document_evidence_id)
+    .map((value) => {
+      const evidence = evidenceMap.get(value.document_evidence_id);
+      if (!evidence?.bbox || !evidence?.document_page_id) {
+        return null;
+      }
+      return {
+        field: canonicalPropertyField(value.campo),
+        page_id: evidence.document_page_id,
+        bbox: evidence.bbox,
+        image_width: 0,
+        image_height: 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+function mergeOverlayItems(primaryItems, secondaryItems) {
+  const merged = [];
+  const seenFields = new Set();
+  [...(primaryItems || []), ...(secondaryItems || [])].forEach((item) => {
+    if (!item?.field || seenFields.has(item.field)) {
+      return;
+    }
+    seenFields.add(item.field);
+    merged.push(item);
+  });
+  return merged;
+}
+
 function PropertiesPdfPanel({
   captureField,
   certificateDocument,
+  draftOverlayItems,
   footerContent,
   onCaptureError,
   onCaptureValue,
+  overlayPreviewItems,
   onTableCaptureProposal,
   tableCaptureActive,
   token,
 }) {
   const [pageImages, setPageImages] = useState([]);
+  const [pageImageSizes, setPageImageSizes] = useState({});
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
@@ -227,7 +313,7 @@ function PropertiesPdfPanel({
         return;
       }
 
-      onCaptureValue(captureField, capture.value);
+      onCaptureValue(captureField, capture.value, capture);
     } catch (requestError) {
       onCaptureError?.(requestError.message);
     } finally {
@@ -327,6 +413,28 @@ function PropertiesPdfPanel({
         }
       : null;
 
+  const previewItemsByPage = useMemo(() => {
+    const grouped = new Map();
+    (overlayPreviewItems || []).forEach((item) => {
+      const key = item.page_id;
+      const items = grouped.get(key) || [];
+      items.push(item);
+      grouped.set(key, items);
+    });
+    return grouped;
+  }, [overlayPreviewItems]);
+
+  const draftItemsByPage = useMemo(() => {
+    const grouped = new Map();
+    (draftOverlayItems || []).forEach((item) => {
+      const key = item.page_id;
+      const items = grouped.get(key) || [];
+      items.push(item);
+      grouped.set(key, items);
+    });
+    return grouped;
+  }, [draftOverlayItems]);
+
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -364,6 +472,24 @@ function PropertiesPdfPanel({
                     alt={`Certificato pagina ${page.numero_pagina}`}
                     className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm"
                     draggable={false}
+                    onLoad={(event) => {
+                      const target = event.currentTarget;
+                      const nextWidth = Number(target.naturalWidth || 0);
+                      const nextHeight = Number(target.naturalHeight || 0);
+                      if (nextWidth <= 0 || nextHeight <= 0) {
+                        return;
+                      }
+                      setPageImageSizes((current) => {
+                        const existing = current[page.id];
+                        if (existing && existing.width === nextWidth && existing.height === nextHeight) {
+                          return current;
+                        }
+                        return {
+                          ...current,
+                          [page.id]: { width: nextWidth, height: nextHeight },
+                        };
+                      });
+                    }}
                     src={page.src}
                     style={{ userSelect: "none" }}
                   />
@@ -374,6 +500,29 @@ function PropertiesPdfPanel({
                     onMouseMove={(event) => handleSelectionMove(page, event)}
                     onMouseUp={() => void handleSelectionEnd(page)}
                   />
+                  {(previewItemsByPage.get(page.id) || []).map((item, index) =>
+                    renderOverlayBox({
+                      item,
+                      color: "blue",
+                      imageWidth: Number(item.image_width || pageImageSizes[page.id]?.width || 0),
+                      imageHeight: Number(item.image_height || pageImageSizes[page.id]?.height || 0),
+                      title: `${formatPropertyFieldLabel(item.field)} evidenza preview`,
+                      key: `${page.id}-${item.field}-${index}`,
+                    }),
+                  )}
+                  {(draftItemsByPage.get(page.id) || []).map((item, index) =>
+                    renderOverlayBox({
+                      item,
+                      color: "green",
+                      imageWidth: Number(pageImageSizes[page.id]?.width || 0),
+                      imageHeight: Number(pageImageSizes[page.id]?.height || 0),
+                      title:
+                        item.field === "__table__"
+                          ? "Cattura tabella in bozza"
+                          : `${formatPropertyFieldLabel(item.field)} catturato nella bozza`,
+                      key: `draft-${page.id}-${item.field}-${index}`,
+                    }),
+                  )}
                   {selection && selection.pageId === page.id && selectionStyle ? (
                     <div className="pointer-events-none absolute rounded-lg border-2 border-sky-400 bg-sky-200/20" style={selectionStyle} />
                   ) : null}
@@ -403,6 +552,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
   );
   const fieldList = useMemo(() => buildFieldList(propertyValues), [propertyValues]);
   const persistedInitialDraft = useMemo(() => buildInitialDraft(propertyValues), [propertyValues]);
+  const persistedSignature = useMemo(() => buildPropertiesPersistedSignature(propertyValues), [propertyValues]);
   const valueMap = useMemo(() => new Map(propertyValues.map((value) => [value.campo, value])), [propertyValues]);
   const [sessionInitialDraft, setSessionInitialDraft] = useState(() => ({ ...persistedInitialDraft }));
   const [draft, setDraft] = useState(() => ({ ...persistedInitialDraft }));
@@ -412,17 +562,22 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
   const [captureField, setCaptureField] = useState("");
   const [tableCaptureActive, setTableCaptureActive] = useState(false);
   const [tableCaptureProposal, setTableCaptureProposal] = useState(null);
+  const [draftOverlayItems, setDraftOverlayItems] = useState([]);
+  const [overlayPreviewItems, setOverlayPreviewItems] = useState([]);
+  const [overlayBusy, setOverlayBusy] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const workspaceRef = useRef(null);
+  const persistedUserOverlayItems = useMemo(() => buildPersistedUserOverlayItems(row), [row]);
 
   useEffect(() => {
     const nextInitial = { ...persistedInitialDraft };
     setSessionInitialDraft(nextInitial);
     setDraft(nextInitial);
     setSessionSourceOverrides({});
+    setDraftOverlayItems([]);
     onDirtyChange?.(false);
-  }, [persistedInitialDraft]);
+  }, [persistedInitialDraft, persistedSignature]);
 
   const effectiveDraft = useMemo(() => buildEffectiveDraft(sessionInitialDraft, draft), [sessionInitialDraft, draft]);
   const initialSources = useMemo(
@@ -477,6 +632,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
     setCaptureField("");
     setTableCaptureActive(false);
     setTableCaptureProposal(null);
+    setDraftOverlayItems([]);
     onDirtyChange?.(false);
   }
 
@@ -487,9 +643,19 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
     });
   }
 
-  function handleCaptureValue(field, value) {
+  function handleCaptureValue(field, value, capture) {
     onDirtyChange?.(true);
     updateField(field, value, { markTouched: true });
+    if (capture?.bbox && capture?.page_id) {
+      setDraftOverlayItems((current) => [
+        ...current.filter((item) => item.field !== field),
+        {
+          field,
+          page_id: capture.page_id,
+          bbox: capture.bbox,
+        },
+      ]);
+    }
     setCaptureField("");
     setError("");
   }
@@ -503,7 +669,86 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
     });
   }
 
+  async function fetchOverlayPreview() {
+    setOverlayBusy(true);
+    try {
+      const response = await apiRequest(`/acquisition/rows/${rowId}/properties-overlay-preview`, {}, token);
+      const backendItems = Array.isArray(response?.items) ? response.items : [];
+      const nextItems = mergeOverlayItems(persistedUserOverlayItems, backendItems);
+      setOverlayPreviewItems(nextItems);
+      if (!nextItems.length) {
+        setError("Nessun overlay disponibile per questo certificato.");
+      } else {
+        setError("");
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+      setOverlayPreviewItems([]);
+    } finally {
+      setOverlayBusy(false);
+    }
+  }
+
+  async function handleToggleOverlayPreview() {
+    if (overlayBusy) {
+      return;
+    }
+    if (overlayPreviewItems.length) {
+      setOverlayPreviewItems([]);
+      return;
+    }
+    await fetchOverlayPreview();
+  }
+
   async function persistDraft() {
+    const overlayWasActive = overlayPreviewItems.length > 0;
+    const draftOverlaySnapshot = draftOverlayItems.map((item) => ({ ...item }));
+    const evidenceIdByField = {};
+    const tableOverlay = draftOverlaySnapshot.find((item) => item.field === "__table__");
+
+    async function ensureUserEvidenceForField(field, persistedValue) {
+      if (evidenceIdByField[field]) {
+        return evidenceIdByField[field];
+      }
+      const directOverlay = draftOverlaySnapshot.find((item) => item.field === field);
+      const sharedOverlay = tableOverlay;
+      const overlayItem = directOverlay || sharedOverlay;
+      if (!overlayItem?.bbox || !overlayItem?.page_id || !certificateDocument?.id) {
+        return null;
+      }
+      if (sharedOverlay && Array.isArray(sharedOverlay.fields) && !sharedOverlay.fields.includes(field) && !directOverlay) {
+        return null;
+      }
+      const evidence = await apiRequest(
+        `/acquisition/rows/${rowId}/evidences`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            document_id: certificateDocument.id,
+            document_page_id: overlayItem.page_id,
+            blocco: "proprieta",
+            tipo_evidenza: directOverlay ? "cella" : "tabella",
+            bbox: overlayItem.bbox,
+            testo_grezzo: persistedValue || null,
+            metodo_estrazione: "utente",
+            mascherato: false,
+          }),
+        },
+        token,
+      );
+      const evidenceId = evidence?.id || null;
+      if (evidenceId) {
+        if (directOverlay) {
+          evidenceIdByField[field] = evidenceId;
+        } else if (Array.isArray(sharedOverlay?.fields)) {
+          sharedOverlay.fields.forEach((sharedField) => {
+            evidenceIdByField[sharedField] = evidenceId;
+          });
+        }
+      }
+      return evidenceId;
+    }
+
     const fieldsToPersist = fieldList.filter((field) => {
       const existingValue = valueMap.get(field);
       const initialValue = normalizeDisplayValue(sessionInitialDraft[field]);
@@ -531,6 +776,8 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
         const sourceChangedToManual = sessionSourceOverrides[field] === "manuale";
         const sourceType = isCalculated ? "calcolato" : sourceChangedToManual ? "utente" : existingValue?.fonte_documentale || "certificato";
         const readMethod = isCalculated ? "sistema" : sourceChangedToManual ? "utente" : existingValue?.metodo_lettura || "pdf_text";
+        const userEvidenceId =
+          sourceChangedToManual && !isCalculated ? await ensureUserEvidenceForField(field, persistedValue) : null;
 
         if (!persistedValue) {
           await apiRequest(
@@ -544,7 +791,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
                 valore_standardizzato: null,
                 valore_finale: null,
                 stato: "confermato",
-                document_evidence_id: existingValue?.document_evidence_id || null,
+                document_evidence_id: userEvidenceId || existingValue?.document_evidence_id || null,
                 metodo_lettura: readMethod,
                 fonte_documentale: sourceType,
                 confidenza: null,
@@ -566,7 +813,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
               valore_standardizzato: persistedValue,
               valore_finale: persistedValue,
               stato: "confermato",
-              document_evidence_id: existingValue?.document_evidence_id || null,
+              document_evidence_id: userEvidenceId || existingValue?.document_evidence_id || null,
               metodo_lettura: readMethod,
               fonte_documentale: sourceType,
               confidenza: existingValue?.confidenza || null,
@@ -583,10 +830,40 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       setCaptureField("");
       setTableCaptureActive(false);
       setTableCaptureProposal(null);
+      if (draftOverlaySnapshot.length) {
+        setOverlayPreviewItems((current) => {
+          const preserved = (current || []).filter(
+            (item) =>
+              !draftOverlaySnapshot.some(
+                (draftItem) =>
+                  draftItem.field === item.field ||
+                  (draftItem.field === "__table__" && Array.isArray(draftItem.fields) && draftItem.fields.includes(item.field)),
+              ),
+          );
+          const promoted = draftOverlaySnapshot.flatMap((item) => {
+            if (item.field !== "__table__") {
+              return [item];
+            }
+            if (!Array.isArray(item.fields)) {
+              return [];
+            }
+            return item.fields.map((field) => ({
+              field,
+              page_id: item.page_id,
+              bbox: item.bbox,
+            }));
+          });
+          return [...preserved, ...promoted];
+        });
+      }
+      setDraftOverlayItems([]);
       setError("");
       onDirtyChange?.(false);
 
       await onRefreshRow();
+      if (overlayWasActive && !draftOverlaySnapshot.length) {
+        await fetchOverlayPreview();
+      }
       return true;
     } catch (requestError) {
       setError(requestError.message);
@@ -637,6 +914,24 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       });
       return next;
     });
+    if (Array.isArray(tableCaptureProposal?.items) && tableCaptureProposal.items.length) {
+      setDraftOverlayItems((current) => {
+        const next = current.filter(
+          (item) => !Object.prototype.hasOwnProperty.call(tableCaptureProposal.values || {}, item.field),
+        );
+        return [...next, ...tableCaptureProposal.items];
+      });
+    } else if (tableCaptureProposal?.bbox && tableCaptureProposal?.page_id) {
+      setDraftOverlayItems((current) => [
+        ...current.filter((item) => item.field !== "__table__"),
+        {
+          field: "__table__",
+          page_id: tableCaptureProposal.page_id,
+          bbox: tableCaptureProposal.bbox,
+          fields: Object.keys(tableCaptureProposal.values || {}),
+        },
+      ]);
+    }
     setTableCaptureActive(false);
     setTableCaptureProposal(null);
     setError("");
@@ -725,7 +1020,19 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
   const workspaceStatusBar = (
     <div className="min-h-[32px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
       <div className="flex min-h-[18px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
-        <div className="min-w-0 text-sm font-medium text-sky-700">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-sky-700">
+          <button
+            className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+              overlayPreviewItems.length
+                ? "border-sky-400 bg-sky-100 text-sky-700"
+                : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
+            }`}
+            disabled={overlayBusy}
+            onClick={() => void handleToggleOverlayPreview()}
+            type="button"
+          >
+            {overlayBusy ? "..." : overlayPreviewItems.length ? "Overlay off" : "Overlay"}
+          </button>
           {tableCaptureActive ? (
             <span>Cattura tabella attiva: seleziona un rettangolo sopra la tabella proprietà.</span>
           ) : captureField ? (
@@ -744,6 +1051,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       <PropertiesPdfPanel
         captureField={captureField}
         certificateDocument={certificateDocument}
+        draftOverlayItems={draftOverlayItems}
         footerContent={
           <div className="space-y-2" ref={workspaceRef}>
             {workspaceStatusBar}
@@ -752,6 +1060,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
         }
         onCaptureError={handleWorkspaceError}
         onCaptureValue={handleCaptureValue}
+        overlayPreviewItems={overlayPreviewItems}
         onTableCaptureProposal={handleTableCaptureProposal}
         tableCaptureActive={tableCaptureActive}
         token={token}

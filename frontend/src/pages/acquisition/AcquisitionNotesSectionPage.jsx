@@ -20,8 +20,59 @@ const SYSTEM_NOTE_LABELS = {
 const CHECKBOX_CLASSNAME =
   "mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 p-0 text-accent focus:ring-2 focus:ring-accent/20";
 
-function NotePdfPanel({ certificateDocument, footerContent, token }) {
+function renderOverlayBox({ item, imageHeight, imageWidth, key, title }) {
+  const [left, top, right, bottom] = String(item?.bbox || "")
+    .split(",")
+    .map((part) => Number.parseFloat(part));
+  if (
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
+    !Number.isFinite(right) ||
+    !Number.isFinite(bottom) ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return null;
+  }
+  return (
+    <div
+      className="pointer-events-none absolute rounded border border-sky-500 bg-sky-400/20 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]"
+      key={key}
+      title={title}
+      style={{
+        left: `${(left / imageWidth) * 100}%`,
+        top: `${(top / imageHeight) * 100}%`,
+        width: `${((right - left) / imageWidth) * 100}%`,
+        height: `${((bottom - top) / imageHeight) * 100}%`,
+      }}
+    />
+  );
+}
+
+function buildPersistedNoteOverlayItems(row) {
+  const evidences = Array.isArray(row?.evidences) ? row.evidences : [];
+  const evidenceMap = new Map(evidences.map((evidence) => [evidence.id, evidence]));
+  return (Array.isArray(row?.values) ? row.values : [])
+    .filter((value) => value?.blocco === "note" && value?.document_evidence_id)
+    .map((value) => {
+      const evidence = evidenceMap.get(value.document_evidence_id);
+      if (!evidence?.bbox || !evidence?.document_page_id) {
+        return null;
+      }
+      return {
+        field: value.campo,
+        page_id: evidence.document_page_id,
+        bbox: evidence.bbox,
+        image_width: 0,
+        image_height: 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems, token }) {
   const [pageImages, setPageImages] = useState([]);
+  const [pageImageSizes, setPageImageSizes] = useState({});
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const viewportRef = useRef(null);
@@ -84,6 +135,17 @@ function NotePdfPanel({ certificateDocument, footerContent, token }) {
     return () => observer.disconnect();
   }, []);
 
+  const previewItemsByPage = useMemo(() => {
+    const grouped = new Map();
+    (overlayPreviewItems || []).forEach((item) => {
+      const key = item.page_id;
+      const items = grouped.get(key) || [];
+      items.push(item);
+      grouped.set(key, items);
+    });
+    return grouped;
+  }, [overlayPreviewItems]);
+
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -130,9 +192,36 @@ function NotePdfPanel({ certificateDocument, footerContent, token }) {
                     alt={`Certificato pagina ${page.numero_pagina}`}
                     className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm"
                     draggable={false}
+                    onLoad={(event) => {
+                      const target = event.currentTarget;
+                      const nextWidth = Number(target.naturalWidth || 0);
+                      const nextHeight = Number(target.naturalHeight || 0);
+                      if (nextWidth <= 0 || nextHeight <= 0) {
+                        return;
+                      }
+                      setPageImageSizes((current) => {
+                        const existing = current[page.id];
+                        if (existing && existing.width === nextWidth && existing.height === nextHeight) {
+                          return current;
+                        }
+                        return {
+                          ...current,
+                          [page.id]: { width: nextWidth, height: nextHeight },
+                        };
+                      });
+                    }}
                     src={page.src}
                     style={{ userSelect: "none" }}
                   />
+                  {(previewItemsByPage.get(page.id) || []).map((item, index) =>
+                    renderOverlayBox({
+                      item,
+                      imageWidth: Number(item.image_width || pageImageSizes[page.id]?.width || 0),
+                      imageHeight: Number(item.image_height || pageImageSizes[page.id]?.height || 0),
+                      title: `${item.field} evidenza`,
+                      key: `${page.id}-${item.field}-${index}`,
+                    }),
+                  )}
                 </div>
               </div>
             ))}
@@ -183,7 +272,9 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
   const [submitting, setSubmitting] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [overlayPreviewItems, setOverlayPreviewItems] = useState([]);
   const workspaceRef = useRef(null);
+  const persistedNoteOverlayItems = useMemo(() => buildPersistedNoteOverlayItems(row), [row]);
 
   useEffect(() => {
     let ignore = false;
@@ -250,6 +341,10 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
     requestAnimationFrame(() => {
       workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  }
+
+  function handleToggleOverlayPreview() {
+    setOverlayPreviewItems((current) => (current.length ? [] : persistedNoteOverlayItems));
   }
 
   function setUsClass(value) {
@@ -344,7 +439,18 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
   const workspaceStatusBar = (
     <div className="min-h-[32px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
       <div className="flex min-h-[18px] flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
-        <div className="min-w-0 text-sm font-medium text-sky-700">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-sky-700">
+          <button
+            className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+              overlayPreviewItems.length
+                ? "border-sky-400 bg-sky-100 text-sky-700"
+                : "border-sky-200 bg-white text-sky-700 hover:bg-sky-100"
+            }`}
+            onClick={handleToggleOverlayPreview}
+            type="button"
+          >
+            {overlayPreviewItems.length ? "Overlay off" : "Overlay"}
+          </button>
           <span>Le spunte aggiornano solo la bozza locale. La sezione Note diventa definitiva con Conferma.</span>
         </div>
         <div className="min-w-0 text-sm text-rose-600 md:text-right">
@@ -516,6 +622,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
             {notesControls}
           </div>
         }
+        overlayPreviewItems={overlayPreviewItems}
         token={token}
       />
 

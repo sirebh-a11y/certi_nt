@@ -158,6 +158,20 @@ class PropertiesTableCaptureResponse(BaseModel):
     bbox: str
     raw_lines: list[str]
     values: dict[str, str]
+    items: list["PropertiesOverlayPreviewItemResponse"] = Field(default_factory=list)
+
+
+class PropertiesOverlayPreviewItemResponse(BaseModel):
+    page_id: int
+    page_number: int
+    field: str
+    bbox: str
+    image_width: int
+    image_height: int
+
+
+class PropertiesOverlayPreviewResponse(BaseModel):
+    items: list[PropertiesOverlayPreviewItemResponse]
 
 
 class DocumentResponse(BaseModel):

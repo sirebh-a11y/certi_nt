@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import re
 import pytesseract
 from functools import lru_cache
@@ -52,6 +53,8 @@ from app.modules.acquisition.schemas import (
     ChemistryTableCaptureResponse,
     PropertiesCaptureRequest,
     PropertiesCaptureResponse,
+    PropertiesOverlayPreviewItemResponse,
+    PropertiesOverlayPreviewResponse,
     PropertiesTableCaptureRequest,
     PropertiesTableCaptureResponse,
     DocumentSplitRowsCreateResponse,
@@ -134,6 +137,19 @@ CHEMISTRY_CAPTURE_FIELD_ORDER = [
     "Bi+Pb",
 ]
 PROPERTY_CAPTURE_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
+
+
+def parse_property_number(value: str | None) -> float | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().replace(" ", "").replace(",", ".")
+    if not normalized:
+        return None
+    try:
+        parsed = float(normalized)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def serialize_document_page(page: DocumentPage) -> DocumentPageResponse:
@@ -920,13 +936,15 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
                     neuman_matches = page_matches
                     raw_lines_for_response = page_lines
         if neuman_matches:
+            values = _serialize_properties_capture_values(neuman_matches)
             return PropertiesTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 orientation="horizontal",
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
-                values=_serialize_properties_capture_values(neuman_matches),
+                values=values,
+                items=_build_properties_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
     if template is not None and template.supplier_key == "aww":
@@ -941,13 +959,15 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
                     aww_matches = page_matches
                     raw_lines_for_response = page_lines
         if aww_matches:
+            values = _serialize_properties_capture_values(aww_matches)
             return PropertiesTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 orientation="horizontal",
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=raw_lines_for_response,
-                values=_serialize_properties_capture_values(aww_matches),
+                values=values,
+                items=_build_properties_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
     horizontal_matches: dict[str, dict[str, str | int]] = {}
@@ -982,13 +1002,16 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
         orientation = "unknown" if horizontal_count == 0 else "horizontal"
         chosen = horizontal_matches or vertical_matches
 
+    values = _serialize_properties_capture_values(chosen)
+
     return PropertiesTableCaptureResponse(
         page_id=page.id,
         page_number=page.numero_pagina,
         orientation=orientation,
         bbox=f"{left},{top},{right},{bottom}",
         raw_lines=lines,
-        values=_serialize_properties_capture_values(chosen),
+        values=values,
+        items=_build_properties_overlay_preview_items_for_page(page=page, field_values=values),
     )
 
 
@@ -1066,6 +1089,429 @@ def _build_chemistry_overlay_preview_items_for_page(
         line_box=line_box,
         field_values=field_values,
         matched_fields=matched_fields,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+def build_properties_overlay_preview(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> PropertiesOverlayPreviewResponse:
+    certificate_document_id = row.document_certificato_id
+    if certificate_document_id is None:
+        return PropertiesOverlayPreviewResponse(items=[])
+
+    certificate_document = get_document(db, certificate_document_id)
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+
+    field_values: dict[str, str] = {}
+    for value in row.values:
+        if value.blocco != "proprieta":
+            continue
+        normalized = _normalize_property_capture_value(
+            value.valore_finale or value.valore_standardizzato or value.valore_grezzo
+        )
+        field_name = _normalize_property_field_name(value.campo)
+        if normalized is None or field_name is None:
+            continue
+        field_values[field_name] = normalized
+
+    if not field_values:
+        return PropertiesOverlayPreviewResponse(items=[])
+
+    best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
+    best_score: tuple[int, int, int] = (0, 0, 0)
+    for page in certificate_document.pages:
+        if not page.immagine_pagina_storage_key:
+            continue
+        staged_match = _find_best_properties_overlay_match(page=page, field_values=field_values)
+        if staged_match is None:
+            continue
+        line_box, matched_fields, image_width, image_height, score = staged_match
+        if score > best_score:
+            best_score = score
+            best_match = (page, line_box, matched_fields, image_width, image_height)
+
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+    if best_match is not None and best_score[1] >= 2:
+        page, line_box, matched_fields, image_width, image_height = best_match
+        items = _build_properties_overlay_items(
+            page=page,
+            line_box=line_box,
+            field_values=field_values,
+            matched_fields=matched_fields,
+            image_width=image_width,
+            image_height=image_height,
+        )
+    if not items:
+        for page in certificate_document.pages:
+            if not page.immagine_pagina_storage_key:
+                continue
+            items = _build_properties_overlay_items_from_page_words(page=page, field_values=field_values)
+            if len(items) >= 2:
+                break
+            items = _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values)
+            if len(items) >= 2:
+                break
+    return PropertiesOverlayPreviewResponse(items=items)
+
+
+def _build_properties_overlay_preview_items_for_page(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    if not field_values or not page.immagine_pagina_storage_key:
+        return []
+    staged_match = _find_best_properties_overlay_match(page=page, field_values=field_values)
+    if staged_match is not None:
+        line_box, matched_fields, image_width, image_height, score = staged_match
+        if score[1] >= 2:
+            items = _build_properties_overlay_items(
+                page=page,
+                line_box=line_box,
+                field_values=field_values,
+                matched_fields=matched_fields,
+                image_width=image_width,
+                image_height=image_height,
+            )
+            if items:
+                return items
+    items = _build_properties_overlay_items_from_page_words(page=page, field_values=field_values)
+    if items:
+        return items
+    return _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values)
+
+
+def _find_best_properties_overlay_match(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
+    primary = _score_properties_overlay_lines(page=page, field_values=field_values, psms=(4,))
+    if primary is not None and (primary[4][0] >= 2 or primary[4][1] >= 4):
+        return primary
+    fallback = _score_properties_overlay_lines(page=page, field_values=field_values, psms=(4, 6))
+    if fallback is not None:
+        return fallback
+    return primary
+
+
+def _score_properties_overlay_lines(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+    psms: tuple[int, ...],
+) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=psms)
+    best_line: dict[str, object] | None = None
+    best_fields: list[str] = []
+    best_score: tuple[int, int, int] = (0, 0, 0)
+    for line_box in line_boxes:
+        matched_fields = _match_properties_overlay_fields(field_values, line_box)
+        if not matched_fields:
+            continue
+        non_zero_matches = _count_non_zero_properties_overlay_matches(field_values, matched_fields)
+        penalty = _properties_overlay_line_penalty(line_box)
+        score = (non_zero_matches, len(matched_fields), -penalty)
+        if score > best_score:
+            best_score = score
+            best_line = line_box
+            best_fields = matched_fields
+    if best_line is None or best_score[1] < 2:
+        return None
+    return best_line, best_fields, image_width, image_height, best_score
+
+
+def _normalize_properties_overlay_token(value: str | None) -> str | None:
+    raw_value = _string_or_none(value)
+    if raw_value is None:
+        return None
+    cleaned = _string_or_none(_normalize_mojibake_numeric_text(raw_value))
+    if cleaned is None:
+        return None
+    cleaned = cleaned.strip().strip("|[](){};:")
+    return _normalize_property_capture_value(cleaned)
+
+
+def _properties_overlay_match_keys(value: str | None) -> set[str]:
+    normalized = _normalize_properties_overlay_token(value)
+    if normalized is None:
+        return set()
+    keys = {normalized}
+    compact = normalized.replace(",", "").replace(".", "").strip()
+    if compact:
+        keys.add(compact)
+    return keys
+
+
+def _match_properties_overlay_fields(
+    field_values: dict[str, str],
+    line_box: dict[str, object],
+) -> list[str]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    available_tokens: set[str] = set()
+    for word in words:
+        available_tokens.update(_properties_overlay_match_keys(cast(str | None, word.get("text"))))
+        available_tokens.update(_properties_overlay_match_keys(cast(str | None, word.get("normalized"))))
+    matched_fields: list[str] = []
+    for field_name in PROPERTY_CAPTURE_FIELD_ORDER:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        if _properties_overlay_match_keys(target_value) & available_tokens:
+            matched_fields.append(field_name)
+    return matched_fields
+
+
+def _count_non_zero_properties_overlay_matches(field_values: dict[str, str], matched_fields: list[str]) -> int:
+    count = 0
+    for field_name in matched_fields:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        parsed = parse_property_number(target_value)
+        if parsed is not None and abs(parsed) > 1e-9:
+            count += 1
+    return count
+
+
+def _properties_overlay_line_penalty(line_box: dict[str, object]) -> int:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    text = " ".join(str(word.get("text") or "") for word in words).lower()
+    penalty = 0
+    if any(token in text for token in ("min", "max", "limit", "soll", "set value")):
+        penalty += 3
+    if "charge" in text or "lot" in text or "sample" in text:
+        penalty -= 1
+    return penalty
+
+
+def _build_properties_overlay_items(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    field_values: dict[str, str],
+    matched_fields: list[str],
+    image_width: int,
+    image_height: int,
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    used_indexes: set[int] = set()
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+
+    for field_name in matched_fields:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        target_keys = _properties_overlay_match_keys(target_value)
+        matched_index: int | None = None
+        for index, word in enumerate(words):
+            if index in used_indexes:
+                continue
+            word_keys = _properties_overlay_match_keys(cast(str | None, word.get("text")))
+            word_keys.update(_properties_overlay_match_keys(cast(str | None, word.get("normalized"))))
+            if target_keys & word_keys:
+                matched_index = index
+                break
+        if matched_index is None:
+            continue
+        used_indexes.add(matched_index)
+        word = words[matched_index]
+        left = int(word["left"])
+        top = int(word["top"])
+        width = int(word["width"])
+        height = int(word["height"])
+        items.append(
+            PropertiesOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+
+    return items
+
+
+def _build_properties_overlay_items_from_page_words(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    words: list[dict[str, object]] = []
+    for line_box in line_boxes:
+        words.extend(cast(list[dict[str, object]], line_box.get("words") or []))
+
+    used_indexes: set[int] = set()
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+    for field_name in PROPERTY_CAPTURE_FIELD_ORDER:
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        target_keys = _properties_overlay_match_keys(target_value)
+        matched_index: int | None = None
+        for index, word in enumerate(words):
+            if index in used_indexes:
+                continue
+            word_keys = _properties_overlay_match_keys(cast(str | None, word.get("text")))
+            word_keys.update(_properties_overlay_match_keys(cast(str | None, word.get("normalized"))))
+            if target_keys & word_keys:
+                matched_index = index
+                break
+        if matched_index is None:
+            continue
+        used_indexes.add(matched_index)
+        word = words[matched_index]
+        left = int(word["left"])
+        top = int(word["top"])
+        width = int(word["width"])
+        height = int(word["height"])
+        items.append(
+            PropertiesOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+    return items
+
+
+def _build_properties_overlay_items_from_anchor_line(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    best_line: dict[str, object] | None = None
+    best_score = (-1, -1)
+    for line_box in line_boxes:
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        text = " ".join(str(word.get("text") or "") for word in words).lower()
+        marker_score = 0
+        if "rm" in text:
+            marker_score += 1
+        if "rp0" in text or "rp0,2" in text or "rp0.2" in text:
+            marker_score += 1
+        if "hbw" in text or "[hb]" in text or "hb" in text:
+            marker_score += 1
+        if "a5" in text or "a%" in text or "as " in f"{text} ":
+            marker_score += 1
+        if marker_score < 2:
+            continue
+        numeric_count = sum(1 for word in words if _normalize_property_capture_value(cast(str | None, word.get("text"))) is not None)
+        score = (marker_score, numeric_count)
+        if score > best_score:
+            best_score = score
+            best_line = line_box
+    if best_line is None:
+        return []
+
+    words = cast(list[dict[str, object]], best_line.get("words") or [])
+    anchor_by_field: dict[str, dict[str, object]] = {}
+    for word in words:
+        text = str(word.get("text") or "").lower()
+        if "rm" in text and "mpa" not in text and "rp0" not in text and "hb" not in text and "a5" not in text and "as" not in text:
+            anchor_by_field.setdefault("Rm", word)
+        elif "rp0" in text:
+            anchor_by_field.setdefault("Rp0.2", word)
+        elif "hbw" in text or text == "[hb]" or text.startswith("hb"):
+            anchor_by_field.setdefault("HB", word)
+        elif text in {"a5", "a%", "as"} or text.startswith("a5") or text.startswith("a%"):
+            anchor_by_field.setdefault("A%", word)
+        elif "iacs" in text:
+            anchor_by_field.setdefault("IACS%", word)
+
+    image_path = get_document_page_image_path(page)
+    if not image_path.exists():
+        return []
+
+    base_fields = [
+        field_name
+        for field_name in PROPERTY_CAPTURE_FIELD_ORDER
+        if field_name in field_values and field_name not in {"Rp0.2 / Rm"}
+    ]
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+    with Image.open(image_path) as image:
+        for field_name in base_fields:
+            anchor = anchor_by_field.get(field_name)
+            if anchor is None:
+                continue
+            click_x = int(cast(int, anchor.get("left")) + cast(int, anchor.get("width")) / 2)
+            click_y = min(
+                max(int(cast(int, anchor.get("top")) + cast(int, anchor.get("height")) * 2.0), 0),
+                max(image.height - 1, 0),
+            )
+            item = _build_property_overlay_item_from_click(
+                page=page,
+                image=image,
+                field_name=field_name,
+                target_value=field_values.get(field_name),
+                click_x=click_x,
+                click_y=click_y,
+                image_width=image_width,
+                image_height=image_height,
+            )
+            if item is not None:
+                items.append(item)
+    return items
+
+
+def _build_property_overlay_item_from_click(
+    *,
+    page: DocumentPage,
+    image: Image.Image,
+    field_name: str,
+    target_value: str | None,
+    click_x: int,
+    click_y: int,
+    image_width: int,
+    image_height: int,
+) -> PropertiesOverlayPreviewItemResponse | None:
+    target_normalized = _normalize_property_capture_value(target_value)
+    if target_normalized is None:
+        return None
+    half_width = max(140, int(image.width * 0.08))
+    half_height = max(34, int(image.height * 0.03))
+    left = max(0, click_x - half_width)
+    top = max(0, click_y - half_height)
+    right = min(image.width, click_x + half_width)
+    bottom = min(image.height, click_y + half_height)
+    crop = image.crop((left, top, right, bottom))
+    candidates = _extract_capture_candidates_from_crop(
+        crop,
+        click_x=click_x,
+        click_y=click_y,
+        left_offset=left,
+        top_offset=top,
+        normalizer=_normalize_property_capture_value,
+    )
+    matching_candidates = [
+        candidate
+        for candidate in candidates
+        if _normalize_property_capture_value(cast(str | None, candidate.get("value"))) == target_normalized
+    ]
+    if not matching_candidates:
+        return None
+    best = min(matching_candidates, key=lambda item: int(item.get("distance") or 0))
+    bbox = cast(str | None, best.get("bbox"))
+    if bbox is None:
+        return None
+    return PropertiesOverlayPreviewItemResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        field=field_name,
+        bbox=bbox,
         image_width=image_width,
         image_height=image_height,
     )

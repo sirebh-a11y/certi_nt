@@ -33,6 +33,7 @@ from app.modules.acquisition.schemas import (
     MatchUpsertRequest,
     PropertiesCaptureRequest,
     PropertiesCaptureResponse,
+    PropertiesOverlayPreviewResponse,
     PropertiesTableCaptureRequest,
     PropertiesTableCaptureResponse,
     ReadValueResponse,
@@ -48,6 +49,7 @@ from app.modules.acquisition.service import (
     capture_chemistry_value_from_page,
     build_chemistry_overlay_preview,
     capture_chemistry_table_from_page,
+    build_properties_overlay_preview,
     capture_properties_value_from_page,
     capture_properties_table_from_page,
     create_evidence,
@@ -328,6 +330,16 @@ def capture_properties_table_route(
 ) -> PropertiesTableCaptureResponse:
     page = get_document_page(db, page_id)
     return capture_properties_table_from_page(page=page, payload=payload)
+
+
+@router.get("/rows/{row_id}/properties-overlay-preview", response_model=PropertiesOverlayPreviewResponse)
+def properties_overlay_preview_route(
+    row_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> PropertiesOverlayPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_properties_overlay_preview(db=db, row=row)
 
 
 @router.get("/rows", response_model=AcquisitionRowListResponse)
