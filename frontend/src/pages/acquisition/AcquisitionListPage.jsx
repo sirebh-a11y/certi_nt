@@ -387,6 +387,7 @@ export default function AcquisitionListPage() {
   const [queryThree, setQueryThree] = useState("");
   const [operatorOne, setOperatorOne] = useState("and");
   const [operatorTwo, setOperatorTwo] = useState("and");
+  const [rowLimit, setRowLimit] = useState("50");
   const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const [documentPlateMetrics, setDocumentPlateMetrics] = useState({});
@@ -469,6 +470,19 @@ export default function AcquisitionListPage() {
     });
   }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, sortConfig]);
 
+  const displayedRows = useMemo(() => {
+    if (rowLimit === "all") {
+      return visibleRows;
+    }
+
+    const limit = Number(rowLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return visibleRows;
+    }
+
+    return visibleRows.slice(0, limit);
+  }, [rowLimit, visibleRows]);
+
   const summary = useMemo(() => {
     const total = rows.length;
     const open = rows.filter((row) => row.stato_workflow !== "validata_quality").length;
@@ -507,13 +521,13 @@ export default function AcquisitionListPage() {
         observer.disconnect();
       }
     };
-  }, [visibleRows.length, rows.length]);
+  }, [displayedRows.length, rows.length]);
 
   useEffect(() => {
     function updateDocumentPlateMetrics() {
       const nextMetrics = {};
 
-      visibleRows.forEach((row) => {
+      displayedRows.forEach((row) => {
         const anchorWrapper = firstDocumentAnchorRefs.current[row.id];
         const anchorElement = firstDocumentCellRefs.current[row.id];
         const lastCell = lastDocumentCellRefs.current[row.id];
@@ -548,7 +562,7 @@ export default function AcquisitionListPage() {
     return () => {
       window.removeEventListener("resize", updateDocumentPlateMetrics);
     };
-  }, [visibleRows]);
+  }, [displayedRows]);
 
   function syncScroll(target, source) {
     if (!target || !source) {
@@ -714,6 +728,23 @@ export default function AcquisitionListPage() {
             value={queryThree}
           />
         </div>
+        <div className="ml-auto min-w-[88px] max-w-[88px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-row-limit">
+            Righe
+          </label>
+          <select
+            className="w-full rounded-xl border border-border bg-white px-2 py-2 text-sm text-slate-700"
+            id="incoming-quality-row-limit"
+            onChange={(event) => setRowLimit(event.target.value)}
+            value={rowLimit}
+          >
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="75">75</option>
+            <option value="100">100</option>
+            <option value="all">Tutte</option>
+          </select>
+        </div>
       </div>
 
       {loading ? <p className="text-sm text-slate-500">Caricamento righe...</p> : null}
@@ -760,7 +791,7 @@ export default function AcquisitionListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {visibleRows.map((row) => (
+                {displayedRows.map((row) => (
                   <tr className="relative align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70" key={row.id}>
                     <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-700">{row.id}</td>
                     <td className="relative min-w-[220px] max-w-[220px] overflow-visible px-0 py-0" ref={(element) => setFirstDocumentAnchorRef(row.id, element)}>
