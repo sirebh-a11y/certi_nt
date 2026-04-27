@@ -23,6 +23,16 @@ const DDT_CORE_FIELDS = [
   "ordine",
 ];
 
+const CERTIFICATE_FIRST_FIELDS = [
+  { key: "lega_base", label: "lega" },
+  { key: "diametro", label: "Ø" },
+  { key: "cdq", label: "Cdq" },
+  { key: "colata", label: "Colata" },
+  { key: "ddt", label: "Ddt" },
+  { key: "peso", label: "peso" },
+  { key: "ordine", label: "ordine" },
+];
+
 const NOTE_CORE_FIELDS = [
   "nota_us_control_classe",
   "nota_rohs",
@@ -229,6 +239,11 @@ export default function AcquisitionDetailPage() {
   const [savingFieldKey, setSavingFieldKey] = useState("");
   const [availableCertificates, setAvailableCertificates] = useState([]);
   const [matchDraft, setMatchDraft] = useState({ documentId: "", motivo: "" });
+  const [certificateFirstDraft, setCertificateFirstDraft] = useState({});
+  const [refreshingCertificateFirst, setRefreshingCertificateFirst] = useState(false);
+  const [savingCertificateFirst, setSavingCertificateFirst] = useState(false);
+  const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
+  const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
 
   useEffect(() => {
     let ignore = false;
@@ -300,6 +315,11 @@ export default function AcquisitionDetailPage() {
     return FINAL_REQUIRED_BLOCKS.every((block) => row.block_states?.[block] === "verde");
   }, [row]);
 
+  const isCertificateFirstRow = useMemo(
+    () => Boolean(row?.certificate_document?.id && !row?.ddt_document?.id),
+    [row],
+  );
+
   async function refreshRow(includeDocuments = false) {
     const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
     setRow(rowData);
@@ -321,6 +341,56 @@ export default function AcquisitionDetailPage() {
       setCertificateDocument(rowData.ddt_document?.id ? certificateData || null : ddtData || null);
     }
   }
+
+  useEffect(() => {
+    if (!isCertificateFirstRow) {
+      setCertificateFirstDraft({});
+      setDdtLinkPreview(null);
+      return;
+    }
+
+    setCertificateFirstDraft({
+      lega_base: formatRowFieldDisplay("lega", row?.lega_base || row?.lega_designazione || row?.variante_lega || ""),
+      diametro: formatRowFieldDisplay("diametro", row?.diametro || ""),
+      cdq: formatRowFieldDisplay("cdq", row?.cdq || ""),
+      colata: formatRowFieldDisplay("colata", row?.colata || ""),
+      ddt: formatRowFieldDisplay("ddt", row?.ddt || ""),
+      peso: formatRowFieldDisplay("peso", row?.peso || ""),
+      ordine: formatRowFieldDisplay("ordine", row?.ordine || ""),
+    });
+  }, [isCertificateFirstRow, row]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadPreview() {
+      if (!isCertificateFirstRow) {
+        return;
+      }
+      setLoadingDdtPreview(true);
+      try {
+        const preview = await apiRequest(`/acquisition/rows/${rowId}/ddt-link-preview`, {}, token);
+        if (!ignore) {
+          setDdtLinkPreview(preview);
+        }
+      } catch (requestError) {
+        if (!ignore) {
+          setDdtLinkPreview(null);
+          setError(requestError.message);
+        }
+      } finally {
+        if (!ignore) {
+          setLoadingDdtPreview(false);
+        }
+      }
+    }
+
+    loadPreview();
+
+    return () => {
+      ignore = true;
+    };
+  }, [isCertificateFirstRow, rowId, token]);
 
   async function handleUpsertMatch(targetState) {
     const selectedDocumentId = Number(matchDraft.documentId);
@@ -351,6 +421,71 @@ export default function AcquisitionDetailPage() {
       setError(requestError.message);
     } finally {
       setProcessingMatch(false);
+    }
+  }
+
+  function updateCertificateFirstDraft(field, value) {
+    setCertificateFirstDraft((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function handleRefreshCertificateFirst() {
+    setRefreshingCertificateFirst(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/refresh-certificate-first`,
+        { method: "POST" },
+        token,
+      );
+      await refreshRow(true);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setRefreshingCertificateFirst(false);
+    }
+  }
+
+  async function handleReloadDdtPreview() {
+    setLoadingDdtPreview(true);
+    setError("");
+    try {
+      const preview = await apiRequest(`/acquisition/rows/${rowId}/ddt-link-preview`, {}, token);
+      setDdtLinkPreview(preview);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoadingDdtPreview(false);
+    }
+  }
+
+  async function handleSaveCertificateFirstFields() {
+    setSavingCertificateFirst(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            lega_base: (certificateFirstDraft.lega_base || "").trim() || null,
+            diametro: (certificateFirstDraft.diametro || "").trim() || null,
+            cdq: (certificateFirstDraft.cdq || "").trim() || null,
+            colata: (certificateFirstDraft.colata || "").trim() || null,
+            ddt: (certificateFirstDraft.ddt || "").trim() || null,
+            peso: (certificateFirstDraft.peso || "").trim() || null,
+            ordine: (certificateFirstDraft.ordine || "").trim() || null,
+          }),
+        },
+        token,
+      );
+      await refreshRow(true);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingCertificateFirst(false);
     }
   }
 
@@ -741,14 +876,24 @@ export default function AcquisitionDetailPage() {
             </div>
 
             <MatchPanel
+              certificateFirstDraft={certificateFirstDraft}
               availableCertificates={availableCertificates}
               certificateDocument={certificateDocument}
+              ddtLinkPreview={ddtLinkPreview}
+              isCertificateFirstRow={isCertificateFirstRow}
+              loadingDdtPreview={loadingDdtPreview}
               match={row.certificate_match}
               matchDraft={matchDraft}
               onConfirmMatch={() => handleUpsertMatch("confermato")}
+              onRefreshCertificateFirst={handleRefreshCertificateFirst}
+              onReloadDdtPreview={handleReloadDdtPreview}
               onDraftChange={setMatchDraft}
+              onSaveCertificateFirstFields={handleSaveCertificateFirstFields}
               onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
+              onUpdateCertificateFirstDraft={updateCertificateFirstDraft}
               processingMatch={processingMatch}
+              refreshingCertificateFirst={refreshingCertificateFirst}
+              savingCertificateFirst={savingCertificateFirst}
             />
 
             <div className="space-y-4">
@@ -969,14 +1114,24 @@ function BlockPanel({
 }
 
 function MatchPanel({
+  certificateFirstDraft,
   availableCertificates,
   certificateDocument,
+  ddtLinkPreview,
+  isCertificateFirstRow,
+  loadingDdtPreview,
   match,
   matchDraft,
   onConfirmMatch,
   onDraftChange,
+  onRefreshCertificateFirst,
+  onReloadDdtPreview,
+  onSaveCertificateFirstFields,
   onSaveMatch,
+  onUpdateCertificateFirstDraft,
   processingMatch,
+  refreshingCertificateFirst,
+  savingCertificateFirst,
 }) {
   const certificateOptions = useMemo(() => {
     const items = [...availableCertificates];
@@ -988,6 +1143,113 @@ function MatchPanel({
 
   return (
     <div className="rounded-2xl border border-border bg-white p-4">
+      {isCertificateFirstRow ? (
+        <div className="mb-6 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Certificate-first</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Qui lavoriamo solo sui 7 campi Excel del certificato, già nel formato utile al match.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                disabled={refreshingCertificateFirst}
+                onClick={onRefreshCertificateFirst}
+                type="button"
+              >
+                {refreshingCertificateFirst ? "Aggiorno..." : "Aggiorna da certificato"}
+              </button>
+              <button
+                className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                disabled={savingCertificateFirst}
+                onClick={onSaveCertificateFirstFields}
+                type="button"
+              >
+                {savingCertificateFirst ? "Salvo..." : "Salva campi"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {CERTIFICATE_FIRST_FIELDS.map((field) => (
+              <div className="rounded-xl border border-sky-100 bg-white p-3" key={field.key}>
+                <label className="text-xs uppercase tracking-[0.18em] text-slate-500" htmlFor={`cf-${field.key}`}>
+                  {field.label}
+                </label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
+                  id={`cf-${field.key}`}
+                  onChange={(event) => onUpdateCertificateFirstDraft(field.key, event.target.value)}
+                  value={certificateFirstDraft[field.key] || ""}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">DDT candidati per il match</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Il sistema confronta questi campi alti con i DDT liberi dello stesso fornitore.
+                </p>
+              </div>
+              <button
+                className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                disabled={loadingDdtPreview}
+                onClick={onReloadDdtPreview}
+                type="button"
+              >
+                {loadingDdtPreview ? "Cerco..." : "Ricarica candidati"}
+              </button>
+            </div>
+
+            {ddtLinkPreview?.auto_match_row_id ? (
+              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                Candidato forte trovato sulla riga #{ddtLinkPreview.auto_match_row_id}.
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-3">
+              {ddtLinkPreview?.items?.length ? (
+                ddtLinkPreview.items.map((item) => (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={item.row_id}>
+                    <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          Riga #{item.row_id} · {item.ddt_file_name || `DDT #${item.document_ddt_id}`}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Score {item.score} · {item.reasons.join(" · ") || "nessun dettaglio"}
+                        </p>
+                      </div>
+                      <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                        DDT {item.ddt || "-"}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
+                      <PreviewMini label="lega" value={item.lega} />
+                      <PreviewMini label="Ø" value={item.diametro} />
+                      <PreviewMini label="Cdq" value={item.cdq} />
+                      <PreviewMini label="Colata" value={item.colata} />
+                      <PreviewMini label="Ddt" value={item.ddt} />
+                      <PreviewMini label="peso" value={item.peso} />
+                      <PreviewMini label="ordine" value={item.ordine} />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                  Nessun DDT candidato trovato con le regole attuali.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h3 className="text-base font-semibold text-slate-900">Match certificato</h3>
@@ -1081,6 +1343,15 @@ function MatchPanel({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function PreviewMini({ label, value }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-2 py-2">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-medium text-slate-800">{value || "-"}</div>
     </div>
   );
 }
