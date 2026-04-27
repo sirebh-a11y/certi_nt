@@ -18638,7 +18638,8 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
         return matches
 
     numbers = re.findall(r"\d+(?:[.,]\d+)?", candidate_line)
-    candidate_values = _extract_property_candidate_values(numbers)
+    include_iacs = any("iacs" in line.lower() or "ms/m" in line.lower() for line in window)
+    candidate_values = _extract_property_candidate_values(numbers, allow_iacs=include_iacs)
     if candidate_values is None:
         for field_name, payload in _parse_vertical_properties_from_lines(window, page_id).items():
             matches.setdefault(field_name, payload)
@@ -18650,7 +18651,7 @@ def _parse_properties_from_compact_lines(lines: list[str], page_id: int) -> dict
         "A%": candidate_values[2],
         "HB": candidate_values[3],
     }
-    if len(candidate_values) >= 5:
+    if include_iacs and len(candidate_values) >= 5:
         mapping["IACS%"] = candidate_values[4]
 
     for field_name, raw_value in mapping.items():
@@ -18873,10 +18874,10 @@ def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> di
         lowered_line = normalized_line.lower()
         inline_values = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
         if len(inline_values) >= 4 and "min" not in lowered_line and "max" not in lowered_line:
-            candidate_values = _extract_property_candidate_values(inline_values)
+            candidate_values = _extract_property_candidate_values(inline_values, allow_iacs=False)
             if candidate_values is None:
                 continue
-            inline_match = _build_property_match_from_candidate_values(candidate_values, page_id)
+            inline_match = _build_property_match_from_candidate_values(candidate_values, page_id, include_iacs=False)
             if inline_match:
                 return inline_match
 
@@ -18892,23 +18893,24 @@ def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> di
         if len(cluster) < 4:
             continue
 
-        candidate_values = _extract_property_candidate_values(cluster)
+        candidate_values = _extract_property_candidate_values(cluster, allow_iacs=False)
         if candidate_values is None:
             continue
 
-        cluster_match = _build_property_match_from_candidate_values(candidate_values, page_id)
+        cluster_match = _build_property_match_from_candidate_values(candidate_values, page_id, include_iacs=False)
         if cluster_match:
             return cluster_match
 
     return {}
 
 
-def _extract_property_candidate_values(raw_values: list[str]) -> list[str] | None:
+def _extract_property_candidate_values(raw_values: list[str], *, allow_iacs: bool = False) -> list[str] | None:
     normalized_values = [_normalize_numeric_value(value) or value for value in raw_values]
     best_candidate: list[str] | None = None
     best_score = -999
 
-    for window_size in (5, 4):
+    window_sizes = (5, 4) if allow_iacs else (4,)
+    for window_size in window_sizes:
         if len(normalized_values) < window_size:
             continue
         for start_index in range(0, len(normalized_values) - window_size + 1):
@@ -18927,7 +18929,7 @@ def _extract_property_candidate_values(raw_values: list[str]) -> list[str] | Non
                 score += 4
             if start_index > 0:
                 score += min(start_index, 3)
-            if window_size == 5:
+            if window_size == 5 and allow_iacs:
                 iacs = _safe_float(candidate[4])
                 if iacs is not None and 0 < iacs <= 100:
                     score += 2
@@ -18944,6 +18946,8 @@ def _extract_property_candidate_values(raw_values: list[str]) -> list[str] | Non
 def _build_property_match_from_candidate_values(
     candidate_values: list[str],
     page_id: int,
+    *,
+    include_iacs: bool = False,
 ) -> dict[str, dict[str, str | int]]:
     if len(candidate_values) < 4:
         return {}
@@ -18958,7 +18962,7 @@ def _build_property_match_from_candidate_values(
         return {}
 
     ordered_fields = ["Rm", "Rp0.2", "A%", "HB"]
-    if len(candidate_values) >= 5:
+    if include_iacs and len(candidate_values) >= 5:
         iacs = _safe_float(candidate_values[4])
         if iacs is not None and 0 < iacs <= 100:
             ordered_fields.append("IACS%")

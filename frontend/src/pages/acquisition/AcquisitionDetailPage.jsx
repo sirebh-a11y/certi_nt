@@ -69,7 +69,6 @@ const PROPERTY_FIELD_ORDER = [
   "Rm",
   "A%",
   "Rp0.2 / Rm",
-  "IACS%",
 ];
 
 const BLOCK_DEFAULT_SOURCE = {
