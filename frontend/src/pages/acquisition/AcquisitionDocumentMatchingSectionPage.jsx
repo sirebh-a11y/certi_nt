@@ -128,8 +128,12 @@ function renderOverlayBox({ item, color, imageWidth, imageHeight, title, key }) 
   }
   const palette =
     color === "green"
-      ? "border-emerald-500 bg-emerald-400/50 shadow-[0_0_0_1px_rgba(16,185,129,0.3)]"
-      : "border-sky-500 bg-sky-400/20 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]";
+      ? "border-emerald-500 bg-emerald-400/45 shadow-[0_0_0_1px_rgba(16,185,129,0.3)]"
+      : color === "orange"
+        ? "border-orange-500 bg-orange-400/35 shadow-[0_0_0_1px_rgba(249,115,22,0.25)]"
+        : color === "indigo"
+          ? "border-indigo-500 bg-indigo-400/30 shadow-[0_0_0_1px_rgba(99,102,241,0.22)]"
+          : "border-sky-500 bg-sky-400/22 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]";
   return (
     <div
       className={`pointer-events-none absolute rounded border ${palette}`}
@@ -142,6 +146,61 @@ function renderOverlayBox({ item, color, imageWidth, imageHeight, title, key }) 
         height: `${((bottom - top) / imageHeight) * 100}%`,
       }}
     />
+  );
+}
+
+function overlayTitle(field) {
+  if (field === "material_block") {
+    return "Lega / Ø / Colata / Peso";
+  }
+  if (field === "cdq") {
+    return "CDQ / certificato";
+  }
+  if (field === "ddt") {
+    return "DDT";
+  }
+  if (field === "ordine") {
+    return "Ordine";
+  }
+  return field;
+}
+
+function overlayColor(field) {
+  if (field === "material_block") {
+    return "green";
+  }
+  if (field === "ordine") {
+    return "orange";
+  }
+  if (field === "ddt") {
+    return "indigo";
+  }
+  return "blue";
+}
+
+function OverlayLegend({ visible }) {
+  if (!visible) {
+    return null;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+      <span className="inline-flex items-center gap-1">
+        <span className="h-2.5 w-2.5 rounded-sm border border-emerald-500 bg-emerald-400/45" />
+        materiale
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="h-2.5 w-2.5 rounded-sm border border-sky-500 bg-sky-400/25" />
+        cdq
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="h-2.5 w-2.5 rounded-sm border border-orange-500 bg-orange-400/35" />
+        ordine
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="h-2.5 w-2.5 rounded-sm border border-indigo-500 bg-indigo-400/30" />
+        ddt
+      </span>
+    </div>
   );
 }
 
@@ -302,11 +361,11 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
                     .map((item) =>
                       renderOverlayBox({
                         item,
-                        color: "blue",
+                        color: overlayColor(item.field),
                         imageWidth: Number(item.image_width || pageImageSizes[page.id]?.width || 0),
                         imageHeight: Number(item.image_height || pageImageSizes[page.id]?.height || 0),
-                        title: item.field,
-                        key: `${page.id}-${item.field}`,
+                        title: overlayTitle(item.field),
+                        key: `${page.id}-${item.field}-${item.bbox}`,
                       }),
                     )}
                 </div>
@@ -355,6 +414,7 @@ function StatusBar({ actionLabel, actionState, error, onToggleOverlay, overlayBu
           >
             {overlayBusy ? "..." : overlayEnabled ? "Overlay off" : "Overlay"}
           </button>
+          <OverlayLegend visible={overlayEnabled} />
           <span>{actionLabel || <span className="invisible">Stato documento</span>}</span>
         </div>
         <div className="min-w-0 text-sm md:text-right">

@@ -1269,6 +1269,7 @@ def build_document_core_overlay_preview(
     }
 
     live_field_items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    material_candidate_items: list[DocumentCoreOverlayPreviewItemResponse] = []
     if source_key == "ddt":
         live_field_items.extend(
             _build_ddt_document_core_overlay_items_from_split_candidate(
@@ -1284,14 +1285,6 @@ def build_document_core_overlay_preview(
                     document=document,
                 )
             )
-    else:
-        live_field_items.extend(
-            _build_certificate_document_core_overlay_items_from_identity_window(
-                row=row,
-                document=document,
-                value_map=value_map,
-            )
-        )
 
     for ui_field, candidate_fields in field_map.items():
         if any(item.field == ui_field for item in live_field_items):
@@ -1314,13 +1307,35 @@ def build_document_core_overlay_preview(
             preferred_page_id=page_id,
             snippet=snippet,
         )
-        if item is not None:
+        if item is not None and _document_core_overlay_item_allowed(
+            item=item,
+            source_key=source_key,
+            document=document,
+        ):
+            if ui_field in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS:
+                material_candidate_items.append(item)
+                continue
             live_field_items.append(item)
+
+    if not any(item.field == "material_block" for item in live_field_items):
+        collapsed_material = _collapse_document_core_material_items(material_candidate_items)
+        live_field_items.extend(item for item in collapsed_material if item.field == "material_block")
+
+    if source_key == "certificato" and not any(item.field == "material_block" for item in live_field_items):
+        live_field_items.extend(
+            _build_certificate_document_core_overlay_items_from_identity_window(
+                row=row,
+                document=document,
+                value_map=value_map,
+            )
+        )
 
     items: list[DocumentCoreOverlayPreviewItemResponse] = list(live_field_items)
     seen_fields = {item.field for item in items}
     for ui_field, candidate_fields in field_map.items():
         if ui_field in seen_fields:
+            continue
+        if ui_field in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS:
             continue
         selected_value: ReadValue | None = None
         for candidate_field in candidate_fields:
@@ -1355,6 +1370,8 @@ def build_document_core_overlay_preview(
     for ui_field, candidate_fields in field_map.items():
         if ui_field in seen_fields:
             continue
+        if ui_field in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS:
+            continue
         selected_text: str | None = None
         for candidate_field in candidate_fields:
             selected_text = _read_value_display_text(value_map.get(candidate_field))
@@ -1369,11 +1386,164 @@ def build_document_core_overlay_preview(
             preferred_page_id=None,
             snippet=selected_text or "",
         )
-        if item is not None:
+        if item is not None and _document_core_overlay_item_allowed(
+            item=item,
+            source_key=source_key,
+            document=document,
+        ):
             items.append(item)
             seen_fields.add(ui_field)
 
+    items = _collapse_document_core_material_items(items)
     return DocumentCoreOverlayPreviewResponse(items=items)
+
+
+def _document_core_overlay_item_allowed(
+    *,
+    item: DocumentCoreOverlayPreviewItemResponse,
+    source_key: str,
+    document: Document,
+) -> bool:
+    if source_key != "certificato":
+        return True
+    bbox = _parse_document_core_bbox(item.bbox)
+    if bbox is None:
+        return False
+    page = next((candidate for candidate in document.pages if candidate.id == item.page_id), None)
+    page_height = float(item.image_height or page.altezza or 0) if page is not None else float(item.image_height or 0)
+    if page_height <= 0:
+        return True
+    _, top, _, bottom = bbox
+    center_ratio = ((top + bottom) / 2) / page_height
+    if item.field in {"material_block", "cdq", "ddt", "ordine"}:
+        return center_ratio <= 0.48
+    if item.field in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS:
+        return center_ratio <= 0.52
+    return True
+
+
+_DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS = {"lega", "lega_base", "diametro", "colata", "peso"}
+
+
+def _append_material_block_overlay_item(
+    *,
+    items: list[DocumentCoreOverlayPreviewItemResponse],
+    field_names: list[str],
+    page_id: int,
+    page_number: int,
+    bbox: str,
+    image_width: int,
+    image_height: int,
+) -> None:
+    material_fields = [field_name for field_name in field_names if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS]
+    if len(set(material_fields)) < 2:
+        return
+    items.append(
+        DocumentCoreOverlayPreviewItemResponse(
+            page_id=page_id,
+            page_number=page_number,
+            field="material_block",
+            bbox=bbox,
+            image_width=image_width,
+            image_height=image_height,
+        )
+    )
+
+
+def _collapse_document_core_material_items(
+    items: list[DocumentCoreOverlayPreviewItemResponse],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    if any(item.field == "material_block" for item in items):
+        return items
+
+    material_items = [item for item in items if item.field in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS]
+    if len({item.field for item in material_items}) < 2:
+        return items
+
+    grouped: dict[tuple[int, int, str], list[DocumentCoreOverlayPreviewItemResponse]] = {}
+    for item in material_items:
+        grouped.setdefault((item.page_id, item.page_number, item.bbox), []).append(item)
+
+    selected_group = max(grouped.values(), key=lambda group: len({item.field for item in group}))
+    if len({item.field for item in selected_group}) < 2:
+        selected_group = _select_nearby_document_core_material_group(material_items)
+    if len({item.field for item in selected_group}) < 2:
+        return items
+
+    merged_bbox = _merge_document_core_overlay_bboxes(selected_group)
+    if merged_bbox is None:
+        return items
+    reference = selected_group[0]
+    collapsed = [
+        DocumentCoreOverlayPreviewItemResponse(
+            page_id=reference.page_id,
+            page_number=reference.page_number,
+            field="material_block",
+            bbox=merged_bbox,
+            image_width=reference.image_width,
+            image_height=reference.image_height,
+        )
+    ]
+    selected_keys = {(item.page_id, item.page_number, item.bbox, item.field) for item in selected_group}
+    collapsed.extend(
+        item
+        for item in items
+        if (item.page_id, item.page_number, item.bbox, item.field) not in selected_keys
+    )
+    return collapsed
+
+
+def _select_nearby_document_core_material_group(
+    material_items: list[DocumentCoreOverlayPreviewItemResponse],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    best_group: list[DocumentCoreOverlayPreviewItemResponse] = []
+    by_page: dict[int, list[DocumentCoreOverlayPreviewItemResponse]] = {}
+    for item in material_items:
+        by_page.setdefault(item.page_id, []).append(item)
+
+    for page_items in by_page.values():
+        parsed: list[tuple[DocumentCoreOverlayPreviewItemResponse, float, float, float, float]] = []
+        for item in page_items:
+            bbox = _parse_document_core_bbox(item.bbox)
+            if bbox is None:
+                continue
+            parsed.append((item, *bbox))
+        if len(parsed) < 2:
+            continue
+        for anchor, left, top, right, bottom in parsed:
+            anchor_center = (top + bottom) / 2
+            page_height = max(float(anchor.image_height or 0), 1.0)
+            vertical_limit = max(220.0, page_height * 0.07)
+            group = [
+                item
+                for item, _, item_top, _, item_bottom in parsed
+                if abs(((item_top + item_bottom) / 2) - anchor_center) <= vertical_limit
+            ]
+            if len({item.field for item in group}) > len({item.field for item in best_group}):
+                best_group = group
+    return best_group
+
+
+def _parse_document_core_bbox(bbox: str | None) -> tuple[float, float, float, float] | None:
+    parts = [float(part) for part in str(bbox or "").split(",") if part.strip()]
+    if len(parts) != 4:
+        return None
+    left, top, right, bottom = parts
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _merge_document_core_overlay_bboxes(items: list[DocumentCoreOverlayPreviewItemResponse]) -> str | None:
+    parsed = [_parse_document_core_bbox(item.bbox) for item in items]
+    boxes = [box for box in parsed if box is not None]
+    if not boxes:
+        return None
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[2] for box in boxes)
+    bottom = max(box[3] for box in boxes)
+    return f"{int(left)},{int(top)},{int(right)},{int(bottom)}"
 
 
 def _read_value_display_text(value: ReadValue | None) -> str | None:
@@ -1428,17 +1598,17 @@ def _build_certificate_document_core_overlay_items_from_identity_window(
     if window_item is None:
         return []
 
-    return [
-        DocumentCoreOverlayPreviewItemResponse(
-            page_id=window_item.page_id,
-            page_number=window_item.page_number,
-            field=field_name,
-            bbox=window_item.bbox,
-            image_width=window_item.image_width,
-            image_height=window_item.image_height,
-        )
-        for field_name in matched_fields
-    ]
+    items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    _append_material_block_overlay_item(
+        items=items,
+        field_names=matched_fields,
+        page_id=window_item.page_id,
+        page_number=window_item.page_number,
+        bbox=window_item.bbox,
+        image_width=window_item.image_width,
+        image_height=window_item.image_height,
+    )
+    return items
 
 
 def _select_best_document_core_identity_window(
@@ -1544,12 +1714,21 @@ def _build_ddt_document_core_overlay_items_from_row_window(
         return []
 
     items: list[DocumentCoreOverlayPreviewItemResponse] = []
-    for field_name in matched_fields:
+    _append_material_block_overlay_item(
+        items=items,
+        field_names=matched_fields,
+        page_id=window_item.page_id,
+        page_number=window_item.page_number,
+        bbox=window_item.bbox,
+        image_width=window_item.image_width,
+        image_height=window_item.image_height,
+    )
+    if "cdq" in matched_fields:
         items.append(
             DocumentCoreOverlayPreviewItemResponse(
                 page_id=window_item.page_id,
                 page_number=window_item.page_number,
-                field=field_name,
+                field="cdq",
                 bbox=window_item.bbox,
                 image_width=window_item.image_width,
                 image_height=window_item.image_height,
@@ -1658,14 +1837,22 @@ def _build_ddt_document_core_overlay_items_from_split_candidate(
         "ordine": selected_candidate.customer_order_no,
     }
     items: list[DocumentCoreOverlayPreviewItemResponse] = []
-    for field_name, field_value in candidate_field_map.items():
-        if _string_or_none(field_value) is None:
-            continue
+    matched_fields = [field_name for field_name, field_value in candidate_field_map.items() if _string_or_none(field_value) is not None]
+    _append_material_block_overlay_item(
+        items=items,
+        field_names=matched_fields,
+        page_id=window_item.page_id,
+        page_number=window_item.page_number,
+        bbox=window_item.bbox,
+        image_width=window_item.image_width,
+        image_height=window_item.image_height,
+    )
+    if _string_or_none(selected_candidate.cdq) is not None:
         items.append(
             DocumentCoreOverlayPreviewItemResponse(
                 page_id=window_item.page_id,
                 page_number=window_item.page_number,
-                field=field_name,
+                field="cdq",
                 bbox=window_item.bbox,
                 image_width=window_item.image_width,
                 image_height=window_item.image_height,
@@ -1706,6 +1893,10 @@ def _select_best_ddt_overlay_split_candidate(
             if _normalize_row_signature_token(row.colata) != _normalize_row_signature_token(candidate_cast):
                 continue
             score += 110
+        if row.cdq and candidate.cdq:
+            if _normalize_row_signature_token(row.cdq) != _normalize_row_signature_token(candidate.cdq):
+                continue
+            score += 110
         if row.diametro and candidate.diametro:
             if not _supplier_decimal_tokens_match(row.diametro, candidate.diametro):
                 continue
@@ -1714,9 +1905,6 @@ def _select_best_ddt_overlay_split_candidate(
             if not reader_weights_are_compatible(row.peso, candidate.peso_netto):
                 continue
             score += 80
-        if row.cdq and candidate.cdq:
-            if _normalize_row_signature_token(row.cdq) == _normalize_row_signature_token(candidate.cdq):
-                score += 80
 
         if score > best_score:
             best_score = score
