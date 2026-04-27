@@ -14910,9 +14910,23 @@ def _normalize_aww_measured_rows_payload(
         return normalized, count
 
     standard_matches, standard_count = _normalized_row(standard_row)
+    simulated_matches, simulated_count = _normalized_row(simulated_row)
+
+    core_fields = {"Rm", "Rp0.2", "A%", "HB"}
+    standard_core_count = sum(1 for field_name in core_fields if field_name in standard_matches)
+    simulated_core_count = sum(1 for field_name in core_fields if field_name in simulated_matches)
+
+    # AWW certificates can expose a partial standard block (for example only HB)
+    # above a complete simulated-heat-treatment measured row. In those cases
+    # prefer the richer row instead of accepting the first non-empty block.
+    if simulated_core_count >= 3 and simulated_core_count > standard_core_count:
+        return simulated_matches
+    if standard_core_count >= 3:
+        return standard_matches
+    if simulated_count > standard_count:
+        return simulated_matches
     if standard_count >= 1:
         return standard_matches
-    simulated_matches, _ = _normalized_row(simulated_row)
     return simulated_matches
 
 
