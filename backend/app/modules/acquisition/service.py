@@ -1198,6 +1198,7 @@ def build_notes_overlay_preview(
             pages=certificate_document.pages,
             field=value.campo,
             evidence=evidence,
+            expected_value=value.valore_finale or value.valore_standardizzato or value.valore_grezzo,
         )
         if item is not None:
             items.append(item)
@@ -1829,6 +1830,7 @@ def _build_note_overlay_item_from_evidence(
     pages: list[DocumentPage],
     field: str,
     evidence: DocumentEvidence,
+    expected_value: str | None = None,
 ) -> NoteOverlayPreviewItemResponse | None:
     snippet = _string_or_none(evidence.testo_grezzo)
     page_by_id = {page.id: page for page in pages}
@@ -1866,6 +1868,7 @@ def _build_note_overlay_item_from_evidence(
             field=field,
             snippet=snippet,
             line_boxes=line_boxes,
+            expected_value=expected_value,
         )
         if match is None:
             continue
@@ -1893,6 +1896,7 @@ def _find_best_note_overlay_match(
     field: str,
     snippet: str,
     line_boxes: list[dict[str, object]],
+    expected_value: str | None = None,
 ) -> tuple[str, int] | None:
     if not line_boxes:
         return None
@@ -1902,11 +1906,17 @@ def _find_best_note_overlay_match(
 
     best_bbox: str | None = None
     best_score = 0
-    max_window = min(3, len(line_boxes))
+    expected_class = _normalize_note_us_expected_class(expected_value) if field == "nota_us_control_classe" else None
+    max_window = min(2 if expected_class else 3, len(line_boxes))
     for window_size in range(1, max_window + 1):
         for start in range(0, len(line_boxes) - window_size + 1):
             window = line_boxes[start : start + window_size]
-            score = _score_note_overlay_window(field=field, tokens=tokens, line_boxes=window)
+            score = _score_note_overlay_window(
+                field=field,
+                tokens=tokens,
+                line_boxes=window,
+                expected_class=expected_class,
+            )
             if score > best_score:
                 left = min(int(box.get("x0") or 0) for box in window)
                 top = min(int(box.get("y0") or 0) for box in window)
@@ -1919,6 +1929,15 @@ def _find_best_note_overlay_match(
     if best_bbox is None or best_score < 6:
         return None
     return best_bbox, best_score
+
+
+def _normalize_note_us_expected_class(value: str | None) -> str | None:
+    normalized = _normalize_mojibake_numeric_text(value or "").upper()
+    if re.search(r"\b(?:CLASS|CLASSE)\s*A\b", normalized) or normalized.strip() == "A":
+        return "A"
+    if re.search(r"\b(?:CLASS|CLASSE)\s*B\b", normalized) or normalized.strip() == "B":
+        return "B"
+    return None
 
 
 def _tokenize_note_overlay_text(value: str) -> list[str]:
@@ -1941,6 +1960,7 @@ def _score_note_overlay_window(
     field: str,
     tokens: list[str],
     line_boxes: list[dict[str, object]],
+    expected_class: str | None = None,
 ) -> int:
     combined = " ".join(
         " ".join(str(word.get("text") or "").upper() for word in cast(list[dict[str, object]], line_box.get("words") or []))
@@ -1951,7 +1971,15 @@ def _score_note_overlay_window(
     score += sum(2 for token in tokens if len(token) >= 6 and token in normalized)
 
     if field == "nota_us_control_classe":
-        if "CLASS A" in normalized or "CLASS B" in normalized:
+        if expected_class in {"A", "B"}:
+            other_class = "B" if expected_class == "A" else "A"
+            if f"CLASS {expected_class}" in normalized or f"CLASSE {expected_class}" in normalized:
+                score += 45
+            else:
+                score -= 30
+            if f"CLASS {other_class}" in normalized or f"CLASSE {other_class}" in normalized:
+                score -= 25
+        elif "CLASS A" in normalized or "CLASS B" in normalized:
             score += 8
         if "AMS" in normalized or "ASTM" in normalized:
             score += 4
