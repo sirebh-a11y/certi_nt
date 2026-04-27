@@ -51,6 +51,8 @@ from app.modules.acquisition.schemas import (
     ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    DocumentCoreOverlayPreviewItemResponse,
+    DocumentCoreOverlayPreviewResponse,
     DdtLinkPreviewCandidateResponse,
     DdtLinkPreviewResponse,
     NoteOverlayPreviewItemResponse,
@@ -1201,6 +1203,579 @@ def build_notes_overlay_preview(
             items.append(item)
 
     return NoteOverlayPreviewResponse(items=items)
+
+
+def build_document_core_overlay_preview(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    source: str,
+) -> DocumentCoreOverlayPreviewResponse:
+    source_key = (source or "").strip().lower()
+    if source_key not in {"ddt", "certificato"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid document core overlay source")
+
+    if source_key == "ddt":
+        document_id = row.document_ddt_id
+        block_name = "ddt"
+        supplier_key = _resolve_row_supplier_key(row)
+        field_map = {
+            "lega": ("lega",),
+            "diametro": ("diametro",),
+            "cdq": ("cdq", "numero_certificato_ddt"),
+            "colata": ("colata",),
+            "ddt": ("ddt",),
+            "peso": ("peso",),
+            "ordine": ("ordine",),
+        }
+    else:
+        document_id = row.document_certificato_id
+        block_name = "match"
+        supplier_key = _resolve_row_supplier_key(row)
+        field_map = {
+            "lega_base": ("lega_certificato",),
+            "diametro": ("diametro_certificato",),
+            "cdq": ("numero_certificato_certificato",),
+            "colata": ("colata_certificato",),
+            "ddt": ("ddt_certificato",),
+            "peso": ("peso_certificato",),
+            "ordine": ("ordine_cliente_certificato",),
+        }
+
+    if document_id is None:
+        return DocumentCoreOverlayPreviewResponse(items=[])
+
+    document = get_document(db, document_id)
+    if not document.pages:
+        document = _index_document_from_path(db, document)
+    document = _ensure_document_page_images(db, document)
+
+    if source_key == "ddt":
+        live_matches = reader_detect_ddt_core_matches(document.pages, supplier_key=supplier_key)
+    else:
+        live_matches = reader_detect_certificate_core_matches(document.pages, supplier_key=supplier_key)
+
+    value_map = {
+        value.campo: value
+        for value in (
+            db.query(ReadValue)
+            .filter(
+                ReadValue.acquisition_row_id == row.id,
+                ReadValue.blocco == block_name,
+            )
+            .all()
+        )
+    }
+
+    live_field_items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    if source_key == "ddt":
+        live_field_items.extend(
+            _build_ddt_document_core_overlay_items_from_split_candidate(
+                db=db,
+                row=row,
+                document=document,
+            )
+        )
+        if not live_field_items:
+            live_field_items.extend(
+                _build_ddt_document_core_overlay_items_from_row_window(
+                    row=row,
+                    document=document,
+                )
+            )
+    else:
+        live_field_items.extend(
+            _build_certificate_document_core_overlay_items_from_identity_window(
+                row=row,
+                document=document,
+                value_map=value_map,
+            )
+        )
+
+    for ui_field, candidate_fields in field_map.items():
+        if any(item.field == ui_field for item in live_field_items):
+            continue
+        selected_match: dict[str, object] | None = None
+        for candidate_field in candidate_fields:
+            candidate_match = cast(dict[str, object] | None, live_matches.get(candidate_field))
+            if candidate_match is not None:
+                selected_match = candidate_match
+                break
+        if selected_match is None:
+            continue
+        page_id = cast(int | None, selected_match.get("page_id"))
+        snippet = _string_or_none(cast(str | None, selected_match.get("snippet")))
+        if page_id is None or snippet is None:
+            continue
+        item = _build_document_core_overlay_item_from_snippet(
+            pages=document.pages,
+            field=ui_field,
+            preferred_page_id=page_id,
+            snippet=snippet,
+        )
+        if item is not None:
+            live_field_items.append(item)
+
+    items: list[DocumentCoreOverlayPreviewItemResponse] = list(live_field_items)
+    seen_fields = {item.field for item in items}
+    for ui_field, candidate_fields in field_map.items():
+        if ui_field in seen_fields:
+            continue
+        selected_value: ReadValue | None = None
+        for candidate_field in candidate_fields:
+            candidate_value = value_map.get(candidate_field)
+            if candidate_value is not None and candidate_value.document_evidence_id is not None:
+                selected_value = candidate_value
+                break
+        if selected_value is None or selected_value.document_evidence_id is None:
+            continue
+        evidence = db.get(DocumentEvidence, selected_value.document_evidence_id)
+        if evidence is None or evidence.document_page_id is None:
+            continue
+        note_item = _build_note_overlay_item_from_evidence(
+            pages=document.pages,
+            field=ui_field,
+            evidence=evidence,
+        )
+        if note_item is None:
+            continue
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=note_item.page_id,
+                page_number=note_item.page_number,
+                field=ui_field,
+                bbox=note_item.bbox,
+                image_width=note_item.image_width,
+                image_height=note_item.image_height,
+            )
+        )
+        seen_fields.add(ui_field)
+
+    for ui_field, candidate_fields in field_map.items():
+        if ui_field in seen_fields:
+            continue
+        selected_text: str | None = None
+        for candidate_field in candidate_fields:
+            selected_text = _read_value_display_text(value_map.get(candidate_field))
+            if selected_text is not None:
+                break
+        token = _normalize_row_signature_token(selected_text)
+        if not token or len(token) < 3:
+            continue
+        item = _build_document_core_overlay_item_from_snippet(
+            pages=document.pages,
+            field=ui_field,
+            preferred_page_id=None,
+            snippet=selected_text or "",
+        )
+        if item is not None:
+            items.append(item)
+            seen_fields.add(ui_field)
+
+    return DocumentCoreOverlayPreviewResponse(items=items)
+
+
+def _read_value_display_text(value: ReadValue | None) -> str | None:
+    if value is None:
+        return None
+    return (
+        _string_or_none(value.valore_finale)
+        or _string_or_none(value.valore_standardizzato)
+        or _string_or_none(value.valore_grezzo)
+    )
+
+
+def _build_certificate_document_core_overlay_items_from_identity_window(
+    *,
+    row: AcquisitionRow,
+    document: Document,
+    value_map: dict[str, ReadValue],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    field_values = {
+        "lega_base": _read_value_display_text(value_map.get("lega_certificato")) or row.lega_base,
+        "diametro": _read_value_display_text(value_map.get("diametro_certificato")) or row.diametro,
+        "cdq": _read_value_display_text(value_map.get("numero_certificato_certificato")) or row.cdq,
+        "colata": _read_value_display_text(value_map.get("colata_certificato")) or row.colata,
+        "ddt": _read_value_display_text(value_map.get("ddt_certificato")) or row.ddt,
+        "peso": _read_value_display_text(value_map.get("peso_certificato")) or row.peso,
+        "ordine": _read_value_display_text(value_map.get("ordine_cliente_certificato")) or row.ordine,
+    }
+    selected = _select_best_document_core_identity_window(
+        pages=document.pages,
+        field_values=field_values,
+        field_weights={
+            "cdq": 70,
+            "colata": 70,
+            "ordine": 65,
+            "peso": 50,
+            "ddt": 45,
+            "diametro": 35,
+            "lega_base": 30,
+        },
+        minimum_score=105,
+    )
+    if selected is None:
+        return []
+
+    page, snippet, matched_fields = selected
+    window_item = _build_document_core_overlay_item_from_snippet(
+        pages=document.pages,
+        field="certificate_identity",
+        preferred_page_id=page.id,
+        snippet=snippet,
+    )
+    if window_item is None:
+        return []
+
+    return [
+        DocumentCoreOverlayPreviewItemResponse(
+            page_id=window_item.page_id,
+            page_number=window_item.page_number,
+            field=field_name,
+            bbox=window_item.bbox,
+            image_width=window_item.image_width,
+            image_height=window_item.image_height,
+        )
+        for field_name in matched_fields
+    ]
+
+
+def _select_best_document_core_identity_window(
+    *,
+    pages: list[DocumentPage],
+    field_values: dict[str, str | None],
+    field_weights: dict[str, int],
+    minimum_score: int,
+) -> tuple[DocumentPage, str, list[str]] | None:
+    field_tokens: list[tuple[str, str, int]] = []
+    for field_name, value in field_values.items():
+        token = _normalize_row_signature_token(value)
+        if not token:
+            continue
+        if field_name == "diametro" and len(token) < 2:
+            continue
+        field_tokens.append((field_name, token, field_weights.get(field_name, 30)))
+
+    if not field_tokens:
+        return None
+
+    best_page: DocumentPage | None = None
+    best_snippet = ""
+    best_fields: list[str] = []
+    best_score = 0
+    for page in pages:
+        lines = _document_core_page_text_lines(page)
+        if not lines:
+            continue
+        normalized_lines = [_normalize_row_signature_token(line) for line in lines]
+        max_window = min(6, len(lines))
+        for window_size in range(1, max_window + 1):
+            for start in range(0, len(lines) - window_size + 1):
+                end = start + window_size
+                window_lines = normalized_lines[start:end]
+                window_key = " ".join(window_lines)
+                matched: list[str] = []
+                score = 0
+                for field_name, token, weight in field_tokens:
+                    if _document_core_window_contains_token(
+                        field_name=field_name,
+                        window_lines=window_lines,
+                        window_key=window_key,
+                        token=token,
+                    ):
+                        matched.append(field_name)
+                        score += weight
+                unique_fields = list(dict.fromkeys(matched))
+                if len(unique_fields) >= 2:
+                    score += 20 * len(unique_fields)
+                if "cdq" in unique_fields and "colata" in unique_fields:
+                    score += 35
+                if "ordine" in unique_fields and ("cdq" in unique_fields or "colata" in unique_fields):
+                    score += 25
+                if score > best_score:
+                    best_page = page
+                    best_snippet = "\n".join(lines[start:end])
+                    best_fields = unique_fields
+                    best_score = score
+
+    if best_page is None or best_score < minimum_score or len(best_fields) < 2:
+        return None
+    return best_page, best_snippet, best_fields
+
+
+def _document_core_window_contains_token(
+    *,
+    field_name: str,
+    window_lines: list[str],
+    window_key: str,
+    token: str,
+) -> bool:
+    if field_name == "diametro" and len(token) >= 2:
+        return token in window_key
+    if len(token) >= 3:
+        return token in window_key
+    token_pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(token)}(?![A-Z0-9])")
+    return any(token_pattern.search(line) for line in window_lines)
+
+
+def _document_core_page_text_lines(page: DocumentPage) -> list[str]:
+    text = page.ocr_text or page.testo_estratto or ""
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def _build_ddt_document_core_overlay_items_from_row_window(
+    *,
+    row: AcquisitionRow,
+    document: Document,
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    selected = _select_best_ddt_overlay_text_window(row=row, pages=document.pages)
+    if selected is None:
+        return []
+
+    page, snippet, matched_fields = selected
+    window_item = _build_document_core_overlay_item_from_snippet(
+        pages=document.pages,
+        field="ddt_row",
+        preferred_page_id=page.id,
+        snippet=snippet,
+    )
+    if window_item is None:
+        return []
+
+    items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    for field_name in matched_fields:
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=window_item.page_id,
+                page_number=window_item.page_number,
+                field=field_name,
+                bbox=window_item.bbox,
+                image_width=window_item.image_width,
+                image_height=window_item.image_height,
+            )
+        )
+    return items
+
+
+def _select_best_ddt_overlay_text_window(
+    *,
+    row: AcquisitionRow,
+    pages: list[DocumentPage],
+) -> tuple[DocumentPage, str, list[str]] | None:
+    field_tokens: list[tuple[str, str, int]] = []
+    for field_name, value, weight in (
+        ("lega", row.lega_base, 35),
+        ("diametro", row.diametro, 30),
+        ("cdq", row.cdq, 55),
+        ("colata", row.colata, 60),
+        ("peso", row.peso, 70),
+    ):
+        token = _normalize_row_signature_token(value)
+        if not token:
+            continue
+        if field_name == "diametro" and len(token) < 2:
+            continue
+        field_tokens.append((field_name, token, weight))
+
+    if not field_tokens:
+        return None
+
+    best_page: DocumentPage | None = None
+    best_snippet = ""
+    best_fields: list[str] = []
+    best_score = 0
+    for page in pages:
+        lines = _document_core_page_text_lines(page)
+        if not lines:
+            continue
+        normalized_lines = [_normalize_row_signature_token(line) for line in lines]
+        max_window = min(6, len(lines))
+        for window_size in range(1, max_window + 1):
+            for start in range(0, len(lines) - window_size + 1):
+                end = start + window_size
+                window_lines = normalized_lines[start:end]
+                window_key = " ".join(window_lines)
+                matched: list[str] = []
+                score = 0
+                for field_name, token, weight in field_tokens:
+                    if _document_core_window_contains_token(
+                        field_name=field_name,
+                        window_lines=window_lines,
+                        window_key=window_key,
+                        token=token,
+                    ):
+                        matched.append(field_name)
+                        score += weight
+                if "peso" in matched and "diametro" in matched:
+                    score += 35
+                if ("cdq" in matched or "colata" in matched) and "peso" in matched:
+                    score += 30
+                if len(set(matched)) >= 2:
+                    score += 20 * len(set(matched))
+                if score > best_score:
+                    best_page = page
+                    best_snippet = "\n".join(lines[start:end])
+                    best_fields = list(dict.fromkeys(matched))
+                    best_score = score
+
+    if best_page is None or best_score < 95 or len(set(best_fields)) < 2:
+        return None
+    return best_page, best_snippet, best_fields
+
+
+def _build_ddt_document_core_overlay_items_from_split_candidate(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    document: Document,
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    plan = build_document_row_split_plan(prepare_document_for_reader(db, document))
+    candidates = plan.row_split_candidates
+    if not candidates:
+        return []
+
+    selected_candidate = _select_best_ddt_overlay_split_candidate(row=row, candidates=candidates)
+    if selected_candidate is None or not selected_candidate.snippets:
+        return []
+
+    window_item = _build_document_core_overlay_item_from_snippet(
+        pages=document.pages,
+        field="ddt_row",
+        preferred_page_id=None,
+        snippet="\n".join(selected_candidate.snippets),
+    )
+    if window_item is None:
+        return []
+
+    candidate_field_map = {
+        "lega": selected_candidate.lega,
+        "diametro": selected_candidate.diametro,
+        "cdq": selected_candidate.cdq,
+        "colata": selected_candidate.colata or selected_candidate.lot_batch_no or selected_candidate.heat_no,
+        "ddt": selected_candidate.ddt_number,
+        "peso": selected_candidate.peso_netto,
+        "ordine": selected_candidate.customer_order_no,
+    }
+    items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    for field_name, field_value in candidate_field_map.items():
+        if _string_or_none(field_value) is None:
+            continue
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=window_item.page_id,
+                page_number=window_item.page_number,
+                field=field_name,
+                bbox=window_item.bbox,
+                image_width=window_item.image_width,
+                image_height=window_item.image_height,
+            )
+        )
+    return items
+
+
+def _select_best_ddt_overlay_split_candidate(
+    *,
+    row: AcquisitionRow,
+    candidates: list[ReaderRowSplitCandidateResponse],
+) -> ReaderRowSplitCandidateResponse | None:
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    best_candidate: ReaderRowSplitCandidateResponse | None = None
+    best_score = -1
+    for candidate in candidates:
+        score = 0
+
+        if row.ddt and candidate.ddt_number:
+            if _normalize_row_signature_token(row.ddt) != _normalize_row_signature_token(candidate.ddt_number):
+                continue
+            score += 120
+        if row.ordine and candidate.customer_order_no:
+            if _normalize_row_signature_token(row.ordine) != _normalize_row_signature_token(candidate.customer_order_no):
+                continue
+            score += 110
+        if row.lega_base and candidate.lega:
+            if _normalize_row_signature_token(row.lega_base) != _normalize_row_signature_token(candidate.lega):
+                continue
+            score += 90
+        if row.colata and (candidate.colata or candidate.lot_batch_no or candidate.heat_no):
+            candidate_cast = candidate.colata or candidate.lot_batch_no or candidate.heat_no
+            if _normalize_row_signature_token(row.colata) != _normalize_row_signature_token(candidate_cast):
+                continue
+            score += 110
+        if row.diametro and candidate.diametro:
+            if not _supplier_decimal_tokens_match(row.diametro, candidate.diametro):
+                continue
+            score += 90
+        if row.peso and candidate.peso_netto:
+            if not reader_weights_are_compatible(row.peso, candidate.peso_netto):
+                continue
+            score += 80
+        if row.cdq and candidate.cdq:
+            if _normalize_row_signature_token(row.cdq) == _normalize_row_signature_token(candidate.cdq):
+                score += 80
+
+        if score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    if best_score <= 0:
+        return None
+    return best_candidate
+
+
+def _build_document_core_overlay_item_from_snippet(
+    *,
+    pages: list[DocumentPage],
+    field: str,
+    preferred_page_id: int | None,
+    snippet: str,
+) -> DocumentCoreOverlayPreviewItemResponse | None:
+    snippet_text = _string_or_none(snippet)
+    if snippet_text is None:
+        return None
+
+    page_by_id = {page.id: page for page in pages}
+    ordered_pages: list[DocumentPage] = []
+    preferred_page = page_by_id.get(preferred_page_id) if preferred_page_id is not None else None
+    if preferred_page is not None:
+        ordered_pages.append(preferred_page)
+    ordered_pages.extend(page for page in pages if preferred_page is None or page.id != preferred_page.id)
+
+    best_result: tuple[DocumentPage, str, int, int, int] | None = None
+    for priority, page in enumerate(ordered_pages):
+        if not page.immagine_pagina_storage_key:
+            continue
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
+        line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+        match = _find_best_note_overlay_match(
+            field=field,
+            snippet=snippet_text,
+            line_boxes=line_boxes,
+        )
+        if match is None:
+            continue
+        bbox, score = match
+        candidate = (page, bbox, score, image_width, image_height)
+        if best_result is None or score > best_result[2] or (score == best_result[2] and priority == 0):
+            best_result = candidate
+
+    if best_result is None:
+        return None
+
+    page, bbox, _, image_width, image_height = best_result
+    return DocumentCoreOverlayPreviewItemResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        field=field,
+        bbox=bbox,
+        image_width=image_width,
+        image_height=image_height,
+    )
 
 
 def _build_properties_overlay_preview_items_for_page(
@@ -4000,6 +4575,9 @@ def upsert_read_value(
     )
     if payload.blocco == "ddt":
         _sync_row_from_ddt_values(db, row)
+        db.add(row)
+    if payload.blocco == "match":
+        _sync_row_from_match_values(db, row)
         db.add(row)
     _sync_row_statuses(db, row)
     db.commit()
@@ -15987,6 +16565,7 @@ def _row_match_core_field_value(row: AcquisitionRow, field_name: str) -> str | N
         "lega_certificato": _row_high_alloy_value(row),
         "diametro_certificato": row.diametro,
         "colata_certificato": row.colata,
+        "ddt_certificato": row.ddt,
         "peso_certificato": row.peso,
     }
     return _string_or_none(field_map.get(field_name))
@@ -16005,6 +16584,7 @@ def _sync_match_values_from_row_fields(
         "lega_certificato": {"lega_base", "lega_designazione", "variante_lega"},
         "diametro_certificato": {"diametro"},
         "colata_certificato": {"colata"},
+        "ddt_certificato": {"ddt"},
         "peso_certificato": {"peso"},
     }
 
@@ -16049,6 +16629,8 @@ def _sync_row_from_match_values(db: Session, row: AcquisitionRow) -> None:
         row.diametro = _final_value_for_row(value_map.get("diametro_certificato"))
     if row.colata is None and "colata_certificato" in value_map:
         row.colata = _final_value_for_row(value_map.get("colata_certificato"))
+    if row.ddt is None and "ddt_certificato" in value_map:
+        row.ddt = _final_value_for_row(value_map.get("ddt_certificato"))
     if row.peso is None and "peso_certificato" in value_map:
         row.peso = _final_value_for_row(value_map.get("peso_certificato"))
 

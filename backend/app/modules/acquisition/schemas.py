@@ -187,6 +187,19 @@ class NoteOverlayPreviewResponse(BaseModel):
     items: list[NoteOverlayPreviewItemResponse]
 
 
+class DocumentCoreOverlayPreviewItemResponse(BaseModel):
+    page_id: int
+    page_number: int
+    field: str
+    bbox: str
+    image_width: int
+    image_height: int
+
+
+class DocumentCoreOverlayPreviewResponse(BaseModel):
+    items: list[DocumentCoreOverlayPreviewItemResponse]
+
+
 class DdtLinkPreviewCandidateResponse(BaseModel):
     row_id: int
     document_ddt_id: int

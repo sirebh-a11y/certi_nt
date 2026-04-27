@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
+import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
 const SYSTEM_NOTE_ORDER = [
   "us_control_class_a",
@@ -55,6 +56,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const viewportRef = useRef(null);
+  const pageElementRefs = useRef({});
   const [viewportWidth, setViewportWidth] = useState(0);
 
   useEffect(() => {
@@ -125,6 +127,21 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
     return grouped;
   }, [overlayPreviewItems]);
 
+  useEffect(() => {
+    if (!overlayPreviewItems.length) {
+      return;
+    }
+    focusFirstOverlayItemInViewport({
+      overlayItems: overlayPreviewItems,
+      pageImages,
+      pageImageSizes,
+      pageElementRefs,
+      viewportElement: viewportRef.current,
+      viewportWidth,
+      zoom,
+    });
+  }, [overlayPreviewItems, pageImages, pageImageSizes, viewportWidth, zoom]);
+
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -157,7 +174,17 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
-              <div className="w-full" key={page.id}>
+              <div
+                className="w-full"
+                key={page.id}
+                ref={(element) => {
+                  if (element) {
+                    pageElementRefs.current[page.id] = element;
+                  } else {
+                    delete pageElementRefs.current[page.id];
+                  }
+                }}
+              >
                 <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">
                   Pagina {page.numero_pagina}
                 </p>

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
+import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
-const PROPERTY_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2 / Rm"];
+const PROPERTY_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "Rp0.2 / Rm"];
 const DERIVED_FIELD = "Rp0.2 / Rm";
 
 function canonicalPropertyField(field) {
@@ -226,6 +227,7 @@ function PropertiesPdfPanel({
   const [captureBusyPageId, setCaptureBusyPageId] = useState(null);
   const [selection, setSelection] = useState(null);
   const viewportRef = useRef(null);
+  const pageElementRefs = useRef({});
   const [viewportWidth, setViewportWidth] = useState(0);
 
   useEffect(() => {
@@ -435,6 +437,21 @@ function PropertiesPdfPanel({
     return grouped;
   }, [draftOverlayItems]);
 
+  useEffect(() => {
+    if (!overlayPreviewItems.length) {
+      return;
+    }
+    focusFirstOverlayItemInViewport({
+      overlayItems: overlayPreviewItems,
+      pageImages,
+      pageImageSizes,
+      pageElementRefs,
+      viewportElement: viewportRef.current,
+      viewportWidth,
+      zoom,
+    });
+  }, [overlayPreviewItems, pageImages, pageImageSizes, viewportWidth, zoom]);
+
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -465,7 +482,17 @@ function PropertiesPdfPanel({
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
-              <div className="w-full" key={page.id}>
+              <div
+                className="w-full"
+                key={page.id}
+                ref={(element) => {
+                  if (element) {
+                    pageElementRefs.current[page.id] = element;
+                  } else {
+                    delete pageElementRefs.current[page.id];
+                  }
+                }}
+              >
                 <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Pagina {page.numero_pagina}</p>
                 <div className="relative" style={{ width: viewportWidth > 0 ? `${(viewportWidth * zoom) / 100}px` : "100%" }}>
                   <img

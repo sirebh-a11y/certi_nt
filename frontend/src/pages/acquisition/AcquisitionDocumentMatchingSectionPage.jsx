@@ -3,6 +3,7 @@ import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { formatRowFieldDisplay } from "./fieldFormatting";
+import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
 const HIGH_LEVEL_FIELDS = [
   { key: "lega_base", label: "lega" },
@@ -14,15 +15,65 @@ const HIGH_LEVEL_FIELDS = [
   { key: "ordine", label: "ordine" },
 ];
 
+function readValuePayload(value) {
+  return value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
+}
+
+function readDdtValue(row, field) {
+  const values = Array.isArray(row?.values) ? row.values : [];
+  const valueKey = field === "lega_base" ? "lega" : field;
+  const found = values.find((value) => value.blocco === "ddt" && value.campo === valueKey);
+  if (field === "lega_base") {
+    return formatRowFieldDisplay("lega", readValuePayload(found) || row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
+  }
+  if (readValuePayload(found)) {
+    return formatRowFieldDisplay(field, readValuePayload(found));
+  }
+  return formatRowFieldDisplay(field, row?.[field] || "");
+}
+
+function readCertificateValue(row, field) {
+  const values = Array.isArray(row?.values) ? row.values : [];
+  const matchFieldMap = {
+    lega_base: "lega_certificato",
+    diametro: "diametro_certificato",
+    cdq: "numero_certificato_certificato",
+    colata: "colata_certificato",
+    ddt: "ddt_certificato",
+    peso: "peso_certificato",
+    ordine: "ordine_cliente_certificato",
+  };
+  const found = values.find((value) => value.blocco === "match" && value.campo === matchFieldMap[field]);
+  if (field === "lega_base") {
+    return formatRowFieldDisplay("lega", readValuePayload(found) || row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
+  }
+  if (readValuePayload(found)) {
+    return formatRowFieldDisplay(field, readValuePayload(found));
+  }
+  return formatRowFieldDisplay(field, row?.[field] || "");
+}
+
 function buildCertificateDraft(row) {
   return {
-    lega_base: formatRowFieldDisplay("lega", row?.lega_base || row?.lega_designazione || row?.variante_lega || ""),
-    diametro: formatRowFieldDisplay("diametro", row?.diametro || ""),
-    cdq: formatRowFieldDisplay("cdq", row?.cdq || ""),
-    colata: formatRowFieldDisplay("colata", row?.colata || ""),
-    ddt: formatRowFieldDisplay("ddt", row?.ddt || ""),
-    peso: formatRowFieldDisplay("peso", row?.peso || ""),
-    ordine: formatRowFieldDisplay("ordine", row?.ordine || ""),
+    lega_base: readCertificateValue(row, "lega_base"),
+    diametro: readCertificateValue(row, "diametro"),
+    cdq: readCertificateValue(row, "cdq"),
+    colata: readCertificateValue(row, "colata"),
+    ddt: readCertificateValue(row, "ddt"),
+    peso: readCertificateValue(row, "peso"),
+    ordine: readCertificateValue(row, "ordine"),
+  };
+}
+
+function buildDdtDraft(row) {
+  return {
+    lega_base: readDdtValue(row, "lega_base"),
+    diametro: readDdtValue(row, "diametro"),
+    cdq: readDdtValue(row, "cdq"),
+    colata: readDdtValue(row, "colata"),
+    ddt: readDdtValue(row, "ddt"),
+    peso: readDdtValue(row, "peso"),
+    ordine: readDdtValue(row, "ordine"),
   };
 }
 
@@ -38,19 +89,6 @@ function renderStateTone(state) {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
   return "border-rose-200 bg-rose-50 text-rose-700";
-}
-
-function readDdtValue(row, field) {
-  const values = Array.isArray(row?.values) ? row.values : [];
-  const valueKey = field === "lega_base" ? "lega" : field;
-  const found = values.find((value) => value.blocco === "ddt" && value.campo === valueKey);
-  if (field === "lega_base") {
-    return formatRowFieldDisplay("lega", found?.valore_finale || found?.valore_standardizzato || found?.valore_grezzo || row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
-  }
-  if (found?.valore_finale || found?.valore_standardizzato || found?.valore_grezzo) {
-    return formatRowFieldDisplay(field, found.valore_finale || found.valore_standardizzato || found.valore_grezzo || "");
-  }
-  return formatRowFieldDisplay(field, row?.[field] || "");
 }
 
 function matchStateLabel(row) {
@@ -81,12 +119,40 @@ function PreviewMini({ label, value }) {
   );
 }
 
-function DocumentPdfPanel({ document, title, footerContent, token }) {
+function renderOverlayBox({ item, color, imageWidth, imageHeight, title, key }) {
+  const [left, top, right, bottom] = String(item?.bbox || "")
+    .split(",")
+    .map((part) => Number.parseFloat(part));
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom) || imageWidth <= 0 || imageHeight <= 0) {
+    return null;
+  }
+  const palette =
+    color === "green"
+      ? "border-emerald-500 bg-emerald-400/50 shadow-[0_0_0_1px_rgba(16,185,129,0.3)]"
+      : "border-sky-500 bg-sky-400/20 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]";
+  return (
+    <div
+      className={`pointer-events-none absolute rounded border ${palette}`}
+      key={key}
+      title={title}
+      style={{
+        left: `${(left / imageWidth) * 100}%`,
+        top: `${(top / imageHeight) * 100}%`,
+        width: `${((right - left) / imageWidth) * 100}%`,
+        height: `${((bottom - top) / imageHeight) * 100}%`,
+      }}
+    />
+  );
+}
+
+function DocumentPdfPanel({ document, title, footerContent, token, overlayPreviewItems }) {
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
   const viewportRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const pageElementRefs = useRef({});
+  const [pageImageSizes, setPageImageSizes] = useState({});
 
   useEffect(() => {
     let ignore = false;
@@ -126,6 +192,35 @@ function DocumentPdfPanel({ document, title, footerContent, token }) {
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [document, token]);
+
+  useEffect(() => {
+    const nextSizes = {};
+    (overlayPreviewItems || []).forEach((item) => {
+      if (!item?.page_id) {
+        return;
+      }
+      nextSizes[item.page_id] = {
+        width: Number(item.image_width || 0),
+        height: Number(item.image_height || 0),
+      };
+    });
+    setPageImageSizes((current) => ({ ...current, ...nextSizes }));
+  }, [overlayPreviewItems]);
+
+  useEffect(() => {
+    if (!overlayPreviewItems?.length) {
+      return;
+    }
+    focusFirstOverlayItemInViewport({
+      overlayItems: overlayPreviewItems,
+      pageImages,
+      pageImageSizes,
+      pageElementRefs,
+      viewportElement: viewportRef.current,
+      viewportWidth,
+      zoom,
+    });
+  }, [overlayPreviewItems, pageImages, pageImageSizes, viewportWidth, zoom]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -174,7 +269,13 @@ function DocumentPdfPanel({ document, title, footerContent, token }) {
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
-              <div className="w-full" key={page.id}>
+              <div
+                className="w-full"
+                key={page.id}
+                ref={(node) => {
+                  pageElementRefs.current[page.id] = node;
+                }}
+              >
                 <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">
                   Pagina {page.numero_pagina}
                 </p>
@@ -183,9 +284,31 @@ function DocumentPdfPanel({ document, title, footerContent, token }) {
                     alt={`${title} pagina ${page.numero_pagina}`}
                     className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm"
                     draggable={false}
+                    onLoad={(event) => {
+                      const image = event.currentTarget;
+                      setPageImageSizes((current) => ({
+                        ...current,
+                        [page.id]: {
+                          width: image.naturalWidth || current[page.id]?.width || 0,
+                          height: image.naturalHeight || current[page.id]?.height || 0,
+                        },
+                      }));
+                    }}
                     src={page.src}
                     style={{ userSelect: "none" }}
                   />
+                  {(overlayPreviewItems || [])
+                    .filter((item) => item.page_id === page.id)
+                    .map((item) =>
+                      renderOverlayBox({
+                        item,
+                        color: "blue",
+                        imageWidth: Number(item.image_width || pageImageSizes[page.id]?.width || 0),
+                        imageHeight: Number(item.image_height || pageImageSizes[page.id]?.height || 0),
+                        title: item.field,
+                        key: `${page.id}-${item.field}`,
+                      }),
+                    )}
                 </div>
               </div>
             ))}
@@ -371,8 +494,11 @@ export default function AcquisitionDocumentMatchingSectionPage({
 }) {
   const isCertificateFirstRow = useMemo(() => Boolean(row?.document_certificato_id) && !row?.document_ddt_id, [row]);
   const isDdtOnlyRow = useMemo(() => Boolean(row?.document_ddt_id) && !row?.document_certificato_id, [row]);
+  const [ddtDraft, setDdtDraft] = useState(() => buildDdtDraft(row));
+  const [initialDdtDraft, setInitialDdtDraft] = useState(() => buildDdtDraft(row));
   const [certificateDraft, setCertificateDraft] = useState(() => buildCertificateDraft(row));
   const [initialCertificateDraft, setInitialCertificateDraft] = useState(() => buildCertificateDraft(row));
+  const [savingDdtFields, setSavingDdtFields] = useState(false);
   const [refreshingCertificateFirst, setRefreshingCertificateFirst] = useState(false);
   const [savingCertificateFirst, setSavingCertificateFirst] = useState(false);
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
@@ -380,6 +506,16 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [error, setError] = useState("");
   const [certificateOverlayActive, setCertificateOverlayActive] = useState(false);
   const [ddtOverlayActive, setDdtOverlayActive] = useState(false);
+  const [certificateOverlayBusy, setCertificateOverlayBusy] = useState(false);
+  const [ddtOverlayBusy, setDdtOverlayBusy] = useState(false);
+  const [certificateOverlayItems, setCertificateOverlayItems] = useState([]);
+  const [ddtOverlayItems, setDdtOverlayItems] = useState([]);
+
+  useEffect(() => {
+    const nextDraft = buildDdtDraft(row);
+    setDdtDraft(nextDraft);
+    setInitialDdtDraft(nextDraft);
+  }, [row]);
 
   useEffect(() => {
     const nextDraft = buildCertificateDraft(row);
@@ -388,13 +524,21 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }, [row]);
 
   useEffect(() => {
-    onDirtyChange?.(isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft));
-  }, [certificateDraft, initialCertificateDraft, isCertificateFirstRow, onDirtyChange]);
+    onDirtyChange?.(
+      (isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft)) ||
+        (isDdtOnlyRow && !draftsEqual(ddtDraft, initialDdtDraft)),
+    );
+  }, [certificateDraft, ddtDraft, initialCertificateDraft, initialDdtDraft, isCertificateFirstRow, isDdtOnlyRow, onDirtyChange]);
 
   useBeforeUnload(
     useMemo(
-      () => (isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft) ? "Hai modifiche certificate-first non confermate." : undefined),
-      [certificateDraft, initialCertificateDraft, isCertificateFirstRow],
+      () =>
+        isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft)
+          ? "Hai modifiche certificate-first non confermate."
+          : isDdtOnlyRow && !draftsEqual(ddtDraft, initialDdtDraft)
+            ? "Hai modifiche DDT non confermate."
+            : undefined,
+      [certificateDraft, ddtDraft, initialCertificateDraft, initialDdtDraft, isCertificateFirstRow, isDdtOnlyRow],
     ),
   );
 
@@ -431,13 +575,107 @@ export default function AcquisitionDocumentMatchingSectionPage({
     };
   }, [isCertificateFirstRow, rowId, token]);
 
-  const ddtFields = useMemo(
-    () => Object.fromEntries(HIGH_LEVEL_FIELDS.map((field) => [field.key, readDdtValue(row, field.key)])),
-    [row],
-  );
+  const ddtFields = useMemo(() => ddtDraft, [ddtDraft]);
 
   function updateCertificateDraft(field, value) {
     setCertificateDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateDdtDraft(field, value) {
+    setDdtDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function fetchDocumentCoreOverlay(source) {
+    const response = await apiRequest(`/acquisition/rows/${rowId}/document-core-overlay-preview?source=${source}`, {}, token);
+    return Array.isArray(response?.items) ? response.items : [];
+  }
+
+  async function handleToggleDdtOverlay() {
+    if (!ddtDocument || ddtOverlayBusy) {
+      return;
+    }
+    if (ddtOverlayActive) {
+      setDdtOverlayActive(false);
+      setDdtOverlayItems([]);
+      return;
+    }
+    setDdtOverlayBusy(true);
+    setError("");
+    try {
+      const items = await fetchDocumentCoreOverlay("ddt");
+      setDdtOverlayItems(items);
+      setDdtOverlayActive(items.length > 0);
+      if (!items.length) {
+        setError("Nessun overlay disponibile per il DDT.");
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+      setDdtOverlayItems([]);
+      setDdtOverlayActive(false);
+    } finally {
+      setDdtOverlayBusy(false);
+    }
+  }
+
+  async function handleToggleCertificateOverlay() {
+    if (!certificateDocument || certificateOverlayBusy) {
+      return;
+    }
+    if (certificateOverlayActive) {
+      setCertificateOverlayActive(false);
+      setCertificateOverlayItems([]);
+      return;
+    }
+    setCertificateOverlayBusy(true);
+    setError("");
+    try {
+      const items = await fetchDocumentCoreOverlay("certificato");
+      setCertificateOverlayItems(items);
+      setCertificateOverlayActive(items.length > 0);
+      if (!items.length) {
+        setError("Nessun overlay disponibile per il certificato.");
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+      setCertificateOverlayItems([]);
+      setCertificateOverlayActive(false);
+    } finally {
+      setCertificateOverlayBusy(false);
+    }
+  }
+
+  async function handleResetDdtDraft() {
+    const nextDraft = buildDdtDraft(row);
+    setDdtDraft(nextDraft);
+    setInitialDdtDraft(nextDraft);
+  }
+
+  async function handleSaveDdtFields() {
+    setSavingDdtFields(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            lega_base: (ddtDraft.lega_base || "").trim() || null,
+            diametro: (ddtDraft.diametro || "").trim() || null,
+            cdq: (ddtDraft.cdq || "").trim() || null,
+            colata: (ddtDraft.colata || "").trim() || null,
+            ddt: (ddtDraft.ddt || "").trim() || null,
+            peso: (ddtDraft.peso || "").trim() || null,
+            ordine: (ddtDraft.ordine || "").trim() || null,
+          }),
+        },
+        token,
+      );
+      await onRefreshRow?.();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingDdtFields(false);
+    }
   }
 
   async function handleRefreshCertificateFirst() {
@@ -498,7 +736,11 @@ export default function AcquisitionDocumentMatchingSectionPage({
     <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
       <p className="text-[11px] font-semibold text-slate-700">DDT</p>
       <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-slate-600">
-        {ddtDocument ? "Campi documento DDT pronti per controllo e conferma." : "Qui arriverà la sezione di accoppiamento al posto del PDF mancante."}
+        {ddtDocument
+          ? isDdtOnlyRow
+            ? "Qui lavoriamo sui 7 campi Excel del DDT."
+            : "Campi DDT in sola lettura finché non chiudiamo la conferma separata a due documenti."
+          : "Qui arriverà la sezione di accoppiamento al posto del PDF mancante."}
       </p>
     </div>
   );
@@ -532,32 +774,39 @@ export default function AcquisitionDocumentMatchingSectionPage({
       ? "Certificato collegato: qui andranno overlay, conferma e controllo match."
       : "Nessun certificato collegato: qui apparirà la sezione di accoppiamento.";
 
+  const ddtStatusLabel = ddtDocument
+    ? isDdtOnlyRow
+      ? "Controlla i campi alti del DDT e conferma il documento."
+      : "DDT collegato: confronto in sola lettura finché non chiudiamo la conferma separata."
+    : "Nessun DDT collegato.";
+
   return (
     <section className="space-y-4">
       {ddtDocument ? (
         <DocumentPdfPanel
           document={ddtDocument}
+          overlayPreviewItems={ddtOverlayItems}
           footerContent={
             <div className="space-y-2">
               <StatusBar
-                actionLabel={ddtDocument ? "PDF DDT collegato. Overlay documentale in arrivo in questa sezione." : "Nessun DDT collegato."}
+                actionLabel={ddtStatusLabel}
                 actionState={ddtDocument ? "Controllo documento DDT" : ""}
                 error={error && !certificateDocument ? error : ""}
-                onToggleOverlay={() => setDdtOverlayActive((current) => !current)}
-                overlayBusy={false}
+                onToggleOverlay={() => void handleToggleDdtOverlay()}
+                overlayBusy={ddtOverlayBusy}
                 overlayEnabled={ddtOverlayActive}
               />
               <DocumentControls
                 actionBox={ddtActionBox}
-                confirmDisabled
-                confirming={false}
-                editable={false}
+                confirmDisabled={!isDdtOnlyRow || savingDdtFields}
+                confirming={savingDdtFields}
+                editable={isDdtOnlyRow}
                 fields={ddtFields}
                 fieldsTitle="ddt"
-                onChange={() => {}}
-                onConfirm={() => {}}
-                onReset={() => {}}
-                resetDisabled
+                onChange={updateDdtDraft}
+                onConfirm={() => void handleSaveDdtFields()}
+                onReset={() => void handleResetDdtDraft()}
+                resetDisabled={!isDdtOnlyRow}
               />
             </div>
           }
@@ -578,8 +827,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
               actionLabel={loadingDdtPreview ? "Ricerca DDT candidati in corso." : "Qui appariranno candidati DDT e collegamento."}
               actionState={ddtLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${ddtLinkPreview.auto_match_row_id}` : ""}
               error={error}
-              onToggleOverlay={() => setDdtOverlayActive((current) => !current)}
-              overlayBusy={false}
+              onToggleOverlay={() => void handleToggleDdtOverlay()}
+              overlayBusy={ddtOverlayBusy}
               overlayEnabled={ddtOverlayActive}
             />
             <DocumentControls
@@ -608,14 +857,15 @@ export default function AcquisitionDocumentMatchingSectionPage({
       {certificateDocument ? (
         <DocumentPdfPanel
           document={certificateDocument}
+          overlayPreviewItems={certificateOverlayItems}
           footerContent={
             <div className="space-y-2">
               <StatusBar
                 actionLabel={certificateStatusLabel}
                 actionState={certificateDocument ? "Controllo documento certificato" : ""}
                 error={error && Boolean(certificateDocument) ? error : ""}
-                onToggleOverlay={() => setCertificateOverlayActive((current) => !current)}
-                overlayBusy={false}
+                onToggleOverlay={() => void handleToggleCertificateOverlay()}
+                overlayBusy={certificateOverlayBusy}
                 overlayEnabled={certificateOverlayActive}
               />
               <DocumentControls
