@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import AcquisitionChemistrySectionPage from "./AcquisitionChemistrySectionPage";
+import AcquisitionDocumentMatchingSectionPage from "./AcquisitionDocumentMatchingSectionPage";
 import AcquisitionNotesSectionPage from "./AcquisitionNotesSectionPage";
 import AcquisitionPropertiesSectionPage from "./AcquisitionPropertiesSectionPage";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
@@ -22,6 +23,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   const { rowId, sectionKey } = useParams();
   const title = SECTION_TITLES[sectionKey] || "Sezione";
   const [row, setRow] = useState(null);
+  const [ddtDocument, setDdtDocument] = useState(null);
   const [certificateDocument, setCertificateDocument] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -35,6 +37,12 @@ export default function AcquisitionSectionPlaceholderPage() {
     try {
       const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
       setRow(rowData);
+      if (rowData.ddt_document?.id) {
+        const ddtData = await apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token);
+        setDdtDocument(ddtData);
+      } else {
+        setDdtDocument(null);
+      }
       if (rowData.certificate_document?.id) {
         const certificateData = await apiRequest(`/acquisition/documents/${rowData.certificate_document.id}`, {}, token);
         setCertificateDocument(certificateData);
@@ -56,6 +64,14 @@ export default function AcquisitionSectionPlaceholderPage() {
         const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
         if (!ignore) {
           setRow(rowData);
+        }
+        if (rowData.ddt_document?.id) {
+          const ddtData = await apiRequest(`/acquisition/documents/${rowData.ddt_document.id}`, {}, token);
+          if (!ignore) {
+            setDdtDocument(ddtData);
+          }
+        } else if (!ignore) {
+          setDdtDocument(null);
         }
         if (rowData.certificate_document?.id) {
           const certificateData = await apiRequest(`/acquisition/documents/${rowData.certificate_document.id}`, {}, token);
@@ -84,7 +100,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [rowId, token]);
 
   useEffect(() => {
-    if (!["chemistry", "properties", "notes"].includes(sectionKey)) {
+    if (!["document-matching", "chemistry", "properties", "notes"].includes(sectionKey)) {
       return undefined;
     }
 
@@ -118,7 +134,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [location.hash, location.pathname, location.search, sectionDirty, sectionKey]);
 
   function handleBackToList() {
-    if (["chemistry", "properties", "notes"].includes(sectionKey) && sectionDirty) {
+    if (["document-matching", "chemistry", "properties", "notes"].includes(sectionKey) && sectionDirty) {
       setPendingPath("/acquisition");
       setExitDialogOpen(true);
       return;
@@ -154,6 +170,17 @@ export default function AcquisitionSectionPlaceholderPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {row && sectionKey === "document-matching" ? (
+        <AcquisitionDocumentMatchingSectionPage
+          certificateDocument={certificateDocument}
+          ddtDocument={ddtDocument}
+          onDirtyChange={setSectionDirty}
+          onRefreshRow={loadRow}
+          row={row}
+          rowId={rowId}
+          token={token}
+        />
       ) : null}
       {row && sectionKey === "chemistry" ? (
         <AcquisitionChemistrySectionPage
