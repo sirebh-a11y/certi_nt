@@ -20,6 +20,7 @@ from app.modules.acquisition.schemas import (
     ChemistryTableCaptureResponse,
     DocumentBatchUploadResponse,
     CurrentUploadBatchResponse,
+    DdtLinkPreviewResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
@@ -72,6 +73,7 @@ from app.modules.acquisition.service import (
     list_documents,
     process_row_minimal,
     prepare_document_for_reader,
+    refresh_certificate_first_row,
     run_ai_intervention,
     save_notes_section,
     run_autonomous_processing,
@@ -79,6 +81,7 @@ from app.modules.acquisition.service import (
     serialize_document_detail,
     serialize_autonomous_run,
     start_autonomous_run,
+    build_ddt_link_preview_from_certificate_row,
     upload_document,
     upload_documents_batch,
     upsert_match,
@@ -516,6 +519,26 @@ def process_row_minimal_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return process_row_minimal(db=db, row=row, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/refresh-certificate-first", response_model=AcquisitionRowDetailResponse)
+def refresh_certificate_first_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return refresh_certificate_first_row(db=db, row=row, actor_id=current_user.id)
+
+
+@router.get("/rows/{row_id}/ddt-link-preview", response_model=DdtLinkPreviewResponse)
+def ddt_link_preview_route(
+    row_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> DdtLinkPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_ddt_link_preview_from_certificate_row(db=db, row=row)
 
 
 @router.post("/rows/{row_id}/intervento-ai", response_model=AcquisitionRowDetailResponse)

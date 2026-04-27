@@ -51,6 +51,8 @@ from app.modules.acquisition.schemas import (
     ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    DdtLinkPreviewCandidateResponse,
+    DdtLinkPreviewResponse,
     NoteOverlayPreviewItemResponse,
     NoteOverlayPreviewResponse,
     PropertiesCaptureRequest,
@@ -3683,6 +3685,11 @@ def update_acquisition_row(
     actor_email: str,
 ) -> AcquisitionRowDetailResponse:
     updates = payload.model_dump(exclude_unset=True)
+    touched_row_core_fields = {
+        field_name
+        for field_name in updates
+        if field_name in {"cdq", "lega_base", "lega_designazione", "variante_lega", "diametro", "colata", "ddt", "peso", "ordine"}
+    }
     if "document_certificato_id" in updates and updates["document_certificato_id"] is not None:
         certificate_document = _get_document_of_type(db, updates["document_certificato_id"], "certificato")
         updates["document_certificato_id"] = certificate_document.id
@@ -3693,6 +3700,20 @@ def update_acquisition_row(
         setattr(row, field, value)
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="riga_aggiornata")
+    if touched_row_core_fields and row.document_ddt_id is not None:
+        _sync_ddt_values_from_row_fields(
+            db,
+            row,
+            actor_id=actor_id,
+            touched_fields=touched_row_core_fields,
+        )
+    if touched_row_core_fields and row.document_certificato_id is not None:
+        _sync_match_values_from_row_fields(
+            db,
+            row,
+            actor_id=actor_id,
+            touched_fields=touched_row_core_fields,
+        )
     _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
@@ -3706,6 +3727,95 @@ def update_acquisition_row(
     updated_row = get_acquisition_row(db, row.id)
     log_service.record("acquisition", f"Acquisition row updated: {updated_row.id}", actor_email)
     return serialize_acquisition_row_detail(updated_row)
+
+
+def refresh_certificate_first_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
+    current_row = get_acquisition_row(db, row.id)
+    if current_row.document_certificato_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    extract_core_fields(db=db, row=current_row, actor_id=actor_id)
+    current_row = get_acquisition_row(db, row.id)
+    current_row = _process_certificate_side_blocks(
+        db=db,
+        row=current_row,
+        actor_id=actor_id,
+        openai_api_key=None,
+        use_ai_intervention=False,
+        certificate_ai_cache=None,
+    )
+    touched_fields = {"cdq", "lega_base", "lega_designazione", "variante_lega", "diametro", "colata", "peso", "ordine", "ddt"}
+    _sync_match_values_from_row_fields(
+        db=db,
+        row=current_row,
+        actor_id=actor_id,
+        touched_fields=touched_fields,
+    )
+    if current_row.document_ddt_id is not None:
+        _sync_ddt_values_from_row_fields(
+            db=db,
+            row=current_row,
+            actor_id=actor_id,
+            touched_fields=touched_fields,
+        )
+    _sync_row_statuses(db, current_row)
+    db.add(current_row)
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def build_ddt_link_preview_from_certificate_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> DdtLinkPreviewResponse:
+    current_row = get_acquisition_row(db, row.id)
+    if current_row.document_certificato_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+    if current_row.fornitore_id is None:
+        return DdtLinkPreviewResponse(current_row_id=current_row.id, items=[])
+
+    supplier_key = _resolve_row_supplier_key(current_row)
+    candidate_rows = _candidate_rows_for_incoming_certificate_link(db, supplier_id=current_row.fornitore_id)
+    certificate_payload = _certificate_link_payload_from_row(current_row, supplier_key=supplier_key)
+    certificate_supplier_fields = _certificate_supplier_fields_from_row(current_row, supplier_key=supplier_key)
+
+    items: list[DdtLinkPreviewCandidateResponse] = []
+    for candidate_row in candidate_rows:
+        if not _candidate_row_matches_certificate_row(
+            candidate_row=candidate_row,
+            supplier_key=supplier_key,
+            certificate_payload=certificate_payload,
+        ):
+            continue
+        candidate_item = _score_ddt_link_candidate_from_certificate_row(
+            candidate_row=candidate_row,
+            certificate_row=current_row,
+            supplier_key=supplier_key,
+            certificate_supplier_fields=certificate_supplier_fields,
+        )
+        if candidate_item is None:
+            continue
+        items.append(candidate_item)
+
+    items.sort(key=lambda item: (-item.score, item.row_id))
+    auto_match_row_id: int | None = None
+    if items:
+        best_score = items[0].score
+        second_score = items[1].score if len(items) > 1 else 0
+        if best_score >= 240 and (len(items) == 1 or best_score - second_score >= 45):
+            auto_match_row_id = items[0].row_id
+
+    return DdtLinkPreviewResponse(
+        current_row_id=current_row.id,
+        auto_match_row_id=auto_match_row_id,
+        items=items[:5],
+    )
 
 
 def save_notes_section(
@@ -6854,6 +6964,8 @@ def _process_certificate_side_blocks(
             actor_id=actor_id,
         )
         current_row = get_acquisition_row(db, current_row.id)
+        if current_row.certificate_document is not None:
+            _sync_row_cdq_from_certificate_document(db, current_row, current_row.certificate_document)
         return current_row
 
     if not _block_has_confirmed_values(db, current_row.id, "chimica"):
@@ -6868,6 +6980,8 @@ def _process_certificate_side_blocks(
         detect_standard_notes(db=db, row=current_row, actor_id=actor_id, openai_api_key=openai_api_key)
         current_row = get_acquisition_row(db, row.id)
 
+    if current_row.certificate_document is not None:
+        _sync_row_cdq_from_certificate_document(db, current_row, current_row.certificate_document)
     return current_row
 
 
@@ -7535,6 +7649,7 @@ def _ensure_certificate_first_rows(
                 or (_string_or_none(ai_supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(ai_match_values.get("ordine_cliente_certificato"))
             )
+            certificate_delivery_note = _string_or_none(ai_supplier_fields.get("delivery_note_no"))
             certificate_packing_list = _string_or_none(ai_supplier_fields.get("packing_list_no"))
             certificate_supplier_order = (
                 _string_or_none(ai_supplier_fields.get("supplier_order_no"))
@@ -7573,6 +7688,7 @@ def _ensure_certificate_first_rows(
                 or (_string_or_none(supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(supplier_fields.get("po_no"))
             )
+            certificate_delivery_note = _string_or_none(supplier_fields.get("delivery_note_no"))
             if supplier_key == "impol":
                 certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_cast = certificate_cast or _string_or_none(supplier_fields.get("charge"))
@@ -7720,6 +7836,7 @@ def _ensure_certificate_first_rows(
                 lega_base=certificate_alloy,
                 diametro=certificate_diameter,
                 colata=certificate_cast,
+                ddt=certificate_delivery_note,
                 peso=certificate_weight,
                 ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol", "metalba", "neuman", "aww"} else None,
                 note_documento="Certificato caricato in attesa del DDT",
@@ -8502,6 +8619,255 @@ def _certificate_first_row_identity_fields(row: AcquisitionRow) -> dict[str, str
         or _string_or_none(match_values.get("ordine_cliente_certificato"))
         or _string_or_none(row.ordine),
     }
+
+
+def _certificate_match_values_map(row: AcquisitionRow) -> dict[str, str | None]:
+    return {
+        value.campo: _final_value_for_row(value)
+        for value in row.values
+        if value.blocco == "match"
+    }
+
+
+def _certificate_link_payload_from_row(
+    row: AcquisitionRow,
+    *,
+    supplier_key: str | None,
+) -> dict[str, str | None]:
+    identity_fields = _certificate_first_row_identity_fields(row)
+    match_values = _certificate_match_values_map(row)
+    profile_code = (
+        _string_or_none(match_values.get("profile_code_certificato"))
+        or _string_or_none(match_values.get("codice_cliente_certificato"))
+        or identity_fields.get("profile_code")
+    )
+    supplier_order = _string_or_none(match_values.get("supplier_order_no_certificato"))
+    certificate_number = _string_or_none(row.cdq)
+    packing_list = normalize_impol_packing_list_root(certificate_number) if supplier_key == "impol" else None
+    return {
+        "certificate_number": certificate_number,
+        "article": identity_fields.get("article"),
+        "profile_code": profile_code,
+        "customer_order": identity_fields.get("customer_order"),
+        "alloy": _row_high_alloy_value(row),
+        "diameter": _string_or_none(row.diametro),
+        "cast": _string_or_none(row.colata),
+        "weight": _string_or_none(row.peso),
+        "packing_list": packing_list,
+        "supplier_order": supplier_order,
+    }
+
+
+def _certificate_supplier_fields_from_row(
+    row: AcquisitionRow,
+    *,
+    supplier_key: str | None,
+) -> dict[str, str | None]:
+    match_values = _certificate_match_values_map(row)
+    payload = _certificate_link_payload_from_row(row, supplier_key=supplier_key)
+    if supplier_key == "metalba":
+        return {
+            "ordine_cliente": payload["customer_order"],
+        }
+    if supplier_key == "leichtmetall":
+        return {
+            "po_no": payload["customer_order"],
+            "customer_order_no": payload["customer_order"],
+            "charge_cast_no": payload["cast"] or payload["certificate_number"],
+            "alloy": payload["alloy"],
+            "diameter": payload["diameter"],
+            "weight": payload["weight"],
+        }
+    if supplier_key == "aww":
+        return {
+            "kunden_teile_nr": payload["article"],
+            "artikel_nr": payload["profile_code"],
+            "auftragsbestaetigung_root": payload["supplier_order"],
+            "customer_order_no": payload["customer_order"],
+            "alloy": payload["alloy"],
+            "diameter": payload["diameter"],
+            "weight": payload["weight"],
+        }
+    if supplier_key == "aluminium_bozen":
+        return {
+            "article": payload["article"],
+            "profile_code": payload["profile_code"],
+            "customer_order_normalized": payload["customer_order"],
+        }
+    if supplier_key == "neuman":
+        return {
+            "delivery_note_no": _string_or_none(row.ddt),
+            "lot_number": payload["cast"] or payload["certificate_number"],
+            "customer_material_number": payload["article"],
+            "customer_order_number": payload["customer_order"],
+            "alloy": payload["alloy"],
+            "diameter": payload["diameter"],
+            "weight": payload["weight"],
+        }
+    if supplier_key == "impol":
+        return {
+            "packing_list_no": payload["packing_list"],
+            "customer_order_no": payload["customer_order"],
+            "supplier_order_no": payload["supplier_order"],
+            "product_code": payload["article"],
+            "charge": payload["cast"],
+            "diameter": payload["diameter"],
+            "net_weight": payload["weight"],
+        }
+    return {
+        "numero_certificato_certificato": payload["certificate_number"],
+        "ordine_cliente_certificato": payload["customer_order"],
+        "lega_certificato": payload["alloy"],
+        "diametro_certificato": payload["diameter"],
+        "colata_certificato": payload["cast"],
+        "peso_certificato": payload["weight"],
+        "profile_code_certificato": _string_or_none(match_values.get("profile_code_certificato")),
+        "supplier_order_no_certificato": _string_or_none(match_values.get("supplier_order_no_certificato")),
+    }
+
+
+def _candidate_row_matches_certificate_row(
+    *,
+    candidate_row: AcquisitionRow,
+    supplier_key: str | None,
+    certificate_payload: dict[str, str | None],
+) -> bool:
+    rows = [candidate_row]
+    matched: AcquisitionRow | None = None
+    if supplier_key == "aluminium_bozen":
+        matched = _find_existing_aluminium_bozen_row_for_certificate(
+            rows=rows,
+            certificate_number=certificate_payload.get("certificate_number"),
+            article=certificate_payload.get("article"),
+            profile_code=certificate_payload.get("profile_code"),
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            cast=certificate_payload.get("cast"),
+            weight=certificate_payload.get("weight"),
+        )
+    elif supplier_key == "impol":
+        matched = _find_existing_impol_row_for_certificate(
+            rows=rows,
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            cast=certificate_payload.get("cast"),
+            weight=certificate_payload.get("weight"),
+            packing_list=certificate_payload.get("packing_list"),
+            supplier_order=certificate_payload.get("supplier_order"),
+            product_code=certificate_payload.get("article"),
+        )
+    elif supplier_key == "leichtmetall":
+        matched = _find_existing_leichtmetall_row_for_certificate(
+            rows=rows,
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            cast=certificate_payload.get("cast"),
+            weight=certificate_payload.get("weight"),
+        )
+    elif supplier_key == "metalba":
+        matched = _find_existing_metalba_row_for_certificate(
+            rows=rows,
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            weight=certificate_payload.get("weight"),
+        )
+    elif supplier_key == "neuman":
+        matched = _find_existing_neuman_row_for_certificate(
+            rows=rows,
+            article=certificate_payload.get("article"),
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            cast=certificate_payload.get("cast"),
+            weight=certificate_payload.get("weight"),
+        )
+    elif supplier_key == "aww":
+        matched = _find_existing_aww_row_for_certificate(
+            rows=rows,
+            article=certificate_payload.get("article"),
+            profile_code=certificate_payload.get("profile_code"),
+            customer_order=certificate_payload.get("customer_order"),
+            alloy=certificate_payload.get("alloy"),
+            diameter=certificate_payload.get("diameter"),
+            weight=certificate_payload.get("weight"),
+            supplier_order=certificate_payload.get("supplier_order"),
+        )
+    return matched is not None and matched.id == candidate_row.id
+
+
+def _score_ddt_link_candidate_from_certificate_row(
+    *,
+    candidate_row: AcquisitionRow,
+    certificate_row: AcquisitionRow,
+    supplier_key: str | None,
+    certificate_supplier_fields: dict[str, str | None],
+) -> DdtLinkPreviewCandidateResponse | None:
+    ddt_values = {
+        value.campo: _final_value_for_row(value)
+        for value in candidate_row.values
+        if value.blocco == "ddt"
+    }
+    ddt_supplier_fields = reader_extract_row_supplier_match_fields(
+        row=candidate_row,
+        ddt_values=ddt_values,
+        supplier_key=supplier_key,
+    )
+    score = 0
+    reasons: list[str] = []
+
+    def add_reason(points: int, label: str) -> None:
+        nonlocal score
+        score += points
+        reasons.append(label)
+
+    if reader_same_token(certificate_row.cdq, candidate_row.cdq):
+        add_reason(120, "Cdq coerente")
+    if reader_same_token(certificate_row.colata, candidate_row.colata):
+        add_reason(100, "Colata coerente")
+    if reader_same_token(certificate_row.ordine, candidate_row.ordine):
+        add_reason(95, "Ordine coerente")
+    if reader_same_token(_row_high_alloy_value(certificate_row), _row_high_alloy_value(candidate_row)):
+        add_reason(55, "Lega coerente")
+    if _supplier_decimal_tokens_match(certificate_row.diametro, candidate_row.diametro):
+        add_reason(55, "Diametro coerente")
+    if reader_same_token(certificate_row.ddt, candidate_row.ddt):
+        add_reason(45, "Ddt coerente")
+    if (
+        (supplier_key == "aww" and reader_aww_weights_are_compatible(certificate_row.peso, candidate_row.peso))
+        or (supplier_key == "neuman" and reader_neuman_weights_are_compatible(certificate_row.peso, candidate_row.peso))
+        or (supplier_key not in {"aww", "neuman"} and reader_weights_are_compatible(certificate_row.peso, candidate_row.peso))
+    ):
+        add_reason(35, "Peso coerente")
+
+    for points, label in reader_score_supplier_field_matches(
+        supplier_key=supplier_key,
+        row=candidate_row,
+        ddt_supplier_fields=ddt_supplier_fields,
+        certificate_supplier_fields=certificate_supplier_fields,
+    ):
+        add_reason(points, label)
+
+    if score <= 0 or candidate_row.document_ddt_id is None:
+        return None
+
+    return DdtLinkPreviewCandidateResponse(
+        row_id=candidate_row.id,
+        document_ddt_id=candidate_row.document_ddt_id,
+        ddt_file_name=candidate_row.ddt_document.nome_file_originale if candidate_row.ddt_document is not None else None,
+        score=score,
+        reasons=reasons,
+        lega=_row_high_alloy_value(candidate_row),
+        diametro=_string_or_none(candidate_row.diametro),
+        cdq=_string_or_none(candidate_row.cdq),
+        colata=_string_or_none(candidate_row.colata),
+        ddt=_string_or_none(candidate_row.ddt),
+        peso=_string_or_none(candidate_row.peso),
+        ordine=_string_or_none(candidate_row.ordine),
+    )
 
 
 def _row_needs_ddt_vision(db: Session, row: AcquisitionRow) -> bool:
@@ -15543,6 +15909,7 @@ def _row_ddt_core_field_value(row: AcquisitionRow, field_name: str) -> str | Non
         "peso": row.peso,
         "ordine": row.ordine,
         "ddt": row.ddt,
+        "lega": _row_high_alloy_value(row),
     }
     value = field_map.get(field_name)
     if field_name in {"diametro", "peso"}:
@@ -15550,10 +15917,29 @@ def _row_ddt_core_field_value(row: AcquisitionRow, field_name: str) -> str | Non
     return _string_or_none(value)
 
 
-def _sync_ddt_values_from_row_fields(db: Session, row: AcquisitionRow, *, actor_id: int) -> None:
-    for field_name in ("cdq", "numero_certificato_ddt", "colata", "diametro", "peso", "ordine", "ddt"):
+def _sync_ddt_values_from_row_fields(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    touched_fields: set[str] | None = None,
+) -> None:
+    field_dependencies = {
+        "cdq": {"cdq"},
+        "numero_certificato_ddt": {"cdq"},
+        "colata": {"colata"},
+        "diametro": {"diametro"},
+        "peso": {"peso"},
+        "ordine": {"ordine"},
+        "ddt": {"ddt"},
+        "lega": {"lega_base", "lega_designazione", "variante_lega"},
+    }
+    for field_name in ("cdq", "numero_certificato_ddt", "colata", "diametro", "peso", "ordine", "ddt", "lega"):
+        dependencies = field_dependencies[field_name]
+        if touched_fields is not None and not (dependencies & touched_fields):
+            continue
         row_value = _row_ddt_core_field_value(row, field_name)
-        if row_value is None:
+        if row_value is None and touched_fields is None:
             continue
         _upsert_read_value_model(
             db=db,
@@ -15568,6 +15954,63 @@ def _sync_ddt_values_from_row_fields(db: Session, row: AcquisitionRow, *, actor_
             metodo_lettura="sistema",
             fonte_documentale="ddt",
             confidenza=0.9,
+            actor_id=actor_id,
+        )
+
+
+def _row_high_alloy_value(row: AcquisitionRow) -> str | None:
+    return (
+        _string_or_none(row.lega_base)
+        or _string_or_none(row.lega_designazione)
+        or _string_or_none(row.variante_lega)
+    )
+
+
+def _row_match_core_field_value(row: AcquisitionRow, field_name: str) -> str | None:
+    field_map = {
+        "numero_certificato_certificato": row.cdq,
+        "ordine_cliente_certificato": row.ordine,
+        "lega_certificato": _row_high_alloy_value(row),
+        "diametro_certificato": row.diametro,
+        "colata_certificato": row.colata,
+        "peso_certificato": row.peso,
+    }
+    return _string_or_none(field_map.get(field_name))
+
+
+def _sync_match_values_from_row_fields(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    actor_id: int,
+    touched_fields: set[str],
+) -> None:
+    field_dependencies = {
+        "numero_certificato_certificato": {"cdq"},
+        "ordine_cliente_certificato": {"ordine"},
+        "lega_certificato": {"lega_base", "lega_designazione", "variante_lega"},
+        "diametro_certificato": {"diametro"},
+        "colata_certificato": {"colata"},
+        "peso_certificato": {"peso"},
+    }
+
+    for field_name, dependencies in field_dependencies.items():
+        if not dependencies & touched_fields:
+            continue
+        row_value = _row_match_core_field_value(row, field_name)
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="match",
+            campo=field_name,
+            valore_grezzo=row_value,
+            valore_standardizzato=row_value,
+            valore_finale=row_value,
+            stato="corretto",
+            document_evidence_id=None,
+            metodo_lettura="sistema",
+            fonte_documentale="certificato",
+            confidenza=None,
             actor_id=actor_id,
         )
 
@@ -15614,11 +16057,25 @@ def _sync_row_cdq_from_certificate_document(
         certificate_document.pages,
         supplier_key=certificate_template.supplier_key if certificate_template is not None else None,
     )
+    supplier_fields = reader_extract_supplier_match_fields(
+        certificate_document.pages,
+        certificate_template.supplier_key if certificate_template is not None else None,
+        "certificato",
+    )
     certificate_number = _string_or_none(
         cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final")
     )
+    delivery_note = _string_or_none(supplier_fields.get("delivery_note_no"))
+    changed = False
     if certificate_number is not None:
         row.cdq = certificate_number
+        changed = True
+    if row.ddt is None and delivery_note is not None:
+        row.ddt = delivery_note
+        changed = True
+    if changed:
+        db.add(row)
+        db.flush()
 
 
 def _final_value_for_row(value: ReadValue | None) -> str | None:

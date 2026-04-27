@@ -187,6 +187,27 @@ class NoteOverlayPreviewResponse(BaseModel):
     items: list[NoteOverlayPreviewItemResponse]
 
 
+class DdtLinkPreviewCandidateResponse(BaseModel):
+    row_id: int
+    document_ddt_id: int
+    ddt_file_name: str | None
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+    lega: str | None = None
+    diametro: str | None = None
+    cdq: str | None = None
+    colata: str | None = None
+    ddt: str | None = None
+    peso: str | None = None
+    ordine: str | None = None
+
+
+class DdtLinkPreviewResponse(BaseModel):
+    current_row_id: int
+    auto_match_row_id: int | None = None
+    items: list[DdtLinkPreviewCandidateResponse] = Field(default_factory=list)
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
