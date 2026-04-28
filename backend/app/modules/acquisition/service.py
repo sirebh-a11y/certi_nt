@@ -1323,6 +1323,15 @@ def build_document_core_overlay_preview(
 
     if source_key == "certificato" and not any(item.field == "material_block" for item in live_field_items):
         live_field_items.extend(
+            _build_certificate_document_core_material_items_from_text_window(
+                row=row,
+                document=document,
+                value_map=value_map,
+            )
+        )
+
+    if source_key == "certificato" and not any(item.field == "material_block" for item in live_field_items):
+        live_field_items.extend(
             _build_certificate_document_core_overlay_items_from_identity_window(
                 row=row,
                 document=document,
@@ -1556,6 +1565,73 @@ def _read_value_display_text(value: ReadValue | None) -> str | None:
     )
 
 
+def _build_certificate_document_core_material_items_from_text_window(
+    *,
+    row: AcquisitionRow,
+    document: Document,
+    value_map: dict[str, ReadValue],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    field_values = {
+        "lega_base": _read_value_display_text(value_map.get("lega_certificato")) or row.lega_base,
+        "diametro": _read_value_display_text(value_map.get("diametro_certificato")) or row.diametro,
+        "colata": _read_value_display_text(value_map.get("colata_certificato")) or row.colata,
+        "peso": _read_value_display_text(value_map.get("peso_certificato")) or row.peso,
+    }
+    selected = _select_best_document_core_identity_window(
+        pages=document.pages,
+        field_values=field_values,
+        field_weights={
+            "colata": 65,
+            "peso": 55,
+            "diametro": 45,
+            "lega_base": 40,
+        },
+        minimum_score=85,
+        max_window_size=4,
+    )
+    if selected is None:
+        selected = _select_best_document_core_identity_window(
+            pages=document.pages,
+            field_values=field_values,
+            field_weights={
+                "colata": 65,
+                "peso": 55,
+                "diametro": 45,
+                "lega_base": 40,
+            },
+            minimum_score=85,
+            max_window_size=8,
+        )
+    if selected is None:
+        return []
+
+    page, snippet, matched_fields = selected
+    material_fields = [field_name for field_name in matched_fields if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS]
+    if len(set(material_fields)) < 2:
+        return []
+
+    window_item = _build_document_core_overlay_item_from_snippet(
+        pages=document.pages,
+        field="certificate_material",
+        preferred_page_id=page.id,
+        snippet=snippet,
+    )
+    if window_item is None:
+        return []
+
+    items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    _append_material_block_overlay_item(
+        items=items,
+        field_names=matched_fields,
+        page_id=window_item.page_id,
+        page_number=window_item.page_number,
+        bbox=window_item.bbox,
+        image_width=window_item.image_width,
+        image_height=window_item.image_height,
+    )
+    return items
+
+
 def _build_certificate_document_core_overlay_items_from_identity_window(
     *,
     row: AcquisitionRow,
@@ -1617,6 +1693,7 @@ def _select_best_document_core_identity_window(
     field_values: dict[str, str | None],
     field_weights: dict[str, int],
     minimum_score: int,
+    max_window_size: int = 6,
 ) -> tuple[DocumentPage, str, list[str]] | None:
     field_tokens: list[tuple[str, str, int]] = []
     for field_name, value in field_values.items():
@@ -1639,7 +1716,7 @@ def _select_best_document_core_identity_window(
         if not lines:
             continue
         normalized_lines = [_normalize_row_signature_token(line) for line in lines]
-        max_window = min(6, len(lines))
+        max_window = min(max_window_size, len(lines))
         for window_size in range(1, max_window + 1):
             for start in range(0, len(lines) - window_size + 1):
                 end = start + window_size
@@ -1682,11 +1759,29 @@ def _document_core_window_contains_token(
     token: str,
 ) -> bool:
     if field_name == "diametro" and len(token) >= 2:
-        return token in window_key
+        return any(_document_core_diameter_token_matches(line=line, token=token) for line in window_lines)
     if len(token) >= 3:
         return token in window_key
     token_pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(token)}(?![A-Z0-9])")
     return any(token_pattern.search(line) for line in window_lines)
+
+
+def _document_core_diameter_token_matches(*, line: str, token: str) -> bool:
+    if not token:
+        return False
+    token_variants = [token]
+    if token.endswith("00") and len(token) > 2:
+        token_variants.append(token[:-2])
+    anchors = ("DIA", "DIAMETER", "DURCHMESSER", "ABMESSUNG", "RUNDSTANGE", "TONDA")
+    has_diameter_anchor = any(anchor in line for anchor in anchors)
+    for variant in dict.fromkeys(token_variants):
+        if not variant:
+            continue
+        if has_diameter_anchor and re.search(rf"{re.escape(variant)}0*(?!\d)", line):
+            return True
+        if re.search(rf"(?<!\d){re.escape(variant)}0*(?!\d)", line):
+            return True
+    return False
 
 
 def _document_core_page_text_lines(page: DocumentPage) -> list[str]:
@@ -1868,8 +1963,6 @@ def _select_best_ddt_overlay_split_candidate(
 ) -> ReaderRowSplitCandidateResponse | None:
     if not candidates:
         return None
-    if len(candidates) == 1:
-        return candidates[0]
 
     best_candidate: ReaderRowSplitCandidateResponse | None = None
     best_score = -1
