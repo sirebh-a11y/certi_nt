@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import pytesseract
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import cast
@@ -81,6 +82,14 @@ from app.modules.acquisition.schemas import (
     MatchResponse,
     ReadValueResponse,
     ReadValueUpsertRequest,
+)
+from app.modules.acquisition.rematch_bridge import (
+    RematchBridge,
+    RematchDecision,
+    RematchScore,
+    build_certificate_bridge,
+    build_ddt_bridge,
+    score_bridge_match,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
@@ -4739,6 +4748,26 @@ def run_autonomous_processing(
                     run,
                     match_proposti=run.match_proposti + certificate_first_matches,
                 )
+
+        rematch_supplier_ids = {
+            document.fornitore_id
+            for document in [*ddt_documents, *certificate_documents]
+            if document.fornitore_id is not None
+        }
+        if rematch_supplier_ids:
+            _save_run(
+                db,
+                run,
+                fase_corrente="rematch_cross_run",
+                messaggio_corrente="Rivaluto i match non confermati anche con i documenti gia presenti",
+            )
+            cross_run_matches = _run_cross_run_auto_rematch(
+                db=db,
+                supplier_ids=rematch_supplier_ids,
+                actor_id=actor_id,
+            )
+            if cross_run_matches:
+                _save_run(db, run, match_proposti=run.match_proposti + cross_run_matches)
 
         _save_run(
             db,
@@ -10124,6 +10153,350 @@ def _block_has_confirmed_values(db: Session, row_id: int, block: str) -> bool:
     if block in {"chimica", "proprieta"}:
         return any(_read_value_has_payload(value) for value in values)
     return bool(values)
+
+
+@dataclass(frozen=True)
+class _CrossRunRematchCandidate:
+    document_id: int
+    source_row_id: int
+    source_has_ddt: bool
+    score: RematchScore
+
+
+@dataclass(frozen=True)
+class _CrossRunRematchPlan:
+    row_id: int
+    document_id: int
+    reason: str
+    candidates: tuple[_CrossRunRematchCandidate, ...]
+
+
+def _run_cross_run_auto_rematch(
+    *,
+    db: Session,
+    supplier_ids: set[int],
+    actor_id: int,
+) -> int:
+    applied = 0
+    for plan in _plan_cross_run_auto_rematch(db=db, supplier_ids=supplier_ids):
+        row = get_acquisition_row(db, plan.row_id)
+        if _row_is_locked_for_auto_rematch(row):
+            continue
+        candidates = [
+            MatchCandidateRequest(
+                document_certificato_id=candidate.document_id,
+                rank=rank,
+                motivo_breve=_cross_run_candidate_reason(candidate.score),
+                fonte_proposta="sistema",
+                stato="scelto" if rank == 1 else "candidato",
+            )
+            for rank, candidate in enumerate(plan.candidates[:3], start=1)
+        ]
+        upsert_match(
+            db=db,
+            row=row,
+            payload=MatchUpsertRequest(
+                document_certificato_id=plan.document_id,
+                stato="proposto",
+                motivo_breve=plan.reason,
+                fonte_proposta="sistema",
+                candidates=candidates,
+            ),
+            actor_id=actor_id,
+        )
+        best_candidate = plan.candidates[0] if plan.candidates else None
+        if best_candidate is not None and not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
+            _merge_certificate_only_row_into_ddt_row(
+                db=db,
+                target_row=get_acquisition_row(db, row.id),
+                source_row_id=best_candidate.source_row_id,
+                actor_id=actor_id,
+            )
+        applied += 1
+    return applied
+
+
+def _plan_cross_run_auto_rematch(
+    *,
+    db: Session,
+    supplier_ids: set[int],
+) -> list[_CrossRunRematchPlan]:
+    if not supplier_ids:
+        return []
+
+    rows = (
+        db.query(AcquisitionRow)
+        .options(
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.certificate_match),
+        )
+        .filter(
+            AcquisitionRow.fornitore_id.in_(supplier_ids),
+            (AcquisitionRow.document_ddt_id.isnot(None) | AcquisitionRow.document_certificato_id.isnot(None)),
+        )
+        .all()
+    )
+    certificate_bridges = [
+        (candidate_row, _build_row_certificate_bridge(candidate_row))
+        for candidate_row in rows
+        if candidate_row.document_certificato_id is not None
+    ]
+    plans: list[_CrossRunRematchPlan] = []
+    for row in rows:
+        if row.document_ddt_id is None or _row_is_locked_for_auto_rematch(row):
+            continue
+        ddt_bridge = _build_row_ddt_bridge(row)
+        scored_by_document: dict[int, _CrossRunRematchCandidate] = {}
+        for candidate_row, certificate_bridge in certificate_bridges:
+            if certificate_bridge.document_id is None:
+                continue
+            if candidate_row.document_ddt_id is None and not _certificate_only_row_can_merge(candidate_row):
+                continue
+            score = score_bridge_match(ddt_bridge, certificate_bridge)
+            if score.decision == RematchDecision.NONE:
+                continue
+            candidate = _CrossRunRematchCandidate(
+                document_id=certificate_bridge.document_id,
+                source_row_id=candidate_row.id,
+                source_has_ddt=candidate_row.document_ddt_id is not None,
+                score=score,
+            )
+            existing = scored_by_document.get(certificate_bridge.document_id)
+            if existing is not None and not _cross_run_candidate_is_better(candidate, existing):
+                continue
+            scored_by_document[certificate_bridge.document_id] = candidate
+
+        scored_candidates = sorted(
+            scored_by_document.values(),
+            key=lambda candidate: (-candidate.score.score, candidate.document_id),
+        )
+        if not scored_candidates:
+            continue
+        best = scored_candidates[0]
+        if best.document_id == row.document_certificato_id:
+            continue
+        if best.score.decision != RematchDecision.STRONG:
+            continue
+        second_score = scored_candidates[1].score.score if len(scored_candidates) > 1 else 0
+        if second_score and best.score.score - second_score < 45:
+            continue
+        if not best.source_has_ddt and row.document_certificato_id is not None:
+            # A certificate-only row can complete a DDT-only row. It must not
+            # replace an already coupled row because that would hide intent.
+            continue
+
+        current_score = 0
+        if row.document_certificato_id is not None:
+            current_candidate = scored_by_document.get(row.document_certificato_id)
+            current_score = current_candidate.score.score if current_candidate is not None else 0
+            if best.score.score < current_score + 60:
+                continue
+
+        plans.append(
+            _CrossRunRematchPlan(
+                row_id=row.id,
+                document_id=best.document_id,
+                reason=_cross_run_candidate_reason(best.score),
+                candidates=tuple(scored_candidates[:3]),
+            )
+        )
+    return plans
+
+
+def _row_is_locked_for_auto_rematch(row: AcquisitionRow) -> bool:
+    if row.validata_finale:
+        return True
+    match = row.certificate_match
+    if match is None:
+        return False
+    if match.stato != "proposto":
+        return True
+    return match.fonte_proposta not in {"sistema", "chatgpt"}
+
+
+def _certificate_only_row_can_merge(row: AcquisitionRow) -> bool:
+    if row.document_ddt_id is not None or row.document_certificato_id is None:
+        return False
+    if row.validata_finale:
+        return False
+    match = row.certificate_match
+    if match is None:
+        return True
+    if match.stato != "proposto":
+        return False
+    return match.fonte_proposta in {"sistema", "chatgpt"}
+
+
+def _merge_certificate_only_row_into_ddt_row(
+    *,
+    db: Session,
+    target_row: AcquisitionRow,
+    source_row_id: int,
+    actor_id: int,
+) -> bool:
+    source_row = get_acquisition_row(db, source_row_id)
+    if not _certificate_only_row_can_merge(source_row):
+        return False
+    if target_row.id == source_row.id:
+        return False
+    if target_row.document_ddt_id is None:
+        return False
+    if target_row.document_certificato_id != source_row.document_certificato_id:
+        return False
+
+    source_values = [
+        value
+        for value in source_row.values
+        if value.blocco in {"match", "chimica", "proprieta", "note"}
+    ]
+    db.query(DocumentEvidence).filter(DocumentEvidence.acquisition_row_id == source_row.id).update(
+        {DocumentEvidence.acquisition_row_id: target_row.id},
+        synchronize_session=False,
+    )
+
+    copied_fields = 0
+    for source_value in source_values:
+        existing_target_value = (
+            db.query(ReadValue)
+            .filter(
+                ReadValue.acquisition_row_id == target_row.id,
+                ReadValue.blocco == source_value.blocco,
+                ReadValue.campo == source_value.campo,
+            )
+            .one_or_none()
+        )
+        if existing_target_value is not None and existing_target_value.stato == "confermato":
+            continue
+        if (
+            existing_target_value is not None
+            and _read_value_has_payload(existing_target_value)
+            and source_value.stato != "confermato"
+        ):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=target_row.id,
+            blocco=source_value.blocco,
+            campo=source_value.campo,
+            valore_grezzo=source_value.valore_grezzo,
+            valore_standardizzato=source_value.valore_standardizzato,
+            valore_finale=source_value.valore_finale,
+            stato=source_value.stato,
+            document_evidence_id=source_value.document_evidence_id,
+            metodo_lettura=source_value.metodo_lettura,
+            fonte_documentale=source_value.fonte_documentale,
+            confidenza=source_value.confidenza,
+            actor_id=actor_id,
+        )
+        copied_fields += 1
+
+    if target_row.note_documento is None and source_row.note_documento is not None:
+        target_row.note_documento = source_row.note_documento
+    _sync_row_from_match_values(db, target_row)
+    _sync_row_statuses(db, target_row)
+    db.add(target_row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=target_row.id,
+        blocco="match",
+        azione="certificate_first_unito_a_ddt",
+        user_id=actor_id,
+        nota_breve=f"riga origine #{source_row.id}, valori copiati {copied_fields}",
+    )
+
+    db.query(AutonomousProcessingRun).filter(AutonomousProcessingRun.current_row_id == source_row.id).update(
+        {AutonomousProcessingRun.current_row_id: target_row.id},
+        synchronize_session=False,
+    )
+    db.delete(source_row)
+    db.commit()
+    return True
+
+
+def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
+    return build_ddt_bridge(
+        row_values=_row_bridge_values(row),
+        read_values=_row_read_values(row, "ddt"),
+        supplier_id=row.fornitore_id,
+        supplier_name=_row_supplier_name(row),
+        row_id=row.id,
+        document_id=row.document_ddt_id,
+    )
+
+
+def _build_row_certificate_bridge(row: AcquisitionRow) -> RematchBridge:
+    return build_certificate_bridge(
+        row_values=_row_certificate_bridge_values(row),
+        read_values=_row_read_values(row, "match"),
+        supplier_id=row.fornitore_id,
+        supplier_name=_row_supplier_name(row),
+        row_id=row.id,
+        document_id=row.document_certificato_id,
+    )
+
+
+def _row_bridge_values(row: AcquisitionRow) -> dict[str, str | None]:
+    supplier_name = _row_supplier_name(row)
+    return {
+        "fornitore": supplier_name,
+        "fornitore_raw": _string_or_none(row.fornitore_raw),
+        "fornitore_nome": supplier_name,
+        "lega": _string_or_none(row.lega_base),
+        "lega_base": _string_or_none(row.lega_base),
+        "diametro": _string_or_none(row.diametro),
+        "cdq": _string_or_none(row.cdq),
+        "colata": _string_or_none(row.colata),
+        "ddt": _string_or_none(row.ddt),
+        "peso": _string_or_none(row.peso),
+        "ordine": _string_or_none(row.ordine),
+    }
+
+
+def _row_certificate_bridge_values(row: AcquisitionRow) -> dict[str, str | None]:
+    values = _row_bridge_values(row)
+    if row.document_ddt_id is None:
+        return values
+
+    # When a certificate is already coupled to a DDT row, high-level row fields
+    # may have been driven by that DDT. Keep only safe certificate identity as
+    # fallback and let pure "match" ReadValue fields drive material matching.
+    return {
+        "fornitore": values["fornitore"],
+        "fornitore_raw": values["fornitore_raw"],
+        "fornitore_nome": values["fornitore_nome"],
+        "cdq": values["cdq"],
+    }
+
+
+def _row_read_values(row: AcquisitionRow, block: str) -> dict[str, str | None]:
+    return {
+        value.campo: _final_value_for_row(value)
+        for value in row.values
+        if value.blocco == block
+    }
+
+
+def _row_supplier_name(row: AcquisitionRow) -> str | None:
+    if row.supplier is not None:
+        return _string_or_none(row.supplier.ragione_sociale)
+    return _string_or_none(row.fornitore_raw)
+
+
+def _cross_run_candidate_reason(score: RematchScore) -> str:
+    fields = ", ".join(score.matched_fields[:5]) or "campi ponte"
+    return f"Rematch automatico cross-run: {fields} coerenti (score {score.score})"
+
+
+def _cross_run_candidate_is_better(
+    candidate: _CrossRunRematchCandidate,
+    existing: _CrossRunRematchCandidate,
+) -> bool:
+    if candidate.score.score != existing.score.score:
+        return candidate.score.score > existing.score.score
+    if candidate.source_has_ddt != existing.source_has_ddt:
+        return candidate.source_has_ddt
+    return candidate.source_row_id < existing.source_row_id
 
 
 def _auto_propose_certificate_match(
