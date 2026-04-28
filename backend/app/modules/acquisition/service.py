@@ -3201,6 +3201,52 @@ def _build_chemistry_overlay_items(
     image_width: int,
     image_height: int,
 ) -> list[ChemistryOverlayPreviewItemResponse]:
+    line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+    header_items = _build_chemistry_overlay_items_from_header_order(
+        page=page,
+        line_box=line_box,
+        line_boxes=line_boxes,
+        field_values=field_values,
+        existing_fields=set(),
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if _count_chemistry_overlay_fields(header_items) >= min(len(field_values), 3):
+        return _merge_chemistry_overlay_items_prefer_first(header_items, _build_chemistry_overlay_value_items(
+            page=page,
+            line_box=line_box,
+            field_values=field_values,
+            matched_fields=matched_fields,
+            image_width=image_width,
+            image_height=image_height,
+        ))
+    return _extend_chemistry_overlay_items_from_header_order(
+        page=page,
+        line_box=line_box,
+        line_boxes=line_boxes,
+        field_values=field_values,
+        existing_items=_build_chemistry_overlay_value_items(
+            page=page,
+            line_box=line_box,
+            field_values=field_values,
+            matched_fields=matched_fields,
+            image_width=image_width,
+            image_height=image_height,
+        ),
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+def _build_chemistry_overlay_value_items(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    field_values: dict[str, str],
+    matched_fields: list[str],
+    image_width: int,
+    image_height: int,
+) -> list[ChemistryOverlayPreviewItemResponse]:
     words = cast(list[dict[str, object]], line_box.get("words") or [])
     used_indexes: set[int] = set()
     items: list[ChemistryOverlayPreviewItemResponse] = []
@@ -3239,6 +3285,169 @@ def _build_chemistry_overlay_items(
         )
 
     return items
+
+
+def _extend_chemistry_overlay_items_from_header_order(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    line_boxes: list[dict[str, object]],
+    field_values: dict[str, str],
+    existing_items: list[ChemistryOverlayPreviewItemResponse],
+    image_width: int,
+    image_height: int,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    existing_fields = {item.field for item in existing_items}
+    if all(field_name in existing_fields for field_name in field_values):
+        return existing_items
+
+    extra_items = _build_chemistry_overlay_items_from_header_order(
+        page=page,
+        line_box=line_box,
+        line_boxes=line_boxes,
+        field_values=field_values,
+        existing_fields=existing_fields,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if not extra_items:
+        return existing_items
+    return [*existing_items, *extra_items]
+
+
+def _count_chemistry_overlay_fields(items: list[ChemistryOverlayPreviewItemResponse]) -> int:
+    return len({item.field for item in items})
+
+
+def _merge_chemistry_overlay_items_prefer_first(
+    primary: list[ChemistryOverlayPreviewItemResponse],
+    secondary: list[ChemistryOverlayPreviewItemResponse],
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    merged: dict[str, ChemistryOverlayPreviewItemResponse] = {}
+    for item in [*primary, *secondary]:
+        merged.setdefault(item.field, item)
+    return [merged[field_name] for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER if field_name in merged]
+
+
+def _build_chemistry_overlay_items_from_header_order(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    line_boxes: list[dict[str, object]],
+    field_values: dict[str, str],
+    existing_fields: set[str],
+    image_width: int,
+    image_height: int,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    header_slots = _find_chemistry_overlay_header_slots(line_boxes=line_boxes, value_line_box=line_box)
+    if not header_slots:
+        return []
+
+    value_words = _chemistry_overlay_value_words(line_box)
+    if len(value_words) > len(header_slots):
+        value_words = value_words[-len(header_slots) :]
+    if len(value_words) < len(header_slots):
+        return []
+
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+    for index, field_name in enumerate(header_slots):
+        if field_name is None or field_name not in field_values or field_name in existing_fields:
+            continue
+        word = value_words[index]
+        left = int(word["left"])
+        top = int(word["top"])
+        width = int(word["width"])
+        height = int(word["height"])
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+        existing_fields.add(field_name)
+
+    return items
+
+
+def _find_chemistry_overlay_header_slots(
+    *,
+    line_boxes: list[dict[str, object]],
+    value_line_box: dict[str, object],
+) -> list[str | None]:
+    value_y0 = int(value_line_box.get("y0") or 0)
+    value_x0 = int(value_line_box.get("x0") or 0)
+    value_x1 = int(value_line_box.get("x1") or 0)
+    best_slots: list[str | None] = []
+    best_score: tuple[int, int, int] | None = None
+    for candidate in line_boxes:
+        candidate_y1 = int(candidate.get("y1") or 0)
+        if candidate_y1 > value_y0 + 8:
+            continue
+        candidate_words = cast(list[dict[str, object]], candidate.get("words") or [])
+        slots = _chemistry_overlay_header_slots_from_words(candidate_words)
+        real_fields = [slot for slot in slots if slot is not None]
+        if len(real_fields) < 5:
+            continue
+        candidate_x0 = int(candidate.get("x0") or 0)
+        candidate_x1 = int(candidate.get("x1") or 0)
+        horizontal_overlap = max(0, min(value_x1, candidate_x1) - max(value_x0, candidate_x0))
+        distance = max(0, value_y0 - candidate_y1)
+        score = (horizontal_overlap, len(real_fields), -distance)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_slots = slots
+    return best_slots
+
+
+def _chemistry_overlay_header_slots_from_words(words: list[dict[str, object]]) -> list[str | None]:
+    slots: list[str | None] = []
+    for word in words:
+        slot = _normalize_chemistry_overlay_element_token(cast(str | None, word.get("text")))
+        if slot is not None or _is_ignored_chemistry_overlay_header_token(cast(str | None, word.get("text"))):
+            slots.append(slot)
+    return _trim_chemistry_header_slots(slots)
+
+
+def _trim_chemistry_header_slots(slots: list[str | None]) -> list[str | None]:
+    first_real_index = next((index for index, slot in enumerate(slots) if slot is not None), None)
+    if first_real_index is None:
+        return []
+    last_real_index = len(slots) - 1 - next(
+        index for index, slot in enumerate(reversed(slots)) if slot is not None
+    )
+    return slots[first_real_index : last_real_index + 1]
+
+
+def _normalize_chemistry_overlay_element_token(value: str | None) -> str | None:
+    raw_value = _string_or_none(value)
+    if raw_value is None:
+        return None
+    cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
+    if cleaned in CHEMISTRY_FIELD_SET:
+        return cleaned
+    return None
+
+
+def _is_ignored_chemistry_overlay_header_token(value: str | None) -> bool:
+    raw_value = _string_or_none(value)
+    if raw_value is None:
+        return False
+    cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
+    return cleaned in IGNORED_CHEMISTRY_HEADER_TOKENS
+
+
+def _chemistry_overlay_value_words(line_box: dict[str, object]) -> list[dict[str, object]]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    return [
+        word
+        for word in words
+        if _chemistry_overlay_token_candidates(cast(str | None, word.get("text")))
+        or _chemistry_overlay_token_candidates(cast(str | None, word.get("normalized")))
+    ]
 
 
 def create_document(db: Session, payload: DocumentCreateRequest, actor_id: int, actor_email: str) -> DocumentResponse:
@@ -5491,7 +5700,11 @@ def detect_chemistry(
                     supplier_key=template.supplier_key if template is not None else None,
                 )
             if vision_matches:
-                if template is not None and template.supplier_key == "metalba":
+                if (
+                    template is not None
+                    and _supplier_supports_ai_vision_pipeline(template.supplier_key)
+                    and len(vision_matches) >= 4
+                ):
                     matches = vision_matches
                 elif len(matches) < 4:
                     for field_name, match in vision_matches.items():
@@ -5512,6 +5725,17 @@ def detect_chemistry(
 
     for field_name, match in matches.items():
         extraction_method = str(match.get("method") or "pdf_text")
+        existing_value = (
+            db.query(ReadValue)
+            .filter(
+                ReadValue.acquisition_row_id == row.id,
+                ReadValue.blocco == "chimica",
+                ReadValue.campo == field_name,
+            )
+            .one_or_none()
+        )
+        if _should_preserve_existing_value_from_weaker_detection(existing_value, incoming_method=extraction_method):
+            continue
         confidence = 0.76 if extraction_method == "chatgpt" else 0.88
         evidence = _create_text_evidence(
             db=db,
@@ -10153,6 +10377,24 @@ def _block_has_confirmed_values(db: Session, row_id: int, block: str) -> bool:
     if block in {"chimica", "proprieta"}:
         return any(_read_value_has_payload(value) for value in values)
     return bool(values)
+
+
+def _should_preserve_existing_value_from_weaker_detection(
+    existing_value: ReadValue | None,
+    *,
+    incoming_method: str,
+) -> bool:
+    if existing_value is None:
+        return False
+    if existing_value.stato == "confermato" and _read_value_has_payload(existing_value):
+        return True
+    if incoming_method == "chatgpt":
+        return False
+    return (
+        existing_value.metodo_lettura == "chatgpt"
+        and existing_value.stato != "scartato"
+        and _read_value_has_payload(existing_value)
+    )
 
 
 @dataclass(frozen=True)
@@ -19024,6 +19266,15 @@ CHEMISTRY_FIELD_SET = {
     "Mn+Cr",
     "Bi+Pb",
 }
+IGNORED_CHEMISTRY_HEADER_TOKENS = {
+    "Al",
+    "Ga",
+    "Other",
+    "Others",
+    "Andere",
+    "Rest",
+    "Remainder",
+}
 
 
 PROPERTY_FIELD_SET = {"HB", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm", "Rp0.2/Rm", "IACS%"}
@@ -19442,6 +19693,15 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
         window.append(line)
     if not window:
         window = normalized_lines
+    detected_header_slots = _find_chemistry_header_slots_in_lines(window, min_real_fields=6)
+    detected_real_fields = {slot for slot in detected_header_slots if slot is not None}
+    active_header_slots = (
+        detected_header_slots
+        if detected_header_slots
+        and len(detected_header_slots) > len(chemistry_order)
+        and set(chemistry_order).issubset(detected_real_fields)
+        else None
+    )
 
     def _payload(raw_value: str, snippet: str) -> dict[str, str | int]:
         standardized = (_normalize_chemistry_capture_value(raw_value) or raw_value).replace(",", ".")
@@ -19531,6 +19791,14 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
         if marker_index < 0:
             return []
         raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line[marker_index + len(marker) :])
+        if active_header_slots:
+            mapped_values = _map_chemistry_values_to_field_order(
+                raw_values,
+                slots=active_header_slots,
+                field_order=chemistry_order,
+            )
+            if mapped_values is not None:
+                raw_values = mapped_values
         normalized_values: list[str] = []
         for field_name, raw_token in zip(field_names, raw_values[: len(field_names)]):
             normalized_values.append(_normalize_aww_chemistry_token(raw_token, field_name))
@@ -19544,23 +19812,34 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
             if "|" not in line:
                 return []
             raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
+        if active_header_slots:
+            mapped_values = _map_chemistry_values_to_field_order(
+                raw_values,
+                slots=active_header_slots,
+                field_order=chemistry_order,
+            )
+            if mapped_values is not None:
+                return mapped_values
         return raw_values[: len(chemistry_order)]
 
     def _extract_stacked_measured_values() -> tuple[str, list[str]] | None:
         for start in range(0, len(window) - len(chemistry_order) + 1):
             candidate_lines = window[start : start + len(chemistry_order)]
-            normalized_values: list[str] = []
-            for field_name, raw_line in zip(chemistry_order, candidate_lines):
+            header_order = _extract_stacked_header_order(start, len(chemistry_order))
+            field_order = header_order if header_order is not None else chemistry_order
+            values_by_field: dict[str, str] = {}
+            for field_name, raw_line in zip(field_order, candidate_lines):
                 single_token = _string_or_none(raw_line)
                 if single_token is None:
-                    normalized_values = []
+                    values_by_field = {}
                     break
                 if not re.fullmatch(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", single_token):
-                    normalized_values = []
+                    values_by_field = {}
                     break
-                normalized_values.append(_normalize_aww_chemistry_token(single_token, field_name))
-            if len(normalized_values) != len(chemistry_order):
+                values_by_field[field_name] = _normalize_aww_chemistry_token(single_token, field_name)
+            if len(values_by_field) != len(chemistry_order):
                 continue
+            normalized_values = [values_by_field[field_name] for field_name in chemistry_order]
             plausible = 0
             for field_name, value in zip(chemistry_order, normalized_values):
                 numeric_value = _safe_chemistry_float(value)
@@ -19572,6 +19851,23 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
             if plausible >= len(chemistry_order) - 1:
                 return (" | ".join(candidate_lines), normalized_values)
         return None
+
+    def _extract_stacked_header_order(value_start_index: int, expected_count: int) -> list[str] | None:
+        collected: list[str] = []
+        for index in range(value_start_index - 1, max(-1, value_start_index - 35), -1):
+            token = _string_or_none(window[index])
+            if token is None:
+                continue
+            if token in chemistry_order and token not in collected:
+                collected.append(token)
+                if len(collected) == expected_count:
+                    break
+        if len(collected) != expected_count:
+            return None
+        ordered = list(reversed(collected))
+        if set(ordered) != set(chemistry_order):
+            return None
+        return ordered
 
     min_values: list[str] | None = None
     max_values: list[str] | None = None
@@ -19592,7 +19888,11 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
         measured_values = _extract_measured_values(line)
         if len(measured_values) < len(chemistry_order):
             continue
-        candidate_rows.append((line, measured_values[: len(chemistry_order)]))
+        row_values = measured_values[: len(chemistry_order)]
+        candidate_rows.append((line, row_values))
+        reversed_values = [] if active_header_slots else list(reversed(row_values))
+        if reversed_values and reversed_values != row_values:
+            candidate_rows.append((line, reversed_values))
 
     stacked_values = _extract_stacked_measured_values()
     if stacked_values is not None:
@@ -19684,6 +19984,15 @@ def _parse_neuman_chemistry_from_lines(lines: list[str], page_id: int) -> dict[s
         window.append(line)
     if not window:
         window = normalized_lines
+    detected_header_slots = _find_chemistry_header_slots_in_lines(window, min_real_fields=6)
+    detected_real_fields = {slot for slot in detected_header_slots if slot is not None}
+    active_header_slots = (
+        detected_header_slots
+        if detected_header_slots
+        and len(detected_header_slots) > len(chemistry_order)
+        and set(chemistry_order).issubset(detected_real_fields)
+        else None
+    )
 
     def _payload(raw_value: str, snippet: str) -> dict[str, str | int]:
         standardized = (_normalize_chemistry_capture_value(raw_value) or raw_value).replace(",", ".")
@@ -19773,6 +20082,14 @@ def _parse_neuman_chemistry_from_lines(lines: list[str], page_id: int) -> dict[s
         if marker_index < 0:
             return []
         raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line[marker_index + len(marker) :])
+        if active_header_slots:
+            mapped_values = _map_chemistry_values_to_field_order(
+                raw_values,
+                slots=active_header_slots,
+                field_order=chemistry_order,
+            )
+            if mapped_values is not None:
+                return mapped_values
         return raw_values[: len(chemistry_order)]
 
     def _extract_measured_values(line: str) -> list[str]:
@@ -19783,9 +20100,48 @@ def _parse_neuman_chemistry_from_lines(lines: list[str], page_id: int) -> dict[s
             if "|" not in line:
                 return []
             raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
+        if active_header_slots:
+            mapped_values = _map_chemistry_values_to_field_order(
+                raw_values,
+                slots=active_header_slots,
+                field_order=chemistry_order,
+            )
+            if mapped_values is not None:
+                return mapped_values
         return raw_values[: len(chemistry_order)]
 
     def _extract_stacked_measured_values() -> tuple[str, list[str]] | None:
+        if active_header_slots:
+            for start in range(0, len(window) - len(active_header_slots) + 1):
+                candidate_lines = window[start : start + len(active_header_slots)]
+                raw_values: list[str] = []
+                for raw_line in candidate_lines:
+                    single_token = _string_or_none(raw_line)
+                    if single_token is None or not re.fullmatch(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", single_token):
+                        raw_values = []
+                        break
+                    raw_values.append(single_token)
+                mapped_values = _map_chemistry_values_to_field_order(
+                    raw_values,
+                    slots=active_header_slots,
+                    field_order=chemistry_order,
+                )
+                if mapped_values is None:
+                    continue
+                normalized_values = [
+                    _normalize_neuman_chemistry_token(raw_value, field_name)
+                    for field_name, raw_value in zip(chemistry_order, mapped_values)
+                ]
+                plausible = 0
+                for field_name, value in zip(chemistry_order, normalized_values):
+                    numeric_value = _safe_chemistry_float(value)
+                    if numeric_value is None:
+                        continue
+                    ceiling = chemistry_field_ceiling.get(field_name, 2.0)
+                    if 0 <= numeric_value <= ceiling:
+                        plausible += 1
+                if plausible >= len(chemistry_order) - 1:
+                    return (" | ".join(candidate_lines), normalized_values)
         for start in range(0, len(window) - len(chemistry_order) + 1):
             candidate_lines = window[start : start + len(chemistry_order)]
             normalized_values: list[str] = []
@@ -19936,8 +20292,10 @@ def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[
     if anchor_index is None:
         return {}
 
-    chemistry_order = ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr"]
     window = normalized_lines[anchor_index + 1 : min(anchor_index + 36, len(normalized_lines))]
+    fixed_slots: list[str | None] = ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr"]
+    header_slots = _find_chemistry_header_slots_in_lines(window, min_real_fields=6)
+    chemistry_slots = header_slots or fixed_slots
     for line in window:
         lowered = line.lower()
         if any(marker in lowered for marker in ("min ", "max ", "each", "total", "remain")):
@@ -19948,15 +20306,22 @@ def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[
             continue
 
         number_tokens = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
-        if len(number_tokens) < len(chemistry_order) + 2:
-            continue
-
-        value_tokens = number_tokens[2 : 2 + len(chemistry_order)]
-        if len(value_tokens) < len(chemistry_order):
+        if header_slots:
+            decimal_tokens = re.findall(r"(?:<=|<|≤)?\d+[.,]\d+", line)
+            if len(decimal_tokens) < len(chemistry_slots):
+                continue
+            value_tokens = decimal_tokens[-len(chemistry_slots) :]
+        else:
+            if len(number_tokens) < len(chemistry_slots) + 2:
+                continue
+            value_tokens = number_tokens[2 : 2 + len(chemistry_slots)]
+        if len(value_tokens) < len(chemistry_slots):
             continue
 
         matches: dict[str, dict[str, str | int]] = {}
-        for field_name, raw_value in zip(chemistry_order, value_tokens):
+        for field_name, raw_value in zip(chemistry_slots, value_tokens):
+            if field_name is None:
+                continue
             standardized = _normalize_numeric_value(raw_value) or raw_value
             matches.setdefault(
                 field_name,
@@ -20589,20 +20954,21 @@ def _build_property_match_from_candidate_values(
 def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for index, line in enumerate(lines):
-        elements = _extract_chemistry_header(line)
-        if not elements:
+        slots = _extract_chemistry_header_slots(line)
+        if not slots:
             continue
+        elements = [slot for slot in slots if slot is not None]
 
-        measurement_line = _find_chemistry_measurement_line(lines, index + 1, len(elements))
+        measurement_line = _find_chemistry_measurement_line(lines, index + 1, len(slots))
         if measurement_line is None:
             continue
 
-        values = _extract_horizontal_chemistry_values(measurement_line, len(elements))
-        if len(values) < len(elements):
+        values = _extract_horizontal_chemistry_values(measurement_line, len(slots))
+        if len(values) < len(slots):
             continue
 
-        for element, raw_value in zip(elements, values):
-            if raw_value in {"/", "Other", "other"}:
+        for element, raw_value in zip(slots, values):
+            if element is None or raw_value in {"/", "Other", "other"}:
                 continue
             standardized = raw_value.replace(",", ".")
             matches.setdefault(
@@ -20671,16 +21037,20 @@ def _extract_horizontal_chemistry_values(line: str, expected_count: int) -> list
 
     # Scarta eventuali token iniziali del charge/identificativo riga finché i valori
     # successivi iniziano a somigliare davvero a percentuali chimiche.
+    best_candidate: tuple[tuple[int, int, int], list[str]] | None = None
     for start_index in range(0, len(raw_values) - expected_count + 1):
         candidate = raw_values[start_index : start_index + expected_count]
         numeric_candidate = [value for value in candidate if value not in {"/", "Other", "other"}]
         if len(numeric_candidate) < max(3, expected_count // 2):
             continue
         plausible = 0
+        decimal_like = 0
         for value in numeric_candidate:
             normalized = _normalize_numeric_value(value)
             if normalized is None:
                 continue
+            if "," in value or "." in value:
+                decimal_like += 1
             try:
                 numeric = float(normalized)
             except ValueError:
@@ -20688,7 +21058,11 @@ def _extract_horizontal_chemistry_values(line: str, expected_count: int) -> list
             if 0 <= numeric <= 100:
                 plausible += 1
         if plausible >= max(3, len(numeric_candidate) - 1):
-            return candidate
+            score = (plausible, decimal_like, start_index)
+            if best_candidate is None or score > best_candidate[0]:
+                best_candidate = (score, candidate)
+    if best_candidate is not None:
+        return best_candidate[1]
 
     return raw_values[:expected_count]
 
@@ -20878,14 +21252,49 @@ def _parse_vertical_chemistry_from_lines(lines: list[str], page_id: int) -> dict
 
 
 def _extract_chemistry_header(line: str) -> list[str]:
+    return [slot for slot in _extract_chemistry_header_slots(line) if slot is not None]
+
+
+def _extract_chemistry_header_slots(line: str) -> list[str | None]:
     lowered = line.lower()
     if any(marker in lowered for marker in ("chemical composition", "composizione chimica", "notes", "mechanical")):
         return []
-    tokens = re.findall(r"[A-Z][a-z]?(?:\+[A-Z][a-z]?)?", line)
-    elements = [token for token in tokens if token in CHEMISTRY_FIELD_SET]
-    if len(elements) < 3:
+    tokens = re.findall(r"[A-Z][a-z]?(?:\+[A-Z][a-z]?)?|Others?|Andere|Rest|Remainder", line)
+    slots: list[str | None] = []
+    for token in tokens:
+        if token in CHEMISTRY_FIELD_SET:
+            slots.append(token)
+        elif token in IGNORED_CHEMISTRY_HEADER_TOKENS:
+            slots.append(None)
+    slots = _trim_chemistry_header_slots(slots)
+    if len([slot for slot in slots if slot is not None]) < 3:
         return []
-    return elements
+    return slots
+
+
+def _find_chemistry_header_slots_in_lines(lines: list[str], *, min_real_fields: int = 3) -> list[str | None]:
+    for line in lines:
+        slots = _extract_chemistry_header_slots(line)
+        if len([slot for slot in slots if slot is not None]) >= min_real_fields:
+            return slots
+    return []
+
+
+def _map_chemistry_values_to_field_order(
+    raw_values: list[str],
+    *,
+    slots: list[str | None],
+    field_order: list[str],
+) -> list[str] | None:
+    if len(raw_values) < len(slots):
+        return None
+    values_by_field: dict[str, str] = {}
+    for field_name, raw_value in zip(slots, raw_values[: len(slots)]):
+        if field_name is not None and field_name in field_order:
+            values_by_field[field_name] = raw_value
+    if not all(field_name in values_by_field for field_name in field_order):
+        return None
+    return [values_by_field[field_name] for field_name in field_order]
 
 
 def _extract_vertical_chemistry_element(line: str) -> str | None:
@@ -20939,18 +21348,33 @@ def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) 
         return {}
 
     window = lines[anchor_index + 1 : min(anchor_index + 42, len(lines))]
-    fixed_slots: list[str | None] = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "V", "Ti", "Pb", "Zr", "Bi", "Sn", None]
+    header_slots = _find_aluminium_bozen_chemistry_header_slots(window)
+    fixed_slots: list[str | None] = header_slots or [
+        "Si",
+        "Fe",
+        "Cu",
+        "Mn",
+        "Mg",
+        "Cr",
+        "Ni",
+        "Zn",
+        None,  # Ga exists on Aluminium Bozen certificates but is not a captured field.
+        "V",
+        "Ti",
+        "Pb",
+        "Zr",
+        "Bi",
+        "Sn",
+    ]
     for line in window:
         lowered = line.lower()
         if any(marker in lowered for marker in ("norma", "norm", "limit", "max.", "min.")):
             continue
         if not re.match(r"^\s*[A-Z]?\d{5,}[A-Z0-9]?", line, re.IGNORECASE):
             continue
-        normalized_line = _normalize_mojibake_numeric_text(line)
-        value_source = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
-        if len(value_source) < 12:
+        numeric_values = _extract_aluminium_bozen_chemistry_numeric_values(line)
+        if len(numeric_values) < 12:
             continue
-        numeric_values = value_source[1:]
         matches: dict[str, dict[str, str | int]] = {}
         for element_name, raw_value in zip(fixed_slots, numeric_values):
             if element_name is None:
@@ -20979,8 +21403,7 @@ def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) 
             continue
         if pending_cast_line is None:
             continue
-        normalized_line = _normalize_mojibake_numeric_text(line)
-        value_source = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+        value_source = _extract_aluminium_bozen_chemistry_numeric_values(line)
         if len(value_source) < 12:
             continue
         matches = {}
@@ -21059,6 +21482,28 @@ def _parse_aluminium_bozen_chemistry_from_lines(lines: list[str], page_id: int) 
     return {}
 
 
+def _find_aluminium_bozen_chemistry_header_slots(lines: list[str]) -> list[str | None]:
+    for line in lines:
+        slots = _trim_chemistry_header_slots(_extract_aluminium_bozen_chemistry_slots_from_line(line))
+        if len([slot for slot in slots if slot is not None]) >= 8:
+            return slots
+    return []
+
+
+def _extract_aluminium_bozen_chemistry_numeric_values(line: str) -> list[str]:
+    normalized_line = _normalize_mojibake_numeric_text(line)
+    decimal_values = [
+        value.strip()
+        for value in re.findall(r"(?:<=|<|≤)?\s*\d+[.,]\d+", normalized_line)
+    ]
+    if len(decimal_values) >= 8:
+        return decimal_values
+    value_source = re.findall(r"\d+(?:[.,]\d+)?", normalized_line)
+    if len(value_source) > 1:
+        return value_source[1:]
+    return value_source
+
+
 def _extract_aluminium_bozen_chemistry_elements_from_line(line: str) -> list[str]:
     return [slot for slot in _extract_aluminium_bozen_chemistry_slots_from_line(line) if slot is not None]
 
@@ -21088,7 +21533,7 @@ def _extract_aluminium_bozen_chemistry_slots_from_line(line: str) -> list[str | 
             slots.append(mojibake_map[token])
         elif token in CHEMISTRY_FIELD_SET:
             slots.append(token)
-        elif re.fullmatch(r"[A-Za-z¿®Ù]+", token):
+        elif token in IGNORED_CHEMISTRY_HEADER_TOKENS or re.fullmatch(r"[A-Za-z¿®Ù]+", token):
             slots.append(None)
     return slots
 
