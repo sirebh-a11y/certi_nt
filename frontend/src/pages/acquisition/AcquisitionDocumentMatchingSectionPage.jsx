@@ -133,7 +133,7 @@ function renderOverlayBox({ item, color, imageWidth, imageHeight, title, key }) 
         ? "border-orange-500 bg-orange-400/35 shadow-[0_0_0_1px_rgba(249,115,22,0.25)]"
         : color === "indigo"
           ? "border-indigo-500 bg-indigo-400/30 shadow-[0_0_0_1px_rgba(99,102,241,0.22)]"
-          : "border-sky-500 bg-sky-400/22 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]";
+          : "border-sky-500 bg-sky-400/40 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]";
   return (
     <div
       className={`pointer-events-none absolute rounded border ${palette}`}
@@ -189,7 +189,7 @@ function OverlayLegend({ visible }) {
         materiale
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="h-2.5 w-2.5 rounded-sm border border-sky-500 bg-sky-400/25" />
+        <span className="h-2.5 w-2.5 rounded-sm border border-sky-500 bg-sky-400/40" />
         cdq
       </span>
       <span className="inline-flex items-center gap-1">
