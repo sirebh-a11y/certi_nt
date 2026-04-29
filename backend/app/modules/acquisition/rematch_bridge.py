@@ -224,7 +224,9 @@ def _supplier_blocker(left: RematchBridge, right: RematchBridge) -> str | None:
 
 def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]:
     blockers: list[str] = []
-    for field_name in ("colata", "diametro", "peso"):
+    # Weight is supporting evidence only: one certificate can cover multiple DDT
+    # rows or a certificate-wide total, so a mismatch must not block a strong bridge.
+    for field_name in ("colata", "diametro"):
         left_value = left.value(field_name)
         right_value = right.value(field_name)
         if left_value is None or right_value is None:

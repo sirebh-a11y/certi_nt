@@ -191,6 +191,38 @@ class RematchBridgeTest(unittest.TestCase):
         self.assertIn("diametro", result.matched_fields)
         self.assertIn("peso", result.matched_fields)
 
+    def test_leichtmetall_certificate_total_weight_does_not_block_same_identity(self):
+        left = ddt(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228.00",
+                "colata": "94668",
+                "ddt": "80008535",
+                "peso": "5014",
+                "ordine": "19.2 + 4 + 5",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        right = cert(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228",
+                "colata": "94668",
+                "peso": "8554",
+                "ordine": "333.1",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        result = self.assert_strong(left, right)
+        self.assertIn("cdq", result.matched_fields)
+        self.assertIn("colata", result.matched_fields)
+        self.assertIn("diametro", result.matched_fields)
+        self.assertNotIn("peso", result.matched_fields)
+
     def test_metalba_existing_match_with_ddt_readvalue_gaps(self):
         left = ddt(
             {
