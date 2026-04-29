@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app.modules.acquisition.service import (
     _build_chemistry_overlay_items,
     _build_chemistry_overlay_items_from_header_order,
+    _find_chemistry_overlay_header_slots,
     _parse_aluminium_bozen_chemistry_from_lines,
 )
 
@@ -96,6 +97,79 @@ class AluminiumBozenChemistryTest(unittest.TestCase):
         self.assertEqual(by_field["V"].bbox, "190,60,198,70")
         self.assertEqual(by_field["Ti"].bbox, "200,60,208,70")
         self.assertEqual(by_field["Sn"].bbox, "240,60,248,70")
+
+    def test_overlay_header_order_handles_lowercase_ocr_elements(self):
+        page = SimpleNamespace(id=1, numero_pagina=1)
+        header_tokens = ["si", "Fe", "Cu", "Mn", "mg", "cr", "Zn", "Ti"]
+        value_tokens = ["1,02", "0,30", "0,07", "0,55", "0,74", "0,13", "0,03", "0,03"]
+        header_words = [
+            {"text": token, "left": 100 + index * 20, "top": 20, "width": 12, "height": 10}
+            for index, token in enumerate(header_tokens)
+        ]
+        value_words = [
+            {"text": token, "normalized": token, "left": 100 + index * 20, "top": 60, "width": 12, "height": 10}
+            for index, token in enumerate(value_tokens)
+        ]
+        line_boxes = [
+            {"words": header_words, "x0": 100, "y0": 20, "x1": 252, "y1": 30},
+            {"words": value_words, "x0": 100, "y0": 60, "x1": 252, "y1": 70},
+        ]
+
+        slots = _find_chemistry_overlay_header_slots(line_boxes=line_boxes, value_line_box=line_boxes[1])
+        self.assertEqual(slots, ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti"])
+
+        items = _build_chemistry_overlay_items_from_header_order(
+            page=page,
+            line_box=line_boxes[1],
+            line_boxes=line_boxes,
+            field_values={"Mg": "0,74"},
+            existing_fields=set(),
+            image_width=300,
+            image_height=100,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].field, "Mg")
+        self.assertEqual(items[0].bbox, "180,60,192,70")
+
+    def test_overlay_uses_header_position_when_ocr_misses_value_word(self):
+        page = SimpleNamespace(id=1, numero_pagina=1)
+        header_tokens = ["si", "Fe", "Cu", "Mn", "mg", "cr", "Zn", "Ti"]
+        header_words = [
+            {"text": token, "left": 100 + index * 20, "top": 20, "width": 12, "height": 10}
+            for index, token in enumerate(header_tokens)
+        ]
+        value_words = [
+            {"text": token, "normalized": token, "left": left, "top": 60, "width": 12, "height": 10}
+            for token, left in [
+                ("1,02", 100),
+                ("0,30", 120),
+                ("0,13", 200),
+                ("0,03", 220),
+                ("0,03", 240),
+            ]
+        ]
+        line_boxes = [
+            {"words": header_words, "x0": 100, "y0": 20, "x1": 252, "y1": 30},
+            {"words": value_words, "x0": 100, "y0": 60, "x1": 252, "y1": 70},
+        ]
+
+        items = _build_chemistry_overlay_items_from_header_order(
+            page=page,
+            line_box=line_boxes[1],
+            line_boxes=line_boxes,
+            field_values={"Mg": "0,74"},
+            existing_fields=set(),
+            image_width=300,
+            image_height=100,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].field, "Mg")
+        left, top, right, bottom = [int(value) for value in items[0].bbox.split(",")]
+        self.assertLess(left, 186)
+        self.assertGreater(right, 186)
+        self.assertEqual((top, bottom), (60, 70))
 
 
 if __name__ == "__main__":

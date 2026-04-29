@@ -1660,7 +1660,7 @@ def _normalize_aww_alloy(value: str | None) -> str | None:
     temper = temper_match.group(0) if temper_match is not None else None
     if base and temper:
         return f"{base} {temper}"
-    return base or temper
+    return base
 
 
 def _extract_aww_diameter(lines: list[str], *, document_type: str) -> str | None:

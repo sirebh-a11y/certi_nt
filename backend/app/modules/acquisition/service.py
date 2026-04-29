@@ -3339,15 +3339,24 @@ def _build_chemistry_overlay_items_from_header_order(
     image_width: int,
     image_height: int,
 ) -> list[ChemistryOverlayPreviewItemResponse]:
-    header_slots = _find_chemistry_overlay_header_slots(line_boxes=line_boxes, value_line_box=line_box)
-    if not header_slots:
+    header_entries = _find_chemistry_overlay_header_slot_words(line_boxes=line_boxes, value_line_box=line_box)
+    header_slots = [slot for slot, _word in header_entries]
+    if not header_entries:
         return []
 
     value_words = _chemistry_overlay_value_words(line_box)
     if len(value_words) > len(header_slots):
         value_words = value_words[-len(header_slots) :]
     if len(value_words) < len(header_slots):
-        return []
+        return _build_chemistry_overlay_items_from_header_positions(
+            page=page,
+            line_box=line_box,
+            header_entries=header_entries,
+            field_values=field_values,
+            existing_fields=existing_fields,
+            image_width=image_width,
+            image_height=image_height,
+        )
 
     items: list[ChemistryOverlayPreviewItemResponse] = []
     for index, field_name in enumerate(header_slots):
@@ -3378,18 +3387,26 @@ def _find_chemistry_overlay_header_slots(
     line_boxes: list[dict[str, object]],
     value_line_box: dict[str, object],
 ) -> list[str | None]:
+    return [slot for slot, _word in _find_chemistry_overlay_header_slot_words(line_boxes=line_boxes, value_line_box=value_line_box)]
+
+
+def _find_chemistry_overlay_header_slot_words(
+    *,
+    line_boxes: list[dict[str, object]],
+    value_line_box: dict[str, object],
+) -> list[tuple[str | None, dict[str, object]]]:
     value_y0 = int(value_line_box.get("y0") or 0)
     value_x0 = int(value_line_box.get("x0") or 0)
     value_x1 = int(value_line_box.get("x1") or 0)
-    best_slots: list[str | None] = []
+    best_entries: list[tuple[str | None, dict[str, object]]] = []
     best_score: tuple[int, int, int] | None = None
     for candidate in line_boxes:
         candidate_y1 = int(candidate.get("y1") or 0)
         if candidate_y1 > value_y0 + 8:
             continue
         candidate_words = cast(list[dict[str, object]], candidate.get("words") or [])
-        slots = _chemistry_overlay_header_slots_from_words(candidate_words)
-        real_fields = [slot for slot in slots if slot is not None]
+        entries = _chemistry_overlay_header_slot_words_from_words(candidate_words)
+        real_fields = [slot for slot, _word in entries if slot is not None]
         if len(real_fields) < 5:
             continue
         candidate_x0 = int(candidate.get("x0") or 0)
@@ -3399,17 +3416,93 @@ def _find_chemistry_overlay_header_slots(
         score = (horizontal_overlap, len(real_fields), -distance)
         if best_score is None or score > best_score:
             best_score = score
-            best_slots = slots
-    return best_slots
+            best_entries = entries
+    return best_entries
 
 
 def _chemistry_overlay_header_slots_from_words(words: list[dict[str, object]]) -> list[str | None]:
-    slots: list[str | None] = []
+    return [slot for slot, _word in _chemistry_overlay_header_slot_words_from_words(words)]
+
+
+def _chemistry_overlay_header_slot_words_from_words(
+    words: list[dict[str, object]],
+) -> list[tuple[str | None, dict[str, object]]]:
+    entries: list[tuple[str | None, dict[str, object]]] = []
     for word in words:
         slot = _normalize_chemistry_overlay_element_token(cast(str | None, word.get("text")))
         if slot is not None or _is_ignored_chemistry_overlay_header_token(cast(str | None, word.get("text"))):
-            slots.append(slot)
-    return _trim_chemistry_header_slots(slots)
+            entries.append((slot, word))
+    return _trim_chemistry_header_slot_entries(entries)
+
+
+def _trim_chemistry_header_slot_entries(
+    entries: list[tuple[str | None, dict[str, object]]],
+) -> list[tuple[str | None, dict[str, object]]]:
+    first_real_index = next((index for index, (slot, _word) in enumerate(entries) if slot is not None), None)
+    if first_real_index is None:
+        return []
+    last_real_index = len(entries) - 1 - next(
+        index for index, (slot, _word) in enumerate(reversed(entries)) if slot is not None
+    )
+    return entries[first_real_index : last_real_index + 1]
+
+
+def _build_chemistry_overlay_items_from_header_positions(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    header_entries: list[tuple[str | None, dict[str, object]]],
+    field_values: dict[str, str],
+    existing_fields: set[str],
+    image_width: int,
+    image_height: int,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    real_entries = [
+        (slot, word)
+        for slot, word in header_entries
+        if slot is not None and slot in field_values and slot not in existing_fields
+    ]
+    if not real_entries:
+        return []
+
+    centers = [
+        int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+        for _slot, word in header_entries
+        if int(word.get("width") or 0) > 0
+    ]
+    centers.sort()
+    gaps = [right - left for left, right in zip(centers, centers[1:]) if right > left]
+    half_width = int(max(18, min(52, (min(gaps) * 0.38) if gaps else image_width * 0.018)))
+
+    value_words = _chemistry_overlay_value_words(line_box)
+    if value_words:
+        top = min(int(word.get("top") or 0) for word in value_words)
+        bottom = max(int(word.get("top") or 0) + int(word.get("height") or 0) for word in value_words)
+    else:
+        top = int(line_box.get("y0") or 0)
+        bottom = int(line_box.get("y1") or 0)
+    if bottom <= top:
+        bottom = top + max(18, int(image_height * 0.012))
+
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+    for field_name, word in real_entries:
+        center = int(int(word.get("left") or 0) + int(word.get("width") or 0) / 2)
+        left = max(0, center - half_width)
+        right = min(image_width, center + half_width)
+        if right <= left:
+            continue
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{right},{bottom}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+        existing_fields.add(field_name)
+    return items
 
 
 def _trim_chemistry_header_slots(slots: list[str | None]) -> list[str | None]:
@@ -3429,6 +3522,9 @@ def _normalize_chemistry_overlay_element_token(value: str | None) -> str | None:
     cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
     if cleaned in CHEMISTRY_FIELD_SET:
         return cleaned
+    for field_name in CHEMISTRY_FIELD_SET:
+        if cleaned.lower() == field_name.lower():
+            return field_name
     return None
 
 
@@ -3437,7 +3533,7 @@ def _is_ignored_chemistry_overlay_header_token(value: str | None) -> bool:
     if raw_value is None:
         return False
     cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
-    return cleaned in IGNORED_CHEMISTRY_HEADER_TOKENS
+    return any(cleaned.lower() == token.lower() for token in IGNORED_CHEMISTRY_HEADER_TOKENS)
 
 
 def _chemistry_overlay_value_words(line_box: dict[str, object]) -> list[dict[str, object]]:
@@ -15414,7 +15510,11 @@ def _extract_aww_ddt_row_groups_from_openai(
                 "order_confirmation_raw deve essere il valore di Order confirmation o il root del Batch number (OC) della stessa posizione. "
                 "batch_number_oc_raw deve essere il Batch number (OC) completo della stessa posizione. "
                 "alloy_temper_raw deve essere il valore di Legierung/Zustand o alloy code AWW della stessa posizione. "
-                "Non usare Your part number, Profilzeichnung o altri codici prodotto al posto della lega/stato. "
+                "alloy_temper_raw deve contenere solo la lega/stato metallurgico, ad esempio EN AW-6082A/535/T1. "
+                "Non usare codici articolo, Your part number, Part number o Profilzeichnung come alloy_temper_raw. "
+                "Se vedi una riga come Your part number o Profilzeichnung, non prenderla come lega. "
+                "Cerca invece alloy code AWW, Legierung/Zustand o una dicitura materiale equivalente. "
+                "Se trovi solo T1/T6 senza una lega tipo 6082, 6082A, EN AW o AlSi, restituisci null. "
                 "Se il documento mostra EN AW-6082A/535/T1, restituisci proprio quel raw completo. "
                 "diameter_raw deve essere il diametro preso dal simbolo Ø o da outer Ø della stessa posizione, senza dipendere dalla parola barra. "
                 "length_raw deve essere la lunghezza raw della stessa posizione, quando visibile. "
@@ -15600,7 +15700,7 @@ def _enrich_aww_ai_row_groups_from_pages(
         return candidates
     page_texts = _document_page_text_map(pages)
     for candidate in candidates:
-        if _string_or_none(candidate.lega) is not None:
+        if _is_valid_aww_alloy_value(candidate.lega):
             continue
         raw_payload = _load_json_dict(candidate.ai_row_payload_raw)
         source_pages = _source_crop_page_numbers(cast(list[str], raw_payload.get("source_crops") or []))
@@ -15664,6 +15764,10 @@ def _normalize_aww_alloy_from_text(value: str | None) -> str | None:
     if base and temper:
         return f"{base} {temper}"
     return base
+
+
+def _is_valid_aww_alloy_value(value: str | None) -> bool:
+    return _normalize_aww_alloy_from_text(value) is not None
 
 
 def _normalize_aww_diameter_from_text(value: str | None) -> str | None:
@@ -17689,7 +17793,10 @@ def _ddt_row_field_fallback_value(row: AcquisitionRow, field_name: str) -> str |
     if field_name == "ddt":
         return _string_or_none(row.ddt)
     if field_name == "lega":
-        return _string_or_none(row.lega_base)
+        value = _string_or_none(row.lega_base)
+        if value is not None and _resolve_row_supplier_key(row) == "aww" and not _is_valid_aww_alloy_value(value):
+            return None
+        return value
     return None
 
 
@@ -17751,8 +17858,13 @@ def _sync_row_from_ddt_values(db: Session, row: AcquisitionRow) -> None:
         row.ordine = _final_value_for_row(value_map.get("customer_order_no")) or _final_value_for_row(value_map.get("ordine"))
     if "ddt" in value_map and row.ddt is None:
         row.ddt = _final_value_for_row(value_map.get("ddt"))
-    if "lega" in value_map and row.lega_base is None:
-        row.lega_base = _final_value_for_row(value_map.get("lega"))
+    if "lega" in value_map and (
+        row.lega_base is None
+        or (_resolve_row_supplier_key(row) == "aww" and not _is_valid_aww_alloy_value(row.lega_base))
+    ):
+        next_alloy = _final_value_for_row(value_map.get("lega"))
+        if _resolve_row_supplier_key(row) != "aww" or _is_valid_aww_alloy_value(next_alloy):
+            row.lega_base = next_alloy
 
 
 def _row_ddt_core_field_value(row: AcquisitionRow, field_name: str) -> str | None:
