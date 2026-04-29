@@ -4,6 +4,8 @@ backend/__pycache__/
 backend/.pytest_cache/
 backend/app/**/__pycache__/
 backend/storage/
+backend/tmp/backups/
+backups/
 *.pyc
 frontend/node_modules/
 frontend/dist/
