@@ -1075,6 +1075,7 @@ def build_chemistry_overlay_preview(
         return ChemistryOverlayPreviewResponse(items=[])
 
     page, line_box, matched_fields, image_width, image_height = best_match
+    template = resolve_supplier_template(_row_supplier_name(row))
     items = _build_chemistry_overlay_items(
         page=page,
         line_box=line_box,
@@ -1082,6 +1083,7 @@ def build_chemistry_overlay_preview(
         matched_fields=matched_fields,
         image_width=image_width,
         image_height=image_height,
+        supplier_key=template.supplier_key if template is not None else None,
     )
     return ChemistryOverlayPreviewResponse(items=items)
 
@@ -1090,6 +1092,7 @@ def _build_chemistry_overlay_preview_items_for_page(
     *,
     page: DocumentPage,
     field_values: dict[str, str],
+    supplier_key: str | None = None,
 ) -> list[ChemistryOverlayPreviewItemResponse]:
     if not field_values or not page.immagine_pagina_storage_key:
         return []
@@ -1106,6 +1109,7 @@ def _build_chemistry_overlay_preview_items_for_page(
         matched_fields=matched_fields,
         image_width=image_width,
         image_height=image_height,
+        supplier_key=supplier_key,
     )
 
 
@@ -3200,8 +3204,22 @@ def _build_chemistry_overlay_items(
     matched_fields: list[str],
     image_width: int,
     image_height: int,
+    supplier_key: str | None = None,
 ) -> list[ChemistryOverlayPreviewItemResponse]:
     line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+    direct_items = _build_chemistry_overlay_items_by_value_then_position(
+        page=page,
+        line_box=line_box,
+        line_boxes=line_boxes,
+        field_values=field_values,
+        matched_fields=matched_fields,
+        image_width=image_width,
+        image_height=image_height,
+        supplier_key=supplier_key,
+    )
+    if _count_chemistry_overlay_fields(direct_items) >= min(len(field_values), 3):
+        return direct_items
+
     header_items = _build_chemistry_overlay_items_from_header_order(
         page=page,
         line_box=line_box,
@@ -3236,6 +3254,152 @@ def _build_chemistry_overlay_items(
         image_width=image_width,
         image_height=image_height,
     )
+
+
+def _build_chemistry_overlay_items_by_value_then_position(
+    *,
+    page: DocumentPage,
+    line_box: dict[str, object],
+    line_boxes: list[dict[str, object]],
+    field_values: dict[str, str],
+    matched_fields: list[str],
+    image_width: int,
+    image_height: int,
+    supplier_key: str | None,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    value_words = _chemistry_overlay_value_words(line_box)
+    if not value_words:
+        return []
+
+    header_entries = _find_chemistry_overlay_header_slot_words(line_boxes=line_boxes, value_line_box=line_box)
+    header_by_field = _chemistry_overlay_header_words_by_field(header_entries)
+    fallback_words = _chemistry_overlay_fallback_words_by_field(
+        value_words=value_words,
+        supplier_key=supplier_key,
+    )
+    used_word_ids: set[int] = set()
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+
+    for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER:
+        if field_name not in matched_fields:
+            continue
+        target_value = field_values.get(field_name)
+        if target_value is None:
+            continue
+        word = _choose_chemistry_overlay_value_word(
+            field_name=field_name,
+            target_value=target_value,
+            value_words=value_words,
+            header_by_field=header_by_field,
+            fallback_words=fallback_words,
+            used_word_ids=used_word_ids,
+        )
+        if word is None:
+            continue
+        used_word_ids.add(id(word))
+        left = int(word["left"])
+        top = int(word["top"])
+        width = int(word["width"])
+        height = int(word["height"])
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+
+    return items
+
+
+def _choose_chemistry_overlay_value_word(
+    *,
+    field_name: str,
+    target_value: str,
+    value_words: list[dict[str, object]],
+    header_by_field: dict[str, dict[str, object]],
+    fallback_words: dict[str, dict[str, object]],
+    used_word_ids: set[int],
+) -> dict[str, object] | None:
+    target_keys = _chemistry_overlay_match_keys(target_value)
+    candidates = [
+        word
+        for word in value_words
+        if id(word) not in used_word_ids and target_keys & _chemistry_overlay_word_match_keys(word)
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    header_word = header_by_field.get(field_name)
+    if header_word is not None and candidates:
+        header_center = _chemistry_overlay_word_center(header_word)
+        return min(candidates, key=lambda word: abs(_chemistry_overlay_word_center(word) - header_center))
+
+    fallback_word = fallback_words.get(field_name)
+    if (
+        fallback_word is not None
+        and id(fallback_word) not in used_word_ids
+        and target_keys & _chemistry_overlay_word_match_keys(fallback_word)
+    ):
+        return fallback_word
+
+    if candidates:
+        return candidates[0]
+    return None
+
+
+def _chemistry_overlay_word_match_keys(word: dict[str, object]) -> set[str]:
+    keys: set[str] = set()
+    keys.update(_chemistry_overlay_match_keys(cast(str | None, word.get("text"))))
+    keys.update(_chemistry_overlay_match_keys(cast(str | None, word.get("normalized"))))
+    return keys
+
+
+def _chemistry_overlay_word_center(word: dict[str, object]) -> float:
+    return int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+
+
+def _chemistry_overlay_header_words_by_field(
+    header_entries: list[tuple[str | None, dict[str, object]]],
+) -> dict[str, dict[str, object]]:
+    by_field: dict[str, dict[str, object]] = {}
+    for field_name, word in header_entries:
+        if field_name is None:
+            continue
+        by_field.setdefault(field_name, word)
+    return by_field
+
+
+CHEMISTRY_OVERLAY_FALLBACK_SLOTS_BY_SUPPLIER: dict[str, list[str | None]] = {
+    "aluminium_bozen": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", None, "V", "Ti", "Pb", "Zr", "Bi", "Sn"],
+    "aww": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Pb"],
+    "leichtmetall": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", None, None],
+    "metalba": ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr", None, None],
+}
+
+
+def _chemistry_overlay_fallback_words_by_field(
+    *,
+    value_words: list[dict[str, object]],
+    supplier_key: str | None,
+) -> dict[str, dict[str, object]]:
+    slots = CHEMISTRY_OVERLAY_FALLBACK_SLOTS_BY_SUPPLIER.get(supplier_key or "")
+    if not slots:
+        return {}
+    aligned_words = value_words
+    if len(aligned_words) > len(slots):
+        # Drop leading row identifiers such as colata/lega before chemistry values.
+        aligned_words = aligned_words[-len(slots) :]
+    if len(aligned_words) < len(slots):
+        return {}
+    return {
+        field_name: word
+        for field_name, word in zip(slots, aligned_words)
+        if field_name is not None
+    }
 
 
 def _build_chemistry_overlay_value_items(
@@ -3519,11 +3683,25 @@ def _normalize_chemistry_overlay_element_token(value: str | None) -> str | None:
     raw_value = _string_or_none(value)
     if raw_value is None:
         return None
-    cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
+    cleaned = _clean_chemistry_overlay_header_token(raw_value)
+    if cleaned is None:
+        return None
+    header_aliases = {
+        "SNL": "Ni",
+        "SNI": "Ni",
+        "SBL": "Bi",
+        "SBI": "Bi",
+    }
+    alias = header_aliases.get(cleaned.upper())
+    if alias is not None:
+        return alias
     if cleaned in CHEMISTRY_FIELD_SET:
         return cleaned
     for field_name in CHEMISTRY_FIELD_SET:
         if cleaned.lower() == field_name.lower():
+            return field_name
+    for field_name in sorted(CHEMISTRY_FIELD_SET, key=len, reverse=True):
+        if cleaned.lower().endswith(field_name.lower()):
             return field_name
     return None
 
@@ -3532,8 +3710,16 @@ def _is_ignored_chemistry_overlay_header_token(value: str | None) -> bool:
     raw_value = _string_or_none(value)
     if raw_value is None:
         return False
-    cleaned = raw_value.strip().replace("%", "").strip("|[](){};:,._")
+    cleaned = _clean_chemistry_overlay_header_token(raw_value)
+    if cleaned is None:
+        return False
     return any(cleaned.lower() == token.lower() for token in IGNORED_CHEMISTRY_HEADER_TOKENS)
+
+
+def _clean_chemistry_overlay_header_token(value: str) -> str | None:
+    cleaned = _normalize_mojibake_numeric_text(value).strip().replace("%", "")
+    cleaned = re.sub(r"[^A-Za-z+]", "", cleaned)
+    return cleaned or None
 
 
 def _chemistry_overlay_value_words(line_box: dict[str, object]) -> list[dict[str, object]]:
