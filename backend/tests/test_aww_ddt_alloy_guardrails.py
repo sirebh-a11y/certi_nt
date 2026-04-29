@@ -1,10 +1,14 @@
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from PIL import Image
 
 from app.modules.acquisition.service import (
     _ddt_row_field_fallback_value,
     _enrich_aww_ai_row_groups_from_pages,
+    _mask_aww_supplier_occurrence_blocks,
     _normalize_aww_alloy_from_text,
 )
 from app.modules.document_reader.matching import _normalize_aww_alloy
@@ -55,6 +59,43 @@ class AwwDdtAlloyGuardrailsTest(unittest.TestCase):
         )
 
         self.assertIsNone(_ddt_row_field_fallback_value(row, "lega"))
+
+    def test_aww_masking_keeps_technical_alloy_code_line(self):
+        image = Image.new("RGB", (420, 160), "white")
+        words = [
+            {"text": "alloy", "left": 20, "top": 30, "right": 60, "bottom": 45, "line_key": (1, 1, 1)},
+            {"text": "code", "left": 66, "top": 30, "right": 104, "bottom": 45, "line_key": (1, 1, 1)},
+            {"text": "AWW:", "left": 110, "top": 30, "right": 152, "bottom": 45, "line_key": (1, 1, 1)},
+            {"text": "EN", "left": 158, "top": 30, "right": 180, "bottom": 45, "line_key": (1, 1, 1)},
+            {"text": "AW-6082A/535/T1", "left": 186, "top": 30, "right": 330, "bottom": 45, "line_key": (1, 1, 1)},
+            {"text": "Aluminium-Werke", "left": 20, "top": 90, "right": 150, "bottom": 105, "line_key": (1, 1, 2)},
+            {"text": "AWW.DE", "left": 156, "top": 90, "right": 220, "bottom": 105, "line_key": (1, 1, 2)},
+        ]
+
+        with patch("app.modules.acquisition.service._extract_ocr_word_blocks", return_value=words):
+            _mask_aww_supplier_occurrence_blocks(image, [{"text": "dummy", "left": 0, "top": 0, "right": 1, "bottom": 1}])
+
+        self.assertEqual(image.getpixel((210, 36)), (255, 255, 255))
+        self.assertEqual(image.getpixel((80, 96)), (0, 0, 0))
+
+    def test_aww_masking_keeps_technical_fields_on_same_ocr_line(self):
+        image = Image.new("RGB", (520, 120), "white")
+        words = [
+            {"text": "Forgialluminio", "left": 20, "top": 35, "right": 135, "bottom": 52, "line_key": (1, 1, 1)},
+            {"text": "3", "left": 140, "top": 35, "right": 150, "bottom": 52, "line_key": (1, 1, 1)},
+            {"text": "S.R.L.", "left": 156, "top": 35, "right": 200, "bottom": 52, "line_key": (1, 1, 1)},
+            {"text": "Werkstoff", "left": 260, "top": 35, "right": 335, "bottom": 52, "line_key": (1, 1, 1)},
+            {"text": "EN", "left": 350, "top": 35, "right": 372, "bottom": 52, "line_key": (1, 1, 1)},
+            {"text": "AW-6082A", "left": 380, "top": 35, "right": 465, "bottom": 52, "line_key": (1, 1, 1)},
+        ]
+
+        with patch("app.modules.acquisition.service._extract_ocr_word_blocks", return_value=words):
+            from app.modules.acquisition.service import _mask_aww_customer_occurrence_blocks
+
+            _mask_aww_customer_occurrence_blocks(image, [{"text": "dummy", "left": 0, "top": 0, "right": 1, "bottom": 1}])
+
+        self.assertEqual(image.getpixel((70, 42)), (0, 0, 0))
+        self.assertEqual(image.getpixel((405, 42)), (255, 255, 255))
 
 
 if __name__ == "__main__":
