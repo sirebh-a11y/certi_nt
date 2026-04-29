@@ -21815,6 +21815,22 @@ def _is_radioactive_free_line(line: str) -> bool:
     if "radio" not in line:
         return False
     normalized = " ".join(line.split())
+    absence_tokens = (
+        "free",
+        "senza",
+        "privo",
+        "priva",
+        "esente",
+        "assenza",
+        "keine",
+        "kein",
+        "sans",
+        "exempt",
+        "exempte",
+        "absence",
+    )
+    if any(token in normalized for token in absence_tokens):
+        return True
     if re.search(r"free\s+(?:from|of)\s+radioactive\s+(?:contamination|contaminants?|radiation)\b", normalized):
         return True
     if "contaminazione radioattiva" in normalized:
