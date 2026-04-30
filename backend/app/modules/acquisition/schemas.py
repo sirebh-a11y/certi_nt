@@ -458,6 +458,15 @@ class DocumentSideFieldsConfirmRequest(BaseModel):
         return {key: normalize_optional_text(item) for key, item in value.items()}
 
 
+class DocumentMatchDetachRequest(BaseModel):
+    motivo_breve: str | None = Field(default=None, max_length=255)
+
+    @field_validator("motivo_breve")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
+
+
 class ReadValueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -600,6 +609,11 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
     certificate_match: MatchResponse | None
     history_events: list[AcquisitionHistoryEventResponse]
     value_history: list[AcquisitionValueHistoryResponse]
+
+
+class DocumentMatchDetachResponse(BaseModel):
+    ddt_row: AcquisitionRowDetailResponse
+    certificate_row: AcquisitionRowDetailResponse
 
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):

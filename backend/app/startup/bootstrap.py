@@ -18,6 +18,7 @@ from app.modules.acquisition.models import (  # noqa: F401
     Document,
     DocumentEvidence,
     DocumentPage,
+    ManualMatchBlock,
     ReadValue,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401

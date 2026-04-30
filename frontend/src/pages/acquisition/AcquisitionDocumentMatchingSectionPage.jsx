@@ -603,19 +603,101 @@ function CandidateBox({ ddtLinkPreview, loadingDdtPreview }) {
   );
 }
 
-function MatchBridgePanel({ row, isCertificateFirstRow, ddtLinkPreview, loadingDdtPreview }) {
+function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateFirstRow, loadingDdtPreview, onDetach, row }) {
   const state = row?.block_states?.match || "rosso";
   return (
     <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3">
       <div className="flex flex-col items-center gap-3 text-center">
-        <button className="flex h-16 w-16 items-center justify-center rounded-full border border-slate-300 bg-white text-3xl font-semibold text-slate-700" type="button">
+        <button
+          className={`flex h-16 w-16 items-center justify-center rounded-full border text-3xl font-semibold transition ${
+            canDetach
+              ? "border-amber-300 bg-white text-amber-700 hover:border-amber-500 hover:bg-amber-50"
+              : "border-slate-300 bg-white text-slate-700"
+          } disabled:cursor-not-allowed disabled:opacity-60`}
+          disabled={!canDetach || detaching}
+          onClick={canDetach ? onDetach : undefined}
+          title={canDetach ? "Disaccoppia DDT e certificato" : "Collegamento documenti"}
+          type="button"
+        >
           ⇄
         </button>
+        {canDetach ? (
+          <button
+            className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+            disabled={detaching}
+            onClick={onDetach}
+            type="button"
+          >
+            {detaching ? "Disaccoppio..." : "Disaccoppia documenti"}
+          </button>
+        ) : null}
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${renderStateTone(state)}`}>{matchStateLabel(row)}</span>
         <p className="max-w-[260px] text-sm leading-6 text-slate-600">
           Qui vivranno collegamento, conferma match e disaccoppio forte tra i due documenti.
         </p>
         {isCertificateFirstRow ? <CandidateBox ddtLinkPreview={ddtLinkPreview} loadingDdtPreview={loadingDdtPreview} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function DetachConfirmDialog({ certificateDraft, ddtDraft, detaching, onCancel, onConfirm }) {
+  const equalFields = HIGH_LEVEL_FIELDS.filter(
+    ({ key }) => String(ddtDraft?.[key] || "").trim() && String(ddtDraft?.[key] || "").trim() === String(certificateDraft?.[key] || "").trim(),
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+      <div className="w-full max-w-3xl rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl">
+        <p className="text-lg font-semibold text-slate-950">Disaccoppiare DDT e certificato?</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Verranno create due righe: una resterà con il DDT, una nuova con il certificato. Questa stessa coppia non verrà riagganciata
+          automaticamente dal rematch: potrai riagganciarla solo con una scelta esplicita.
+        </p>
+        {equalFields.length ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Attenzione: alcuni campi sono ancora uguali ({equalFields.map((field) => field.label).join(", ")}). Senza blocco manuale il
+            sistema li considererebbe ancora matchabili.
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <DetachPreview title="Riga DDT" values={ddtDraft} />
+          <DetachPreview title="Nuova riga certificato" values={certificateDraft} />
+        </div>
+        <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={detaching}
+            onClick={onCancel}
+            type="button"
+          >
+            Annulla
+          </button>
+          <button
+            className="rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+            disabled={detaching}
+            onClick={onConfirm}
+            type="button"
+          >
+            {detaching ? "Disaccoppio..." : "Conferma disaccoppio"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetachPreview({ title, values }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <p className="text-sm font-semibold text-slate-900">{title}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {HIGH_LEVEL_FIELDS.map((field) => (
+          <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5" key={field.key}>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{field.label}</p>
+            <p className="mt-0.5 truncate text-sm font-medium text-slate-800">{values?.[field.key] || "-"}</p>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -650,6 +732,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [ddtOverlayBusy, setDdtOverlayBusy] = useState(false);
   const [certificateOverlayItems, setCertificateOverlayItems] = useState([]);
   const [ddtOverlayItems, setDdtOverlayItems] = useState([]);
+  const [detachDialogOpen, setDetachDialogOpen] = useState(false);
+  const [detachingMatch, setDetachingMatch] = useState(false);
 
   useEffect(() => {
     const nextDraft = buildDdtDraft(row);
@@ -880,6 +964,33 @@ export default function AcquisitionDocumentMatchingSectionPage({
     }
   }
 
+  async function handleDetachMatch() {
+    setDetachingMatch(true);
+    setError("");
+    try {
+      await apiRequest(
+        `/acquisition/rows/${rowId}/detach-match`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            motivo_breve: "Disaccoppiato manualmente dalla pagina match",
+          }),
+        },
+        token,
+      );
+      setDetachDialogOpen(false);
+      setDdtOverlayActive(false);
+      setCertificateOverlayActive(false);
+      setDdtOverlayItems([]);
+      setCertificateOverlayItems([]);
+      await onRefreshRow?.();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setDetachingMatch(false);
+    }
+  }
+
   const ddtActionBox = (
     <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
       <p className="text-[11px] font-semibold text-slate-700">DDT</p>
@@ -994,9 +1105,12 @@ export default function AcquisitionDocumentMatchingSectionPage({
       )}
 
       <MatchBridgePanel
+        canDetach={Boolean(ddtDocument && certificateDocument)}
+        detaching={detachingMatch}
         ddtLinkPreview={ddtLinkPreview}
         isCertificateFirstRow={isCertificateFirstRow}
         loadingDdtPreview={loadingDdtPreview}
+        onDetach={() => setDetachDialogOpen(true)}
         row={row}
       />
 
@@ -1098,6 +1212,15 @@ export default function AcquisitionDocumentMatchingSectionPage({
             ))}
           </div>
         </div>
+      ) : null}
+      {detachDialogOpen ? (
+        <DetachConfirmDialog
+          certificateDraft={certificateDraft}
+          ddtDraft={ddtDraft}
+          detaching={detachingMatch}
+          onCancel={() => setDetachDialogOpen(false)}
+          onConfirm={() => void handleDetachMatch()}
+        />
       ) : null}
     </section>
   );

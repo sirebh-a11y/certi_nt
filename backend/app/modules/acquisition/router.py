@@ -28,6 +28,8 @@ from app.modules.acquisition.schemas import (
     DocumentEvidenceCreateRequest,
     DocumentEvidenceResponse,
     DocumentListResponse,
+    DocumentMatchDetachRequest,
+    DocumentMatchDetachResponse,
     DocumentPageCreateRequest,
     DocumentPageResponse,
     DocumentResponse,
@@ -63,6 +65,7 @@ from app.modules.acquisition.service import (
     detect_chemistry,
     detect_properties,
     detect_standard_notes,
+    detach_document_match,
     extract_ddt_fields_with_vision,
     extract_core_fields,
     get_acquisition_row,
@@ -449,6 +452,17 @@ def confirm_document_side_fields_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return confirm_document_side_fields(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/detach-match", response_model=DocumentMatchDetachResponse)
+def detach_document_match_route(
+    row_id: int,
+    payload: DocumentMatchDetachRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> DocumentMatchDetachResponse:
+    row = get_acquisition_row(db, row_id)
+    return detach_document_match(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/evidences", response_model=DocumentEvidenceResponse)

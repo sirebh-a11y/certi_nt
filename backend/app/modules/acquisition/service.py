@@ -35,6 +35,7 @@ from app.modules.acquisition.models import (
     Document,
     DocumentEvidence,
     DocumentPage,
+    ManualMatchBlock,
     ReadValue,
 )
 from app.modules.acquisition.schemas import (
@@ -72,6 +73,8 @@ from app.modules.acquisition.schemas import (
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
     DocumentEvidenceResponse,
+    DocumentMatchDetachRequest,
+    DocumentMatchDetachResponse,
     DocumentPageCreateRequest,
     DocumentPageResponse,
     DocumentResponse,
@@ -5640,8 +5643,218 @@ def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, st
     row.ordine = _string_or_none(fields.get("ordine"))
 
 
+def detach_document_match(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: DocumentMatchDetachRequest,
+    actor_id: int,
+) -> DocumentMatchDetachResponse:
+    current_row = get_acquisition_row(db, row.id)
+    if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Row must have both DDT and certificate documents")
+
+    ddt_document_id = current_row.document_ddt_id
+    certificate_document_id = current_row.document_certificato_id
+    certificate_fields = _certificate_side_fields_for_detach(current_row)
+
+    _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason="match_disaccoppiato")
+    certificate_row = AcquisitionRow(
+        document_ddt_id=None,
+        document_certificato_id=certificate_document_id,
+        cdq=certificate_fields.get("cdq"),
+        fornitore_id=current_row.fornitore_id,
+        fornitore_raw=current_row.fornitore_raw,
+        lega_base=certificate_fields.get("lega_base"),
+        diametro=certificate_fields.get("diametro"),
+        colata=certificate_fields.get("colata"),
+        ddt=certificate_fields.get("ddt"),
+        peso=certificate_fields.get("peso"),
+        ordine=certificate_fields.get("ordine"),
+        data_documento=current_row.data_documento,
+        note_documento="Certificato separato manualmente dal DDT",
+        stato_tecnico="rosso",
+        stato_workflow="nuova",
+        priorita_operativa="media",
+        validata_finale=False,
+    )
+    db.add(certificate_row)
+    db.flush()
+
+    moved_blocks = ("match", "chimica", "proprieta", "note")
+    moved_values = [
+        value
+        for value in current_row.values
+        if value.blocco in moved_blocks
+    ]
+    moved_evidence_ids = {
+        value.document_evidence_id
+        for value in moved_values
+        if value.document_evidence_id is not None
+    }
+    moved_value_ids = [value.id for value in moved_values]
+
+    for value in moved_values:
+        value.acquisition_row_id = certificate_row.id
+        db.add(value)
+
+    if moved_evidence_ids:
+        db.query(DocumentEvidence).filter(DocumentEvidence.id.in_(moved_evidence_ids)).update(
+            {DocumentEvidence.acquisition_row_id: certificate_row.id},
+            synchronize_session=False,
+        )
+    db.query(DocumentEvidence).filter(
+        DocumentEvidence.acquisition_row_id == current_row.id,
+        DocumentEvidence.document_id == certificate_document_id,
+        DocumentEvidence.blocco.in_(moved_blocks),
+    ).update({DocumentEvidence.acquisition_row_id: certificate_row.id}, synchronize_session=False)
+
+    if moved_value_ids:
+        db.query(AcquisitionValueHistory).filter(AcquisitionValueHistory.value_id.in_(moved_value_ids)).update(
+            {AcquisitionValueHistory.acquisition_row_id: certificate_row.id},
+            synchronize_session=False,
+        )
+    db.query(AcquisitionHistoryEvent).filter(
+        AcquisitionHistoryEvent.acquisition_row_id == current_row.id,
+        AcquisitionHistoryEvent.blocco.in_(moved_blocks),
+    ).update({AcquisitionHistoryEvent.acquisition_row_id: certificate_row.id}, synchronize_session=False)
+    db.query(AcquisitionRowNoteTemplate).filter(
+        AcquisitionRowNoteTemplate.acquisition_row_id == current_row.id,
+    ).update({AcquisitionRowNoteTemplate.acquisition_row_id: certificate_row.id}, synchronize_session=False)
+
+    if current_row.certificate_match is not None:
+        db.delete(current_row.certificate_match)
+    current_row.document_certificato_id = None
+    current_row.validata_finale = False
+
+    _ensure_manual_match_block(
+        db=db,
+        ddt_document_id=ddt_document_id,
+        certificate_document_id=certificate_document_id,
+        source_row_id=current_row.id,
+        certificate_row_id=certificate_row.id,
+        motivo_breve=payload.motivo_breve or "Coppia separata manualmente dall'utente",
+        actor_id=actor_id,
+    )
+    _record_history_event(
+        db=db,
+        acquisition_row_id=current_row.id,
+        blocco="match",
+        azione="match_disaccoppiato_utente",
+        user_id=actor_id,
+        nota_breve=f"certificato spostato su riga #{certificate_row.id}",
+    )
+    _record_history_event(
+        db=db,
+        acquisition_row_id=certificate_row.id,
+        blocco="match",
+        azione="certificato_separato_da_ddt",
+        user_id=actor_id,
+        nota_breve=f"DDT origine riga #{current_row.id}",
+    )
+
+    db.flush()
+    db.expire(current_row, ["values", "history_events", "custom_note_links", "certificate_match"])
+    db.expire(certificate_row, ["values", "history_events", "custom_note_links", "certificate_match"])
+    refreshed_current_row = get_acquisition_row(db, current_row.id)
+    refreshed_certificate_row = get_acquisition_row(db, certificate_row.id)
+    _sync_row_statuses(db, refreshed_current_row)
+    _sync_row_statuses(db, refreshed_certificate_row)
+    db.add(refreshed_current_row)
+    db.add(refreshed_certificate_row)
+    db.commit()
+    return DocumentMatchDetachResponse(
+        ddt_row=serialize_acquisition_row_detail(get_acquisition_row(db, refreshed_current_row.id)),
+        certificate_row=serialize_acquisition_row_detail(get_acquisition_row(db, refreshed_certificate_row.id)),
+    )
+
+
+def _certificate_side_fields_for_detach(row: AcquisitionRow) -> dict[str, str | None]:
+    value_map = {
+        value.campo: _final_value_for_row(value)
+        for value in row.values
+        if value.blocco == "match"
+    }
+
+    def first_value(*field_names: str, fallback: str | None = None) -> str | None:
+        for field_name in field_names:
+            value = _string_or_none(value_map.get(field_name))
+            if value is not None:
+                return value
+        return _string_or_none(fallback)
+
+    return {
+        "lega_base": first_value("lega_certificato", fallback=_row_high_alloy_value(row)),
+        "diametro": _normalize_value_for_field("ddt", "diametro", first_value("diametro_certificato", fallback=row.diametro)),
+        "cdq": first_value("numero_certificato_certificato", fallback=row.cdq),
+        "colata": first_value("colata_certificato", fallback=row.colata),
+        "ddt": first_value("ddt_certificato", fallback=row.ddt),
+        "peso": _normalize_value_for_field("ddt", "peso", first_value("peso_certificato", fallback=row.peso)),
+        "ordine": first_value("ordine_cliente_certificato", fallback=row.ordine),
+    }
+
+
+def _ensure_manual_match_block(
+    *,
+    db: Session,
+    ddt_document_id: int,
+    certificate_document_id: int,
+    source_row_id: int | None,
+    certificate_row_id: int | None,
+    motivo_breve: str | None,
+    actor_id: int,
+) -> None:
+    existing = (
+        db.query(ManualMatchBlock)
+        .filter(
+            ManualMatchBlock.document_ddt_id == ddt_document_id,
+            ManualMatchBlock.document_certificato_id == certificate_document_id,
+            ManualMatchBlock.attivo.is_(True),
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        existing.source_row_id = source_row_id or existing.source_row_id
+        existing.certificate_row_id = certificate_row_id or existing.certificate_row_id
+        existing.motivo_breve = motivo_breve or existing.motivo_breve
+        existing.utente_id = actor_id
+        db.add(existing)
+        return
+    db.add(
+        ManualMatchBlock(
+            document_ddt_id=ddt_document_id,
+            document_certificato_id=certificate_document_id,
+            source_row_id=source_row_id,
+            certificate_row_id=certificate_row_id,
+            motivo_breve=motivo_breve,
+            utente_id=actor_id,
+        )
+    )
+
+
+def _manual_match_block_exists(db: Session, *, ddt_document_id: int | None, certificate_document_id: int | None) -> bool:
+    if ddt_document_id is None or certificate_document_id is None:
+        return False
+    return (
+        db.query(ManualMatchBlock.id)
+        .filter(
+            ManualMatchBlock.document_ddt_id == ddt_document_id,
+            ManualMatchBlock.document_certificato_id == certificate_document_id,
+            ManualMatchBlock.attivo.is_(True),
+        )
+        .first()
+        is not None
+    )
+
+
 def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
     if row.document_ddt_id is None or row.document_certificato_id is None:
+        return
+    if _manual_match_block_exists(
+        db,
+        ddt_document_id=row.document_ddt_id,
+        certificate_document_id=row.document_certificato_id,
+    ):
         return
     if not _ddt_required_fields_are_confirmed(row):
         return
@@ -11002,6 +11215,12 @@ def _plan_cross_run_auto_rematch(
         scored_by_document: dict[int, _CrossRunRematchCandidate] = {}
         for candidate_row, certificate_bridge in certificate_bridges:
             if certificate_bridge.document_id is None:
+                continue
+            if _manual_match_block_exists(
+                db,
+                ddt_document_id=row.document_ddt_id,
+                certificate_document_id=certificate_bridge.document_id,
+            ):
                 continue
             if candidate_row.document_ddt_id is None and not _certificate_only_row_can_merge(candidate_row):
                 continue

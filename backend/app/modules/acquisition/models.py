@@ -277,6 +277,26 @@ class CertificateMatchCandidate(Base):
     certificate_document = relationship("Document", back_populates="match_candidates")
 
 
+class ManualMatchBlock(Base):
+    __tablename__ = "match_blocchi_manual"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_ddt_id: Mapped[int] = mapped_column(ForeignKey("documenti_fornitore.id"), nullable=False, index=True)
+    document_certificato_id: Mapped[int] = mapped_column(ForeignKey("documenti_fornitore.id"), nullable=False, index=True)
+    source_row_id: Mapped[int | None] = mapped_column(ForeignKey("datimaterialeincoming.id"), nullable=True, index=True)
+    certificate_row_id: Mapped[int | None] = mapped_column(ForeignKey("datimaterialeincoming.id"), nullable=True, index=True)
+    motivo_breve: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attivo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    utente_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    ddt_document = relationship("Document", foreign_keys=[document_ddt_id])
+    certificate_document = relationship("Document", foreign_keys=[document_certificato_id])
+    source_row = relationship("AcquisitionRow", foreign_keys=[source_row_id])
+    certificate_row = relationship("AcquisitionRow", foreign_keys=[certificate_row_id])
+    user = relationship("User", foreign_keys=[utente_id])
+
+
 class AcquisitionHistoryEvent(Base):
     __tablename__ = "storico_eventi_acquisition"
 
