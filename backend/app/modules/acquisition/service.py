@@ -11170,6 +11170,13 @@ def _run_cross_run_auto_rematch(
             actor_id=actor_id,
         )
         best_candidate = plan.candidates[0] if plan.candidates else None
+        if best_candidate is not None and best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
+            _copy_certificate_side_blocks_between_rows(
+                db=db,
+                source_row_id=best_candidate.source_row_id,
+                target_row_id=row.id,
+                actor_id=actor_id,
+            )
         if best_candidate is not None and not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
             _merge_certificate_only_row_into_ddt_row(
                 db=db,
@@ -11385,6 +11392,153 @@ def _merge_certificate_only_row_into_ddt_row(
     return True
 
 
+def _find_certificate_side_source_row_id(
+    *,
+    db: Session,
+    certificate_document_id: int,
+    exclude_row_id: int,
+) -> int | None:
+    candidate_rows = (
+        db.query(AcquisitionRow)
+        .options(selectinload(AcquisitionRow.values))
+        .filter(
+            AcquisitionRow.document_certificato_id == certificate_document_id,
+            AcquisitionRow.id != exclude_row_id,
+        )
+        .all()
+    )
+    best_row_id: int | None = None
+    best_score = 0
+    for candidate_row in candidate_rows:
+        useful_values = [
+            value
+            for value in candidate_row.values
+            if value.blocco in {"match", "chimica", "proprieta", "note"} and _read_value_has_payload(value)
+        ]
+        if not useful_values:
+            continue
+        score = len(useful_values)
+        score += sum(2 for value in useful_values if value.stato == "confermato")
+        if candidate_row.document_ddt_id is not None:
+            score += 3
+        if score > best_score:
+            best_score = score
+            best_row_id = candidate_row.id
+    return best_row_id
+
+
+def _copy_certificate_side_blocks_between_rows(
+    *,
+    db: Session,
+    source_row_id: int,
+    target_row_id: int,
+    actor_id: int,
+) -> int:
+    if source_row_id == target_row_id:
+        return 0
+
+    source_row = get_acquisition_row(db, source_row_id)
+    target_row = get_acquisition_row(db, target_row_id)
+    if source_row.document_certificato_id is None or target_row.document_certificato_id is None:
+        return 0
+    if source_row.document_certificato_id != target_row.document_certificato_id:
+        return 0
+
+    existing_target_values = {
+        (value.blocco, value.campo): value
+        for value in target_row.values
+        if value.blocco in {"match", "chimica", "proprieta", "note"}
+    }
+    evidence_id_map: dict[int, int | None] = {}
+    copied = 0
+    for source_value in source_row.values:
+        if source_value.blocco not in {"match", "chimica", "proprieta", "note"}:
+            continue
+        if not _read_value_has_payload(source_value):
+            continue
+        existing_target = existing_target_values.get((source_value.blocco, source_value.campo))
+        if existing_target is not None and existing_target.stato == "confermato":
+            continue
+        if (
+            existing_target is not None
+            and _read_value_has_payload(existing_target)
+            and source_value.stato != "confermato"
+        ):
+            continue
+
+        target_evidence_id = None
+        if source_value.document_evidence_id is not None:
+            if source_value.document_evidence_id not in evidence_id_map:
+                evidence_id_map[source_value.document_evidence_id] = _copy_document_evidence_for_target_row(
+                    db=db,
+                    evidence_id=source_value.document_evidence_id,
+                    target_row_id=target_row_id,
+                    actor_id=actor_id,
+                )
+            target_evidence_id = evidence_id_map[source_value.document_evidence_id]
+
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=target_row_id,
+            blocco=source_value.blocco,
+            campo=source_value.campo,
+            valore_grezzo=source_value.valore_grezzo,
+            valore_standardizzato=source_value.valore_standardizzato,
+            valore_finale=source_value.valore_finale,
+            stato="proposto",
+            document_evidence_id=target_evidence_id,
+            metodo_lettura="sistema" if source_value.metodo_lettura == "utente" else source_value.metodo_lettura,
+            fonte_documentale=source_value.fonte_documentale,
+            confidenza=source_value.confidenza,
+            actor_id=actor_id,
+        )
+        copied += 1
+
+    if copied:
+        refreshed_target = get_acquisition_row(db, target_row_id)
+        _sync_row_statuses(db, refreshed_target)
+        db.add(refreshed_target)
+        _record_history_event(
+            db=db,
+            acquisition_row_id=target_row_id,
+            blocco="match",
+            azione="blocchi_certificato_copiati_da_riga",
+            user_id=actor_id,
+            nota_breve=f"riga origine #{source_row_id}, valori copiati {copied}",
+        )
+        db.commit()
+    return copied
+
+
+def _copy_document_evidence_for_target_row(
+    *,
+    db: Session,
+    evidence_id: int,
+    target_row_id: int,
+    actor_id: int,
+) -> int | None:
+    source_evidence = db.get(DocumentEvidence, evidence_id)
+    if source_evidence is None:
+        return None
+    copied_evidence = DocumentEvidence(
+        document_id=source_evidence.document_id,
+        document_page_id=source_evidence.document_page_id,
+        acquisition_row_id=target_row_id,
+        blocco=source_evidence.blocco,
+        tipo_evidenza=source_evidence.tipo_evidenza,
+        bbox=source_evidence.bbox,
+        testo_grezzo=source_evidence.testo_grezzo,
+        storage_key_derivato=source_evidence.storage_key_derivato,
+        metodo_estrazione=source_evidence.metodo_estrazione,
+        mascherato=source_evidence.mascherato,
+        confidenza=source_evidence.confidenza,
+        utente_creazione_id=actor_id,
+    )
+    db.add(copied_evidence)
+    db.flush()
+    return copied_evidence.id
+
+
 def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
     return build_ddt_bridge(
         row_values=_row_bridge_values(row),
@@ -11545,6 +11699,18 @@ def _auto_propose_certificate_match(
         ),
         actor_id=actor_id,
     )
+    source_row_id = _find_certificate_side_source_row_id(
+        db=db,
+        certificate_document_id=int(best_candidate["document"].id),
+        exclude_row_id=row.id,
+    )
+    if source_row_id is not None:
+        _copy_certificate_side_blocks_between_rows(
+            db=db,
+            source_row_id=source_row_id,
+            target_row_id=row.id,
+            actor_id=actor_id,
+        )
     return True
 
 
