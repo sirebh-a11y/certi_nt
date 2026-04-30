@@ -3217,6 +3217,22 @@ def _build_chemistry_overlay_items(
         image_height=image_height,
         supplier_key=supplier_key,
     )
+    direct_count = _count_chemistry_overlay_fields(direct_items)
+    if direct_count >= len(field_values):
+        return direct_items
+
+    extended_direct_items = _extend_chemistry_overlay_items_from_header_order(
+        page=page,
+        line_box=line_box,
+        line_boxes=line_boxes,
+        field_values=field_values,
+        existing_items=direct_items,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if _count_chemistry_overlay_fields(extended_direct_items) > direct_count:
+        return extended_direct_items
+
     if _count_chemistry_overlay_fields(direct_items) >= min(len(field_values), 3):
         return direct_items
 
