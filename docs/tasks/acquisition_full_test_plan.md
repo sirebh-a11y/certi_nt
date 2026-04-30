@@ -124,6 +124,27 @@ Regola per il prossimo intervento:
 
 Questo placeholder non blocca il resto del flusso, ma impedisce di considerare conclusa la pagina match finche l'overlay non sara robusto lato operatore.
 
+## Placeholder obbligatorio: test rematch utente e riuso certificati
+
+Prima di considerare chiusa la pagina rematch utente bisogna testare end-to-end il caso corretto nel codice: un certificato gia agganciato puo essere riusato da un'altra riga DDT senza rompere la riga originaria.
+
+Casi minimi da provare:
+
+- Primo run con DDT multiriga e certificati nello stesso carico: stesso DDT, piu certificati, righe distinte.
+- Primo run con certificato gia usato da una riga e seconda riga DDT compatibile: la seconda riga deve ricevere anche `match`, `chimica`, `proprieta`, `note` come proposti.
+- Secondo run con DDT nuovo che trova un certificato gia presente/agganciato: deve agganciare e copiare i blocchi certificato senza spostare dati dalla vecchia riga.
+- Secondo run con certificato nuovo che completa una riga DDT gia presente: deve restare coerente con il comportamento gia previsto.
+- Caso utente: se una coppia e stata disaccoppiata, il blocco manuale deve valere solo per quella coppia DDT/certificato, non per altri DDT compatibili.
+- Caso molti-a-molti: un DDT puo avere piu certificati e un certificato puo essere rilevante per piu DDT; la UI deve mostrare quando un candidato e gia agganciato altrove.
+
+Risultato atteso:
+
+- La riga vecchia resta intatta.
+- La nuova riga ha il certificato collegato.
+- I blocchi certificato copiati sulla nuova riga entrano come `proposto`, non come `confermato`.
+- Chimica, proprieta, note e overlay devono aprirsi sulla nuova riga senza errori di evidenza appartenente ad altra riga.
+- La pagina rematch utente deve distinguere `Collega anche qui` da `Sposta aggancio`, senza azioni distruttive silenziose.
+
 ## Criteri di stop
 
 Fermare il test e non proseguire con altri documenti se succede uno di questi casi:
