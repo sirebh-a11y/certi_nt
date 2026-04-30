@@ -75,6 +75,7 @@ from app.modules.acquisition.schemas import (
     DocumentPageCreateRequest,
     DocumentPageResponse,
     DocumentResponse,
+    DocumentSideFieldsConfirmRequest,
     DocumentSummaryResponse,
     MatchCandidateRequest,
     MatchCandidateResponse,
@@ -5486,6 +5487,206 @@ def update_acquisition_row(
     updated_row = get_acquisition_row(db, row.id)
     log_service.record("acquisition", f"Acquisition row updated: {updated_row.id}", actor_email)
     return serialize_acquisition_row_detail(updated_row)
+
+
+DOCUMENT_SIDE_UI_FIELDS: tuple[str, ...] = ("lega_base", "diametro", "cdq", "colata", "ddt", "peso", "ordine")
+DDT_SIDE_FIELD_MAP: dict[str, tuple[str, ...]] = {
+    "lega_base": ("lega",),
+    "diametro": ("diametro",),
+    "cdq": ("cdq", "numero_certificato_ddt"),
+    "colata": ("colata",),
+    "ddt": ("ddt",),
+    "peso": ("peso",),
+    "ordine": ("ordine", "customer_order_no"),
+}
+CERTIFICATE_SIDE_FIELD_MAP: dict[str, tuple[str, ...]] = {
+    "lega_base": ("lega_certificato",),
+    "diametro": ("diametro_certificato",),
+    "cdq": ("numero_certificato_certificato",),
+    "colata": ("colata_certificato",),
+    "ddt": ("ddt_certificato",),
+    "peso": ("peso_certificato",),
+    "ordine": ("ordine_cliente_certificato",),
+}
+
+
+def confirm_document_side_fields(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: DocumentSideFieldsConfirmRequest,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
+    current_row = get_acquisition_row(db, row.id)
+    if payload.side == "ddt" and current_row.document_ddt_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
+    if payload.side == "certificato" and current_row.document_certificato_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+
+    _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
+    block = "ddt" if payload.side == "ddt" else "match"
+    field_map = DDT_SIDE_FIELD_MAP if payload.side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
+    source = "ddt" if payload.side == "ddt" else "certificato"
+    changed_any = False
+
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        raw_value = _string_or_none(payload.fields.get(ui_field))
+        for read_field in field_map[ui_field]:
+            changed_any = _confirm_document_side_read_value(
+                db=db,
+                row=current_row,
+                block=block,
+                field=read_field,
+                raw_value=raw_value,
+                source=source,
+                actor_id=actor_id,
+            ) or changed_any
+
+    # Only single-document rows can safely drive the high-level row fields.
+    # Paired rows keep DDT and certificate fields independent for future split/rematch.
+    if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
+        _apply_document_side_fields_to_row(current_row, payload.fields)
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=current_row.id,
+        blocco=block,
+        azione=f"{payload.side}_campi_confermati",
+        user_id=actor_id,
+    )
+    db.flush()
+    refreshed_row = get_acquisition_row(db, current_row.id)
+    if changed_any:
+        _mark_match_changed_after_document_side_edit(db=db, row=refreshed_row, actor_id=actor_id)
+    _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
+    _sync_row_statuses(db, refreshed_row)
+    db.add(refreshed_row)
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, current_row.id))
+
+
+def _confirm_document_side_read_value(
+    *,
+    db: Session,
+    row: AcquisitionRow,
+    block: str,
+    field: str,
+    raw_value: str | None,
+    source: str,
+    actor_id: int,
+) -> bool:
+    existing = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            ReadValue.blocco == block,
+            ReadValue.campo == field,
+        )
+        .one_or_none()
+    )
+    next_value = _normalize_value_for_field(block, field, raw_value)
+    existing_value = _final_value_for_row(existing)
+    unchanged = existing is not None and _normalize_value_for_field(block, field, existing_value) == next_value
+    changed = (existing is not None and not unchanged) or (existing is None and next_value is not None)
+    method = existing.metodo_lettura if unchanged else "utente"
+    value_source = existing.fonte_documentale if unchanged else "utente"
+    _upsert_read_value_model(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco=block,
+        campo=field,
+        valore_grezzo=raw_value,
+        valore_standardizzato=next_value,
+        valore_finale=next_value,
+        stato="confermato",
+        document_evidence_id=existing.document_evidence_id if unchanged else None,
+        metodo_lettura=method,
+        fonte_documentale=value_source if value_source in {"ddt", "certificato", "utente"} else source,
+        confidenza=existing.confidenza if unchanged else None,
+        actor_id=actor_id,
+    )
+    return changed
+
+
+def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, str | None]) -> None:
+    row.lega_base = _string_or_none(fields.get("lega_base"))
+    row.diametro = _normalize_value_for_field("ddt", "diametro", fields.get("diametro"))
+    row.cdq = _string_or_none(fields.get("cdq"))
+    row.colata = _string_or_none(fields.get("colata"))
+    row.ddt = _string_or_none(fields.get("ddt"))
+    row.peso = _normalize_value_for_field("ddt", "peso", fields.get("peso"))
+    row.ordine = _string_or_none(fields.get("ordine"))
+
+
+def _mark_match_changed_after_document_side_edit(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
+    if row.document_ddt_id is None or row.document_certificato_id is None:
+        return
+    match = (
+        db.query(CertificateMatch)
+        .filter(CertificateMatch.acquisition_row_id == row.id)
+        .one_or_none()
+    )
+    if match is None or match.stato != "confermato":
+        return
+    match.stato = "cambiato"
+    match.fonte_proposta = "utente"
+    match.utente_conferma_id = actor_id
+    match.timestamp = datetime.now(UTC)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="match",
+        azione="match_riaperto_da_modifica_documento",
+        user_id=actor_id,
+    )
+
+
+def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
+    if row.document_ddt_id is None or row.document_certificato_id is None:
+        return
+    if _compute_block_states_from_db(db, row).get("ddt") != "verde":
+        return
+    match_values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            ReadValue.blocco == "match",
+            ReadValue.campo.in_(tuple(field for fields in CERTIFICATE_SIDE_FIELD_MAP.values() for field in fields)),
+        )
+        .all()
+    )
+    effective_values = [value for value in match_values if _read_value_has_payload(value)]
+    if not effective_values or any(value.stato != "confermato" for value in effective_values):
+        return
+
+    refreshed = get_acquisition_row(db, row.id)
+    score = score_bridge_match(_build_row_ddt_bridge(refreshed), _build_row_certificate_bridge(refreshed))
+    if score.decision != RematchDecision.STRONG:
+        return
+    match = (
+        db.query(CertificateMatch)
+        .filter(CertificateMatch.acquisition_row_id == refreshed.id)
+        .one_or_none()
+    )
+    if match is None:
+        match = CertificateMatch(acquisition_row_id=refreshed.id)
+        db.add(match)
+    if match.stato == "confermato" and match.document_certificato_id == refreshed.document_certificato_id:
+        return
+    match.document_certificato_id = refreshed.document_certificato_id
+    match.stato = "confermato"
+    match.motivo_breve = _cross_run_candidate_reason(score)
+    match.fonte_proposta = "utente"
+    match.utente_conferma_id = actor_id
+    match.timestamp = datetime.now(UTC)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=refreshed.id,
+        blocco="match",
+        azione="match_confermato_da_campi_documento",
+        user_id=actor_id,
+        nota_breve=match.motivo_breve,
+    )
 
 
 def refresh_certificate_first_row(

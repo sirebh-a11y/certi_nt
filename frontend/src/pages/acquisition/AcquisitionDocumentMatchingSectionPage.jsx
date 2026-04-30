@@ -15,42 +15,107 @@ const HIGH_LEVEL_FIELDS = [
   { key: "ordine", label: "ordine" },
 ];
 
+const DDT_VALUE_FIELDS = {
+  lega_base: ["lega"],
+  diametro: ["diametro"],
+  cdq: ["cdq", "numero_certificato_ddt"],
+  colata: ["colata"],
+  ddt: ["ddt"],
+  peso: ["peso"],
+  ordine: ["ordine", "customer_order_no"],
+};
+
+const CERTIFICATE_VALUE_FIELDS = {
+  lega_base: ["lega_certificato"],
+  diametro: ["diametro_certificato"],
+  cdq: ["numero_certificato_certificato"],
+  colata: ["colata_certificato"],
+  ddt: ["ddt_certificato"],
+  peso: ["peso_certificato"],
+  ordine: ["ordine_cliente_certificato"],
+};
+
 function readValuePayload(value) {
   return value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
 }
 
-function readDdtValue(row, field) {
-  const values = Array.isArray(row?.values) ? row.values : [];
-  const valueKey = field === "lega_base" ? "lega" : field;
-  const found = values.find((value) => value.blocco === "ddt" && value.campo === valueKey);
+function readRowFallbackValue(row, field) {
   if (field === "lega_base") {
-    return formatRowFieldDisplay("lega", readValuePayload(found) || row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
-  }
-  if (readValuePayload(found)) {
-    return formatRowFieldDisplay(field, readValuePayload(found));
+    return formatRowFieldDisplay("lega", row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
   }
   return formatRowFieldDisplay(field, row?.[field] || "");
 }
 
-function readCertificateValue(row, field) {
+function findSideValue(row, side, field) {
   const values = Array.isArray(row?.values) ? row.values : [];
-  const matchFieldMap = {
-    lega_base: "lega_certificato",
-    diametro: "diametro_certificato",
-    cdq: "numero_certificato_certificato",
-    colata: "colata_certificato",
-    ddt: "ddt_certificato",
-    peso: "peso_certificato",
-    ordine: "ordine_cliente_certificato",
-  };
-  const found = values.find((value) => value.blocco === "match" && value.campo === matchFieldMap[field]);
-  if (field === "lega_base") {
-    return formatRowFieldDisplay("lega", readValuePayload(found) || row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
+  const block = side === "ddt" ? "ddt" : "match";
+  const fields = side === "ddt" ? DDT_VALUE_FIELDS[field] : CERTIFICATE_VALUE_FIELDS[field];
+  const candidates = values.filter((value) => value.blocco === block && fields.includes(value.campo));
+  return candidates.find((value) => readValuePayload(value)) || candidates[0] || null;
+}
+
+function sideAllowsRowFallback(row, side) {
+  if (side === "ddt") {
+    return Boolean(row?.document_ddt_id) && !row?.document_certificato_id;
   }
+  return Boolean(row?.document_certificato_id) && !row?.document_ddt_id;
+}
+
+function readDocumentSideValue(row, side, field) {
+  const found = findSideValue(row, side, field);
+  const payload = readValuePayload(found);
+  if (payload) {
+    return formatRowFieldDisplay(field === "lega_base" ? "lega" : field, payload);
+  }
+  if (sideAllowsRowFallback(row, side)) {
+    return readRowFallbackValue(row, field);
+  }
+  return "";
+}
+
+function sourceTextForSide(row, side, field, override) {
+  const label = side === "ddt" ? "ddt" : "certificato";
+  if (override === "utente") {
+    return `${label} - utente`;
+  }
+  const found = findSideValue(row, side, field);
+  if (found?.metodo_lettura === "utente" || found?.fonte_documentale === "utente") {
+    return `${label} - utente`;
+  }
+  if (readValuePayload(found) || (sideAllowsRowFallback(row, side) && readRowFallbackValue(row, field))) {
+    return `${label} - AI`;
+  }
+  return `${label} - mancante`;
+}
+
+function stateForSide(row, side, field, override) {
+  if (override === "utente") {
+    return "giallo";
+  }
+  const found = findSideValue(row, side, field);
   if (readValuePayload(found)) {
-    return formatRowFieldDisplay(field, readValuePayload(found));
+    return found.stato === "confermato" ? "verde" : "giallo";
   }
-  return formatRowFieldDisplay(field, row?.[field] || "");
+  if (sideAllowsRowFallback(row, side) && readRowFallbackValue(row, field)) {
+    return "giallo";
+  }
+  return "rosso";
+}
+
+function buildSourceMap(row, side, overrides = {}) {
+  return Object.fromEntries(HIGH_LEVEL_FIELDS.map(({ key }) => [key, sourceTextForSide(row, side, key, overrides[key])]));
+}
+
+function buildStateMap(row, side, overrides = {}) {
+  return Object.fromEntries(HIGH_LEVEL_FIELDS.map(({ key }) => [key, stateForSide(row, side, key, overrides[key])]));
+}
+
+function readDdtValue(row, field) {
+  return readDocumentSideValue(row, "ddt", field);
+}
+
+function readCertificateValue(row, field) {
+  return readDocumentSideValue(row, "certificato", field);
 }
 
 function buildCertificateDraft(row) {
@@ -429,7 +494,8 @@ function DocumentControls({
   actionBox,
   fields,
   editable,
-  fieldsTitle,
+  fieldSources,
+  fieldStates,
   onChange,
   onReset,
   onConfirm,
@@ -459,8 +525,20 @@ function DocumentControls({
                       {fields[field.key] || "Valore"}
                     </div>
                   )}
-                  <p className="mt-0.5 text-center text-[8px] font-semibold uppercase tracking-[0.03em] text-slate-400">Campo</p>
-                  <p className="mt-0 min-h-[20px] text-center text-[10px] font-medium leading-tight text-slate-600">{fieldsTitle}</p>
+                  <p
+                    className={`mt-0.5 text-center text-[8px] font-semibold uppercase tracking-[0.03em] ${
+                      fieldStates?.[field.key] === "verde"
+                        ? "text-emerald-600"
+                        : fieldStates?.[field.key] === "giallo"
+                          ? "text-amber-600"
+                          : "text-rose-500"
+                    }`}
+                  >
+                    Origine
+                  </p>
+                  <p className="mt-0 min-h-[20px] text-center text-[10px] font-medium leading-tight text-slate-600">
+                    {fieldSources?.[field.key] || "dato mancante"}
+                  </p>
                 </div>
               ))}
             </div>
@@ -558,6 +636,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [initialDdtDraft, setInitialDdtDraft] = useState(() => buildDdtDraft(row));
   const [certificateDraft, setCertificateDraft] = useState(() => buildCertificateDraft(row));
   const [initialCertificateDraft, setInitialCertificateDraft] = useState(() => buildCertificateDraft(row));
+  const [ddtSourceOverrides, setDdtSourceOverrides] = useState({});
+  const [certificateSourceOverrides, setCertificateSourceOverrides] = useState({});
   const [savingDdtFields, setSavingDdtFields] = useState(false);
   const [refreshingCertificateFirst, setRefreshingCertificateFirst] = useState(false);
   const [savingCertificateFirst, setSavingCertificateFirst] = useState(false);
@@ -575,30 +655,32 @@ export default function AcquisitionDocumentMatchingSectionPage({
     const nextDraft = buildDdtDraft(row);
     setDdtDraft(nextDraft);
     setInitialDdtDraft(nextDraft);
+    setDdtSourceOverrides({});
   }, [row]);
 
   useEffect(() => {
     const nextDraft = buildCertificateDraft(row);
     setCertificateDraft(nextDraft);
     setInitialCertificateDraft(nextDraft);
+    setCertificateSourceOverrides({});
   }, [row]);
 
   useEffect(() => {
     onDirtyChange?.(
-      (isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft)) ||
-        (isDdtOnlyRow && !draftsEqual(ddtDraft, initialDdtDraft)),
+      (Boolean(certificateDocument) && !draftsEqual(certificateDraft, initialCertificateDraft)) ||
+        (Boolean(ddtDocument) && !draftsEqual(ddtDraft, initialDdtDraft)),
     );
-  }, [certificateDraft, ddtDraft, initialCertificateDraft, initialDdtDraft, isCertificateFirstRow, isDdtOnlyRow, onDirtyChange]);
+  }, [certificateDocument, certificateDraft, ddtDocument, ddtDraft, initialCertificateDraft, initialDdtDraft, onDirtyChange]);
 
   useBeforeUnload(
     useMemo(
       () =>
-        isCertificateFirstRow && !draftsEqual(certificateDraft, initialCertificateDraft)
-          ? "Hai modifiche certificate-first non confermate."
-          : isDdtOnlyRow && !draftsEqual(ddtDraft, initialDdtDraft)
+        Boolean(certificateDocument) && !draftsEqual(certificateDraft, initialCertificateDraft)
+          ? "Hai modifiche certificato non confermate."
+          : Boolean(ddtDocument) && !draftsEqual(ddtDraft, initialDdtDraft)
             ? "Hai modifiche DDT non confermate."
             : undefined,
-      [certificateDraft, ddtDraft, initialCertificateDraft, initialDdtDraft, isCertificateFirstRow, isDdtOnlyRow],
+      [certificateDocument, certificateDraft, ddtDocument, ddtDraft, initialCertificateDraft, initialDdtDraft],
     ),
   );
 
@@ -636,13 +718,19 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }, [isCertificateFirstRow, rowId, token]);
 
   const ddtFields = useMemo(() => ddtDraft, [ddtDraft]);
+  const ddtFieldSources = useMemo(() => buildSourceMap(row, "ddt", ddtSourceOverrides), [ddtSourceOverrides, row]);
+  const certificateFieldSources = useMemo(() => buildSourceMap(row, "certificato", certificateSourceOverrides), [certificateSourceOverrides, row]);
+  const ddtFieldStates = useMemo(() => buildStateMap(row, "ddt", ddtSourceOverrides), [ddtSourceOverrides, row]);
+  const certificateFieldStates = useMemo(() => buildStateMap(row, "certificato", certificateSourceOverrides), [certificateSourceOverrides, row]);
 
   function updateCertificateDraft(field, value) {
     setCertificateDraft((current) => ({ ...current, [field]: value }));
+    setCertificateSourceOverrides((current) => ({ ...current, [field]: "utente" }));
   }
 
   function updateDdtDraft(field, value) {
     setDdtDraft((current) => ({ ...current, [field]: value }));
+    setDdtSourceOverrides((current) => ({ ...current, [field]: "utente" }));
   }
 
   async function fetchDocumentCoreOverlay(source) {
@@ -708,6 +796,14 @@ export default function AcquisitionDocumentMatchingSectionPage({
     const nextDraft = buildDdtDraft(row);
     setDdtDraft(nextDraft);
     setInitialDdtDraft(nextDraft);
+    setDdtSourceOverrides({});
+  }
+
+  async function handleResetCertificateDraft() {
+    const nextDraft = buildCertificateDraft(row);
+    setCertificateDraft(nextDraft);
+    setInitialCertificateDraft(nextDraft);
+    setCertificateSourceOverrides({});
   }
 
   async function handleSaveDdtFields() {
@@ -715,21 +811,17 @@ export default function AcquisitionDocumentMatchingSectionPage({
     setError("");
     try {
       await apiRequest(
-        `/acquisition/rows/${rowId}`,
+        `/acquisition/rows/${rowId}/document-side-fields`,
         {
-          method: "PATCH",
+          method: "PUT",
           body: JSON.stringify({
-            lega_base: (ddtDraft.lega_base || "").trim() || null,
-            diametro: (ddtDraft.diametro || "").trim() || null,
-            cdq: (ddtDraft.cdq || "").trim() || null,
-            colata: (ddtDraft.colata || "").trim() || null,
-            ddt: (ddtDraft.ddt || "").trim() || null,
-            peso: (ddtDraft.peso || "").trim() || null,
-            ordine: (ddtDraft.ordine || "").trim() || null,
+            side: "ddt",
+            fields: ddtDraft,
           }),
         },
         token,
       );
+      setDdtSourceOverrides({});
       await onRefreshRow?.();
     } catch (requestError) {
       setError(requestError.message);
@@ -756,21 +848,17 @@ export default function AcquisitionDocumentMatchingSectionPage({
     setError("");
     try {
       await apiRequest(
-        `/acquisition/rows/${rowId}`,
+        `/acquisition/rows/${rowId}/document-side-fields`,
         {
-          method: "PATCH",
+          method: "PUT",
           body: JSON.stringify({
-            lega_base: (certificateDraft.lega_base || "").trim() || null,
-            diametro: (certificateDraft.diametro || "").trim() || null,
-            cdq: (certificateDraft.cdq || "").trim() || null,
-            colata: (certificateDraft.colata || "").trim() || null,
-            ddt: (certificateDraft.ddt || "").trim() || null,
-            peso: (certificateDraft.peso || "").trim() || null,
-            ordine: (certificateDraft.ordine || "").trim() || null,
+            side: "certificato",
+            fields: certificateDraft,
           }),
         },
         token,
       );
+      setCertificateSourceOverrides({});
       await onRefreshRow?.();
     } catch (requestError) {
       setError(requestError.message);
@@ -797,9 +885,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       <p className="text-[11px] font-semibold text-slate-700">DDT</p>
       <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-slate-600">
         {ddtDocument
-          ? isDdtOnlyRow
-            ? "Qui lavoriamo sui 7 campi Excel del DDT."
-            : "Campi DDT in sola lettura finché non chiudiamo la conferma separata a due documenti."
+          ? "Controlla i campi letti dal DDT come documento autonomo."
           : "Qui arriverà la sezione di accoppiamento al posto del PDF mancante."}
       </p>
     </div>
@@ -819,7 +905,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
     <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
       <p className="text-[11px] font-semibold text-slate-700">Certificato</p>
       <p className="mt-1.5 min-h-[28px] text-[11px] leading-tight text-slate-600">
-        {certificateDocument ? "Campi documento certificato pronti per controllo e conferma." : "Qui arriveranno ricerca e collegamento del certificato mancante."}
+        {certificateDocument ? "Controlla i campi letti dal certificato come certificate-first." : "Qui arriveranno ricerca e collegamento del certificato mancante."}
       </p>
     </div>
   );
@@ -831,13 +917,11 @@ export default function AcquisitionDocumentMatchingSectionPage({
         ? `Candidato forte trovato: riga #${ddtLinkPreview.auto_match_row_id}.`
         : "Controlla i campi alti del certificato e poi ricarica i candidati."
     : certificateDocument
-      ? "Certificato collegato: qui andranno overlay, conferma e controllo match."
+      ? "Controlla e conferma il lato certificato. Il DDT resta separato."
       : "Nessun certificato collegato: qui apparirà la sezione di accoppiamento.";
 
   const ddtStatusLabel = ddtDocument
-    ? isDdtOnlyRow
-      ? "Controlla i campi alti del DDT e conferma il documento."
-      : "DDT collegato: confronto in sola lettura finché non chiudiamo la conferma separata."
+    ? "Controlla e conferma il lato DDT. Il certificato resta separato."
     : "Nessun DDT collegato.";
 
   return (
@@ -858,15 +942,16 @@ export default function AcquisitionDocumentMatchingSectionPage({
               />
               <DocumentControls
                 actionBox={ddtActionBox}
-                confirmDisabled={!isDdtOnlyRow || savingDdtFields}
+                confirmDisabled={!ddtDocument || savingDdtFields}
                 confirming={savingDdtFields}
-                editable={isDdtOnlyRow}
+                editable={Boolean(ddtDocument)}
                 fields={ddtFields}
-                fieldsTitle="ddt"
+                fieldSources={ddtFieldSources}
+                fieldStates={ddtFieldStates}
                 onChange={updateDdtDraft}
                 onConfirm={() => void handleSaveDdtFields()}
                 onReset={() => void handleResetDdtDraft()}
-                resetDisabled={!isDdtOnlyRow}
+                resetDisabled={!ddtDocument}
               />
             </div>
           }
@@ -897,7 +982,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
               confirming={false}
               editable={false}
               fields={ddtFields}
-              fieldsTitle="ddt"
+              fieldSources={ddtFieldSources}
+              fieldStates={ddtFieldStates}
               onChange={() => {}}
               onConfirm={() => {}}
               onReset={() => {}}
@@ -930,15 +1016,16 @@ export default function AcquisitionDocumentMatchingSectionPage({
               />
               <DocumentControls
                 actionBox={certificateActionBox}
-                confirmDisabled={savingCertificateFirst || !isCertificateFirstRow}
+                confirmDisabled={savingCertificateFirst || !certificateDocument}
                 confirming={savingCertificateFirst}
-                editable={isCertificateFirstRow}
+                editable={Boolean(certificateDocument)}
                 fields={certificateDraft}
-                fieldsTitle="certificato"
+                fieldSources={certificateFieldSources}
+                fieldStates={certificateFieldStates}
                 onChange={updateCertificateDraft}
                 onConfirm={handleSaveCertificateFirstFields}
-                onReset={handleRefreshCertificateFirst}
-                resetDisabled={refreshingCertificateFirst || !isCertificateFirstRow}
+                onReset={isCertificateFirstRow ? handleRefreshCertificateFirst : handleResetCertificateDraft}
+                resetDisabled={refreshingCertificateFirst || !certificateDocument}
               />
             </div>
           }
@@ -969,7 +1056,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
               confirming={false}
               editable={false}
               fields={certificateDraft}
-              fieldsTitle="certificato"
+              fieldSources={certificateFieldSources}
+              fieldStates={certificateFieldStates}
               onChange={() => {}}
               onConfirm={() => {}}
               onReset={() => {}}

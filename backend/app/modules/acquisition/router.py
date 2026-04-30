@@ -20,6 +20,7 @@ from app.modules.acquisition.schemas import (
     ChemistryTableCaptureResponse,
     DocumentBatchUploadResponse,
     DocumentCoreOverlayPreviewResponse,
+    DocumentSideFieldsConfirmRequest,
     CurrentUploadBatchResponse,
     DdtLinkPreviewResponse,
     DocumentCreateRequest,
@@ -78,6 +79,7 @@ from app.modules.acquisition.service import (
     refresh_certificate_first_row,
     run_ai_intervention,
     save_notes_section,
+    confirm_document_side_fields,
     run_autonomous_processing,
     serialize_acquisition_row_detail,
     serialize_document_detail,
@@ -436,6 +438,17 @@ def save_notes_section_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return save_notes_section(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.put("/rows/{row_id}/document-side-fields", response_model=AcquisitionRowDetailResponse)
+def confirm_document_side_fields_route(
+    row_id: int,
+    payload: DocumentSideFieldsConfirmRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return confirm_document_side_fields(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/evidences", response_model=DocumentEvidenceResponse)

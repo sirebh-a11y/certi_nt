@@ -9,6 +9,7 @@ from app.modules.notes.schemas import NoteTemplateResponse
 
 
 DocumentType = Literal["ddt", "certificato"]
+DocumentSide = Literal["ddt", "certificato"]
 DocumentStatus = Literal["caricato", "indicizzato", "letto", "errore"]
 DocumentOrigin = Literal["utente", "import", "sistema"]
 DocumentUploadState = Literal["temporaneo", "persistente"]
@@ -445,6 +446,16 @@ class ReadValueUpsertRequest(BaseModel):
     @classmethod
     def normalize_fields(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)
+
+
+class DocumentSideFieldsConfirmRequest(BaseModel):
+    side: DocumentSide
+    fields: dict[str, str | None] = Field(default_factory=dict)
+
+    @field_validator("fields")
+    @classmethod
+    def normalize_fields(cls, value: dict[str, str | None]) -> dict[str, str | None]:
+        return {key: normalize_optional_text(item) for key, item in value.items()}
 
 
 class ReadValueResponse(BaseModel):
