@@ -107,6 +107,23 @@ Per ogni riga generata:
 - Note con box su righe note corrette e non troppo largo.
 - Dopo uscita/rientro pagina, overlay blu persistente dove confermato.
 
+## Placeholder futuro: overlay pagina match DDT/certificato
+
+La parte overlay della finestra match DDT/certificato resta da riprendere con audit dedicato.
+
+Motivo: la logica documentale e' piu complessa di chimica/proprieta/note, perche deve guidare l'utente su due documenti separati, con DDT multiriga, certificati gia accoppiati, casi uno-a-molti e casi molti-a-molti.
+
+Regola per il prossimo intervento:
+
+- non fare patch puntuali su un solo fornitore;
+- prima separare chiaramente overlay DDT e overlay certificato;
+- sul DDT cercare sempre il blocco della riga materiale corretta, non il primo valore simile nel documento;
+- sul certificato cercare valori e campi del certificato come documento autonomo, coerente con certificate-first;
+- evitare box fuorvianti: se il box puo indicare una riga o un campo sbagliato, meglio non mostrarlo o mostrarlo come dubbio;
+- documentare per ogni fornitore quali campi sono affidabili per centrare il box e quali sono solo fallback.
+
+Questo placeholder non blocca il resto del flusso, ma impedisce di considerare conclusa la pagina match finche l'overlay non sara robusto lato operatore.
+
 ## Criteri di stop
 
 Fermare il test e non proseguire con altri documenti se succede uno di questi casi:

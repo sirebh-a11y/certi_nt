@@ -1303,6 +1303,10 @@ def build_document_core_overlay_preview(
     for ui_field, candidate_fields in field_map.items():
         if any(item.field == ui_field for item in live_field_items):
             continue
+        if source_key == "ddt" and ui_field == "ordine" and live_field_items:
+            # In multi-row DDTs, a document-level order match can belong to a
+            # different material row. Only row-scoped builders may add it.
+            continue
         selected_match: dict[str, object] | None = None
         for candidate_field in candidate_fields:
             candidate_match = cast(dict[str, object] | None, live_matches.get(candidate_field))
@@ -2116,6 +2120,17 @@ def _build_ddt_document_core_overlay_items_from_row_window(
                 image_height=window_item.image_height,
             )
         )
+    if "ordine" in matched_fields:
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=window_item.page_id,
+                page_number=window_item.page_number,
+                field="ordine",
+                bbox=window_item.bbox,
+                image_width=window_item.image_width,
+                image_height=window_item.image_height,
+            )
+        )
     return items
 
 
@@ -2131,6 +2146,7 @@ def _select_best_ddt_overlay_text_window(
         ("cdq", row.cdq, 55),
         ("colata", row.colata, 60),
         ("peso", row.peso, 70),
+        ("ordine", row.ordine, 50),
     ):
         token = _normalize_row_signature_token(value)
         if not token:
@@ -2257,6 +2273,17 @@ def _build_ddt_document_core_overlay_items_from_split_candidate(
                 page_id=window_item.page_id,
                 page_number=window_item.page_number,
                 field="cdq",
+                bbox=window_item.bbox,
+                image_width=window_item.image_width,
+                image_height=window_item.image_height,
+            )
+        )
+    if _string_or_none(selected_candidate.customer_order_no) is not None:
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=window_item.page_id,
+                page_number=window_item.page_number,
+                field="ordine",
                 bbox=window_item.bbox,
                 image_width=window_item.image_width,
                 image_height=window_item.image_height,
@@ -5616,7 +5643,7 @@ def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, st
 def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
     if row.document_ddt_id is None or row.document_certificato_id is None:
         return
-    if _compute_block_states_from_db(db, row).get("ddt") != "verde":
+    if not _ddt_required_fields_are_confirmed(row):
         return
     match_values = (
         db.query(ReadValue)
@@ -5659,6 +5686,17 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         user_id=actor_id,
         nota_breve=match.motivo_breve,
     )
+
+
+def _ddt_required_fields_are_confirmed(row: AcquisitionRow) -> bool:
+    supplier_key = _resolve_row_supplier_key(row)
+    summary = _compute_ddt_field_summary(row)
+    required_fields = set(_ddt_required_fields(supplier_key))
+    if any(field in required_fields for field in summary["missing"]):
+        return False
+    if any(field in required_fields for field in summary["pending"]):
+        return False
+    return True
 
 
 def refresh_certificate_first_row(
@@ -11881,7 +11919,14 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state(row),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
-        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
+        "proprieta": _compute_properties_block_state(
+            values_by_block.get("proprieta", []),
+            processed=_row_has_block_history_event(
+                row,
+                blocco="proprieta",
+                actions=("proprieta_rilevate", "proprieta_non_rilevate"),
+            ),
+        ),
         "note": _compute_note_block_state(
             values_by_block.get("note", []),
             processed=_row_has_block_history_event(
@@ -11910,7 +11955,15 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
         "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
-        "proprieta": _compute_value_block_state(values_by_block.get("proprieta", []), require_payload=True),
+        "proprieta": _compute_properties_block_state(
+            values_by_block.get("proprieta", []),
+            processed=_db_has_block_history_event(
+                db,
+                acquisition_row_id=row.id,
+                blocco="proprieta",
+                actions=("proprieta_rilevate", "proprieta_non_rilevate"),
+            ),
+        ),
         "note": _compute_note_block_state(
             values_by_block.get("note", []),
             processed=_db_has_block_history_event(
@@ -11947,6 +12000,15 @@ def _compute_value_block_state(values: list[ReadValue], fallback: str = "rosso",
     if all(value.stato == "confermato" for value in effective_values):
         return "verde"
     return "giallo"
+
+
+def _compute_properties_block_state(values: list[ReadValue], *, processed: bool) -> str:
+    payload_state = _compute_value_block_state(values, require_payload=True)
+    if payload_state != "rosso":
+        return payload_state
+    if values:
+        return "verde" if all(value.stato == "confermato" for value in values) else "giallo"
+    return "giallo" if processed else "rosso"
 
 
 def _compute_note_block_state(values: list[ReadValue], *, processed: bool) -> str:

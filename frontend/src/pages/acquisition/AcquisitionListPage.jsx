@@ -68,6 +68,9 @@ function formatUploadDate(value) {
 }
 
 function stateSurfaceClasses(state) {
+  if (state === "documento_chiuso") {
+    return "border-transparent bg-transparent text-slate-950";
+  }
   if (state === "accettato") {
     return "border-slate-300 bg-slate-100 text-slate-700";
   }
@@ -212,6 +215,9 @@ function rowActivityState(row) {
 }
 
 function documentMatchVisualState(row) {
+  if (documentMatchingClosed(row)) {
+    return "documento_chiuso";
+  }
   const hasDdt = Boolean(row.document_ddt_id);
   const hasCertificate = Boolean(row.document_certificato_id);
   const hasActualMatch = Boolean(hasCertificate && row.match_state && row.match_state !== "mancante");
@@ -225,6 +231,10 @@ function documentMatchVisualState(row) {
     return "rosso";
   }
   return "rosso";
+}
+
+function documentMatchingClosed(row) {
+  return ddtCoreState(row) === "verde" && row.block_states?.match === "verde";
 }
 
 function activityRank(label) {
@@ -321,6 +331,9 @@ function CellShell({ children, onClick, onKeyDown, interactive = false }) {
 }
 
 function documentPlateClasses(state) {
+  if (state === "accettato" || state === "documento_chiuso") {
+    return "border-transparent bg-transparent";
+  }
   if (state === "verde") {
     return "border-emerald-300 bg-emerald-100/90";
   }
@@ -328,6 +341,10 @@ function documentPlateClasses(state) {
     return "border-amber-300 bg-amber-100/90";
   }
   return "border-rose-300 bg-rose-100/90";
+}
+
+function displayCellState(row, state) {
+  return documentMatchingClosed(row) ? "documento_chiuso" : state;
 }
 
 function RowStateCell({ row, onClick, onKeyDown }) {
@@ -808,7 +825,7 @@ export default function AcquisitionListPage() {
                         boxRef={(element) => setFirstDocumentCellRef(row.id, element)}
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={supplierFieldState(row)}
+                        state={displayCellState(row, supplierFieldState(row))}
                         value={displaySupplierName(row)}
                         secondary={row.ddt_data_upload ? `DDT ${formatUploadDate(row.ddt_data_upload)}` : ""}
                         wide
@@ -818,7 +835,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={legaFieldState(row)}
+                        state={displayCellState(row, legaFieldState(row))}
                         value={composeLega(row)}
                       />
                     </td>
@@ -826,7 +843,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "diametro")}
+                        state={displayCellState(row, ddtFieldState(row, "diametro"))}
                         value={formatRowFieldDisplay("diametro", row.diametro)}
                       />
                     </td>
@@ -834,7 +851,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "cdq")}
+                        state={displayCellState(row, ddtFieldState(row, "cdq"))}
                         value={row.cdq}
                       />
                     </td>
@@ -842,7 +859,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "colata")}
+                        state={displayCellState(row, ddtFieldState(row, "colata"))}
                         value={row.colata}
                       />
                     </td>
@@ -850,7 +867,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "ddt")}
+                        state={displayCellState(row, ddtFieldState(row, "ddt"))}
                         value={row.ddt || "-"}
                       />
                     </td>
@@ -858,7 +875,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "peso")}
+                        state={displayCellState(row, ddtFieldState(row, "peso"))}
                         value={formatRowFieldDisplay("peso", row.peso)}
                       />
                     </td>
@@ -866,7 +883,7 @@ export default function AcquisitionListPage() {
                       <DataCell
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
-                        state={ddtFieldState(row, "ordine")}
+                        state={displayCellState(row, ddtFieldState(row, "ordine"))}
                         value={row.ordine}
                       />
                     </td>
@@ -877,7 +894,7 @@ export default function AcquisitionListPage() {
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         secondary={compactMatchReference(row)}
-                        state={row.block_states?.match || "rosso"}
+                        state={displayCellState(row, row.block_states?.match || "rosso")}
                       />
                     </td>
                       <td className="px-0 py-0">

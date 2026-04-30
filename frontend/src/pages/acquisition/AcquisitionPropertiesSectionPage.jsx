@@ -776,7 +776,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       return evidenceId;
     }
 
-    const fieldsToPersist = fieldList.filter((field) => {
+    let fieldsToPersist = fieldList.filter((field) => {
       const existingValue = valueMap.get(field);
       const initialValue = normalizeDisplayValue(sessionInitialDraft[field]);
       const currentValue = normalizeDisplayValue(effectiveDraft[field]);
@@ -786,6 +786,10 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       const hasCurrentPayload = Boolean(currentValue);
       return valueChanged || sourceChanged || hasExistingPayload || hasCurrentPayload;
     });
+
+    if (!fieldsToPersist.length && fieldList.every((field) => !normalizeDisplayValue(effectiveDraft[field]))) {
+      fieldsToPersist = fieldList;
+    }
 
     if (!fieldsToPersist.length) {
       return true;
@@ -818,7 +822,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
                 valore_standardizzato: null,
                 valore_finale: null,
                 stato: "confermato",
-                document_evidence_id: userEvidenceId || existingValue?.document_evidence_id || null,
+                document_evidence_id: userEvidenceId,
                 metodo_lettura: readMethod,
                 fonte_documentale: sourceType,
                 confidenza: null,
@@ -840,7 +844,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
               valore_standardizzato: persistedValue,
               valore_finale: persistedValue,
               stato: "confermato",
-              document_evidence_id: userEvidenceId || existingValue?.document_evidence_id || null,
+              document_evidence_id: userEvidenceId,
               metodo_lettura: readMethod,
               fonte_documentale: sourceType,
               confidenza: existingValue?.confidenza || null,
