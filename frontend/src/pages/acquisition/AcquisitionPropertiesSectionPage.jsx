@@ -4,7 +4,7 @@ import { useBeforeUnload } from "react-router-dom";
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
-const PROPERTY_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "Rp0.2 / Rm"];
+const PROPERTY_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2 / Rm"];
 const DERIVED_FIELD = "Rp0.2 / Rm";
 
 function canonicalPropertyField(field) {
