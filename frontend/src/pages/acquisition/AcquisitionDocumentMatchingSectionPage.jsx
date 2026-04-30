@@ -449,13 +449,16 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
   );
 }
 
-function MissingDocumentPanel({ title, subtitle, children }) {
+function MissingDocumentPanel({ title, subtitle, previewContent, children }) {
   return (
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
-      <div className="flex h-[38vh] flex-col justify-center rounded-2xl border border-dashed border-slate-500 bg-slate-700 px-6 text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</p>
-        <p className="mt-3 text-lg font-semibold text-white">Documento mancante</p>
-        <p className="mt-2 text-sm leading-6 text-slate-300">{subtitle}</p>
+      <div className="h-[38vh] overflow-auto rounded-2xl border border-dashed border-slate-500 bg-slate-700 p-4">
+        <div className="text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</p>
+          <p className="mt-3 text-lg font-semibold text-white">Documento mancante</p>
+          <p className="mt-2 text-sm leading-6 text-slate-300">{subtitle}</p>
+        </div>
+        {previewContent ? <div className="mt-4 text-left">{previewContent}</div> : null}
       </div>
       <div className="mt-3">{children}</div>
     </div>
@@ -567,30 +570,30 @@ function DocumentControls({
   );
 }
 
-function CandidateBox({ ddtLinkPreview, loadingDdtPreview }) {
-  if (loadingDdtPreview) {
+function CandidateBox({ label = "candidati", loadingPreview, preview }) {
+  if (loadingPreview) {
     return (
       <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
         <p className="text-[11px] font-semibold text-sky-700">Accoppiamento</p>
-        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Ricerca candidati DDT in corso.</p>
+        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Ricerca {label} in corso.</p>
       </div>
     );
   }
 
-  if (ddtLinkPreview?.auto_match_row_id) {
+  if (preview?.auto_match_row_id) {
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
         <p className="text-[11px] font-semibold text-emerald-700">Accoppiamento</p>
-        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Candidato forte: riga #{ddtLinkPreview.auto_match_row_id}.</p>
+        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Candidato forte: riga #{preview.auto_match_row_id}.</p>
       </div>
     );
   }
 
-  if (ddtLinkPreview?.items?.length) {
+  if (preview?.items?.length) {
     return (
       <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
         <p className="text-[11px] font-semibold text-sky-700">Accoppiamento</p>
-        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">{ddtLinkPreview.items.length} candidati DDT trovati.</p>
+        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">{preview.items.length} {label} trovati.</p>
       </div>
     );
   }
@@ -635,7 +638,85 @@ function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateF
         <p className="max-w-[260px] text-sm leading-6 text-slate-600">
           Qui vivranno collegamento, conferma match e disaccoppio forte tra i due documenti.
         </p>
-        {isCertificateFirstRow ? <CandidateBox ddtLinkPreview={ddtLinkPreview} loadingDdtPreview={loadingDdtPreview} /> : null}
+        {isCertificateFirstRow ? <CandidateBox label="candidati DDT" loadingPreview={loadingDdtPreview} preview={ddtLinkPreview} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function LinkCandidateList({ emptyLabel, items, loading, title, type }) {
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+        <p className="text-sm font-semibold text-sky-800">{title}</p>
+        <p className="mt-1 text-xs text-slate-600">Sto cercando candidati usando i campi ponte Excel.</p>
+      </div>
+    );
+  }
+  if (!items?.length) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <p className="text-sm font-semibold text-slate-900">{title}</p>
+        <p className="mt-1 text-xs text-slate-500">{emptyLabel}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{title}</p>
+          <p className="mt-1 text-xs text-slate-500">Lista letta dal bridge di match. Le azioni vere arrivano nel prossimo step.</p>
+        </div>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">{items.length} trovati</span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {items.map((item) => {
+          const fileName = type === "ddt" ? item.ddt_file_name || `DDT #${item.document_ddt_id}` : item.certificate_file_name || `Certificato #${item.document_certificato_id}`;
+          return (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={`${type}-${item.row_id}`}>
+              <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    Riga #{item.row_id} · {fileName}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">Score {item.score} · {(item.reasons || []).join(" · ") || "nessun dettaglio"}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {item.manual_blocked ? (
+                    <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
+                      Blocco manuale
+                    </span>
+                  ) : null}
+                  {item.already_linked ? (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                      Gia agganciata a riga #{item.linked_row_id}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                    {item.recommended_action === "collega_anche_qui"
+                      ? "Collega anche qui"
+                      : item.recommended_action === "riaggancio_bloccato"
+                        ? "Riaggancio bloccato"
+                        : "Aggancia"}
+                  </span>
+                </div>
+              </div>
+              {item.already_linked && item.linked_file_name ? (
+                <p className="mt-2 text-xs text-amber-800">Documento gia collegato: {item.linked_file_name}</p>
+              ) : null}
+              <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
+                <PreviewMini label="lega" value={item.lega} />
+                <PreviewMini label="Ø" value={item.diametro} />
+                <PreviewMini label="Cdq" value={item.cdq} />
+                <PreviewMini label="Colata" value={item.colata} />
+                <PreviewMini label="Ddt" value={item.ddt} />
+                <PreviewMini label="peso" value={item.peso} />
+                <PreviewMini label="ordine" value={item.ordine} />
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -725,6 +806,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [savingCertificateFirst, setSavingCertificateFirst] = useState(false);
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
+  const [loadingCertificatePreview, setLoadingCertificatePreview] = useState(false);
+  const [certificateLinkPreview, setCertificateLinkPreview] = useState(null);
   const [error, setError] = useState("");
   const [certificateOverlayActive, setCertificateOverlayActive] = useState(false);
   const [ddtOverlayActive, setDdtOverlayActive] = useState(false);
@@ -800,6 +883,39 @@ export default function AcquisitionDocumentMatchingSectionPage({
       ignore = true;
     };
   }, [isCertificateFirstRow, rowId, token]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadPreview() {
+      if (!isDdtOnlyRow) {
+        setCertificateLinkPreview(null);
+        return;
+      }
+      setLoadingCertificatePreview(true);
+      try {
+        const preview = await apiRequest(`/acquisition/rows/${rowId}/certificate-link-preview`, {}, token);
+        if (!ignore) {
+          setCertificateLinkPreview(preview);
+          setError("");
+        }
+      } catch (requestError) {
+        if (!ignore) {
+          setCertificateLinkPreview(null);
+          setError(requestError.message);
+        }
+      } finally {
+        if (!ignore) {
+          setLoadingCertificatePreview(false);
+        }
+      }
+    }
+
+    void loadPreview();
+    return () => {
+      ignore = true;
+    };
+  }, [isDdtOnlyRow, rowId, token]);
 
   const ddtFields = useMemo(() => ddtDraft, [ddtDraft]);
   const ddtFieldSources = useMemo(() => buildSourceMap(row, "ddt", ddtSourceOverrides), [ddtSourceOverrides, row]);
@@ -1010,7 +1126,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
           Qui lavoriamo sui 7 campi Excel del certificato, già nel formato utile al match.
         </p>
       </div>
-      <CandidateBox ddtLinkPreview={ddtLinkPreview} loadingDdtPreview={loadingDdtPreview} />
+      <CandidateBox label="candidati DDT" loadingPreview={loadingDdtPreview} preview={ddtLinkPreview} />
     </div>
   ) : (
     <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -1071,6 +1187,17 @@ export default function AcquisitionDocumentMatchingSectionPage({
         />
       ) : (
         <MissingDocumentPanel
+          previewContent={
+            isCertificateFirstRow ? (
+              <LinkCandidateList
+                emptyLabel="Nessun DDT candidato trovato con i campi ponte attuali."
+                items={ddtLinkPreview?.items || []}
+                loading={loadingDdtPreview}
+                title="Candidati DDT da collegare"
+                type="ddt"
+              />
+            ) : null
+          }
           subtitle={
             isCertificateFirstRow
               ? "Qui dobbiamo aiutare l’utente a trovare e collegare il DDT giusto, usando i campi alti e i candidati trovati."
@@ -1148,6 +1275,17 @@ export default function AcquisitionDocumentMatchingSectionPage({
         />
       ) : (
         <MissingDocumentPanel
+          previewContent={
+            isDdtOnlyRow ? (
+              <LinkCandidateList
+                emptyLabel="Nessun certificato candidato trovato con i campi ponte attuali."
+                items={certificateLinkPreview?.items || []}
+                loading={loadingCertificatePreview}
+                title="Candidati certificato da collegare"
+                type="certificato"
+              />
+            ) : null
+          }
           subtitle={
             isDdtOnlyRow
               ? "Qui dobbiamo aiutare l’utente a trovare e collegare il certificato giusto, con ricerca assistita e confronto sui campi alti."
@@ -1157,8 +1295,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
         >
           <div className="space-y-2">
             <StatusBar
-              actionLabel="Qui appariranno ricerca certificato, collegamento e conferma."
-              actionState=""
+              actionLabel={loadingCertificatePreview ? "Ricerca certificati candidati in corso." : "Qui appariranno candidati certificato e collegamento."}
+              actionState={certificateLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${certificateLinkPreview.auto_match_row_id}` : ""}
               error={error}
               onToggleOverlay={() => setCertificateOverlayActive((current) => !current)}
               overlayBusy={false}
@@ -1180,39 +1318,6 @@ export default function AcquisitionDocumentMatchingSectionPage({
           </div>
         </MissingDocumentPanel>
       )}
-
-      {isCertificateFirstRow && ddtLinkPreview?.items?.length ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="text-sm font-semibold text-slate-900">Candidati DDT</p>
-          <p className="mt-1 text-xs text-slate-500">Questa lista resterà nella zona centrale finché non agganciamo il collegamento vero.</p>
-          <div className="mt-4 space-y-3">
-            {ddtLinkPreview.items.map((item) => (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={item.row_id}>
-                <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      Riga #{item.row_id} · {item.ddt_file_name || `DDT #${item.document_ddt_id}`}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">Score {item.score} · {item.reasons.join(" · ") || "nessun dettaglio"}</p>
-                  </div>
-                  <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                    DDT {item.ddt || "-"}
-                  </div>
-                </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
-                  <PreviewMini label="lega" value={item.lega} />
-                  <PreviewMini label="Ø" value={item.diametro} />
-                  <PreviewMini label="Cdq" value={item.cdq} />
-                  <PreviewMini label="Colata" value={item.colata} />
-                  <PreviewMini label="Ddt" value={item.ddt} />
-                  <PreviewMini label="peso" value={item.peso} />
-                  <PreviewMini label="ordine" value={item.ordine} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
       {detachDialogOpen ? (
         <DetachConfirmDialog
           certificateDraft={certificateDraft}

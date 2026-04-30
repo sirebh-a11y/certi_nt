@@ -18,6 +18,7 @@ from app.modules.acquisition.schemas import (
     ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    CertificateLinkPreviewResponse,
     DocumentBatchUploadResponse,
     DocumentCoreOverlayPreviewResponse,
     DocumentSideFieldsConfirmRequest,
@@ -54,6 +55,7 @@ from app.modules.acquisition.service import (
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
     build_chemistry_overlay_preview,
+    build_certificate_link_preview_from_ddt_row,
     build_document_core_overlay_preview,
     build_notes_overlay_preview,
     capture_chemistry_table_from_page,
@@ -579,6 +581,16 @@ def ddt_link_preview_route(
 ) -> DdtLinkPreviewResponse:
     row = get_acquisition_row(db, row_id)
     return build_ddt_link_preview_from_certificate_row(db=db, row=row)
+
+
+@router.get("/rows/{row_id}/certificate-link-preview", response_model=CertificateLinkPreviewResponse)
+def certificate_link_preview_route(
+    row_id: int,
+    _: CurrentUser,
+    db: DbSession,
+) -> CertificateLinkPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return build_certificate_link_preview_from_ddt_row(db=db, row=row)
 
 
 @router.post("/rows/{row_id}/intervento-ai", response_model=AcquisitionRowDetailResponse)

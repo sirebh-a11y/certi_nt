@@ -207,6 +207,13 @@ class DdtLinkPreviewCandidateResponse(BaseModel):
     ddt_file_name: str | None
     score: int
     reasons: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
+    already_linked: bool = False
+    linked_row_id: int | None = None
+    linked_document_id: int | None = None
+    linked_file_name: str | None = None
+    manual_blocked: bool = False
+    recommended_action: str | None = None
     lega: str | None = None
     diametro: str | None = None
     cdq: str | None = None
@@ -220,6 +227,34 @@ class DdtLinkPreviewResponse(BaseModel):
     current_row_id: int
     auto_match_row_id: int | None = None
     items: list[DdtLinkPreviewCandidateResponse] = Field(default_factory=list)
+
+
+class CertificateLinkPreviewCandidateResponse(BaseModel):
+    row_id: int
+    document_certificato_id: int
+    certificate_file_name: str | None
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
+    already_linked: bool = False
+    linked_row_id: int | None = None
+    linked_document_id: int | None = None
+    linked_file_name: str | None = None
+    manual_blocked: bool = False
+    recommended_action: str | None = None
+    lega: str | None = None
+    diametro: str | None = None
+    cdq: str | None = None
+    colata: str | None = None
+    ddt: str | None = None
+    peso: str | None = None
+    ordine: str | None = None
+
+
+class CertificateLinkPreviewResponse(BaseModel):
+    current_row_id: int
+    auto_match_row_id: int | None = None
+    items: list[CertificateLinkPreviewCandidateResponse] = Field(default_factory=list)
 
 
 class DocumentResponse(BaseModel):

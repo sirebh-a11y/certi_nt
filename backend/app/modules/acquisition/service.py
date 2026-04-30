@@ -53,6 +53,8 @@ from app.modules.acquisition.schemas import (
     ChemistryOverlayPreviewResponse,
     ChemistryTableCaptureRequest,
     ChemistryTableCaptureResponse,
+    CertificateLinkPreviewCandidateResponse,
+    CertificateLinkPreviewResponse,
     DocumentCoreOverlayPreviewItemResponse,
     DocumentCoreOverlayPreviewResponse,
     DdtLinkPreviewCandidateResponse,
@@ -5963,42 +5965,196 @@ def build_ddt_link_preview_from_certificate_row(
     if current_row.fornitore_id is None:
         return DdtLinkPreviewResponse(current_row_id=current_row.id, items=[])
 
-    supplier_key = _resolve_row_supplier_key(current_row)
-    candidate_rows = _candidate_rows_for_incoming_certificate_link(db, supplier_id=current_row.fornitore_id)
-    certificate_payload = _certificate_link_payload_from_row(current_row, supplier_key=supplier_key)
-    certificate_supplier_fields = _certificate_supplier_fields_from_row(current_row, supplier_key=supplier_key)
-
+    certificate_bridge = _build_row_certificate_bridge(current_row)
     items: list[DdtLinkPreviewCandidateResponse] = []
-    for candidate_row in candidate_rows:
-        if not _candidate_row_matches_certificate_row(
-            candidate_row=candidate_row,
-            supplier_key=supplier_key,
-            certificate_payload=certificate_payload,
-        ):
+    for candidate_row in _rows_with_ddt_for_link_preview(db, current_row):
+        if candidate_row.document_ddt_id is None:
             continue
-        candidate_item = _score_ddt_link_candidate_from_certificate_row(
-            candidate_row=candidate_row,
-            certificate_row=current_row,
-            supplier_key=supplier_key,
-            certificate_supplier_fields=certificate_supplier_fields,
+        ddt_bridge = _build_row_ddt_bridge(candidate_row)
+        score = score_bridge_match(ddt_bridge, certificate_bridge)
+        if score.decision == RematchDecision.NONE:
+            continue
+        manual_blocked = _manual_match_block_exists(
+            db,
+            ddt_document_id=candidate_row.document_ddt_id,
+            certificate_document_id=current_row.document_certificato_id,
         )
-        if candidate_item is None:
-            continue
-        items.append(candidate_item)
+        items.append(_ddt_preview_candidate_from_row(candidate_row, score=score, manual_blocked=manual_blocked))
 
     items.sort(key=lambda item: (-item.score, item.row_id))
-    auto_match_row_id: int | None = None
-    if items:
-        best_score = items[0].score
-        second_score = items[1].score if len(items) > 1 else 0
-        if best_score >= 240 and (len(items) == 1 or best_score - second_score >= 45):
-            auto_match_row_id = items[0].row_id
-
     return DdtLinkPreviewResponse(
         current_row_id=current_row.id,
-        auto_match_row_id=auto_match_row_id,
+        auto_match_row_id=_auto_match_preview_row_id(items),
         items=items[:5],
     )
+
+
+def build_certificate_link_preview_from_ddt_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> CertificateLinkPreviewResponse:
+    current_row = get_acquisition_row(db, row.id)
+    if current_row.document_ddt_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
+    if current_row.fornitore_id is None:
+        return CertificateLinkPreviewResponse(current_row_id=current_row.id, items=[])
+
+    ddt_bridge = _build_row_ddt_bridge(current_row)
+    items: list[CertificateLinkPreviewCandidateResponse] = []
+    for candidate_row in _rows_with_certificate_for_link_preview(db, current_row):
+        if candidate_row.document_certificato_id is None:
+            continue
+        certificate_bridge = _build_row_certificate_bridge(candidate_row)
+        score = score_bridge_match(ddt_bridge, certificate_bridge)
+        if score.decision == RematchDecision.NONE:
+            continue
+        manual_blocked = _manual_match_block_exists(
+            db,
+            ddt_document_id=current_row.document_ddt_id,
+            certificate_document_id=candidate_row.document_certificato_id,
+        )
+        items.append(_certificate_preview_candidate_from_row(candidate_row, score=score, manual_blocked=manual_blocked))
+
+    items.sort(key=lambda item: (-item.score, item.row_id))
+    return CertificateLinkPreviewResponse(
+        current_row_id=current_row.id,
+        auto_match_row_id=_auto_match_preview_row_id(items),
+        items=items[:5],
+    )
+
+
+def _rows_with_ddt_for_link_preview(db: Session, current_row: AcquisitionRow) -> list[AcquisitionRow]:
+    return (
+        db.query(AcquisitionRow)
+        .options(
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document),
+            joinedload(AcquisitionRow.certificate_document),
+            selectinload(AcquisitionRow.values),
+        )
+        .filter(
+            AcquisitionRow.fornitore_id == current_row.fornitore_id,
+            AcquisitionRow.id != current_row.id,
+            AcquisitionRow.document_ddt_id.is_not(None),
+        )
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+
+
+def _rows_with_certificate_for_link_preview(db: Session, current_row: AcquisitionRow) -> list[AcquisitionRow]:
+    return (
+        db.query(AcquisitionRow)
+        .options(
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document),
+            joinedload(AcquisitionRow.certificate_document),
+            selectinload(AcquisitionRow.values),
+        )
+        .filter(
+            AcquisitionRow.fornitore_id == current_row.fornitore_id,
+            AcquisitionRow.id != current_row.id,
+            AcquisitionRow.document_certificato_id.is_not(None),
+        )
+        .order_by(AcquisitionRow.id.asc())
+        .all()
+    )
+
+
+def _auto_match_preview_row_id(
+    items: list[DdtLinkPreviewCandidateResponse] | list[CertificateLinkPreviewCandidateResponse],
+) -> int | None:
+    eligible_items = [item for item in items if not item.manual_blocked]
+    if not eligible_items:
+        return None
+    best_score = eligible_items[0].score
+    second_score = eligible_items[1].score if len(eligible_items) > 1 else 0
+    if best_score >= 220 and (len(eligible_items) == 1 or best_score - second_score >= 45):
+        return eligible_items[0].row_id
+    return None
+
+
+def _preview_values_from_bridge(bridge: RematchBridge) -> dict[str, str | None]:
+    return {
+        "lega": bridge.value("lega"),
+        "diametro": bridge.value("diametro"),
+        "cdq": bridge.value("cdq"),
+        "colata": bridge.value("colata"),
+        "ddt": bridge.value("ddt"),
+        "peso": bridge.value("peso"),
+        "ordine": bridge.value("ordine"),
+    }
+
+
+def _ddt_preview_candidate_from_row(
+    row: AcquisitionRow,
+    *,
+    score: RematchScore,
+    manual_blocked: bool,
+) -> DdtLinkPreviewCandidateResponse:
+    values = _preview_values_from_bridge(_build_row_ddt_bridge(row))
+    already_linked = row.document_certificato_id is not None
+    return DdtLinkPreviewCandidateResponse(
+        row_id=row.id,
+        document_ddt_id=int(row.document_ddt_id),
+        ddt_file_name=row.ddt_document.nome_file_originale if row.ddt_document is not None else None,
+        score=score.score,
+        reasons=list(score.reasons),
+        matched_fields=list(score.matched_fields),
+        already_linked=already_linked,
+        linked_row_id=row.id if already_linked else None,
+        linked_document_id=row.document_certificato_id if already_linked else None,
+        linked_file_name=row.certificate_document.nome_file_originale if already_linked and row.certificate_document is not None else None,
+        manual_blocked=manual_blocked,
+        recommended_action=_preview_recommended_action(already_linked=already_linked, manual_blocked=manual_blocked),
+        lega=values["lega"],
+        diametro=values["diametro"],
+        cdq=values["cdq"],
+        colata=values["colata"],
+        ddt=values["ddt"],
+        peso=values["peso"],
+        ordine=values["ordine"],
+    )
+
+
+def _certificate_preview_candidate_from_row(
+    row: AcquisitionRow,
+    *,
+    score: RematchScore,
+    manual_blocked: bool,
+) -> CertificateLinkPreviewCandidateResponse:
+    values = _preview_values_from_bridge(_build_row_certificate_bridge(row))
+    already_linked = row.document_ddt_id is not None
+    return CertificateLinkPreviewCandidateResponse(
+        row_id=row.id,
+        document_certificato_id=int(row.document_certificato_id),
+        certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document is not None else None,
+        score=score.score,
+        reasons=list(score.reasons),
+        matched_fields=list(score.matched_fields),
+        already_linked=already_linked,
+        linked_row_id=row.id if already_linked else None,
+        linked_document_id=row.document_ddt_id if already_linked else None,
+        linked_file_name=row.ddt_document.nome_file_originale if already_linked and row.ddt_document is not None else None,
+        manual_blocked=manual_blocked,
+        recommended_action=_preview_recommended_action(already_linked=already_linked, manual_blocked=manual_blocked),
+        lega=values["lega"],
+        diametro=values["diametro"],
+        cdq=values["cdq"],
+        colata=values["colata"],
+        ddt=values["ddt"],
+        peso=values["peso"],
+        ordine=values["ordine"],
+    )
+
+
+def _preview_recommended_action(*, already_linked: bool, manual_blocked: bool) -> str:
+    if manual_blocked:
+        return "riaggancio_bloccato"
+    if already_linked:
+        return "collega_anche_qui"
+    return "aggancia"
 
 
 def save_notes_section(
