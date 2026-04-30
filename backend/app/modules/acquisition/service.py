@@ -5527,12 +5527,11 @@ def confirm_document_side_fields(
     block = "ddt" if payload.side == "ddt" else "match"
     field_map = DDT_SIDE_FIELD_MAP if payload.side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
     source = "ddt" if payload.side == "ddt" else "certificato"
-    changed_any = False
 
     for ui_field in DOCUMENT_SIDE_UI_FIELDS:
         raw_value = _string_or_none(payload.fields.get(ui_field))
         for read_field in field_map[ui_field]:
-            changed_any = _confirm_document_side_read_value(
+            _confirm_document_side_read_value(
                 db=db,
                 row=current_row,
                 block=block,
@@ -5540,7 +5539,7 @@ def confirm_document_side_fields(
                 raw_value=raw_value,
                 source=source,
                 actor_id=actor_id,
-            ) or changed_any
+            )
 
     # Only single-document rows can safely drive the high-level row fields.
     # Paired rows keep DDT and certificate fields independent for future split/rematch.
@@ -5556,8 +5555,6 @@ def confirm_document_side_fields(
     )
     db.flush()
     refreshed_row = get_acquisition_row(db, current_row.id)
-    if changed_any:
-        _mark_match_changed_after_document_side_edit(db=db, row=refreshed_row, actor_id=actor_id)
     _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
@@ -5574,7 +5571,7 @@ def _confirm_document_side_read_value(
     raw_value: str | None,
     source: str,
     actor_id: int,
-) -> bool:
+) -> None:
     existing = (
         db.query(ReadValue)
         .filter(
@@ -5587,7 +5584,6 @@ def _confirm_document_side_read_value(
     next_value = _normalize_value_for_field(block, field, raw_value)
     existing_value = _final_value_for_row(existing)
     unchanged = existing is not None and _normalize_value_for_field(block, field, existing_value) == next_value
-    changed = (existing is not None and not unchanged) or (existing is None and next_value is not None)
     method = existing.metodo_lettura if unchanged else "utente"
     value_source = existing.fonte_documentale if unchanged else "utente"
     _upsert_read_value_model(
@@ -5605,7 +5601,6 @@ def _confirm_document_side_read_value(
         confidenza=existing.confidenza if unchanged else None,
         actor_id=actor_id,
     )
-    return changed
 
 
 def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, str | None]) -> None:
@@ -5616,29 +5611,6 @@ def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, st
     row.ddt = _string_or_none(fields.get("ddt"))
     row.peso = _normalize_value_for_field("ddt", "peso", fields.get("peso"))
     row.ordine = _string_or_none(fields.get("ordine"))
-
-
-def _mark_match_changed_after_document_side_edit(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
-    if row.document_ddt_id is None or row.document_certificato_id is None:
-        return
-    match = (
-        db.query(CertificateMatch)
-        .filter(CertificateMatch.acquisition_row_id == row.id)
-        .one_or_none()
-    )
-    if match is None or match.stato != "confermato":
-        return
-    match.stato = "cambiato"
-    match.fonte_proposta = "utente"
-    match.utente_conferma_id = actor_id
-    match.timestamp = datetime.now(UTC)
-    _record_history_event(
-        db=db,
-        acquisition_row_id=row.id,
-        blocco="match",
-        azione="match_riaperto_da_modifica_documento",
-        user_id=actor_id,
-    )
 
 
 def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
