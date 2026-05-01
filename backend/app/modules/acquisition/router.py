@@ -21,6 +21,8 @@ from app.modules.acquisition.schemas import (
     CertificateLinkPreviewResponse,
     DocumentBatchUploadResponse,
     DocumentCoreOverlayPreviewResponse,
+    DocumentLinkCandidateRequest,
+    DocumentLinkCandidateResponse,
     DocumentSideFieldsConfirmRequest,
     CurrentUploadBatchResponse,
     DdtLinkPreviewResponse,
@@ -68,6 +70,7 @@ from app.modules.acquisition.service import (
     detect_properties,
     detect_standard_notes,
     detach_document_match,
+    link_document_match_candidate,
     extract_ddt_fields_with_vision,
     extract_core_fields,
     get_acquisition_row,
@@ -465,6 +468,17 @@ def detach_document_match_route(
 ) -> DocumentMatchDetachResponse:
     row = get_acquisition_row(db, row_id)
     return detach_document_match(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/link-candidate", response_model=DocumentLinkCandidateResponse)
+def link_document_match_candidate_route(
+    row_id: int,
+    payload: DocumentLinkCandidateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> DocumentLinkCandidateResponse:
+    row = get_acquisition_row(db, row_id)
+    return link_document_match_candidate(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/evidences", response_model=DocumentEvidenceResponse)

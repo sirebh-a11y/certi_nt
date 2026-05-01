@@ -75,6 +75,8 @@ from app.modules.acquisition.schemas import (
     DocumentDetailResponse,
     DocumentEvidenceCreateRequest,
     DocumentEvidenceResponse,
+    DocumentLinkCandidateRequest,
+    DocumentLinkCandidateResponse,
     DocumentMatchDetachRequest,
     DocumentMatchDetachResponse,
     DocumentPageCreateRequest,
@@ -5771,6 +5773,286 @@ def detach_document_match(
     )
 
 
+def link_document_match_candidate(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: DocumentLinkCandidateRequest,
+    actor_id: int,
+) -> DocumentLinkCandidateResponse:
+    current_row = get_acquisition_row(db, row.id)
+    candidate_row = get_acquisition_row(db, payload.candidate_row_id)
+    if current_row.id == candidate_row.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row must be different from current row")
+
+    if current_row.document_ddt_id is not None and current_row.document_certificato_id is None:
+        return _link_certificate_candidate_to_ddt_row(
+            db=db,
+            current_row=current_row,
+            candidate_row=candidate_row,
+            payload=payload,
+            actor_id=actor_id,
+        )
+    if current_row.document_certificato_id is not None and current_row.document_ddt_id is None:
+        return _link_ddt_candidate_to_certificate_row(
+            db=db,
+            current_row=current_row,
+            candidate_row=candidate_row,
+            payload=payload,
+            actor_id=actor_id,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Manual candidate link is available only for rows with one missing document",
+    )
+
+
+def _link_certificate_candidate_to_ddt_row(
+    *,
+    db: Session,
+    current_row: AcquisitionRow,
+    candidate_row: AcquisitionRow,
+    payload: DocumentLinkCandidateRequest,
+    actor_id: int,
+) -> DocumentLinkCandidateResponse:
+    if candidate_row.document_certificato_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row has no certificate document")
+    score = score_bridge_match(_build_row_ddt_bridge(current_row), _build_row_certificate_bridge(candidate_row))
+    _ensure_user_candidate_can_link(
+        db=db,
+        score=score,
+        ddt_document_id=current_row.document_ddt_id,
+        certificate_document_id=candidate_row.document_certificato_id,
+        ddt_row_id=current_row.id,
+        certificate_row_id=None,
+        candidate_already_linked=candidate_row.document_ddt_id is not None,
+        allow_already_linked=payload.allow_already_linked,
+    )
+
+    upsert_match(
+        db=db,
+        row=current_row,
+        payload=MatchUpsertRequest(
+            document_certificato_id=candidate_row.document_certificato_id,
+            stato="proposto",
+            motivo_breve=payload.motivo_breve or _manual_link_reason(score),
+            fonte_proposta="utente",
+            candidates=[],
+        ),
+        actor_id=actor_id,
+    )
+    target_row = get_acquisition_row(db, current_row.id)
+    source_row_deleted = False
+    if candidate_row.document_ddt_id is None:
+        source_row_deleted = _merge_certificate_only_row_into_ddt_row(
+            db=db,
+            target_row=target_row,
+            source_row_id=candidate_row.id,
+            actor_id=actor_id,
+        )
+    else:
+        _copy_certificate_side_blocks_between_rows(
+            db=db,
+            source_row_id=candidate_row.id,
+            target_row_id=target_row.id,
+            actor_id=actor_id,
+        )
+
+    refreshed = get_acquisition_row(db, target_row.id)
+    return DocumentLinkCandidateResponse(
+        row=serialize_acquisition_row_detail(refreshed),
+        target_row_id=refreshed.id,
+        source_row_deleted=source_row_deleted,
+        message="Certificato collegato alla riga DDT",
+    )
+
+
+def _link_ddt_candidate_to_certificate_row(
+    *,
+    db: Session,
+    current_row: AcquisitionRow,
+    candidate_row: AcquisitionRow,
+    payload: DocumentLinkCandidateRequest,
+    actor_id: int,
+) -> DocumentLinkCandidateResponse:
+    if candidate_row.document_ddt_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row has no DDT document")
+    score = score_bridge_match(_build_row_ddt_bridge(candidate_row), _build_row_certificate_bridge(current_row))
+    _ensure_user_candidate_can_link(
+        db=db,
+        score=score,
+        ddt_document_id=candidate_row.document_ddt_id,
+        certificate_document_id=current_row.document_certificato_id,
+        ddt_row_id=candidate_row.id,
+        certificate_row_id=current_row.id,
+        candidate_already_linked=candidate_row.document_certificato_id is not None,
+        allow_already_linked=payload.allow_already_linked,
+    )
+
+    target_row = candidate_row
+    created_row_id: int | None = None
+    if candidate_row.document_certificato_id is not None:
+        target_row = _create_ddt_clone_row_for_manual_link(
+            db=db,
+            source_row=candidate_row,
+            actor_id=actor_id,
+        )
+        created_row_id = target_row.id
+
+    upsert_match(
+        db=db,
+        row=target_row,
+        payload=MatchUpsertRequest(
+            document_certificato_id=current_row.document_certificato_id,
+            stato="proposto",
+            motivo_breve=payload.motivo_breve or _manual_link_reason(score),
+            fonte_proposta="utente",
+            candidates=[],
+        ),
+        actor_id=actor_id,
+    )
+    merged = _merge_certificate_only_row_into_ddt_row(
+        db=db,
+        target_row=get_acquisition_row(db, target_row.id),
+        source_row_id=current_row.id,
+        actor_id=actor_id,
+    )
+    refreshed = get_acquisition_row(db, target_row.id)
+    return DocumentLinkCandidateResponse(
+        row=serialize_acquisition_row_detail(refreshed),
+        target_row_id=refreshed.id,
+        source_row_deleted=merged,
+        created_row_id=created_row_id,
+        message="DDT collegato al certificato",
+    )
+
+
+def _ensure_user_candidate_can_link(
+    *,
+    db: Session,
+    score: RematchScore,
+    ddt_document_id: int | None,
+    certificate_document_id: int | None,
+    ddt_row_id: int | None,
+    certificate_row_id: int | None,
+    candidate_already_linked: bool,
+    allow_already_linked: bool,
+) -> None:
+    if ddt_document_id is None or certificate_document_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate documents are not available")
+    if _manual_match_block_exists(
+        db,
+        ddt_document_id=ddt_document_id,
+        certificate_document_id=certificate_document_id,
+        ddt_row_id=ddt_row_id,
+        certificate_row_id=certificate_row_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This pair was manually detached and cannot be relinked here")
+    if score.decision == RematchDecision.NONE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate is not compatible with the current row")
+    if candidate_already_linked and not allow_already_linked:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Candidate is already linked; confirm multi-link explicitly")
+
+
+def _manual_link_reason(score: RematchScore) -> str:
+    fields = ", ".join(score.matched_fields[:5]) or "campi ponte"
+    return f"Aggancio manuale utente: {fields} coerenti (score {score.score})"
+
+
+def _create_ddt_clone_row_for_manual_link(
+    *,
+    db: Session,
+    source_row: AcquisitionRow,
+    actor_id: int,
+) -> AcquisitionRow:
+    clone = AcquisitionRow(
+        document_ddt_id=source_row.document_ddt_id,
+        document_certificato_id=None,
+        cdq=source_row.cdq,
+        fornitore_id=source_row.fornitore_id,
+        fornitore_raw=source_row.fornitore_raw,
+        lega_base=source_row.lega_base,
+        lega_designazione=source_row.lega_designazione,
+        variante_lega=source_row.variante_lega,
+        diametro=source_row.diametro,
+        colata=source_row.colata,
+        ddt=source_row.ddt,
+        peso=source_row.peso,
+        ordine=source_row.ordine,
+        data_documento=source_row.data_documento,
+        note_documento="Riga DDT duplicata per aggancio manuale certificato",
+        stato_tecnico="rosso",
+        stato_workflow="nuova",
+        priorita_operativa=source_row.priorita_operativa,
+        validata_finale=False,
+    )
+    db.add(clone)
+    db.flush()
+    _copy_read_values_for_blocks(
+        db=db,
+        source_row=source_row,
+        target_row=clone,
+        blocks={"ddt"},
+        actor_id=actor_id,
+        proposed=False,
+    )
+    _sync_row_statuses(db, clone)
+    db.add(clone)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=clone.id,
+        blocco="match",
+        azione="riga_ddt_duplicata_per_aggancio",
+        user_id=actor_id,
+        nota_breve=f"riga origine #{source_row.id}",
+    )
+    db.commit()
+    return get_acquisition_row(db, clone.id)
+
+
+def _copy_read_values_for_blocks(
+    *,
+    db: Session,
+    source_row: AcquisitionRow,
+    target_row: AcquisitionRow,
+    blocks: set[str],
+    actor_id: int,
+    proposed: bool,
+) -> int:
+    evidence_id_map: dict[int, int | None] = {}
+    copied = 0
+    for source_value in source_row.values:
+        if source_value.blocco not in blocks:
+            continue
+        target_evidence_id = None
+        if source_value.document_evidence_id is not None:
+            if source_value.document_evidence_id not in evidence_id_map:
+                evidence_id_map[source_value.document_evidence_id] = _copy_document_evidence_for_target_row(
+                    db=db,
+                    evidence_id=source_value.document_evidence_id,
+                    target_row_id=target_row.id,
+                    actor_id=actor_id,
+                )
+            target_evidence_id = evidence_id_map[source_value.document_evidence_id]
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=target_row.id,
+            blocco=source_value.blocco,
+            campo=source_value.campo,
+            valore_grezzo=source_value.valore_grezzo,
+            valore_standardizzato=source_value.valore_standardizzato,
+            valore_finale=source_value.valore_finale,
+            stato="proposto" if proposed else source_value.stato,
+            document_evidence_id=target_evidence_id,
+            metodo_lettura="sistema" if source_value.metodo_lettura == "utente" else source_value.metodo_lettura,
+            fonte_documentale=source_value.fonte_documentale,
+            confidenza=source_value.confidenza,
+            actor_id=actor_id,
+        )
+        copied += 1
+    return copied
+
+
 def _certificate_side_fields_for_detach(row: AcquisitionRow) -> dict[str, str | None]:
     value_map = {
         value.campo: _final_value_for_row(value)
@@ -5834,19 +6116,46 @@ def _ensure_manual_match_block(
     )
 
 
-def _manual_match_block_exists(db: Session, *, ddt_document_id: int | None, certificate_document_id: int | None) -> bool:
+def _manual_match_block_exists(
+    db: Session,
+    *,
+    ddt_document_id: int | None,
+    certificate_document_id: int | None,
+    ddt_row_id: int | None = None,
+    certificate_row_id: int | None = None,
+) -> bool:
     if ddt_document_id is None or certificate_document_id is None:
         return False
-    return (
+    blocks = (
         db.query(ManualMatchBlock.id)
         .filter(
             ManualMatchBlock.document_ddt_id == ddt_document_id,
             ManualMatchBlock.document_certificato_id == certificate_document_id,
             ManualMatchBlock.attivo.is_(True),
         )
-        .first()
-        is not None
+        .all()
     )
+    if not blocks:
+        return False
+    if ddt_row_id is None and certificate_row_id is None:
+        return True
+
+    full_blocks = (
+        db.query(ManualMatchBlock)
+        .filter(
+            ManualMatchBlock.document_ddt_id == ddt_document_id,
+            ManualMatchBlock.document_certificato_id == certificate_document_id,
+            ManualMatchBlock.attivo.is_(True),
+        )
+        .all()
+    )
+    for block in full_blocks:
+        if block.source_row_id is not None and ddt_row_id is not None and block.source_row_id != ddt_row_id:
+            continue
+        if block.certificate_row_id is not None and certificate_row_id is not None and block.certificate_row_id != certificate_row_id:
+            continue
+        return True
+    return False
 
 
 def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionRow, actor_id: int) -> None:
@@ -5856,6 +6165,8 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         db,
         ddt_document_id=row.document_ddt_id,
         certificate_document_id=row.document_certificato_id,
+        ddt_row_id=row.id,
+        certificate_row_id=None,
     ):
         return
     if not _ddt_required_fields_are_confirmed(row):
@@ -5978,6 +6289,8 @@ def build_ddt_link_preview_from_certificate_row(
             db,
             ddt_document_id=candidate_row.document_ddt_id,
             certificate_document_id=current_row.document_certificato_id,
+            ddt_row_id=candidate_row.id,
+            certificate_row_id=current_row.id,
         )
         items.append(_ddt_preview_candidate_from_row(candidate_row, score=score, manual_blocked=manual_blocked))
 
@@ -6013,6 +6326,8 @@ def build_certificate_link_preview_from_ddt_row(
             db,
             ddt_document_id=current_row.document_ddt_id,
             certificate_document_id=candidate_row.document_certificato_id,
+            ddt_row_id=current_row.id,
+            certificate_row_id=None,
         )
         items.append(_certificate_preview_candidate_from_row(candidate_row, score=score, manual_blocked=manual_blocked))
 
@@ -11383,6 +11698,8 @@ def _plan_cross_run_auto_rematch(
                 db,
                 ddt_document_id=row.document_ddt_id,
                 certificate_document_id=certificate_bridge.document_id,
+                ddt_row_id=row.id,
+                certificate_row_id=None,
             ):
                 continue
             if candidate_row.document_ddt_id is None and not _certificate_only_row_can_merge(candidate_row):
@@ -11541,6 +11858,14 @@ def _merge_certificate_only_row_into_ddt_row(
 
     db.query(AutonomousProcessingRun).filter(AutonomousProcessingRun.current_row_id == source_row.id).update(
         {AutonomousProcessingRun.current_row_id: target_row.id},
+        synchronize_session=False,
+    )
+    db.query(ManualMatchBlock).filter(ManualMatchBlock.source_row_id == source_row.id).update(
+        {ManualMatchBlock.source_row_id: target_row.id},
+        synchronize_session=False,
+    )
+    db.query(ManualMatchBlock).filter(ManualMatchBlock.certificate_row_id == source_row.id).update(
+        {ManualMatchBlock.certificate_row_id: target_row.id},
         synchronize_session=False,
     )
     db.delete(source_row)

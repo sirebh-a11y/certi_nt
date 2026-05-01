@@ -644,7 +644,7 @@ function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateF
   );
 }
 
-function LinkCandidateList({ emptyLabel, items, loading, title, type }) {
+function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandidate, title, type }) {
   if (loading) {
     return (
       <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
@@ -666,7 +666,7 @@ function LinkCandidateList({ emptyLabel, items, loading, title, type }) {
       <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-900">{title}</p>
-          <p className="mt-1 text-xs text-slate-500">Lista letta dal bridge di match. Le azioni vere arrivano nel prossimo step.</p>
+          <p className="mt-1 text-xs text-slate-500">Scegli un candidato solo se i campi ponte sono coerenti con la riga.</p>
         </div>
         <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">{items.length} trovati</span>
       </div>
@@ -685,7 +685,7 @@ function LinkCandidateList({ emptyLabel, items, loading, title, type }) {
                 <div className="flex flex-wrap gap-2">
                   {item.manual_blocked ? (
                     <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
-                      Blocco manuale
+                      Bloccato da disaccoppio
                     </span>
                   ) : null}
                   {item.already_linked ? (
@@ -693,17 +693,37 @@ function LinkCandidateList({ emptyLabel, items, loading, title, type }) {
                       Gia agganciata a riga #{item.linked_row_id}
                     </span>
                   ) : null}
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                    {item.recommended_action === "collega_anche_qui"
-                      ? "Collega anche qui"
-                      : item.recommended_action === "riaggancio_bloccato"
-                        ? "Riaggancio bloccato"
-                        : "Aggancia"}
-                  </span>
+                  <button
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                      item.manual_blocked
+                        ? "cursor-not-allowed border-rose-200 bg-rose-50 text-rose-700"
+                        : item.already_linked
+                          ? "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"
+                          : "border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50"
+                    } disabled:opacity-60`}
+                    disabled={item.manual_blocked || linkingKey === `${type}-${item.row_id}`}
+                    onClick={() => onLinkCandidate?.(type, item)}
+                    type="button"
+                  >
+                    {linkingKey === `${type}-${item.row_id}`
+                      ? "Collego..."
+                      : item.recommended_action === "collega_anche_qui"
+                        ? "Collega anche qui"
+                        : item.recommended_action === "riaggancio_bloccato"
+                          ? "Bloccato"
+                          : "Aggancia"}
+                  </button>
                 </div>
               </div>
+              {item.manual_blocked ? (
+                <p className="mt-2 text-xs text-rose-700">
+                  Questa coppia è stata separata manualmente: non la riagganciamo da qui.
+                </p>
+              ) : null}
               {item.already_linked && item.linked_file_name ? (
-                <p className="mt-2 text-xs text-amber-800">Documento gia collegato: {item.linked_file_name}</p>
+                <p className="mt-2 text-xs text-amber-800">
+                  Documento gia collegato: {item.linked_file_name}. Se confermi, non lo sposto: creo un aggancio aggiuntivo.
+                </p>
               ) : null}
               <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
                 <PreviewMini label="lega" value={item.lega} />
@@ -784,10 +804,61 @@ function DetachPreview({ title, values }) {
   );
 }
 
+function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm }) {
+  if (!candidate) {
+    return null;
+  }
+  const typeLabel = candidate.type === "ddt" ? "DDT" : "certificato";
+  const fileName =
+    candidate.type === "ddt"
+      ? candidate.item.ddt_file_name || `DDT #${candidate.item.document_ddt_id}`
+      : candidate.item.certificate_file_name || `Certificato #${candidate.item.document_certificato_id}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+      <div className="w-full max-w-2xl rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl">
+        <p className="text-lg font-semibold text-slate-950">Collegare un documento gia agganciato?</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Il candidato {typeLabel} sulla riga #{candidate.item.row_id} è gia collegato. Confermando non lo spostiamo dalla riga attuale:
+          creiamo un aggancio aggiuntivo o una riga gemella quando serve.
+        </p>
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Controlla che i campi ponte siano davvero dello stesso materiale prima di proseguire.
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-2">
+          <PreviewMini label="Riga" value={`#${candidate.item.row_id}`} />
+          <PreviewMini label="Documento" value={fileName} />
+          <PreviewMini label="Score" value={candidate.item.score} />
+          <PreviewMini label="Gia collegato" value={candidate.item.linked_file_name || "-"} />
+        </div>
+        <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={confirming}
+            onClick={onCancel}
+            type="button"
+          >
+            Annulla
+          </button>
+          <button
+            className="rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+            disabled={confirming}
+            onClick={onConfirm}
+            type="button"
+          >
+            {confirming ? "Collego..." : "Conferma collega anche qui"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AcquisitionDocumentMatchingSectionPage({
   certificateDocument,
   ddtDocument,
   onDirtyChange,
+  onRowRelocated,
   row,
   rowId,
   token,
@@ -817,6 +888,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [ddtOverlayItems, setDdtOverlayItems] = useState([]);
   const [detachDialogOpen, setDetachDialogOpen] = useState(false);
   const [detachingMatch, setDetachingMatch] = useState(false);
+  const [linkingCandidateKey, setLinkingCandidateKey] = useState("");
+  const [pendingLinkCandidate, setPendingLinkCandidate] = useState(null);
 
   useEffect(() => {
     const nextDraft = buildDdtDraft(row);
@@ -1107,6 +1180,51 @@ export default function AcquisitionDocumentMatchingSectionPage({
     }
   }
 
+  async function handleLinkCandidate(type, item) {
+    if (item.already_linked) {
+      setPendingLinkCandidate({ type, item });
+      return;
+    }
+    await executeLinkCandidate(type, item);
+  }
+
+  async function executeLinkCandidate(type, item) {
+    const key = `${type}-${item.row_id}`;
+    setLinkingCandidateKey(key);
+    setError("");
+    try {
+      const response = await apiRequest(
+        `/acquisition/rows/${rowId}/link-candidate`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            candidate_row_id: item.row_id,
+            allow_already_linked: Boolean(item.already_linked),
+            motivo_breve: null,
+          }),
+        },
+        token,
+      );
+      setDdtOverlayActive(false);
+      setCertificateOverlayActive(false);
+      setDdtOverlayItems([]);
+      setCertificateOverlayItems([]);
+      setDdtLinkPreview(null);
+      setCertificateLinkPreview(null);
+      setPendingLinkCandidate(null);
+      const targetRowId = response?.target_row_id;
+      if (targetRowId && String(targetRowId) !== String(rowId)) {
+        onRowRelocated?.(targetRowId);
+        return;
+      }
+      await onRefreshRow?.();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLinkingCandidateKey("");
+    }
+  }
+
   const ddtActionBox = (
     <div className="flex min-h-[72px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-3 py-2">
       <p className="text-[11px] font-semibold text-slate-700">DDT</p>
@@ -1192,7 +1310,9 @@ export default function AcquisitionDocumentMatchingSectionPage({
               <LinkCandidateList
                 emptyLabel="Nessun DDT candidato trovato con i campi ponte attuali."
                 items={ddtLinkPreview?.items || []}
+                linkingKey={linkingCandidateKey}
                 loading={loadingDdtPreview}
+                onLinkCandidate={handleLinkCandidate}
                 title="Candidati DDT da collegare"
                 type="ddt"
               />
@@ -1280,7 +1400,9 @@ export default function AcquisitionDocumentMatchingSectionPage({
               <LinkCandidateList
                 emptyLabel="Nessun certificato candidato trovato con i campi ponte attuali."
                 items={certificateLinkPreview?.items || []}
+                linkingKey={linkingCandidateKey}
                 loading={loadingCertificatePreview}
+                onLinkCandidate={handleLinkCandidate}
                 title="Candidati certificato da collegare"
                 type="certificato"
               />
@@ -1325,6 +1447,14 @@ export default function AcquisitionDocumentMatchingSectionPage({
           detaching={detachingMatch}
           onCancel={() => setDetachDialogOpen(false)}
           onConfirm={() => void handleDetachMatch()}
+        />
+      ) : null}
+      {pendingLinkCandidate ? (
+        <LinkCandidateConfirmDialog
+          candidate={pendingLinkCandidate}
+          confirming={linkingCandidateKey === `${pendingLinkCandidate.type}-${pendingLinkCandidate.item.row_id}`}
+          onCancel={() => setPendingLinkCandidate(null)}
+          onConfirm={() => void executeLinkCandidate(pendingLinkCandidate.type, pendingLinkCandidate.item)}
         />
       ) : null}
     </section>

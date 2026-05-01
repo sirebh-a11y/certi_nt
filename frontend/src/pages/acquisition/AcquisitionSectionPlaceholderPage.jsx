@@ -176,6 +176,10 @@ export default function AcquisitionSectionPlaceholderPage() {
           certificateDocument={certificateDocument}
           ddtDocument={ddtDocument}
           onDirtyChange={setSectionDirty}
+          onRowRelocated={(targetRowId) => {
+            setSectionDirty(false);
+            navigate(`/acquisition/${targetRowId}/document-matching`, { replace: true });
+          }}
           onRefreshRow={loadRow}
           row={row}
           rowId={rowId}

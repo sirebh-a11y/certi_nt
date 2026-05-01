@@ -502,6 +502,17 @@ class DocumentMatchDetachRequest(BaseModel):
         return normalize_optional_text(value)
 
 
+class DocumentLinkCandidateRequest(BaseModel):
+    candidate_row_id: int
+    allow_already_linked: bool = False
+    motivo_breve: str | None = Field(default=None, max_length=255)
+
+    @field_validator("motivo_breve")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
+
+
 class ReadValueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -649,6 +660,14 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
 class DocumentMatchDetachResponse(BaseModel):
     ddt_row: AcquisitionRowDetailResponse
     certificate_row: AcquisitionRowDetailResponse
+
+
+class DocumentLinkCandidateResponse(BaseModel):
+    row: AcquisitionRowDetailResponse
+    target_row_id: int
+    source_row_deleted: bool = False
+    created_row_id: int | None = None
+    message: str
 
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):
