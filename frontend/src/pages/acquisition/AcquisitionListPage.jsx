@@ -30,6 +30,18 @@ function activityLabelFromState(state) {
   }
 
 function compactMatchReference(row) {
+  const hasDdt = Boolean(row.document_ddt_id);
+  const hasCertificate = Boolean(row.document_certificato_id);
+
+  if (hasDdt && !hasCertificate) {
+    return "";
+  }
+  if (hasCertificate && !hasDdt) {
+    return "";
+  }
+  if (row.match_state === "confermato") {
+    return "";
+  }
   if (!row.certificate_file_name) {
     return activityLabelFromState(row.block_states?.match || "rosso");
   }
@@ -38,6 +50,22 @@ function compactMatchReference(row) {
     return numericMatch[0];
   }
   return row.certificate_file_name.replace(/\.pdf$/i, "").slice(0, 12);
+}
+
+function matchCellLabel(row) {
+  const hasDdt = Boolean(row.document_ddt_id);
+  const hasCertificate = Boolean(row.document_certificato_id);
+
+  if (hasDdt && !hasCertificate) {
+    return "Solo DDT";
+  }
+  if (hasCertificate && !hasDdt) {
+    return "Solo Certificato";
+  }
+  if (row.match_state === "confermato") {
+    return "Match Confermato";
+  }
+  return BLOCK_LABELS.match;
 }
 
 function composeLega(row) {
@@ -70,6 +98,9 @@ function formatUploadDate(value) {
 function stateSurfaceClasses(state) {
   if (state === "documento_chiuso") {
     return "border-transparent bg-transparent text-slate-950";
+  }
+  if (state === "neutro") {
+    return "border-slate-200 bg-white text-slate-700";
   }
   if (state === "accettato") {
     return "border-slate-300 bg-slate-100 text-slate-700";
@@ -105,6 +136,8 @@ function searchableFieldValues(row) {
     row.ddt,
     row.peso,
     row.ordine,
+    matchCellLabel(row),
+    compactMatchReference(row),
     row.certificate_file_name,
     row.note_documento,
   ]
@@ -890,11 +923,11 @@ export default function AcquisitionListPage() {
                     <td className="px-0 py-0" ref={(element) => setLastDocumentCellRef(row.id, element)}>
                       <BlockCell
                         boxRef={(element) => setLastDocumentCellRef(row.id, element)}
-                        label={BLOCK_LABELS.match}
+                        label={matchCellLabel(row)}
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         secondary={compactMatchReference(row)}
-                        state={displayCellState(row, row.block_states?.match || "rosso")}
+                        state="neutro"
                       />
                     </td>
                       <td className="px-0 py-0">

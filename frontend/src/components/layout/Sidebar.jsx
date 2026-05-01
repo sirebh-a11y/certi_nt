@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 
 import { useAuth } from "../../app/auth";
 
@@ -16,6 +16,14 @@ const navItems = [
 
 export default function Sidebar() {
   const { user } = useAuth();
+  const location = useLocation();
+
+  function isNavItemActive(item, isActive) {
+    if (item.to === "/acquisition") {
+      return location.pathname === "/acquisition" || /^\/acquisition\/\d+/.test(location.pathname);
+    }
+    return isActive;
+  }
 
   return (
     <aside className="border-r border-border bg-panel px-4 py-6">
@@ -35,7 +43,7 @@ export default function Sidebar() {
               to={item.to}
               className={({ isActive }) =>
                 `rounded-xl px-4 py-3 text-sm font-medium transition ${
-                  isActive ? "bg-accent text-white" : "text-slate-600 hover:bg-slate-100 hover:text-ink"
+                  isNavItemActive(item, isActive) ? "bg-accent text-white" : "text-slate-600 hover:bg-slate-100 hover:text-ink"
                 }`
               }
             >
