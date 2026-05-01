@@ -68,6 +68,19 @@ function matchCellLabel(row) {
   return BLOCK_LABELS.match;
 }
 
+function matchSortValue(row) {
+  const label = matchCellLabel(row);
+  const priority =
+    label === "Solo DDT"
+      ? 1
+      : label === "Solo Certificato"
+        ? 2
+        : label === "Match"
+          ? 3
+          : 4;
+  return `${priority}-${label}-${compactMatchReference(row)}-${row.id}`;
+}
+
 function composeLega(row) {
   return row.lega_designazione || row.lega_base || row.variante_lega || "-";
 }
@@ -327,7 +340,7 @@ function rowFieldSortValue(row, field) {
     case "ordine":
       return row.ordine || "";
     case "match":
-      return compactMatchReference(row);
+      return matchSortValue(row);
     case "chimica":
       return activityRank(blockActivityLabel("chimica", row.block_states?.chimica || "rosso"));
     case "proprieta":

@@ -696,12 +696,12 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
                   <button
                     className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
                       item.manual_blocked
-                        ? "cursor-not-allowed border-rose-200 bg-rose-50 text-rose-700"
+                        ? "border-rose-300 bg-white text-rose-700 hover:bg-rose-50"
                         : item.already_linked
                           ? "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"
                           : "border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50"
                     } disabled:opacity-60`}
-                    disabled={item.manual_blocked || linkingKey === `${type}-${item.row_id}`}
+                    disabled={linkingKey === `${type}-${item.row_id}`}
                     onClick={() => onLinkCandidate?.(type, item)}
                     type="button"
                   >
@@ -710,14 +710,14 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
                       : item.recommended_action === "collega_anche_qui"
                         ? "Collega anche qui"
                         : item.recommended_action === "riaggancio_bloccato"
-                          ? "Bloccato"
+                          ? "Riaggancia comunque"
                           : "Aggancia"}
                   </button>
                 </div>
               </div>
               {item.manual_blocked ? (
                 <p className="mt-2 text-xs text-rose-700">
-                  Questa coppia è stata separata manualmente: non la riagganciamo da qui.
+                  Questa coppia è stata separata manualmente: il rematch automatico resta bloccato, ma puoi riagganciarla con conferma esplicita.
                 </p>
               ) : null}
               {item.already_linked && item.linked_file_name ? (
@@ -809,6 +809,7 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
     return null;
   }
   const typeLabel = candidate.type === "ddt" ? "DDT" : "certificato";
+  const isManualBlocked = Boolean(candidate.item.manual_blocked);
   const fileName =
     candidate.type === "ddt"
       ? candidate.item.ddt_file_name || `DDT #${candidate.item.document_ddt_id}`
@@ -817,19 +818,24 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
       <div className="w-full max-w-2xl rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl">
-        <p className="text-lg font-semibold text-slate-950">Collegare un documento gia agganciato?</p>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
-          Il candidato {typeLabel} sulla riga #{candidate.item.row_id} è gia collegato. Confermando non lo spostiamo dalla riga attuale:
-          creiamo un aggancio aggiuntivo o una riga gemella quando serve.
+        <p className="text-lg font-semibold text-slate-950">
+          {isManualBlocked ? "Riagganciare una coppia separata?" : "Collegare un documento gia agganciato?"}
         </p>
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Controlla che i campi ponte siano davvero dello stesso materiale prima di proseguire.
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {isManualBlocked
+            ? `Il candidato ${typeLabel} sulla riga #${candidate.item.row_id} era stato separato manualmente. Confermando togliamo il blocco solo per questa coppia e la riagganciamo.`
+            : `Il candidato ${typeLabel} sulla riga #${candidate.item.row_id} è gia collegato. Confermando non lo spostiamo dalla riga attuale: creiamo un aggancio aggiuntivo o una riga gemella quando serve.`}
+        </p>
+        <div className={`mt-4 rounded-xl border px-3 py-2 text-sm ${isManualBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+          {isManualBlocked
+            ? "Azione forte: usala solo se lo sgancio era sbagliato o vuoi ricreare consapevolmente questo match."
+            : "Controlla che i campi ponte siano davvero dello stesso materiale prima di proseguire."}
         </div>
         <div className="mt-4 grid gap-2 md:grid-cols-2">
           <PreviewMini label="Riga" value={`#${candidate.item.row_id}`} />
           <PreviewMini label="Documento" value={fileName} />
           <PreviewMini label="Score" value={candidate.item.score} />
-          <PreviewMini label="Gia collegato" value={candidate.item.linked_file_name || "-"} />
+          <PreviewMini label={isManualBlocked ? "Stato" : "Gia collegato"} value={isManualBlocked ? "Bloccato da disaccoppio" : candidate.item.linked_file_name || "-"} />
         </div>
         <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
@@ -841,12 +847,12 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
             Annulla
           </button>
           <button
-            className="rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+            className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60 ${isManualBlocked ? "bg-rose-600 hover:bg-rose-700" : "bg-amber-600 hover:bg-amber-700"}`}
             disabled={confirming}
             onClick={onConfirm}
             type="button"
           >
-            {confirming ? "Collego..." : "Conferma collega anche qui"}
+            {confirming ? "Collego..." : isManualBlocked ? "Conferma riaggancio" : "Conferma collega anche qui"}
           </button>
         </div>
       </div>
@@ -1181,7 +1187,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function handleLinkCandidate(type, item) {
-    if (item.already_linked) {
+    if (item.already_linked || item.manual_blocked) {
       setPendingLinkCandidate({ type, item });
       return;
     }
@@ -1200,6 +1206,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
           body: JSON.stringify({
             candidate_row_id: item.row_id,
             allow_already_linked: Boolean(item.already_linked),
+            allow_manual_blocked: Boolean(item.manual_blocked),
             motivo_breve: null,
           }),
         },

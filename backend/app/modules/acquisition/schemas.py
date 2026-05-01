@@ -505,6 +505,7 @@ class DocumentMatchDetachRequest(BaseModel):
 class DocumentLinkCandidateRequest(BaseModel):
     candidate_row_id: int
     allow_already_linked: bool = False
+    allow_manual_blocked: bool = False
     motivo_breve: str | None = Field(default=None, max_length=255)
 
     @field_validator("motivo_breve")

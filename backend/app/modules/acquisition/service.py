@@ -5660,6 +5660,7 @@ def detach_document_match(
 
     ddt_document_id = current_row.document_ddt_id
     certificate_document_id = current_row.document_certificato_id
+    ddt_fields = _ddt_side_fields_for_detach(current_row)
     certificate_fields = _certificate_side_fields_for_detach(current_row)
 
     _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason="match_disaccoppiato")
@@ -5730,6 +5731,7 @@ def detach_document_match(
         db.delete(current_row.certificate_match)
     current_row.document_certificato_id = None
     current_row.validata_finale = False
+    _apply_document_side_fields_to_row(current_row, ddt_fields)
 
     _ensure_manual_match_block(
         db=db,
@@ -5824,10 +5826,19 @@ def _link_certificate_candidate_to_ddt_row(
         ddt_document_id=current_row.document_ddt_id,
         certificate_document_id=candidate_row.document_certificato_id,
         ddt_row_id=current_row.id,
-        certificate_row_id=None,
+        certificate_row_id=candidate_row.id,
         candidate_already_linked=candidate_row.document_ddt_id is not None,
         allow_already_linked=payload.allow_already_linked,
+        allow_manual_blocked=payload.allow_manual_blocked,
     )
+    if payload.allow_manual_blocked:
+        _deactivate_manual_match_blocks(
+            db,
+            ddt_document_id=current_row.document_ddt_id,
+            certificate_document_id=candidate_row.document_certificato_id,
+            ddt_row_id=current_row.id,
+            certificate_row_id=candidate_row.id,
+        )
 
     upsert_match(
         db=db,
@@ -5887,7 +5898,16 @@ def _link_ddt_candidate_to_certificate_row(
         certificate_row_id=current_row.id,
         candidate_already_linked=candidate_row.document_certificato_id is not None,
         allow_already_linked=payload.allow_already_linked,
+        allow_manual_blocked=payload.allow_manual_blocked,
     )
+    if payload.allow_manual_blocked:
+        _deactivate_manual_match_blocks(
+            db,
+            ddt_document_id=candidate_row.document_ddt_id,
+            certificate_document_id=current_row.document_certificato_id,
+            ddt_row_id=candidate_row.id,
+            certificate_row_id=current_row.id,
+        )
 
     target_row = candidate_row
     created_row_id: int | None = None
@@ -5937,6 +5957,7 @@ def _ensure_user_candidate_can_link(
     certificate_row_id: int | None,
     candidate_already_linked: bool,
     allow_already_linked: bool,
+    allow_manual_blocked: bool,
 ) -> None:
     if ddt_document_id is None or certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate documents are not available")
@@ -5946,7 +5967,7 @@ def _ensure_user_candidate_can_link(
         certificate_document_id=certificate_document_id,
         ddt_row_id=ddt_row_id,
         certificate_row_id=certificate_row_id,
-    ):
+    ) and not allow_manual_blocked:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This pair was manually detached and cannot be relinked here")
     if score.decision == RematchDecision.NONE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate is not compatible with the current row")
@@ -5957,6 +5978,34 @@ def _ensure_user_candidate_can_link(
 def _manual_link_reason(score: RematchScore) -> str:
     fields = ", ".join(score.matched_fields[:5]) or "campi ponte"
     return f"Aggancio manuale utente: {fields} coerenti (score {score.score})"
+
+
+def _deactivate_manual_match_blocks(
+    db: Session,
+    *,
+    ddt_document_id: int | None,
+    certificate_document_id: int | None,
+    ddt_row_id: int | None,
+    certificate_row_id: int | None,
+) -> None:
+    if ddt_document_id is None or certificate_document_id is None:
+        return
+    blocks = (
+        db.query(ManualMatchBlock)
+        .filter(
+            ManualMatchBlock.document_ddt_id == ddt_document_id,
+            ManualMatchBlock.document_certificato_id == certificate_document_id,
+            ManualMatchBlock.attivo.is_(True),
+        )
+        .all()
+    )
+    for block in blocks:
+        if block.source_row_id is not None and ddt_row_id is not None and block.source_row_id != ddt_row_id:
+            continue
+        if block.certificate_row_id is not None and certificate_row_id is not None and block.certificate_row_id != certificate_row_id:
+            continue
+        block.attivo = False
+        db.add(block)
 
 
 def _create_ddt_clone_row_for_manual_link(
@@ -6053,29 +6102,43 @@ def _copy_read_values_for_blocks(
     return copied
 
 
-def _certificate_side_fields_for_detach(row: AcquisitionRow) -> dict[str, str | None]:
+def _normalize_document_side_field(field_name: str, value: str | None) -> str | None:
+    if field_name in {"diametro", "peso"}:
+        return _normalize_value_for_field("ddt", field_name, value)
+    return _string_or_none(value)
+
+
+def _document_side_fields_from_read_values(
+    row: AcquisitionRow,
+    *,
+    block: str,
+    field_map: dict[str, tuple[str, ...]],
+) -> dict[str, str | None]:
     value_map = {
         value.campo: _final_value_for_row(value)
         for value in row.values
-        if value.blocco == "match"
+        if value.blocco == block
     }
 
-    def first_value(*field_names: str, fallback: str | None = None) -> str | None:
+    def first_value(*field_names: str) -> str | None:
         for field_name in field_names:
             value = _string_or_none(value_map.get(field_name))
             if value is not None:
                 return value
-        return _string_or_none(fallback)
+        return None
 
     return {
-        "lega_base": first_value("lega_certificato", fallback=_row_high_alloy_value(row)),
-        "diametro": _normalize_value_for_field("ddt", "diametro", first_value("diametro_certificato", fallback=row.diametro)),
-        "cdq": first_value("numero_certificato_certificato", fallback=row.cdq),
-        "colata": first_value("colata_certificato", fallback=row.colata),
-        "ddt": first_value("ddt_certificato", fallback=row.ddt),
-        "peso": _normalize_value_for_field("ddt", "peso", first_value("peso_certificato", fallback=row.peso)),
-        "ordine": first_value("ordine_cliente_certificato", fallback=row.ordine),
+        ui_field: _normalize_document_side_field(ui_field, first_value(*field_map[ui_field]))
+        for ui_field in DOCUMENT_SIDE_UI_FIELDS
     }
+
+
+def _ddt_side_fields_for_detach(row: AcquisitionRow) -> dict[str, str | None]:
+    return _document_side_fields_from_read_values(row, block="ddt", field_map=DDT_SIDE_FIELD_MAP)
+
+
+def _certificate_side_fields_for_detach(row: AcquisitionRow) -> dict[str, str | None]:
+    return _document_side_fields_from_read_values(row, block="match", field_map=CERTIFICATE_SIDE_FIELD_MAP)
 
 
 def _ensure_manual_match_block(
