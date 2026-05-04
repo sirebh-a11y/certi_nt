@@ -84,6 +84,8 @@ from app.modules.acquisition.schemas import (
     DocumentResponse,
     DocumentSideFieldsConfirmRequest,
     DocumentSummaryResponse,
+    ManualDocumentRowCreateRequest,
+    ManualDocumentUploadResponse,
     MatchCandidateRequest,
     MatchCandidateResponse,
     MatchUpsertRequest,
@@ -3958,6 +3960,109 @@ def upload_documents_batch(
     )
 
 
+def upload_or_reuse_manual_document(
+    db: Session,
+    *,
+    tipo_documento: str,
+    uploaded_file: UploadFile,
+    actor_id: int,
+    actor_email: str,
+    fornitore_id: int,
+) -> ManualDocumentUploadResponse:
+    supplier = _get_supplier(db, fornitore_id)
+    if uploaded_file.filename is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file must have a filename")
+
+    file_bytes = uploaded_file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    duplicate = _find_persistent_duplicate_document(db, file_hash=file_hash)
+    reused_existing = duplicate is not None
+    message = None
+
+    if duplicate is None:
+        temporary_duplicate = _find_temporary_duplicate_document_for_user(db, actor_id=actor_id, file_hash=file_hash)
+        if temporary_duplicate is not None and (temporary_duplicate.stato_elaborazione or "").lower() != "errore":
+            duplicate = temporary_duplicate
+            reused_existing = True
+
+    if duplicate is not None:
+        document = duplicate
+        if document.tipo_documento != tipo_documento:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Il file esiste gia ma risulta {document.tipo_documento}, non {tipo_documento}",
+            )
+        rows = _manual_document_linked_rows(db, document=document, side=tipo_documento)
+        if document.fornitore_id is None or (document.fornitore_id != supplier.id and not rows):
+            document.fornitore_id = supplier.id
+            db.add(document)
+            db.commit()
+            document = get_document(db, document.id)
+        elif document.fornitore_id != supplier.id:
+            message = "Documento gia presente con un fornitore diverso: uso il fornitore gia salvato e non modifico le righe esistenti."
+        else:
+            message = "Documento gia presente: mostro il PDF e le righe gia create."
+        document = prepare_document_for_reader(db, document)
+        return ManualDocumentUploadResponse(
+            document=serialize_document_detail(document),
+            reused_existing=reused_existing,
+            rows=rows,
+            message=message,
+        )
+
+    uploaded_file.file.seek(0)
+    uploaded = upload_document(
+        db=db,
+        tipo_documento=tipo_documento,
+        uploaded_file=uploaded_file,
+        actor_id=actor_id,
+        actor_email=actor_email,
+        fornitore_id=supplier.id,
+        origine_upload="utente",
+    )
+    document = get_document(db, uploaded.id)
+    if document.tipo_documento != tipo_documento:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Il file caricato risulta {document.tipo_documento}, non {tipo_documento}",
+        )
+    return ManualDocumentUploadResponse(
+        document=serialize_document_detail(document),
+        reused_existing=False,
+        rows=[],
+        message="PDF caricato. Ora puoi creare una o piu righe da questo documento.",
+    )
+
+
+def _manual_document_linked_rows(
+    db: Session,
+    *,
+    document: Document,
+    side: str,
+) -> list[AcquisitionRowListItemResponse]:
+    query = (
+        db.query(AcquisitionRow)
+        .options(
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
+            joinedload(AcquisitionRow.certificate_match),
+            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
+        )
+        .order_by(AcquisitionRow.id.asc())
+    )
+    if side == "ddt":
+        query = query.filter(AcquisitionRow.document_ddt_id == document.id)
+    elif side == "certificato":
+        query = query.filter(AcquisitionRow.document_certificato_id == document.id)
+    else:
+        return []
+    return [serialize_acquisition_row_list_item(row) for row in query.all()]
+
+
 def _apply_document_identity_detection(db: Session, document: Document) -> Document:
     probable_type = _detect_document_type(document)
     probable_supplier_id = _detect_document_supplier_id(db, document)
@@ -5594,6 +5699,93 @@ def confirm_document_side_fields(
     db.add(refreshed_row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, current_row.id))
+
+
+def create_manual_document_row(
+    db: Session,
+    *,
+    document: Document,
+    payload: ManualDocumentRowCreateRequest,
+    actor_id: int,
+    actor_email: str,
+) -> AcquisitionRowDetailResponse:
+    if document.tipo_documento != payload.side:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Document {document.id} is not of type {payload.side}",
+        )
+
+    supplier = _get_supplier(db, payload.fornitore_id)
+    existing_rows = list(document.rows_as_ddt if payload.side == "ddt" else document.rows_as_certificate)
+    if document.fornitore_id is not None and document.fornitore_id != supplier.id and existing_rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Documento gia usato con un fornitore diverso",
+        )
+
+    document.fornitore_id = supplier.id
+    document.stato_upload = "persistente"
+    document.upload_batch_id = None
+    document.scadenza_batch = None
+    document.stato_elaborazione = "letto"
+    db.add(document)
+
+    normalized_fields = {
+        field: _normalize_document_side_field(field, payload.fields.get(field))
+        for field in DOCUMENT_SIDE_UI_FIELDS
+    }
+    row = AcquisitionRow(
+        document_ddt_id=document.id if payload.side == "ddt" else None,
+        document_certificato_id=document.id if payload.side == "certificato" else None,
+        fornitore_id=supplier.id,
+        fornitore_raw=supplier.ragione_sociale,
+        cdq=normalized_fields.get("cdq"),
+        lega_base=normalized_fields.get("lega_base"),
+        diametro=normalized_fields.get("diametro"),
+        colata=normalized_fields.get("colata"),
+        ddt=normalized_fields.get("ddt"),
+        peso=normalized_fields.get("peso"),
+        ordine=normalized_fields.get("ordine"),
+        note_documento=f"Riga {payload.side.upper()} creata manualmente",
+        stato_tecnico="rosso",
+        stato_workflow="nuova",
+        priorita_operativa="media",
+        validata_finale=False,
+    )
+    db.add(row)
+    db.flush()
+
+    block = "ddt" if payload.side == "ddt" else "match"
+    field_map = DDT_SIDE_FIELD_MAP if payload.side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
+    source = "ddt" if payload.side == "ddt" else "certificato"
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        raw_value = normalized_fields.get(ui_field)
+        for read_field in field_map[ui_field]:
+            _confirm_document_side_read_value(
+                db=db,
+                row=row,
+                block=block,
+                field=read_field,
+                raw_value=raw_value,
+                source=source,
+                actor_id=actor_id,
+            )
+
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco=block,
+        azione=f"{payload.side}_manuale_creato",
+        user_id=actor_id,
+        nota_breve=f"Documento #{document.id}",
+    )
+    db.flush()
+    _sync_row_statuses(db, row)
+    db.add(row)
+    db.commit()
+    created_row = get_acquisition_row(db, row.id)
+    log_service.record("acquisition", f"Manual {payload.side} row created: {created_row.id}", actor_email)
+    return serialize_acquisition_row_detail(created_row)
 
 
 def _confirm_document_side_read_value(

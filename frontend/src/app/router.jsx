@@ -11,6 +11,7 @@ import LoginPage from "../pages/auth/LoginPage";
 import SetPasswordPage from "../pages/auth/SetPasswordPage";
 import AcquisitionDetailPage from "../pages/acquisition/AcquisitionDetailPage";
 import AcquisitionListPage from "../pages/acquisition/AcquisitionListPage";
+import AcquisitionManualDdtPage from "../pages/acquisition/AcquisitionManualDdtPage";
 import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionSectionPlaceholderPage";
 import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import DashboardPage from "../pages/core/DashboardPage";
@@ -121,6 +122,7 @@ export function AppRouter() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/acquisition" element={<AcquisitionListPage />} />
           <Route path="/acquisition/upload" element={<AcquisitionUploadPage />} />
+          <Route path="/acquisition/manual/ddt" element={<AcquisitionManualDdtPage />} />
           <Route path="/acquisition/:rowId/:sectionKey" element={<AcquisitionSectionPlaceholderPage />} />
           <Route path="/acquisition/:rowId" element={<AcquisitionDetailPage />} />
           <Route path="/suppliers" element={<SuppliersListPage />} />

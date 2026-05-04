@@ -359,9 +359,17 @@ export default function AcquisitionUploadPage() {
               Flusso semplice: carichi DDT e certificati nel batch corrente, il sistema li riconosce e poi lavora sui documenti selezionati.
             </p>
           </div>
-          <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
-            Torna alla griglia
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100" to="/acquisition/manual/ddt">
+              Fallback manuale DDT
+            </Link>
+            <button className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-semibold text-slate-400" disabled type="button">
+              Fallback certificato
+            </button>
+            <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
+              Torna alla griglia
+            </Link>
+          </div>
         </div>
 
         {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}

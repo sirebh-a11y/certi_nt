@@ -493,6 +493,17 @@ class DocumentSideFieldsConfirmRequest(BaseModel):
         return {key: normalize_optional_text(item) for key, item in value.items()}
 
 
+class ManualDocumentRowCreateRequest(BaseModel):
+    side: DocumentSide
+    fornitore_id: int = Field(gt=0)
+    fields: dict[str, str | None] = Field(default_factory=dict)
+
+    @field_validator("fields")
+    @classmethod
+    def normalize_fields(cls, value: dict[str, str | None]) -> dict[str, str | None]:
+        return {key: normalize_optional_text(item) for key, item in value.items()}
+
+
 class DocumentMatchDetachRequest(BaseModel):
     motivo_breve: str | None = Field(default=None, max_length=255)
 
@@ -645,6 +656,13 @@ class AcquisitionRowListItemResponse(BaseModel):
     ddt_missing_fields: list[str]
     created_at: datetime
     updated_at: datetime
+
+
+class ManualDocumentUploadResponse(BaseModel):
+    document: DocumentDetailResponse
+    reused_existing: bool = False
+    rows: list[AcquisitionRowListItemResponse] = Field(default_factory=list)
+    message: str | None = None
 
 
 class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):

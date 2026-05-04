@@ -37,6 +37,8 @@ from app.modules.acquisition.schemas import (
     DocumentPageResponse,
     DocumentResponse,
     DocumentSplitRowsCreateResponse,
+    ManualDocumentRowCreateRequest,
+    ManualDocumentUploadResponse,
     MatchResponse,
     MatchUpsertRequest,
     NoteOverlayPreviewResponse,
@@ -53,6 +55,7 @@ from app.modules.acquisition.service import (
     get_autonomous_run,
     create_acquisition_row,
     create_document,
+    create_manual_document_row,
     create_document_page,
     create_rows_from_document_split_plan,
     capture_chemistry_value_from_page,
@@ -95,6 +98,7 @@ from app.modules.acquisition.service import (
     start_autonomous_run,
     build_ddt_link_preview_from_certificate_row,
     upload_document,
+    upload_or_reuse_manual_document,
     upload_documents_batch,
     upsert_match,
     upsert_read_value,
@@ -207,6 +211,23 @@ def upload_document_route(
     )
 
 
+@router.post("/documents/manual-ddt-upload", response_model=ManualDocumentUploadResponse)
+def upload_or_reuse_manual_ddt_document_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    file: UploadFile = File(...),
+    fornitore_id: int = Form(...),
+) -> ManualDocumentUploadResponse:
+    return upload_or_reuse_manual_document(
+        db=db,
+        tipo_documento="ddt",
+        uploaded_file=file,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        fornitore_id=fornitore_id,
+    )
+
+
 @router.post("/documents/upload-batch", response_model=DocumentBatchUploadResponse)
 def upload_documents_batch_route(
     current_user: CurrentUser,
@@ -257,6 +278,23 @@ def create_document_split_rows_route(
     return create_rows_from_document_split_plan(
         db=db,
         document=document,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+    )
+
+
+@router.post("/documents/{document_id}/manual-row", response_model=AcquisitionRowDetailResponse)
+def create_manual_document_row_route(
+    document_id: int,
+    payload: ManualDocumentRowCreateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    document = get_document(db, document_id)
+    return create_manual_document_row(
+        db=db,
+        document=document,
+        payload=payload,
         actor_id=current_user.id,
         actor_email=current_user.email,
     )
