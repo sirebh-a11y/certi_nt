@@ -465,7 +465,7 @@ function addPropertyRow() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Standards</p>
           <h2 className="mt-2 text-2xl font-semibold">Standard chimici e meccanici</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Archivio propedeutico: condizioni di validità, limiti chimici e proprietà per range. Nessun confronto automatico viene eseguito qui.
+            Condizioni di validità, limiti chimici e proprietà.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">

@@ -79,7 +79,6 @@ export default function AcquisitionUploadPage() {
   const [certificateFiles, setCertificateFiles] = useState([]);
   const [processingDdt, setProcessingDdt] = useState(false);
   const [processingCertificates, setProcessingCertificates] = useState(false);
-  const [startingRun, setStartingRun] = useState(false);
   const [startingAiRun, setStartingAiRun] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -87,10 +86,7 @@ export default function AcquisitionUploadPage() {
   const [certificateResult, setCertificateResult] = useState(null);
   const [sessionDdtDocuments, setSessionDdtDocuments] = useState([]);
   const [sessionCertificateDocuments, setSessionCertificateDocuments] = useState([]);
-  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [currentRun, setCurrentRun] = useState(null);
-  const [lastStartedSignature, setLastStartedSignature] = useState("");
-  const [activeRunChecked, setActiveRunChecked] = useState(false);
 
   const ddtCount = useMemo(() => ddtFiles.length, [ddtFiles]);
   const certificateCount = useMemo(() => certificateFiles.length, [certificateFiles]);
@@ -103,11 +99,6 @@ export default function AcquisitionUploadPage() {
     setCertificateFiles((current) => mergeSelectedFiles(current, incomingFiles));
   }
 
-  const automationSignature = useMemo(() => {
-    const ddtIds = sessionDdtDocuments.map((item) => item.id).join(",");
-    const certificateIds = sessionCertificateDocuments.map((item) => item.id).join(",");
-    return `${ddtIds}|${certificateIds}`;
-  }, [sessionCertificateDocuments, sessionDdtDocuments]);
   const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
 
   function handleRequestError(requestError) {
@@ -129,7 +120,6 @@ export default function AcquisitionUploadPage() {
       setSessionDdtDocuments(documents.filter((item) => item.tipo_documento === "ddt"));
       setSessionCertificateDocuments(documents.filter((item) => item.tipo_documento === "certificato"));
       if (batchId && documents.length) {
-        setAutoStartEnabled(false);
         setNotice("Hai un batch temporaneo aperto: puoi continuare oppure scartarlo.");
       }
     } catch (requestError) {
@@ -170,8 +160,6 @@ export default function AcquisitionUploadPage() {
     } catch (requestError) {
       handleRequestError(requestError);
       return null;
-    } finally {
-      setActiveRunChecked(true);
     }
   }
 
@@ -228,14 +216,13 @@ export default function AcquisitionUploadPage() {
     }
   }
 
-  async function startAutomationRun(signature = automationSignature, useAiIntervention = false) {
+  async function startAutomationRun() {
     if (!hasAutomationDocuments) {
       setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
       return;
     }
 
-    const setStarting = useAiIntervention ? setStartingAiRun : setStartingRun;
-    setStarting(true);
+    setStartingAiRun(true);
     setError("");
     try {
       const run = await apiRequest(
@@ -246,13 +233,12 @@ export default function AcquisitionUploadPage() {
             ddt_document_ids: sessionDdtDocuments.map((item) => item.id),
             certificate_document_ids: sessionCertificateDocuments.map((item) => item.id),
             usa_ddt_vision: true,
-            usa_intervento_ai: useAiIntervention,
+            usa_intervento_ai: true,
           }),
         },
         token,
       );
       setCurrentRun(run);
-      setLastStartedSignature(signature);
       setUploadBatchId("");
     } catch (requestError) {
       const message = requestError?.message || "Request failed";
@@ -264,7 +250,7 @@ export default function AcquisitionUploadPage() {
       }
       handleRequestError(requestError);
     } finally {
-      setStarting(false);
+      setStartingAiRun(false);
     }
   }
 
@@ -287,7 +273,6 @@ export default function AcquisitionUploadPage() {
     let cancelled = false;
 
     async function initializeActiveRun() {
-      setActiveRunChecked(false);
       try {
         const run = await apiRequest("/acquisition/automation/runs/active", {}, token);
         if (cancelled) {
@@ -300,10 +285,6 @@ export default function AcquisitionUploadPage() {
       } catch (requestError) {
         if (!cancelled) {
           handleRequestError(requestError);
-        }
-      } finally {
-        if (!cancelled) {
-          setActiveRunChecked(true);
         }
       }
     }
@@ -333,20 +314,6 @@ export default function AcquisitionUploadPage() {
       window.clearInterval(intervalId);
     };
   }, [currentRun, token]);
-
-  useEffect(() => {
-    const hasRunningRun = currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato);
-    if (!activeRunChecked || !autoStartEnabled || hasRunningRun || startingRun || startingAiRun) {
-      return;
-    }
-    if (!hasAutomationDocuments) {
-      return;
-    }
-    if (!automationSignature || automationSignature === lastStartedSignature) {
-      return;
-    }
-    startAutomationRun(automationSignature);
-  }, [activeRunChecked, autoStartEnabled, automationSignature, currentRun, hasAutomationDocuments, lastStartedSignature, startingAiRun, startingRun]);
 
   return (
     <section className="space-y-4">
@@ -400,104 +367,91 @@ export default function AcquisitionUploadPage() {
           />
         </div>
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr,0.85fr]">
-          <div className="rounded-2xl border border-border bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Documenti pronti</h3>
-                <p className="mt-1 text-sm text-slate-500">Tipo reale riconosciuto e fornitore dove disponibile.</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-xs text-slate-500">
-                  {sessionDdtDocuments.length} DDT · {sessionCertificateDocuments.length} certificati
-                </div>
-                {uploadBatchId ? (
-                  <button
-                    className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                    onClick={discardCurrentBatch}
-                    type="button"
-                  >
-                    Scarta batch
-                  </button>
-                ) : null}
-              </div>
+        <div className="mt-4 rounded-2xl border border-border bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Documenti pronti</h3>
+              <p className="mt-1 text-sm text-slate-500">Tipo reale riconosciuto e fornitore dove disponibile.</p>
             </div>
-
-            {uploadBatchId ? <div className="mt-3 text-xs text-slate-500">Batch corrente: {uploadBatchId}</div> : null}
-
-            <div className="mt-4 grid gap-4 xl:grid-cols-2">
-              <DocumentTable emptyLabel="Nessun DDT pronto." items={sessionDdtDocuments} title="DDT pronti" />
-              <DocumentTable emptyLabel="Nessun certificato pronto." items={sessionCertificateDocuments} title="Certificati pronti" />
+            <div className="flex items-center gap-3">
+              <div className="text-xs text-slate-500">
+                {sessionDdtDocuments.length} DDT · {sessionCertificateDocuments.length} certificati
+              </div>
+              {uploadBatchId ? (
+                <button
+                  className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                  onClick={discardCurrentBatch}
+                  type="button"
+                >
+                  Scarta batch
+                </button>
+              ) : null}
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-white p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">3. Lavorazione automatica</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Usa i documenti pronti del batch corrente che vedi qui sopra.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input checked={autoStartEnabled} className="h-4 w-4 accent-teal-700" onChange={(event) => setAutoStartEnabled(event.target.checked)} type="checkbox" />
-                Avvio automatico
-              </label>
-            </div>
+          {uploadBatchId ? <div className="mt-3 text-xs text-slate-500">Batch corrente: {uploadBatchId}</div> : null}
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-                disabled={startingRun || startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
-                onClick={() => startAutomationRun(automationSignature)}
-                type="button"
-              >
-                {startingRun ? "Avvio..." : "Avvia lavorazione"}
-              </button>
-              <button
-                className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
-                disabled={startingRun || startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
-                onClick={() => startAutomationRun(automationSignature, true)}
-                type="button"
-              >
-                <MaskedAiIcon />
-                <span className="flex flex-col">
-                  <span className="text-base font-semibold leading-tight">{startingAiRun ? "AI processing..." : "AI Intervention"}</span>
-                  <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <DocumentTable emptyLabel="Nessun DDT pronto." items={sessionDdtDocuments} title="DDT pronti" />
+            <DocumentTable emptyLabel="Nessun certificato pronto." items={sessionCertificateDocuments} title="Certificati pronti" />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-border bg-white p-4">
+          <div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">3. Lavorazione automatica</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Usa i documenti pronti del batch corrente che vedi qui sopra.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
+              disabled={startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
+              onClick={startAutomationRun}
+              type="button"
+            >
+              <MaskedAiIcon />
+              <span className="flex flex-col">
+                <span className="text-base font-semibold leading-tight">
+                  {startingAiRun ? "Avvio lettura intelligente..." : "Avvia lettura intelligente dei documenti"}
                 </span>
-              </button>
-              <span className="self-center text-xs text-slate-500">Vision DDT viene usata quando disponibile.</span>
+                <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
+              </span>
+            </button>
+          </div>
+
+          <div className={`mt-4 rounded-2xl border p-4 ${runStateClasses(currentRun)}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.16em]">Run</div>
+                <div className="mt-1 text-lg font-semibold">{currentRun ? `#${currentRun.id}` : "-"}</div>
+                <div className="mt-1 text-sm">{runStateLabel(currentRun)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-semibold">{runProgress(currentRun)}%</div>
+                <div className="text-xs opacity-80">
+                  {currentRun ? `${currentRun.righe_processate}/${currentRun.totale_righe_target}` : "0/0"} righe
+                </div>
+              </div>
             </div>
 
-            <div className={`mt-4 rounded-2xl border p-4 ${runStateClasses(currentRun)}`}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em]">Run</div>
-                  <div className="mt-1 text-lg font-semibold">{currentRun ? `#${currentRun.id}` : "-"}</div>
-                  <div className="mt-1 text-sm">{runStateLabel(currentRun)}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-semibold">{runProgress(currentRun)}%</div>
-                  <div className="text-xs opacity-80">
-                    {currentRun ? `${currentRun.righe_processate}/${currentRun.totale_righe_target}` : "0/0"} righe
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/60">
-                <div className="h-full rounded-full bg-current transition-all duration-300" style={{ width: `${runProgress(currentRun)}%` }} />
-              </div>
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <RunStat label="Match proposti" value={currentRun?.match_proposti || 0} />
-                <RunStat label="Note rilevate" value={currentRun?.note_rilevate || 0} />
-                <RunStat label="Chimica" value={currentRun?.chimica_rilevata || 0} />
-                <RunStat label="Proprietà" value={currentRun?.proprieta_rilevate || 0} />
-              </div>
-
-              {currentRun?.messaggio_corrente ? <div className="mt-3 text-sm opacity-90">{currentRun.messaggio_corrente}</div> : null}
-              {currentRun?.ultimo_errore ? <div className="mt-2 text-sm text-rose-700">Errore: {currentRun.ultimo_errore}</div> : null}
+            <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/60">
+              <div className="h-full rounded-full bg-current transition-all duration-300" style={{ width: `${runProgress(currentRun)}%` }} />
             </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <RunStat label="Match proposti" value={currentRun?.match_proposti || 0} />
+              <RunStat label="Note rilevate" value={currentRun?.note_rilevate || 0} />
+              <RunStat label="Chimica" value={currentRun?.chimica_rilevata || 0} />
+              <RunStat label="Proprietà" value={currentRun?.proprieta_rilevate || 0} />
+            </div>
+
+            {currentRun?.messaggio_corrente ? <div className="mt-3 text-sm opacity-90">{currentRun.messaggio_corrente}</div> : null}
+            {currentRun?.ultimo_errore ? <div className="mt-2 text-sm text-rose-700">Errore: {currentRun.ultimo_errore}</div> : null}
           </div>
         </div>
       </div>
