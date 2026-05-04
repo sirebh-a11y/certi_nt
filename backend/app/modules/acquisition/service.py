@@ -3995,6 +3995,7 @@ def upload_or_reuse_manual_document(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Il file esiste gia ma risulta {document.tipo_documento}, non {tipo_documento}",
             )
+        document = _detach_manual_document_from_upload_batch(db, document)
         rows = _manual_document_linked_rows(db, document=document, side=tipo_documento)
         if document.fornitore_id is None or (document.fornitore_id != supplier.id and not rows):
             document.fornitore_id = supplier.id
@@ -4025,16 +4026,30 @@ def upload_or_reuse_manual_document(
     )
     document = get_document(db, uploaded.id)
     if document.tipo_documento != tipo_documento:
+        if document.stato_upload == "temporaneo":
+            _delete_temporary_documents_by_ids(db, actor_id=actor_id, document_ids=[document.id])
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Il file caricato risulta {document.tipo_documento}, non {tipo_documento}",
         )
+    document = _detach_manual_document_from_upload_batch(db, document)
     return ManualDocumentUploadResponse(
         document=serialize_document_detail(document),
         reused_existing=False,
         rows=[],
         message="PDF caricato. Ora puoi creare una o piu righe da questo documento.",
     )
+
+
+def _detach_manual_document_from_upload_batch(db: Session, document: Document) -> Document:
+    if document.stato_upload == "persistente" and document.upload_batch_id is None and document.scadenza_batch is None:
+        return document
+    document.stato_upload = "persistente"
+    document.upload_batch_id = None
+    document.scadenza_batch = None
+    db.add(document)
+    db.commit()
+    return get_document(db, document.id)
 
 
 def _manual_document_linked_rows(
