@@ -84,7 +84,7 @@ function buildRangeLabel(minValue, maxValue) {
     return `<= ${maxText}`;
   }
   if (minText) {
-    return `>= ${minText}`;
+    return `> ${minText}`;
   }
   return null;
 }
@@ -651,7 +651,11 @@ function addPropertyRow() {
             </div>
           </EditableSection>
 
-          <EditableSection title="Proprietà per range" description="Ogni riga rappresenta un valore valido per il range di diametro/spessore indicato." onAdd={addPropertyRow}>
+          <EditableSection
+            title="Proprietà per range"
+            description="Ogni riga rappresenta un valore valido per il range di diametro/spessore indicato. Regola Excel: limite basso escluso, limite alto incluso."
+            onAdd={addPropertyRow}
+          >
             <div className="overflow-auto rounded-xl border border-slate-200">
               <table className="min-w-[980px] divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50">
