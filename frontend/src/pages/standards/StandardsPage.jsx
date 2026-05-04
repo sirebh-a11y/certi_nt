@@ -21,7 +21,28 @@ const EMPTY_STANDARD = {
   properties: [],
 };
 
-const CHEMISTRY_ELEMENTS = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Pb"];
+const CHEMISTRY_ELEMENTS = [
+  "Si",
+  "Fe",
+  "Cu",
+  "Mn",
+  "Mg",
+  "Cr",
+  "Ni",
+  "Zn",
+  "Ti",
+  "Cd",
+  "Hg",
+  "Pb",
+  "V",
+  "Bi",
+  "Sn",
+  "Zr",
+  "Be",
+  "Zr+Ti",
+  "Mn+Cr",
+  "Bi+Pb",
+];
 const PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%"];
 
 function textValue(value) {
@@ -39,6 +60,128 @@ function parseOptionalNumber(value) {
   }
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function cloneEmptyStandard() {
+  return {
+    ...EMPTY_STANDARD,
+    chemistry: [],
+    properties: [],
+  };
+}
+
+function normalizeDecimalText(value) {
+  return String(value ?? "").trim().replace(".", ",");
+}
+
+function buildRangeLabel(minValue, maxValue) {
+  const minText = normalizeDecimalText(minValue);
+  const maxText = normalizeDecimalText(maxValue);
+  if (minText && maxText) {
+    return `${minText} - ${maxText}`;
+  }
+  if (maxText) {
+    return `<= ${maxText}`;
+  }
+  if (minText) {
+    return `>= ${minText}`;
+  }
+  return null;
+}
+
+function isOptionalNumberText(value) {
+  const cleaned = String(value ?? "").trim();
+  return !cleaned || /^-?\d+(?:[,.]\d+)?$/.test(cleaned);
+}
+
+function isChanged(currentValue, savedValue) {
+  return textValue(currentValue) !== textValue(savedValue);
+}
+
+function inputStateClass({ changed = false, invalid = false } = {}) {
+  if (invalid) {
+    return "border-rose-300 bg-rose-50 text-rose-900";
+  }
+  if (changed) {
+    return "border-amber-300 bg-amber-50 text-ink";
+  }
+  return "border-slate-200 bg-slate-50 text-ink";
+}
+
+function validateDraft(draft) {
+  const errors = [];
+  const seenElements = new Map();
+
+  draft.chemistry.forEach((entry, index) => {
+    const element = entry.elemento.trim();
+    if (!element) {
+      errors.push(`Chimica riga ${index + 1}: seleziona un elemento.`);
+      return;
+    }
+    seenElements.set(element, [...(seenElements.get(element) || []), index + 1]);
+
+    if (!isOptionalNumberText(entry.min_value) || !isOptionalNumberText(entry.max_value)) {
+      errors.push(`Chimica ${element}: usa numeri con virgola, esempio 0,25.`);
+      return;
+    }
+
+    const minValue = parseOptionalNumber(entry.min_value);
+    const maxValue = parseOptionalNumber(entry.max_value);
+    if (minValue !== null && maxValue !== null && minValue > maxValue) {
+      errors.push(`Chimica ${element}: il minimo non può essere maggiore del massimo.`);
+    }
+  });
+
+  seenElements.forEach((rows, element) => {
+    if (rows.length > 1) {
+      errors.push(`Chimica ${element}: elemento duplicato nelle righe ${rows.join(", ")}.`);
+    }
+  });
+
+  const seenProperties = new Map();
+  draft.properties.forEach((entry, index) => {
+    const field = entry.proprieta.trim();
+    if (!field) {
+      errors.push(`Proprieta riga ${index + 1}: seleziona un campo.`);
+      return;
+    }
+
+    const numericFields = [
+      ["Da", entry.misura_min],
+      ["A", entry.misura_max],
+      ["Min", entry.min_value],
+      ["Max", entry.max_value],
+    ];
+    const invalidNumber = numericFields.find(([, value]) => !isOptionalNumberText(value));
+    if (invalidNumber) {
+      errors.push(`Proprieta ${field}: il campo ${invalidNumber[0]} deve essere un numero con virgola, esempio 260,5.`);
+      return;
+    }
+
+    const measureMin = parseOptionalNumber(entry.misura_min);
+    const measureMax = parseOptionalNumber(entry.misura_max);
+    if (measureMin !== null && measureMax !== null && measureMin > measureMax) {
+      errors.push(`Proprieta ${field}: il campo Da non puo essere maggiore del campo A.`);
+    }
+
+    const minValue = parseOptionalNumber(entry.min_value);
+    const maxValue = parseOptionalNumber(entry.max_value);
+    if (minValue !== null && maxValue !== null && minValue > maxValue) {
+      errors.push(`Proprieta ${field}: il minimo non puo essere maggiore del massimo.`);
+    }
+
+    const duplicateKey = [field, normalizeDecimalText(entry.misura_min), normalizeDecimalText(entry.misura_max)].join("|");
+    seenProperties.set(duplicateKey, [...(seenProperties.get(duplicateKey) || []), index + 1]);
+  });
+
+  seenProperties.forEach((rows, key) => {
+    const [field] = key.split("|");
+    if (rows.length > 1) {
+      errors.push(`Proprieta ${field}: riga duplicata nelle righe ${rows.join(", ")}.`);
+    }
+  });
+
+  return errors;
 }
 
 function hydrateDraft(item) {
@@ -101,11 +244,10 @@ function serializeDraft(draft) {
     properties: draft.properties
       .filter((entry) => entry.proprieta.trim())
       .map((entry) => ({
-        categoria: entry.categoria.trim() || "meccanica",
         proprieta: entry.proprieta.trim(),
         misura_min: parseOptionalNumber(entry.misura_min),
         misura_max: parseOptionalNumber(entry.misura_max),
-        range_label: entry.range_label.trim() || null,
+        range_label: buildRangeLabel(entry.misura_min, entry.misura_max),
         min_value: parseOptionalNumber(entry.min_value),
         max_value: parseOptionalNumber(entry.max_value),
       })),
@@ -136,7 +278,8 @@ export default function StandardsPage() {
   const { token } = useAuth();
   const [items, setItems] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [draft, setDraft] = useState(EMPTY_STANDARD);
+  const [draft, setDraft] = useState(cloneEmptyStandard);
+  const [savedDraft, setSavedDraft] = useState(cloneEmptyStandard);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -157,7 +300,9 @@ export default function StandardsPage() {
       setSelectedId(resolvedId);
       const selected = data.items?.find((item) => item.id === resolvedId);
       if (selected) {
-        setDraft(hydrateDraft(selected));
+        const hydrated = hydrateDraft(selected);
+        setDraft(hydrated);
+        setSavedDraft(hydrated);
       }
     } catch (requestError) {
       setError(requestError.message);
@@ -180,9 +325,31 @@ export default function StandardsPage() {
     );
   }, [filter, items]);
 
+  const duplicatePropertyRows = useMemo(() => {
+    const rowsByKey = new Map();
+    draft.properties.forEach((entry, index) => {
+      const field = entry.proprieta.trim();
+      if (!field) {
+        return;
+      }
+      const duplicateKey = [field, normalizeDecimalText(entry.misura_min), normalizeDecimalText(entry.misura_max)].join("|");
+      rowsByKey.set(duplicateKey, [...(rowsByKey.get(duplicateKey) || []), index]);
+    });
+
+    const duplicates = new Set();
+    rowsByKey.forEach((rows) => {
+      if (rows.length > 1) {
+        rows.forEach((index) => duplicates.add(index));
+      }
+    });
+    return duplicates;
+  }, [draft.properties]);
+
   function selectItem(item) {
     setSelectedId(item.id);
-    setDraft(hydrateDraft(item));
+    const hydrated = hydrateDraft(item);
+    setDraft(hydrated);
+    setSavedDraft(hydrated);
     setError("");
     setStatusMessage("");
   }
@@ -198,6 +365,24 @@ export default function StandardsPage() {
     }));
   }
 
+  function normalizeChemistryNumber(index, field) {
+    setDraft((current) => ({
+      ...current,
+      chemistry: current.chemistry.map((entry, entryIndex) =>
+        entryIndex === index ? { ...entry, [field]: normalizeDecimalText(entry[field]) } : entry,
+      ),
+    }));
+  }
+
+  function normalizePropertyNumber(index, field) {
+    setDraft((current) => ({
+      ...current,
+      properties: current.properties.map((entry, entryIndex) =>
+        entryIndex === index ? { ...entry, [field]: normalizeDecimalText(entry[field]) } : entry,
+      ),
+    }));
+  }
+
   function updateProperty(index, field, value) {
     setDraft((current) => ({
       ...current,
@@ -208,6 +393,10 @@ export default function StandardsPage() {
   function addChemistryRow() {
     const used = new Set(draft.chemistry.map((entry) => entry.elemento));
     const firstFree = CHEMISTRY_ELEMENTS.find((element) => !used.has(element)) || "";
+    if (!firstFree) {
+      setStatusMessage("Tutti gli elementi chimici disponibili sono gia presenti nello standard.");
+      return;
+    }
     setDraft((current) => ({
       ...current,
       chemistry: [...current.chemistry, { elemento: firstFree, min_value: "", max_value: "" }],
@@ -220,7 +409,6 @@ function addPropertyRow() {
       properties: [
         ...current.properties,
         {
-          categoria: "meccanica",
           proprieta: PROPERTY_FIELDS[0],
           misura_min: "",
           misura_max: "",
@@ -242,6 +430,12 @@ function addPropertyRow() {
 
   async function handleSave(event) {
     event.preventDefault();
+    const validationErrors = validateDraft(draft);
+    if (validationErrors.length) {
+      setError(validationErrors[0]);
+      setStatusMessage("");
+      return;
+    }
     setSaving(true);
     setError("");
     setStatusMessage("");
@@ -279,7 +473,9 @@ function addPropertyRow() {
             className="rounded-xl border border-border bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             onClick={() => {
               setSelectedId(null);
-              setDraft(EMPTY_STANDARD);
+              const emptyDraft = cloneEmptyStandard();
+              setDraft(emptyDraft);
+              setSavedDraft(emptyDraft);
               setStatusMessage("");
               setError("");
             }}
@@ -294,7 +490,9 @@ function addPropertyRow() {
               const selected = items.find((item) => item.id === selectedId);
               if (selected) {
                 setSelectedId(null);
-                setDraft(buildDuplicate(selected));
+                const duplicateDraft = buildDuplicate(selected);
+                setDraft(duplicateDraft);
+                setSavedDraft(cloneEmptyStandard());
               }
             }}
             type="button"
@@ -385,16 +583,60 @@ function addPropertyRow() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {draft.chemistry.map((entry, index) => (
+                  {draft.chemistry.map((entry, index) => {
+                    const original = savedDraft.chemistry[index] || {};
+                    const duplicateElement =
+                      entry.elemento &&
+                      draft.chemistry.some((otherEntry, otherIndex) => otherIndex !== index && otherEntry.elemento === entry.elemento);
+                    const minInvalid = !isOptionalNumberText(entry.min_value);
+                    const maxInvalid = !isOptionalNumberText(entry.max_value);
+                    const minValue = parseOptionalNumber(entry.min_value);
+                    const maxValue = parseOptionalNumber(entry.max_value);
+                    const rangeInvalid = minValue !== null && maxValue !== null && minValue > maxValue;
+                    return (
                     <tr key={`${entry.elemento}-${index}`}>
                       <td className="px-3 py-2">
-                        <input className="w-24 rounded-lg border border-slate-200 px-3 py-2" value={entry.elemento} onChange={(event) => updateChemistry(index, "elemento", event.target.value)} />
+                        <select
+                          className={`w-28 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.elemento, original.elemento),
+                            invalid: duplicateElement,
+                          })}`}
+                          value={entry.elemento}
+                          onChange={(event) => updateChemistry(index, "elemento", event.target.value)}
+                        >
+                          {CHEMISTRY_ELEMENTS.map((element) => {
+                            const usedByOther = draft.chemistry.some(
+                              (otherEntry, otherIndex) => otherIndex !== index && otherEntry.elemento === element,
+                            );
+                            return (
+                              <option disabled={usedByOther} key={element} value={element}>
+                                {element}
+                              </option>
+                            );
+                          })}
+                        </select>
                       </td>
                       <td className="px-3 py-2">
-                        <input className="w-28 rounded-lg border border-slate-200 px-3 py-2" value={entry.min_value} onChange={(event) => updateChemistry(index, "min_value", event.target.value)} />
+                        <input
+                          className={`w-28 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.min_value, original.min_value),
+                            invalid: minInvalid || rangeInvalid,
+                          })}`}
+                          onBlur={() => normalizeChemistryNumber(index, "min_value")}
+                          onChange={(event) => updateChemistry(index, "min_value", event.target.value)}
+                          value={entry.min_value}
+                        />
                       </td>
                       <td className="px-3 py-2">
-                        <input className="w-28 rounded-lg border border-slate-200 px-3 py-2" value={entry.max_value} onChange={(event) => updateChemistry(index, "max_value", event.target.value)} />
+                        <input
+                          className={`w-28 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.max_value, original.max_value),
+                            invalid: maxInvalid || rangeInvalid,
+                          })}`}
+                          onBlur={() => normalizeChemistryNumber(index, "max_value")}
+                          onChange={(event) => updateChemistry(index, "max_value", event.target.value)}
+                          value={entry.max_value}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <button className="text-xs font-semibold text-rose-600" onClick={() => removeChemistryRow(index)} type="button">
@@ -402,7 +644,8 @@ function addPropertyRow() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -415,7 +658,6 @@ function addPropertyRow() {
                   <tr>
                     <th className="px-3 py-2 text-left">Da</th>
                     <th className="px-3 py-2 text-left">A</th>
-                    <th className="px-3 py-2 text-left">Range</th>
                     <th className="px-3 py-2 text-left">Campo</th>
                     <th className="px-3 py-2 text-left">Min</th>
                     <th className="px-3 py-2 text-left">Max</th>
@@ -423,20 +665,49 @@ function addPropertyRow() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {draft.properties.map((entry, index) => (
-                    <tr key={`${entry.proprieta}-${entry.range_label}-${index}`}>
+                  {draft.properties.map((entry, index) => {
+                    const original = savedDraft.properties[index] || {};
+                    const measureMinInvalid = !isOptionalNumberText(entry.misura_min);
+                    const measureMaxInvalid = !isOptionalNumberText(entry.misura_max);
+                    const propertyMinInvalid = !isOptionalNumberText(entry.min_value);
+                    const propertyMaxInvalid = !isOptionalNumberText(entry.max_value);
+                    const measureMin = parseOptionalNumber(entry.misura_min);
+                    const measureMax = parseOptionalNumber(entry.misura_max);
+                    const propertyMin = parseOptionalNumber(entry.min_value);
+                    const propertyMax = parseOptionalNumber(entry.max_value);
+                    const measureRangeInvalid = measureMin !== null && measureMax !== null && measureMin > measureMax;
+                    const propertyRangeInvalid = propertyMin !== null && propertyMax !== null && propertyMin > propertyMax;
+                    const duplicateProperty = duplicatePropertyRows.has(index);
+                    return (
+                    <tr key={`property-${index}`}>
                       <td className="px-3 py-2">
-                        <input className="w-24 rounded-lg border border-slate-200 px-3 py-2" value={entry.misura_min} onChange={(event) => updateProperty(index, "misura_min", event.target.value)} />
+                        <input
+                          className={`w-24 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.misura_min, original.misura_min),
+                            invalid: measureMinInvalid || measureRangeInvalid || duplicateProperty,
+                          })}`}
+                          onBlur={() => normalizePropertyNumber(index, "misura_min")}
+                          onChange={(event) => updateProperty(index, "misura_min", event.target.value)}
+                          value={entry.misura_min}
+                        />
                       </td>
                       <td className="px-3 py-2">
-                        <input className="w-24 rounded-lg border border-slate-200 px-3 py-2" value={entry.misura_max} onChange={(event) => updateProperty(index, "misura_max", event.target.value)} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input className="w-32 rounded-lg border border-slate-200 px-3 py-2" value={entry.range_label} onChange={(event) => updateProperty(index, "range_label", event.target.value)} />
+                        <input
+                          className={`w-24 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.misura_max, original.misura_max),
+                            invalid: measureMaxInvalid || measureRangeInvalid || duplicateProperty,
+                          })}`}
+                          onBlur={() => normalizePropertyNumber(index, "misura_max")}
+                          onChange={(event) => updateProperty(index, "misura_max", event.target.value)}
+                          value={entry.misura_max}
+                        />
                       </td>
                       <td className="px-3 py-2">
                         <select
-                          className="w-28 rounded-lg border border-slate-200 px-3 py-2"
+                          className={`w-28 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.proprieta, original.proprieta),
+                            invalid: duplicateProperty,
+                          })}`}
                           value={entry.proprieta}
                           onChange={(event) => updateProperty(index, "proprieta", event.target.value)}
                         >
@@ -448,10 +719,26 @@ function addPropertyRow() {
                         </select>
                       </td>
                       <td className="px-3 py-2">
-                        <input className="w-24 rounded-lg border border-slate-200 px-3 py-2" value={entry.min_value} onChange={(event) => updateProperty(index, "min_value", event.target.value)} />
+                        <input
+                          className={`w-24 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.min_value, original.min_value),
+                            invalid: propertyMinInvalid || propertyRangeInvalid,
+                          })}`}
+                          onBlur={() => normalizePropertyNumber(index, "min_value")}
+                          onChange={(event) => updateProperty(index, "min_value", event.target.value)}
+                          value={entry.min_value}
+                        />
                       </td>
                       <td className="px-3 py-2">
-                        <input className="w-24 rounded-lg border border-slate-200 px-3 py-2" value={entry.max_value} onChange={(event) => updateProperty(index, "max_value", event.target.value)} />
+                        <input
+                          className={`w-24 rounded-lg border px-3 py-2 ${inputStateClass({
+                            changed: isChanged(entry.max_value, original.max_value),
+                            invalid: propertyMaxInvalid || propertyRangeInvalid,
+                          })}`}
+                          onBlur={() => normalizePropertyNumber(index, "max_value")}
+                          onChange={(event) => updateProperty(index, "max_value", event.target.value)}
+                          value={entry.max_value}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <button className="text-xs font-semibold text-rose-600" onClick={() => removePropertyRow(index)} type="button">
@@ -459,7 +746,8 @@ function addPropertyRow() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
