@@ -10,7 +10,8 @@ const navItems = [
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
   { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
   { label: "Reparti", to: "/departments", roles: ["admin"] },
-  { label: "Note", to: "/notes", roles: ["admin"] },
+  { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },
+  { label: "Note", to: "/notes", roles: ["user", "manager", "admin"] },
   { label: "Log", to: "/logs", roles: ["manager", "admin"] },
 ];
 

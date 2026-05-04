@@ -1,0 +1,3972 @@
+[
+  {
+    "code": "2014_en_aw_755_2_t6_diametro_1",
+    "lega_base": "2014",
+    "lega_designazione": "2014",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2014",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.5,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.7
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.9,
+        "max_value": 5.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.2,
+        "max_value": 0.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 370.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 415.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 415.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 460.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 465.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 350.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 430.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 320.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 5.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2014_en_aw_603_2_t62_diametro_2",
+    "lega_base": "2014",
+    "lega_designazione": "2014",
+    "variante_lega": null,
+    "norma": "EN AW 603-2",
+    "trattamento_termico": "T62",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2014",
+    "fonte_excel_blocco": "EN AW 603-2, T62 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.5,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.7
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.9,
+        "max_value": 5.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.2,
+        "max_value": 0.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 180.0,
+        "range_label": "<= 180",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 180.0,
+        "range_label": "<= 180",
+        "min_value": 380.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 180.0,
+        "range_label": "<= 180",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2017a_en_aw_755_2_t4_diametro_1",
+    "lega_base": "2017A",
+    "lega_designazione": "2017A",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T4",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2017A",
+    "fonte_excel_blocco": "EN AW 755-2, T4 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.2,
+        "max_value": 0.8
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.7
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.5,
+        "max_value": 4.5
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.4,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 380.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 12.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 270.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 400.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 10.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 390.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 75.0,
+        "misura_max": 150.0,
+        "range_label": "75 - 150",
+        "min_value": 9.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 240.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 370.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 220.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 7.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2024_en_aw_603_2_t4_diametro_1",
+    "lega_base": "2024",
+    "lega_designazione": "2024",
+    "variante_lega": null,
+    "norma": "EN AW 603-2",
+    "trattamento_termico": "T4",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2024",
+    "fonte_excel_blocco": "EN AW 603-2, T4 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.8,
+        "max_value": 4.9
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.3,
+        "max_value": 0.9
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.2,
+        "max_value": 1.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 8.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2024_sigma_lst_05_t4_diametro_1",
+    "lega_base": "2024",
+    "lega_designazione": "2024 Sigma",
+    "variante_lega": "Sigma",
+    "norma": "LST 05",
+    "trattamento_termico": "T4",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2024 Sigma",
+    "fonte_excel_blocco": "LST 05, T4 — misura: `diametro`",
+    "stato_validazione": "da_verificare",
+    "note": "Range non esplicitato nel blocco Excel: verificare prima dell uso operativo.",
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.12
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.8,
+        "max_value": 4.9
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.3,
+        "max_value": 0.9
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.2,
+        "max_value": 1.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.03,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2024_sigma_lst_05_t6_2",
+    "lega_base": "2024",
+    "lega_designazione": "2024 Sigma",
+    "variante_lega": "Sigma",
+    "norma": "LST 05",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": null,
+    "fonte_excel_foglio": "2024 Sigma",
+    "fonte_excel_blocco": "LST 05, T6",
+    "stato_validazione": "da_verificare",
+    "note": "Range non esplicitato nel blocco Excel: verificare prima dell uso operativo.",
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.12
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 3.8,
+        "max_value": 4.9
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.3,
+        "max_value": 0.9
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.2,
+        "max_value": 1.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.03,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 300.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 450.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": null,
+        "range_label": "non esplicitato nel blocco",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2618a_en_aw_755_2_t6_diametro_1",
+    "lega_base": "2618A",
+    "lega_designazione": "2618A",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2618A",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.15,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Fe",
+        "min_value": 0.9,
+        "max_value": 1.4
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.8,
+        "max_value": 2.7
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.2,
+        "max_value": 1.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Ni",
+        "min_value": 0.8,
+        "max_value": 1.4
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 330.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 410.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 7.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "2618a_adixen_en_aw_755_2_t6_diametro_1",
+    "lega_base": "2618A",
+    "lega_designazione": "2618A Adixen",
+    "variante_lega": "Adixen",
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "2618A Adixen",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.15,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Fe",
+        "min_value": 0.9,
+        "max_value": 1.4
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.8,
+        "max_value": 2.7
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.2,
+        "max_value": 1.8
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Ni",
+        "min_value": 0.8,
+        "max_value": 1.4
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.005
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.005
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Bi+Pb",
+        "min_value": null,
+        "max_value": 0.008
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 330.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 410.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 10.0,
+        "range_label": "<= 10",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 10.0,
+        "misura_max": 100.0,
+        "range_label": "10 - 100",
+        "min_value": 7.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "5754_en_aw_755_2_h112_diametro_1",
+    "lega_base": "5754",
+    "lega_designazione": "5754",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "H112",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "5754",
+    "fonte_excel_blocco": "EN AW 755-2, H112 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.6,
+        "max_value": 3.6
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Mn+Cr",
+        "min_value": 0.1,
+        "max_value": 0.6
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 80.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 180.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 14.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 250.0,
+        "range_label": "150 - 250",
+        "min_value": 70.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 250.0,
+        "range_label": "150 - 250",
+        "min_value": 180.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 250.0,
+        "range_label": "150 - 250",
+        "min_value": 13.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6005a_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6005A",
+    "lega_designazione": "6005A",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6005A",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.5,
+        "max_value": 0.9
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.35
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.4,
+        "max_value": 0.7
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Mn+Cr",
+        "min_value": 0.12,
+        "max_value": 0.5
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 225.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 270.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 10.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 50.0,
+        "range_label": "25 - 50",
+        "min_value": 225.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 50.0,
+        "range_label": "25 - 50",
+        "min_value": 270.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 50.0,
+        "range_label": "25 - 50",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 50.0,
+        "misura_max": 100.0,
+        "range_label": "50 - 100",
+        "min_value": 215.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 50.0,
+        "misura_max": 100.0,
+        "range_label": "50 - 100",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 50.0,
+        "misura_max": 100.0,
+        "range_label": "50 - 100",
+        "min_value": 8.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6060_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6060",
+    "lega_designazione": "6060",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6060",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.3,
+        "max_value": 0.6
+      },
+      {
+        "elemento": "Fe",
+        "min_value": 0.1,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.35,
+        "max_value": 0.6
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 150.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 190.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 150.0,
+        "range_label": "<= 150",
+        "min_value": 8.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6082_en_aw_755_2_t6_barre_diametro_1",
+    "lega_base": "6082",
+    "lega_designazione": "6082",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": "BARRE",
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6082",
+    "fonte_excel_blocco": "EN AW 755-2, T6 BARRE — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.7,
+        "max_value": 1.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.6,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 250.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 295.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 310.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 240.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 280.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 200.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 270.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6082_en_aw_755_2_t6_profili_spessore_2",
+    "lega_base": "6082",
+    "lega_designazione": "6082",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": "PROFILI",
+    "misura_tipo": "spessore",
+    "fonte_excel_foglio": "6082",
+    "fonte_excel_blocco": "EN AW 755-2, T6 PROFILI — misura: `spessore`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.7,
+        "max_value": 1.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.6,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 5.0,
+        "range_label": "<= 5",
+        "min_value": 250.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 5.0,
+        "range_label": "<= 5",
+        "min_value": 290.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 5.0,
+        "range_label": "<= 5",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 5.0,
+        "misura_max": 25.0,
+        "range_label": "5 - 25",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 5.0,
+        "misura_max": 25.0,
+        "range_label": "5 - 25",
+        "min_value": 310.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 5.0,
+        "misura_max": 25.0,
+        "range_label": "5 - 25",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6082h_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6082H",
+    "lega_designazione": "6082H",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6082H",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 1.1,
+        "max_value": 1.25
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 0.04,
+        "max_value": 0.08
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.6,
+        "max_value": 0.8
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.75,
+        "max_value": 0.95
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Ti",
+        "min_value": 0.03,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.03
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 340.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 380.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6082l_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6082L",
+    "lega_designazione": "6082L",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6082L",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.7,
+        "max_value": 1.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.6,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.005
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 250.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 295.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 20.0,
+        "range_label": "<= 20",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 260.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 310.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 20.0,
+        "misura_max": 150.0,
+        "range_label": "20 - 150",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 240.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 280.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 200.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 270.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 200.0,
+        "misura_max": 250.0,
+        "range_label": "200 - 250",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6110a_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6110A",
+    "lega_designazione": "6110A",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6110A",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.8,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 0.4,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.4,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.7,
+        "max_value": 0.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.05,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.08,
+        "max_value": 0.14
+      },
+      {
+        "elemento": "Be",
+        "min_value": 0.005,
+        "max_value": 0.006
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.2
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 120.0,
+        "range_label": "<= 120",
+        "min_value": 380.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 120.0,
+        "range_label": "<= 120",
+        "min_value": 410.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 120.0,
+        "range_label": "<= 120",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6182_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6182",
+    "lega_designazione": "6182",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6182",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 0.9,
+        "max_value": 1.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.5,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.7,
+        "max_value": 1.2
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.05,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 9.0,
+        "misura_max": 100.0,
+        "range_label": "9 - 100",
+        "min_value": 330.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 9.0,
+        "misura_max": 100.0,
+        "range_label": "9 - 100",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 9.0,
+        "misura_max": 100.0,
+        "range_label": "9 - 100",
+        "min_value": 9.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 300.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 330.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 220.0,
+        "range_label": "150 - 220",
+        "min_value": 240.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 220.0,
+        "range_label": "150 - 220",
+        "min_value": 280.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 220.0,
+        "range_label": "150 - 220",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "6182_lst07_en_aw_755_2_t6_diametro_1",
+    "lega_base": "6182",
+    "lega_designazione": "6182 LST07",
+    "variante_lega": "LST07",
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "6182 LST07",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": 1.2,
+        "max_value": 1.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 0.04,
+        "max_value": 0.08
+      },
+      {
+        "elemento": "Mn",
+        "min_value": 0.5,
+        "max_value": 0.65
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.75,
+        "max_value": 0.95
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.01
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.01
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.03
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.05,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Be",
+        "min_value": 0.005,
+        "max_value": 0.008
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 340.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 380.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 10.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7003_en_aw_755_2_t6_diametro_1",
+    "lega_base": "7003",
+    "lega_designazione": "7003",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7003",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.35
+      },
+      {
+        "elemento": "Cu",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 0.5,
+        "max_value": 1.0
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.0,
+        "max_value": 6.5
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.05,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 50.0,
+        "range_label": "<= 50",
+        "min_value": 290.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 50.0,
+        "range_label": "<= 50",
+        "min_value": 350.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 50.0,
+        "range_label": "<= 50",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 50.0,
+        "misura_max": 150.0,
+        "range_label": "50 - 150",
+        "min_value": 280.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 50.0,
+        "misura_max": 150.0,
+        "range_label": "50 - 150",
+        "min_value": 340.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 50.0,
+        "misura_max": 150.0,
+        "range_label": "50 - 150",
+        "min_value": 8.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7055_en_aw_755_2_t76_diametro_1",
+    "lega_base": "7055",
+    "lega_designazione": "7055",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T76",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7055",
+    "fonte_excel_blocco": "EN AW 755-2, T76 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 2.0,
+        "max_value": 2.6
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 1.8,
+        "max_value": 2.3
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.04
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 7.6,
+        "max_value": 8.4
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.06
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.08,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 550.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 600.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 8.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7075_en_aw_755_2_t6_diametro_1",
+    "lega_base": "7075",
+    "lega_designazione": "7075",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7075",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.2,
+        "max_value": 2.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.1,
+        "max_value": 2.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.18,
+        "max_value": 0.28
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.1,
+        "max_value": 6.1
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 480.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 540.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 500.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 560.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 550.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 5.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 400.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 5.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7075_en_aw_755_2_t73_diametro_2",
+    "lega_base": "7075",
+    "lega_designazione": "7075",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T73",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7075",
+    "fonte_excel_blocco": "EN AW 755-2, T73 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.2,
+        "max_value": 2.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.1,
+        "max_value": 2.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.18,
+        "max_value": 0.28
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.1,
+        "max_value": 6.1
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 485.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 405.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 475.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 390.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 470.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7075_eppendorf_en_aw_755_2_t6_diametro_1",
+    "lega_base": "7075",
+    "lega_designazione": "7075 Eppendorf",
+    "variante_lega": "Eppendorf",
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7075 Eppendorf",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.2,
+        "max_value": 2.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.1,
+        "max_value": 2.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.18,
+        "max_value": 0.28
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.1,
+        "max_value": 6.1
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 480.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 540.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 500.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 560.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 100.0,
+        "range_label": "25 - 100",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 550.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 5.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 400.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 150.0,
+        "misura_max": 200.0,
+        "range_label": "150 - 200",
+        "min_value": 5.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7075_eppendorf_en_aw_755_2_t73_diametro_2",
+    "lega_base": "7075",
+    "lega_designazione": "7075 Eppendorf",
+    "variante_lega": "Eppendorf",
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T73",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7075 Eppendorf",
+    "fonte_excel_blocco": "EN AW 755-2, T73 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.4
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.5
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.2,
+        "max_value": 2.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.3
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.1,
+        "max_value": 2.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": 0.18,
+        "max_value": 0.28
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.1,
+        "max_value": 6.1
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.25
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr+Ti",
+        "min_value": null,
+        "max_value": 0.25
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 420.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 485.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 25.0,
+        "range_label": "<= 25",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 405.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 475.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 25.0,
+        "misura_max": 75.0,
+        "range_label": "25 - 75",
+        "min_value": 7.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 390.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 470.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 75.0,
+        "misura_max": 100.0,
+        "range_label": "75 - 100",
+        "min_value": 6.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 360.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 440.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": 100.0,
+        "misura_max": 150.0,
+        "range_label": "100 - 150",
+        "min_value": 6.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7150_en_aw_755_2_t76_diametro_1",
+    "lega_base": "7150",
+    "lega_designazione": "7150",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T76",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7150",
+    "fonte_excel_blocco": "EN AW 755-2, T76 — misura: `diametro`",
+    "stato_validazione": "attivo",
+    "note": null,
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.12
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.9,
+        "max_value": 2.5
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.0,
+        "max_value": 2.7
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.04
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.9,
+        "max_value": 6.9
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.06
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": 0.08,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 525.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 580.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 8.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "IACS%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 33.0,
+        "max_value": null
+      }
+    ]
+  },
+  {
+    "code": "7175_en_aw_755_2_t6_diametro_1",
+    "lega_base": "7175",
+    "lega_designazione": "7175",
+    "variante_lega": null,
+    "norma": "EN AW 755-2",
+    "trattamento_termico": "T6",
+    "tipo_prodotto": null,
+    "misura_tipo": "diametro",
+    "fonte_excel_foglio": "7175",
+    "fonte_excel_blocco": "EN AW 755-2, T6 — misura: `diametro`",
+    "stato_validazione": "da_verificare",
+    "note": "Valori meccanici a zero nel documento Excel: standard importato come da verificare.",
+    "chemistry": [
+      {
+        "elemento": "Si",
+        "min_value": null,
+        "max_value": 0.15
+      },
+      {
+        "elemento": "Fe",
+        "min_value": null,
+        "max_value": 0.2
+      },
+      {
+        "elemento": "Cu",
+        "min_value": 1.2,
+        "max_value": 2.0
+      },
+      {
+        "elemento": "Mn",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Mg",
+        "min_value": 2.1,
+        "max_value": 2.9
+      },
+      {
+        "elemento": "Cr",
+        "min_value": null,
+        "max_value": 0.28
+      },
+      {
+        "elemento": "Ni",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zn",
+        "min_value": 5.1,
+        "max_value": 6.1
+      },
+      {
+        "elemento": "Ti",
+        "min_value": null,
+        "max_value": 0.1
+      },
+      {
+        "elemento": "Pb",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "V",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Bi",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Sn",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Zr",
+        "min_value": null,
+        "max_value": 0.05
+      },
+      {
+        "elemento": "Be",
+        "min_value": null,
+        "max_value": 0.05
+      }
+    ],
+    "properties": [
+      {
+        "proprieta": "Rp0.2",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 0.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "Rm",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 0.0,
+        "max_value": null
+      },
+      {
+        "proprieta": "A%",
+        "misura_min": null,
+        "misura_max": 1000.0,
+        "range_label": "<= 1000",
+        "min_value": 0.0,
+        "max_value": null
+      }
+    ]
+  }
+]

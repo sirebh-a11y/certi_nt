@@ -1,0 +1,1 @@
+"""Normative standards module."""

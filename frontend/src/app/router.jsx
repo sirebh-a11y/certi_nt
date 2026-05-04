@@ -18,6 +18,7 @@ import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import NotesPage from "../pages/notes/NotesPage";
+import StandardsPage from "../pages/standards/StandardsPage";
 import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
 import SuppliersListPage from "../pages/suppliers/SuppliersListPage";
@@ -97,11 +98,7 @@ function LogsRoute() {
 }
 
 function NotesRoute() {
-  return (
-    <RoleGuard allowedRoles={["admin"]}>
-      <NotesPage />
-    </RoleGuard>
-  );
+  return <NotesPage />;
 }
 
 export function AppRouter() {
@@ -130,6 +127,7 @@ export function AppRouter() {
           <Route path="/suppliers/new" element={<NewSupplierPage />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
+          <Route path="/standards" element={<StandardsPage />} />
           <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>

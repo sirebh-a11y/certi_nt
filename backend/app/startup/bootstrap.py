@@ -23,6 +23,12 @@ from app.modules.acquisition.models import (  # noqa: F401
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401
 from app.modules.notes.service import seed_note_templates
+from app.modules.standards.models import (  # noqa: F401
+    NormativeStandard,
+    NormativeStandardChemistry,
+    NormativeStandardProperty,
+)
+from app.modules.standards.service import seed_normative_standards
 from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
@@ -37,6 +43,7 @@ def initialize_application() -> None:
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
         seed_note_templates(db)
+        seed_normative_standards(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()
