@@ -37,6 +37,7 @@ from app.modules.acquisition.schemas import (
     DocumentPageResponse,
     DocumentResponse,
     DocumentSplitRowsCreateResponse,
+    DocumentSupplierUpdateRequest,
     ManualDocumentRowCreateRequest,
     ManualDocumentUploadResponse,
     MatchResponse,
@@ -100,6 +101,7 @@ from app.modules.acquisition.service import (
     upload_document,
     upload_or_reuse_manual_document,
     upload_documents_batch,
+    update_document_supplier,
     upsert_match,
     upsert_read_value,
     update_acquisition_row,
@@ -272,6 +274,21 @@ def upload_documents_batch_route(
 @router.get("/documents/{document_id}", response_model=DocumentDetailResponse)
 def get_document_route(document_id: int, _: CurrentUser, db: DbSession) -> DocumentDetailResponse:
     return serialize_document_detail(get_document(db, document_id))
+
+
+@router.patch("/documents/{document_id}/supplier", response_model=DocumentResponse)
+def update_document_supplier_route(
+    document_id: int,
+    payload: DocumentSupplierUpdateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> DocumentResponse:
+    return update_document_supplier(
+        db=db,
+        document=get_document(db, document_id),
+        payload=payload,
+        actor_email=current_user.email,
+    )
 
 
 @router.get("/documents/{document_id}/row-split-plan", response_model=DocumentRowSplitPlanResponse)

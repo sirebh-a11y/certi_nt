@@ -83,6 +83,7 @@ from app.modules.acquisition.schemas import (
     DocumentPageResponse,
     DocumentResponse,
     DocumentSideFieldsConfirmRequest,
+    DocumentSupplierUpdateRequest,
     DocumentSummaryResponse,
     ManualDocumentRowCreateRequest,
     ManualDocumentUploadResponse,
@@ -4039,6 +4040,44 @@ def upload_or_reuse_manual_document(
         rows=[],
         message="PDF caricato. Ora puoi creare una o piu righe da questo documento.",
     )
+
+
+def update_document_supplier(
+    db: Session,
+    *,
+    document: Document,
+    payload: DocumentSupplierUpdateRequest,
+    actor_email: str,
+) -> DocumentResponse:
+    supplier = _get_supplier(db, payload.fornitore_id) if payload.fornitore_id is not None else None
+    if document.fornitore_id == payload.fornitore_id:
+        return serialize_document(document)
+
+    linked_rows_count = (
+        db.query(AcquisitionRow.id)
+        .filter(
+            (AcquisitionRow.document_ddt_id == document.id)
+            | (AcquisitionRow.document_certificato_id == document.id)
+        )
+        .limit(1)
+        .count()
+    )
+    if linked_rows_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Documento gia collegato a righe: modifica il fornitore dalla riga, non dal batch di caricamento.",
+        )
+
+    document.fornitore_id = supplier.id if supplier is not None else None
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    log_service.record(
+        "acquisition",
+        f"Document supplier updated: {document.nome_file_originale} -> {supplier.ragione_sociale if supplier else '-'}",
+        actor_email,
+    )
+    return serialize_document(get_document(db, document.id))
 
 
 def _detach_manual_document_from_upload_batch(db: Session, document: Document) -> Document:

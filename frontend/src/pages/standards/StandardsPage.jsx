@@ -264,7 +264,7 @@ function slugify(value) {
 }
 
 function buildDuplicate(item) {
-  const suffix = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+  const suffix = new Date().toISOString().slice(0, 19).replaceAll("-", "").replaceAll(":", "").replaceAll("T", "");
   return {
     ...hydrateDraft(item),
     id: null,

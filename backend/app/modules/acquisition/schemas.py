@@ -288,6 +288,10 @@ class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
 
 
+class DocumentSupplierUpdateRequest(BaseModel):
+    fornitore_id: int | None = None
+
+
 class DocumentBatchErrorResponse(BaseModel):
     file_name: str
     detail: str

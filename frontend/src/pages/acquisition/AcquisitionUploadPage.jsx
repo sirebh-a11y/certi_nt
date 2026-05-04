@@ -86,10 +86,13 @@ export default function AcquisitionUploadPage() {
   const [certificateResult, setCertificateResult] = useState(null);
   const [sessionDdtDocuments, setSessionDdtDocuments] = useState([]);
   const [sessionCertificateDocuments, setSessionCertificateDocuments] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [savingSupplierDocumentId, setSavingSupplierDocumentId] = useState(null);
   const [currentRun, setCurrentRun] = useState(null);
 
   const ddtCount = useMemo(() => ddtFiles.length, [ddtFiles]);
   const certificateCount = useMemo(() => certificateFiles.length, [certificateFiles]);
+  const activeSuppliers = useMemo(() => suppliers.filter((item) => item.attivo), [suppliers]);
 
   function addDdtFiles(incomingFiles) {
     setDdtFiles((current) => mergeSelectedFiles(current, incomingFiles));
@@ -100,6 +103,7 @@ export default function AcquisitionUploadPage() {
   }
 
   const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
+  const hasDocumentsWithoutSupplier = [...sessionDdtDocuments, ...sessionCertificateDocuments].some((item) => !item.fornitore_id);
 
   function handleRequestError(requestError) {
     const message = requestError?.message || "Request failed";
@@ -122,6 +126,15 @@ export default function AcquisitionUploadPage() {
       if (batchId && documents.length) {
         setNotice("Hai un batch temporaneo aperto: puoi continuare oppure scartarlo.");
       }
+    } catch (requestError) {
+      handleRequestError(requestError);
+    }
+  }
+
+  async function loadSuppliers() {
+    try {
+      const response = await apiRequest("/suppliers", {}, token);
+      setSuppliers(response.items || []);
     } catch (requestError) {
       handleRequestError(requestError);
     }
@@ -221,6 +234,10 @@ export default function AcquisitionUploadPage() {
       setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
       return;
     }
+    if (hasDocumentsWithoutSupplier) {
+      setError("Assegna un fornitore a tutti i documenti pronti prima di avviare la lettura intelligente.");
+      return;
+    }
 
     setStartingAiRun(true);
     setError("");
@@ -267,6 +284,7 @@ export default function AcquisitionUploadPage() {
 
   useEffect(() => {
     loadCurrentBatch();
+    loadSuppliers();
   }, [token]);
 
   useEffect(() => {
@@ -314,6 +332,33 @@ export default function AcquisitionUploadPage() {
       window.clearInterval(intervalId);
     };
   }, [currentRun, token]);
+
+  function replaceSessionDocument(updatedDocument) {
+    const updater = (items) => items.map((item) => (item.id === updatedDocument.id ? updatedDocument : item));
+    setSessionDdtDocuments(updater);
+    setSessionCertificateDocuments(updater);
+  }
+
+  async function handleDocumentSupplierChange(documentId, supplierIdValue) {
+    const supplierId = supplierIdValue ? Number(supplierIdValue) : null;
+    setSavingSupplierDocumentId(documentId);
+    setError("");
+    try {
+      const updatedDocument = await apiRequest(
+        `/acquisition/documents/${documentId}/supplier`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ fornitore_id: supplierId }),
+        },
+        token,
+      );
+      replaceSessionDocument(updatedDocument);
+    } catch (requestError) {
+      handleRequestError(requestError);
+    } finally {
+      setSavingSupplierDocumentId(null);
+    }
+  }
 
   return (
     <section className="space-y-4">
@@ -392,9 +437,28 @@ export default function AcquisitionUploadPage() {
           {uploadBatchId ? <div className="mt-3 text-xs text-slate-500">Batch corrente: {uploadBatchId}</div> : null}
 
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
-            <DocumentTable emptyLabel="Nessun DDT pronto." items={sessionDdtDocuments} title="DDT pronti" />
-            <DocumentTable emptyLabel="Nessun certificato pronto." items={sessionCertificateDocuments} title="Certificati pronti" />
+            <DocumentTable
+              emptyLabel="Nessun DDT pronto."
+              items={sessionDdtDocuments}
+              onSupplierChange={handleDocumentSupplierChange}
+              savingSupplierDocumentId={savingSupplierDocumentId}
+              suppliers={activeSuppliers}
+              title="DDT pronti"
+            />
+            <DocumentTable
+              emptyLabel="Nessun certificato pronto."
+              items={sessionCertificateDocuments}
+              onSupplierChange={handleDocumentSupplierChange}
+              savingSupplierDocumentId={savingSupplierDocumentId}
+              suppliers={activeSuppliers}
+              title="Certificati pronti"
+            />
           </div>
+          {hasDocumentsWithoutSupplier ? (
+            <p className="mt-3 text-sm text-amber-700">Controlla il fornitore: i documenti senza fornitore non possono avviare la lettura intelligente.</p>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">Controlla il fornitore prima di avviare la lettura intelligente.</p>
+          )}
         </div>
 
         <div className="mt-4 rounded-2xl border border-border bg-white p-4">
@@ -410,7 +474,12 @@ export default function AcquisitionUploadPage() {
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
-              disabled={startingAiRun || !hasAutomationDocuments || (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))}
+              disabled={
+                startingAiRun ||
+                !hasAutomationDocuments ||
+                hasDocumentsWithoutSupplier ||
+                (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))
+              }
               onClick={startAutomationRun}
               type="button"
             >
@@ -562,7 +631,7 @@ function UploadSection({
   );
 }
 
-function DocumentTable({ title, items, emptyLabel }) {
+function DocumentTable({ title, items, emptyLabel, suppliers, savingSupplierDocumentId, onSupplierChange }) {
   return (
     <div>
       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</div>
@@ -582,7 +651,27 @@ function DocumentTable({ title, items, emptyLabel }) {
                 <td className="whitespace-nowrap px-3 py-2 text-slate-700">{item.id}</td>
                 <td className="px-3 py-2 text-slate-800">{item.nome_file_originale}</td>
                 <td className="whitespace-nowrap px-3 py-2 text-slate-700">{item.tipo_documento}</td>
-                <td className="px-3 py-2 text-slate-600">{item.fornitore_nome || "-"}</td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <select
+                      className={`min-w-56 rounded-lg border px-3 py-2 text-sm ${
+                        item.fornitore_id ? "border-slate-200 bg-white text-slate-800" : "border-amber-300 bg-amber-50 text-amber-900"
+                      }`}
+                      disabled={savingSupplierDocumentId === item.id}
+                      onChange={(event) => onSupplierChange(item.id, event.target.value)}
+                      value={item.fornitore_id || ""}
+                    >
+                      <option value="">Seleziona fornitore...</option>
+                      {suppliers.map((supplier) => (
+                        <option key={supplier.id} value={supplier.id}>
+                          {supplier.ragione_sociale}
+                        </option>
+                      ))}
+                    </select>
+                    {!item.fornitore_id ? <span className="text-sm font-semibold text-amber-700">!</span> : null}
+                    {savingSupplierDocumentId === item.id ? <span className="text-xs text-slate-500">Salvo...</span> : null}
+                  </div>
+                </td>
               </tr>
             ))}
             {!items.length ? (
