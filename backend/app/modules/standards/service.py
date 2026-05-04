@@ -77,6 +77,7 @@ def create_standard(
     actor_email: str,
 ) -> StandardResponse:
     _ensure_unique_code(db, payload.code)
+    _validate_payload_limits(payload)
     item = NormativeStandard()
     _apply_standard_payload(item, payload)
     item.chemistry_limits = [_chemistry_from_payload(limit) for limit in payload.chemistry]
@@ -97,10 +98,14 @@ def update_standard(
 ) -> StandardResponse:
     if standard.code != payload.code:
         _ensure_unique_code(db, payload.code)
+    _validate_payload_limits(payload)
     _apply_standard_payload(standard, payload)
+    db.add(standard)
+    standard.chemistry_limits.clear()
+    standard.property_limits.clear()
+    db.flush()
     standard.chemistry_limits = [_chemistry_from_payload(limit) for limit in payload.chemistry]
     standard.property_limits = [_property_from_payload(limit) for limit in payload.properties]
-    db.add(standard)
     db.commit()
     db.refresh(standard)
     log_service.record("standards", f"Standard updated: {standard.code}", actor_email)
@@ -203,6 +208,7 @@ def _chemistry_from_payload(payload: StandardChemistryPayload) -> NormativeStand
 
 def _property_from_payload(payload: StandardPropertyPayload) -> NormativeStandardProperty:
     return NormativeStandardProperty(
+        categoria="meccanica",
         proprieta=payload.proprieta,
         misura_min=payload.misura_min,
         misura_max=payload.misura_max,
@@ -210,6 +216,28 @@ def _property_from_payload(payload: StandardPropertyPayload) -> NormativeStandar
         min_value=payload.min_value,
         max_value=payload.max_value,
     )
+
+
+def _validate_payload_limits(payload: StandardCreateRequest | StandardUpdateRequest) -> None:
+    seen_elements: set[str] = set()
+    for limit in payload.chemistry:
+      element = limit.elemento.strip()
+      if element in seen_elements:
+          raise HTTPException(
+              status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+              detail=f"Duplicate chemistry element: {element}",
+          )
+      seen_elements.add(element)
+
+    seen_properties: set[tuple[str, float | None, float | None]] = set()
+    for limit in payload.properties:
+        key = (limit.proprieta.strip(), limit.misura_min, limit.misura_max)
+        if key in seen_properties:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Duplicate property range: {limit.proprieta}",
+            )
+        seen_properties.add(key)
 
 
 def _ensure_unique_code(db: Session, code: str) -> None:

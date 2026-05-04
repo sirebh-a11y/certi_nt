@@ -64,6 +64,8 @@ class NormativeStandardProperty(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     standard_id: Mapped[int] = mapped_column(ForeignKey("normative_standards.id"), nullable=False, index=True)
+    # Colonna storica ancora presente nel DB: resta tecnica, non esposta in UI.
+    categoria: Mapped[str] = mapped_column(String(64), default="meccanica", nullable=False)
     proprieta: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     misura_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     misura_max: Mapped[float | None] = mapped_column(Float, nullable=True)
