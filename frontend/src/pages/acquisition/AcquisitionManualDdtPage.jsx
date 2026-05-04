@@ -16,7 +16,64 @@ const FIELD_DEFS = [
 
 const EMPTY_FIELDS = Object.fromEntries(FIELD_DEFS.map((field) => [field.key, ""]));
 
+const PAGE_CONFIGS = {
+  ddt: {
+    side: "ddt",
+    documentLabel: "DDT",
+    documentLabelPlural: "DDT",
+    sourceLabel: "ddt",
+    uploadEndpoint: "/acquisition/documents/manual-ddt-upload",
+    title: "Fallback manuale DDT",
+    intro:
+      "Usa questa pagina quando il flusso automatico non e disponibile o quando un DDT gia caricato richiede una riga aggiuntiva. Carica il PDF: se era gia presente, il sistema lo riconosce e mostra le righe gia create.",
+    rule:
+      "Ogni conferma crea una riga Solo DDT. Per DDT multiriga compila i campi della prima riga, crea, poi compila la riga successiva.",
+    linkedTitle: "Righe gia create da questo DDT",
+    linkedHelper: "Solo guida: qui non modifichi righe esistenti, puoi solo aggiungerne una nuova sotto.",
+    emptyRows: "Nessuna riga ancora creata da questo DDT.",
+    formTitle: "DDT",
+    formHelper: "Compila i campi che l'utente usa per lista e match. I valori saranno salvati come provenienza utente.",
+    readyMessage: "PDF DDT pronto. Ora puoi creare una o piu righe da questo documento.",
+    createdMessage: "Puoi aggiungere un'altra riga dallo stesso DDT.",
+    createButton: "Crea riga DDT",
+    creatingButton: "Creo...",
+    rowStateLinked: "con certificato",
+    rowStateSingle: "solo DDT",
+  },
+  certificato: {
+    side: "certificato",
+    documentLabel: "certificato",
+    documentLabelPlural: "certificati",
+    sourceLabel: "certificato",
+    uploadEndpoint: "/acquisition/documents/manual-certificate-upload",
+    title: "Fallback manuale certificato",
+    intro:
+      "Usa questa pagina quando il flusso automatico non e disponibile o quando un certificato gia caricato richiede una riga aggiuntiva. Carica il PDF: se era gia presente, il sistema lo riconosce e mostra le righe gia create.",
+    rule:
+      "Ogni conferma crea una riga Solo Certificato. Compila i campi ponte del certificato come certificate first, cosi potranno agganciarsi ai DDT coerenti.",
+    linkedTitle: "Righe gia create da questo certificato",
+    linkedHelper: "Solo guida: qui non modifichi righe esistenti, puoi solo aggiungerne una nuova sotto.",
+    emptyRows: "Nessuna riga ancora creata da questo certificato.",
+    formTitle: "Certificato",
+    formHelper: "Compila i campi ponte letti dal certificato. I valori saranno salvati come provenienza utente.",
+    readyMessage: "PDF certificato pronto. Ora puoi creare una o piu righe da questo documento.",
+    createdMessage: "Puoi aggiungere un'altra riga dallo stesso certificato.",
+    createButton: "Crea riga certificato",
+    creatingButton: "Creo...",
+    rowStateLinked: "con DDT",
+    rowStateSingle: "solo certificato",
+  },
+};
+
+export function AcquisitionManualCertificatePage() {
+  return <AcquisitionManualDocumentPage config={PAGE_CONFIGS.certificato} />;
+}
+
 export default function AcquisitionManualDdtPage() {
+  return <AcquisitionManualDocumentPage config={PAGE_CONFIGS.ddt} />;
+}
+
+function AcquisitionManualDocumentPage({ config }) {
   const { token } = useAuth();
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
@@ -89,7 +146,7 @@ export default function AcquisitionManualDdtPage() {
     }
 
     const formData = new FormData();
-    formData.append("tipo_documento", "ddt");
+    formData.append("tipo_documento", config.side);
     formData.append("fornitore_id", selectedSupplierId);
     formData.append("file", file);
     formData.append("origine_upload", "utente");
@@ -99,7 +156,7 @@ export default function AcquisitionManualDdtPage() {
     setNotice("");
     try {
       const uploaded = await apiRequest(
-        "/acquisition/documents/manual-ddt-upload",
+        config.uploadEndpoint,
         {
           method: "POST",
           body: formData,
@@ -112,7 +169,7 @@ export default function AcquisitionManualDdtPage() {
       if (uploaded.document.fornitore_id) {
         setSelectedSupplierId(String(uploaded.document.fornitore_id));
       }
-      setNotice(uploaded.message || "PDF DDT pronto. Ora puoi creare una o piu righe da questo documento.");
+      setNotice(uploaded.message || config.readyMessage);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -126,7 +183,7 @@ export default function AcquisitionManualDdtPage() {
       return;
     }
     if (!selectedDocumentId) {
-      setError("Seleziona o carica un PDF DDT.");
+      setError(`Seleziona o carica un PDF ${config.documentLabel}.`);
       return;
     }
     const hasAnyField = FIELD_DEFS.some((field) => fields[field.key]?.trim());
@@ -144,7 +201,7 @@ export default function AcquisitionManualDdtPage() {
         {
           method: "POST",
           body: JSON.stringify({
-            side: "ddt",
+            side: config.side,
             fornitore_id: Number(selectedSupplierId),
             fields,
           }),
@@ -154,7 +211,7 @@ export default function AcquisitionManualDdtPage() {
       setCreatedRows((current) => [created, ...current]);
       setLinkedRows((current) => [...current, created]);
       setFields(EMPTY_FIELDS);
-      setNotice(`Riga #${created.id} creata. Puoi aggiungere un'altra riga dallo stesso DDT.`);
+      setNotice(`Riga #${created.id} creata. ${config.createdMessage}`);
       await loadDocument(selectedDocumentId);
     } catch (requestError) {
       setError(requestError.message);
@@ -169,10 +226,9 @@ export default function AcquisitionManualDdtPage() {
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
-            <h2 className="mt-2 text-2xl font-semibold text-ink">Fallback manuale DDT</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">{config.title}</h2>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-500">
-              Usa questa pagina quando il flusso automatico non e disponibile o quando un DDT gia caricato richiede una riga aggiuntiva.
-              Carica il PDF: se era gia presente, il sistema lo riconosce e mostra le righe gia create.
+              {config.intro}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -192,12 +248,12 @@ export default function AcquisitionManualDdtPage() {
           <aside className="space-y-4">
             <div className="rounded-2xl border border-border bg-white p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">1. Documento</p>
-              <label className="mt-3 block text-sm font-medium text-slate-700" htmlFor="manual-ddt-supplier">
+              <label className="mt-3 block text-sm font-medium text-slate-700" htmlFor={`manual-${config.side}-supplier`}>
                 Fornitore
               </label>
               <select
                 className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-accent"
-                id="manual-ddt-supplier"
+                id={`manual-${config.side}-supplier`}
                 onChange={(event) => setSelectedSupplierId(event.target.value)}
                 disabled={Boolean(selectedDocument)}
                 value={selectedSupplierId}
@@ -211,7 +267,7 @@ export default function AcquisitionManualDdtPage() {
               </select>
 
               <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
-                <p className="text-sm font-medium text-slate-700">Carica PDF DDT</p>
+                <p className="text-sm font-medium text-slate-700">Carica PDF {config.documentLabel}</p>
                 <input
                   accept=".pdf,application/pdf"
                   className="mt-3 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border file:border-border file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-100"
@@ -235,24 +291,24 @@ export default function AcquisitionManualDdtPage() {
             <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">Regola</p>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Ogni conferma crea una riga Solo DDT. Per DDT multiriga compila i campi della prima riga, crea, poi compila la riga successiva.
+                {config.rule}
               </p>
             </div>
           </aside>
 
           <div className="space-y-4">
-            <ManualPdfPanel document={selectedDocument} loading={loadingDocument} token={token} />
+            <ManualPdfPanel config={config} document={selectedDocument} loading={loadingDocument} token={token} />
 
             {selectedDocument ? (
-              <LinkedRowsGuide rows={linkedRows} />
+              <LinkedRowsGuide config={config} rows={linkedRows} />
             ) : null}
 
             <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch xl:justify-between">
                 <div className="flex w-full shrink-0 flex-col justify-center rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 xl:w-[230px]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700">DDT</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700">{config.formTitle}</p>
                   <p className="mt-1.5 text-[11px] leading-tight text-slate-600">
-                    Compila i campi che l'utente usa per lista e match. I valori saranno salvati come provenienza utente.
+                    {config.formHelper}
                   </p>
                 </div>
                 <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-slate-400 bg-slate-50">
@@ -268,7 +324,7 @@ export default function AcquisitionManualDdtPage() {
                             value={fields[field.key] || ""}
                           />
                           <p className="mt-1 text-center text-[8px] font-semibold uppercase tracking-[0.03em] text-amber-600">Origine</p>
-                          <p className="min-h-[20px] text-center text-[10px] font-medium leading-tight text-slate-600">ddt - utente</p>
+                          <p className="min-h-[20px] text-center text-[10px] font-medium leading-tight text-slate-600">{config.sourceLabel} - utente</p>
                         </div>
                       ))}
                     </div>
@@ -289,7 +345,7 @@ export default function AcquisitionManualDdtPage() {
                     onClick={handleCreateRow}
                     type="button"
                   >
-                    {creating ? "Creo..." : "Crea riga DDT"}
+                    {creating ? config.creatingButton : config.createButton}
                   </button>
                 </div>
               </div>
@@ -319,13 +375,13 @@ export default function AcquisitionManualDdtPage() {
   );
 }
 
-function LinkedRowsGuide({ rows }) {
+function LinkedRowsGuide({ config, rows }) {
   return (
     <div className="rounded-2xl border border-border bg-white p-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm font-semibold text-slate-900">Righe gia create da questo DDT</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">Solo guida: qui non modifichi righe esistenti, puoi solo aggiungerne una nuova sotto.</p>
+          <p className="text-sm font-semibold text-slate-900">{config.linkedTitle}</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{config.linkedHelper}</p>
         </div>
         <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
           {rows.length} righe
@@ -363,7 +419,7 @@ function LinkedRowsGuide({ rows }) {
                   <td className="whitespace-nowrap px-3 py-2 text-slate-700">{row.peso || "-"}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-slate-700">{row.ordine || "-"}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-slate-600">
-                    {row.document_certificato_id ? "con certificato" : "solo DDT"}
+                    {(config.side === "ddt" ? row.document_certificato_id : row.document_ddt_id) ? config.rowStateLinked : config.rowStateSingle}
                   </td>
                 </tr>
               ))}
@@ -372,14 +428,14 @@ function LinkedRowsGuide({ rows }) {
         </div>
       ) : (
         <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-          Nessuna riga ancora creata da questo DDT.
+          {config.emptyRows}
         </p>
       )}
     </div>
   );
 }
 
-function ManualPdfPanel({ document, loading, token }) {
+function ManualPdfPanel({ config, document, loading, token }) {
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
@@ -442,7 +498,7 @@ function ManualPdfPanel({ document, loading, token }) {
     <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">PDF DDT</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">PDF {config.documentLabel}</p>
           <p className="mt-1 text-sm text-white">{document?.nome_file_originale || "Seleziona o carica un documento"}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -465,7 +521,7 @@ function ManualPdfPanel({ document, loading, token }) {
               <div className="w-full" key={page.id}>
                 <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Pagina {page.numero_pagina}</p>
                 <div className="relative" style={{ width: viewportWidth > 0 ? `${(viewportWidth * zoom) / 100}px` : "100%" }}>
-                  <img alt={`DDT pagina ${page.numero_pagina}`} className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm" draggable={false} src={page.src} />
+                  <img alt={`${config.documentLabel} pagina ${page.numero_pagina}`} className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm" draggable={false} src={page.src} />
                 </div>
               </div>
             ))}

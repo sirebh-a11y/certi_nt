@@ -363,9 +363,9 @@ export default function AcquisitionUploadPage() {
             <Link className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100" to="/acquisition/manual/ddt">
               Fallback manuale DDT
             </Link>
-            <button className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-semibold text-slate-400" disabled type="button">
+            <Link className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100" to="/acquisition/manual/certificato">
               Fallback certificato
-            </button>
+            </Link>
             <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
               Torna alla griglia
             </Link>

@@ -228,6 +228,23 @@ def upload_or_reuse_manual_ddt_document_route(
     )
 
 
+@router.post("/documents/manual-certificate-upload", response_model=ManualDocumentUploadResponse)
+def upload_or_reuse_manual_certificate_document_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    file: UploadFile = File(...),
+    fornitore_id: int = Form(...),
+) -> ManualDocumentUploadResponse:
+    return upload_or_reuse_manual_document(
+        db=db,
+        tipo_documento="certificato",
+        uploaded_file=file,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        fornitore_id=fornitore_id,
+    )
+
+
 @router.post("/documents/upload-batch", response_model=DocumentBatchUploadResponse)
 def upload_documents_batch_route(
     current_user: CurrentUser,
