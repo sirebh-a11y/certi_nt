@@ -10969,7 +10969,7 @@ def extract_ddt_fields_with_vision(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for vision")
 
     supplier_key = _resolve_row_supplier_key(row)
-    if supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww"}:
+    if supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "zalco"}:
         sibling_rows = (
             db.query(AcquisitionRow)
             .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
@@ -11016,6 +11016,14 @@ def extract_ddt_fields_with_vision(
             )
         elif supplier_key == "neuman":
             _apply_neuman_ai_row_groups_to_rows(
+                db=db,
+                ddt_document=ddt_document,
+                rows=sibling_rows,
+                ai_candidates=ai_candidates,
+                actor_id=actor_id,
+            )
+        elif supplier_key == "zalco":
+            _apply_zalco_ai_row_groups_to_rows(
                 db=db,
                 ddt_document=ddt_document,
                 rows=sibling_rows,
@@ -13939,6 +13947,14 @@ def _score_certificate_candidate(
                 "alloy": _string_or_none(certificate_supplier_fields.get("alloy")) or _string_or_none(ai_supplier_fields.get("alloy")),
                 "diameter": _string_or_none(certificate_supplier_fields.get("diameter")) or _string_or_none(ai_supplier_fields.get("diameter")),
             }
+        elif supplier_key == "zalco":
+            certificate_supplier_fields = {
+                "tally_sheet_no": _string_or_none(certificate_supplier_fields.get("tally_sheet_no"))
+                or _string_or_none(ai_supplier_fields.get("tally_sheet_no")),
+                "cast_no": _string_or_none(certificate_supplier_fields.get("cast_no")) or _string_or_none(ai_supplier_fields.get("cast_no")),
+                "symbol": _string_or_none(certificate_supplier_fields.get("symbol")) or _string_or_none(ai_supplier_fields.get("symbol")),
+                "code_art": _string_or_none(certificate_supplier_fields.get("code_art")) or _string_or_none(ai_supplier_fields.get("code_art")),
+            }
         elif supplier_key == "aww":
             certificate_supplier_fields = {
                 "kunden_teile_nr": _string_or_none(certificate_supplier_fields.get("kunden_teile_nr"))
@@ -15078,6 +15094,10 @@ def _build_certificate_safe_crops(
             return specialized
     if supplier_key == "grupa_kety":
         specialized = _build_grupa_kety_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
+    if supplier_key == "zalco":
+        specialized = _build_zalco_certificate_safe_crops(pages)
         if specialized:
             return specialized
 
@@ -20333,7 +20353,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
-    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover", "grupa_kety"}
+    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover", "grupa_kety", "zalco"}
 
 
 def _get_supplier_certificate_ai_payload(
@@ -20400,6 +20420,13 @@ def _get_supplier_certificate_ai_payload(
             openai_api_key=openai_api_key,
             certificate_ai_cache=certificate_ai_cache,
         )
+    if supplier_key == "zalco":
+        return _get_zalco_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
     return {
         "match_values": {},
         "supplier_fields": {},
@@ -20460,6 +20487,12 @@ def _extract_supplier_ddt_row_groups_with_vision(
         )
     if supplier_key == "grupa_kety":
         return _extract_grupa_kety_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
+    if supplier_key == "zalco":
+        return _extract_zalco_ddt_row_groups_with_vision(
             db=db,
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
@@ -20531,6 +20564,14 @@ def _apply_supplier_ai_candidate_to_row(
             actor_id=actor_id,
             document_id=document_id,
         )
+    if ai_candidate.supplier_key == "zalco":
+        return _apply_zalco_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
     return _apply_aluminium_bozen_ai_candidate_to_row(
         db=db,
         row=row,
@@ -20553,6 +20594,660 @@ def _apply_supplier_certificate_ai_payload(
         payload=payload,
         actor_id=actor_id,
     )
+
+
+def _extract_zalco_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_zalco_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to prepare Zalco DDT pages for AI")
+
+    local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="zalco")
+    fallback_ddt = _string_or_none(cast(dict[str, object], local_matches.get("ddt") or {}).get("final"))
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_zalco_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_zalco_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
+def _build_zalco_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_zalco_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"zalco_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            roles = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                roles.insert(0, ("header_page", "header_page"))
+            else:
+                roles.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in roles:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _extract_zalco_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un DDT Zalco / Zeeland Aluminium Company. "
+                "Una riga acquisition corrisponde al documento tally/packing utile, non alle singole righe FAR/bundle. "
+                "Non usare annotazioni a penna e non usare il nome file. "
+                "Se trovi LISTE DE COLISAGE / PACKING LIST WITH ANALYSIS, usa quella pagina come sorgente forte. "
+                "Se trovi solo AVIS D'EXPEDITION / TALLY SHEET che rimanda a VOIR LISTE DE COLISAGE, restituisci comunque i campi visibili ma lascia cast_raw nullo se non c'e' la colata reale. "
+                "Campi da leggere: tally_sheet_raw e' No. AVIS / TALLY SHEET o il numero finale tipo 000020285; "
+                "order_raw e' No. ORDRE / Order Nr. o ordine cliente; symbol_raw e' SYMBOLE/CUSTOMER ALLOY CODE tipo 608213; "
+                "code_art_raw e' CODE ART/CODE tipo 0381Z; diameter_raw e' FORMAT o DIAMETER OR SIZES; "
+                "weight_raw e' POIDS NET/NET; cast_raw e' No. COULEE/CAST Nr. completo, ad esempio 2023 42669; "
+                "alloy_raw e' la lega/stato stampata, ad esempio 6082 HO; chemistry_raw contiene solo valori misurati, non limiti. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,\"tally_sheet_raw\":\"string|null\","
+                "\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\",\"code_art_raw\":\"string|null\","
+                "\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\",\"cast_raw\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\","
+                "\"Mn\":\"string|null\",\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
+                "\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": f"Crop label: {crop_label}; role: {crop.get('role') or 'unknown'}; page_number: {crop.get('page_number') or 'unknown'}",
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Zalco DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_zalco_row_groups(response.output_text), response.output_text)
+
+
+def _parse_openai_json_payload_for_zalco_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Zalco DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Zalco DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Zalco DDT row-group AI payload")
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Zalco DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (_string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else []))
+            if item is not None
+        ]
+        chemistry_raw = raw_row.get("chemistry_raw")
+        normalized_rows.append(
+            {
+                "row_index": index,
+                "tally_sheet_raw": _string_or_none(raw_row.get("tally_sheet_raw")),
+                "order_raw": _string_or_none(raw_row.get("order_raw")),
+                "symbol_raw": _string_or_none(raw_row.get("symbol_raw")),
+                "code_art_raw": _string_or_none(raw_row.get("code_art_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "weight_raw": _string_or_none(raw_row.get("weight_raw")),
+                "cast_raw": _string_or_none(raw_row.get("cast_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "chemistry_raw": chemistry_raw if isinstance(chemistry_raw, dict) else {},
+                "source_crops": normalized_sources,
+            }
+        )
+    return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _sanitize_zalco_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
+) -> list[ReaderRowSplitCandidateResponse]:
+    candidates: list[ReaderRowSplitCandidateResponse] = []
+    fallback_tally = _normalize_zalco_tally_number(ddt_number_raw)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        tally = _normalize_zalco_tally_number(_string_or_none(raw_row.get("tally_sheet_raw"))) or fallback_tally
+        symbol = _normalize_zalco_symbol(_string_or_none(raw_row.get("symbol_raw")))
+        code_art = _normalize_zalco_code_art(_string_or_none(raw_row.get("code_art_raw")))
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="zalco",
+            ddt_number=tally,
+            cdq=tally,
+            customer_order_no=_normalize_zalco_order(_string_or_none(raw_row.get("order_raw"))),
+            customer_code=symbol,
+            article_code=code_art,
+            product_code=code_art,
+            lega=_normalize_zalco_alloy(_string_or_none(raw_row.get("alloy_raw"))),
+            diametro=_normalize_zalco_diameter(_string_or_none(raw_row.get("diameter_raw"))),
+            peso_netto=_normalize_zalco_weight(_string_or_none(raw_row.get("weight_raw"))),
+            colata=_normalize_zalco_cast_number(_string_or_none(raw_row.get("cast_raw"))),
+            snippets=cast(list[str], raw_row.get("source_crops") or [])[:6],
+            ai_row_payload_raw=json.dumps(raw_row, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in ("ddt_number", "cdq", "customer_order_no", "customer_code", "article_code", "diametro", "peso_netto", "colata")
+        ):
+            candidates.append(candidate)
+    return candidates
+
+
+def _apply_zalco_ai_row_groups_to_rows(
+    db: Session,
+    *,
+    ddt_document: Document,
+    rows: list[AcquisitionRow],
+    ai_candidates: list[ReaderRowSplitCandidateResponse],
+    actor_id: int,
+) -> None:
+    if not rows or not ai_candidates:
+        return
+    pairs: list[tuple[int, int, int]] = []
+    ai_by_index = {candidate.candidate_index: candidate for candidate in ai_candidates}
+    row_value_maps = {
+        row.id: {
+            value.campo: _final_value_for_row(value)
+            for value in db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt").all()
+        }
+        for row in rows
+    }
+    for row in rows:
+        ddt_values = row_value_maps.get(row.id, {})
+        for candidate in ai_candidates:
+            score = _score_zalco_ai_candidate_against_row(row=row, ddt_values=ddt_values, ai_candidate=candidate)
+            if score > 0:
+                pairs.append((score, row.id, candidate.candidate_index))
+    if not pairs and len(rows) == 1 and len(ai_candidates) == 1:
+        pairs.append((1, rows[0].id, ai_candidates[0].candidate_index))
+    pairs.sort(reverse=True)
+    assigned_rows: set[int] = set()
+    assigned_candidates: set[int] = set()
+    for _, row_id, candidate_index in pairs:
+        if row_id in assigned_rows or candidate_index in assigned_candidates:
+            continue
+        row = next(item for item in rows if item.id == row_id)
+        _apply_zalco_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_by_index[candidate_index],
+            actor_id=actor_id,
+            document_id=ddt_document.id,
+        )
+        assigned_rows.add(row_id)
+        assigned_candidates.add(candidate_index)
+
+
+def _score_zalco_ai_candidate_against_row(
+    *,
+    row: AcquisitionRow,
+    ddt_values: dict[str, str | None],
+    ai_candidate: ReaderRowSplitCandidateResponse,
+) -> int:
+    score = 0
+    if reader_same_token(_string_or_none(row.cdq) or _string_or_none(ddt_values.get("cdq")), ai_candidate.cdq):
+        score += 140
+    if reader_same_token(_string_or_none(row.ddt) or _string_or_none(ddt_values.get("ddt")), ai_candidate.ddt_number):
+        score += 100
+    if reader_same_token(_string_or_none(row.colata) or _string_or_none(ddt_values.get("colata")), ai_candidate.colata):
+        score += 90
+    if reader_same_token(_string_or_none(row.diametro) or _string_or_none(ddt_values.get("diametro")), ai_candidate.diametro):
+        score += 35
+    if reader_weights_are_compatible(_string_or_none(row.peso) or _string_or_none(ddt_values.get("peso")), ai_candidate.peso_netto):
+        score += 25
+    return score
+
+
+def _apply_zalco_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "numero_certificato_ddt": ai_candidate.cdq,
+        "cdq": ai_candidate.cdq,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "customer_code": ai_candidate.customer_code,
+        "article_code": ai_candidate.article_code,
+        "product_code": ai_candidate.product_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "colata": ai_candidate.colata,
+        "peso": ai_candidate.peso_netto,
+    }
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+    if changed_fields == 0:
+        return False
+    _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
+def _get_zalco_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="zalco")
+    page_images = {label: crop for label, crop in crops.items() if str(crop.get("role") or "").startswith(("certificate", "chemistry", "notes"))}
+    if not page_images:
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+    raw_payload = _extract_zalco_certificate_payload_from_openai(page_images, openai_api_key=openai_api_key)
+    payload = _normalize_zalco_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _extract_zalco_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato origine Zalco / Zeeland Aluminium Company. "
+                "Non usare certificati Forgialluminio derivati e non usare nome file. "
+                "Campi core: tally_sheet_raw e' No. AVIS / TALLY SHEET; order_raw e' No. ORDRE / ORDER Nr.; "
+                "symbol_raw e' SYMBOLE/CUSTOMER ALLOY CODE; code_art_raw e' CODE/CODE ART; "
+                "diameter_raw e' DIAMETER OR SIZES/FORMAT; weight_raw e' NET; cast_raw e' No. COULEE/CAST Nr. completo; "
+                "alloy_raw e' lega/stato visibile come 6082 HO. "
+                "Chimica: leggi solo riga valori misurati, non limiti e non testo legale. "
+                "Note: se trovi US inspection/compliant, RoHS o free from radioactivity, riportale come testo. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"tally_sheet_raw\":\"string|null\",\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\","
+                "\"code_art_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\","
+                "\"cast_raw\":\"string|null\",\"alloy_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\","
+                "\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\","
+                "\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append({"type": "input_text", "text": f"Image label: {image_label}; page_number: {crop.get('page_number') or 'unknown'}"})
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Zalco certificate AI extraction request failed") from exc
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_zalco_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+    source_crop = next(iter(page_images.keys()), None)
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_zalco_vision_certificate_fields(core_payload, source_crop)
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": source_crop,
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti")
+        },
+        {source_crop or "page1": {"page_id": first_page_id, "page_number": first_page_crop.get("page_number") if first_page_crop else 1}},
+    )
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    notes_source_crop = next(reversed(page_images.keys()), None) if page_images else None
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": notes_source_crop,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": notes_source_crop,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": notes_source_crop,
+            },
+        },
+        {notes_source_crop or "page1": {"page_id": last_page_id, "page_number": last_page_crop.get("page_number") if last_page_crop else 1}},
+    )
+    tally = _normalize_zalco_tally_number(_string_or_none(core_payload.get("tally_sheet_raw")))
+    cast_no = _normalize_zalco_cast_number(_string_or_none(core_payload.get("cast_raw")))
+    symbol = _normalize_zalco_symbol(_string_or_none(core_payload.get("symbol_raw")))
+    code_art = _normalize_zalco_code_art(_string_or_none(core_payload.get("code_art_raw")))
+    return {
+        "match_values": {field_name: _string_or_none(field_payload.get("value")) for field_name, field_payload in core_fields.items()},
+        "supplier_fields": {
+            "tally_sheet_no": tally,
+            "cast_no": cast_no,
+            "symbol": symbol,
+            "code_art": code_art,
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": {},
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_zalco_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    tally = _normalize_zalco_tally_number(_string_or_none(core_payload.get("tally_sheet_raw")))
+    order = _normalize_zalco_order(_string_or_none(core_payload.get("order_raw")))
+    symbol = _normalize_zalco_symbol(_string_or_none(core_payload.get("symbol_raw")))
+    code_art = _normalize_zalco_code_art(_string_or_none(core_payload.get("code_art_raw")))
+    diameter = _normalize_zalco_diameter(_string_or_none(core_payload.get("diameter_raw")))
+    weight = _normalize_zalco_weight(_string_or_none(core_payload.get("weight_raw")))
+    cast_no = _normalize_zalco_cast_number(_string_or_none(core_payload.get("cast_raw")))
+    alloy = _normalize_zalco_alloy(_string_or_none(core_payload.get("alloy_raw")))
+
+    def _payload(value: str | None, evidence: str | None = None) -> dict[str, str | None]:
+        return {"value": value, "evidence": evidence or value, "source_crop": source_crop}
+
+    return {
+        "numero_certificato_certificato": _payload(tally),
+        "ordine_cliente_certificato": _payload(order),
+        "lega_certificato": _payload(alloy),
+        "diametro_certificato": _payload(diameter),
+        "colata_certificato": _payload(cast_no),
+        "ddt_certificato": _payload(tally),
+        "peso_certificato": _payload(weight),
+        "articolo_certificato": _payload(code_art),
+        "codice_cliente_certificato": _payload(symbol),
+    }
+
+
+def _build_zalco_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_zalco_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"zalco_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [
+                ("core_page", "certificate_core_context"),
+                ("chemistry_page", "chemistry_table"),
+                ("notes_page", "notes_block"),
+            ]
+            if index > 0:
+                role_specs.insert(0, ("continuation_page", "certificate_continuation"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_zalco_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    words = _extract_ocr_word_blocks(masked)
+    if masked.height > masked.width:
+        _mask_relative_rectangle(masked, (0.70, 0.035, 0.96, 0.125))
+    else:
+        _mask_relative_rectangle(masked, (0.70, 0.035, 0.96, 0.16))
+    if words:
+        line_map = _group_ocr_words_by_line(words)
+        for line_words in line_map.values():
+            line_text = " ".join(str(word["text"]).upper() for word in line_words)
+            if any(keep in line_text for keep in ("PACKING LIST", "TALLY SHEET", "CODE ART", "CUSTOMER ALLOY", "COULEE", "CAST", "ANALYSE")):
+                continue
+            if "ZALCO" in line_text or "ZEELAND ALUMINIUM" in line_text:
+                _mask_words_matching_terms(
+                    masked,
+                    line_words,
+                    ("ZALCO", "ZEELAND", "ALUMINIUM", "COMPANY"),
+                    left_extra=max(4, masked.width // 450),
+                    right_extra=max(4, masked.width // 450),
+                )
+    return masked
+
+
+def _normalize_zalco_tally_number(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    matches = re.findall(r"\b(0{0,5}\d{5})\b", cleaned)
+    if not matches:
+        return None
+    return str(int(matches[-1]))
+
+
+def _normalize_zalco_order(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(20\d{6})\b", cleaned)
+    if match is not None:
+        return match.group(1)
+    match = re.search(r"\bORDER(?:\s+NUMBER)?\s+([0-9]{1,6})\b", cleaned, re.IGNORECASE)
+    if match is not None:
+        return match.group(1)
+    return None
+
+
+def _normalize_zalco_symbol(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    matches = re.findall(r"\b(\d{5,6})\b", cleaned)
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def _normalize_zalco_code_art(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b([0-9]{4}[A-Z])\b", cleaned.upper())
+    return match.group(1) if match is not None else None
+
+
+def _normalize_zalco_diameter(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    anchor_match = re.search(
+        r"\b(?:FORMAT|DIAM(?:ETER|ETRE)?(?:\s+OR\s+(?:SIZES|SECTION))?)\b[^0-9]{0,30}([0-9]{2,4}(?:[.,][0-9]+)?)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if anchor_match is not None:
+        return _normalize_decimal_value(anchor_match.group(1))
+    size_matches = re.findall(r"\b([0-9]{2,4}(?:[.,][0-9]+)?)\b", cleaned)
+    filtered = [token for token in size_matches if _normalize_decimal_value(token) not in {"5500", "5000", "5400"}]
+    match = re.search(r"\b([0-9]{2,4}(?:[.,][0-9]+)?)\b", filtered[0]) if filtered else None
+    return _normalize_decimal_value(match.group(1)) if match is not None else None
+
+
+def _normalize_zalco_weight(value: str | None) -> str | None:
+    return _normalize_value_for_field("ddt", "peso", value)
+
+
+def _normalize_zalco_cast_number(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = cleaned.replace("/", "-")
+    match = re.search(r"\b(20\d{2})\s*[- ]\s*(\d{5})\b", normalized)
+    if match is not None:
+        return f"{match.group(1)}-{match.group(2)}"
+    match = re.search(r"\b(\d{5})\b", normalized)
+    return match.group(1) if match is not None else None
+
+
+def _normalize_zalco_alloy(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    normalized = cleaned.upper().replace("EN AW", " ").replace("-", " ")
+    match = re.search(r"\b([0-9]{4})\b(?:\s*(H[O0]|T\d{1,2}|F|O))?", normalized)
+    if match is None:
+        return None
+    temper = match.group(2)
+    if temper:
+        temper = temper.replace("H0", "HO")
+        return f"{match.group(1)} {temper}"
+    return match.group(1)
 
 
 def _parse_openai_json_payload_for_fields(payload: str, field_names: list[str]) -> dict[str, dict[str, str | None]]:
