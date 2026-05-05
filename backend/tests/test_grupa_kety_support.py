@@ -11,6 +11,7 @@ from app.modules.acquisition.rematch_bridge import (
 from app.modules.acquisition.service import (
     _build_grupa_kety_masked_page,
     _normalize_grupa_kety_certificate_ai_payload,
+    _prefer_grupa_kety_ddt_number,
     _sanitize_grupa_kety_ai_row_groups,
     _supplier_certificate_first_keeps_row_order,
     _supplier_supports_certificate_first,
@@ -28,6 +29,11 @@ class GrupaKetySupportTest(unittest.TestCase):
     def test_grupa_kety_certificate_first_is_enabled_for_second_run_rematch(self):
         self.assertTrue(_supplier_supports_certificate_first("grupa_kety"))
         self.assertTrue(_supplier_certificate_first_keeps_row_order("grupa_kety"))
+
+    def test_grupa_kety_ai_ddt_wins_after_minimal_masking_keeps_labels_visible(self):
+        self.assertEqual(_prefer_grupa_kety_ddt_number("12594", "19883"), "19883")
+        self.assertEqual(_prefer_grupa_kety_ddt_number(None, "201177772"), "201177772")
+        self.assertEqual(_prefer_grupa_kety_ddt_number("12594", None), "12594")
 
     def test_grupa_kety_ddt_sanitizer_aggregates_12594_rows_by_certificate_and_heat(self):
         candidates = _sanitize_grupa_kety_ai_row_groups(
@@ -205,6 +211,8 @@ class GrupaKetySupportTest(unittest.TestCase):
         image = Image.new("RGB", (1000, 1400), "white")
         draw = ImageDraw.Draw(image)
         draw.text((90, 120), "FORGIALLUMINIO Via Enrico Fermi 2", fill="black")
+        draw.text((90, 220), "Delivery Note: 12594", fill="black")
+        draw.text((90, 260), "Shipment ID: 19883", fill="black")
         draw.text((90, 600), "Alloy grade EN AW-7150 Heat H6245 kg", fill="black")
         before = image.copy()
 
@@ -212,6 +220,7 @@ class GrupaKetySupportTest(unittest.TestCase):
 
         diff = ImageChops.difference(before, masked).convert("L")
         self.assertIsNotNone(diff.crop((70, 95, 460, 160)).getbbox())
+        self.assertIsNone(diff.crop((70, 195, 360, 290)).getbbox())
         self.assertIsNone(diff.crop((70, 570, 520, 640)).getbbox())
 
 

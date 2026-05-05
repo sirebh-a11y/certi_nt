@@ -153,6 +153,27 @@ class ArconicSupportTest(unittest.TestCase):
         self.assertEqual(candidate.colata, "C70025341313")
         self.assertEqual(candidate.lot_batch_no, "44218360|44270958")
 
+    def test_arconic_ddt_sanitizer_falls_back_when_diameter_raw_is_dirty(self):
+        candidates = _sanitize_arconic_hannover_ai_row_groups(
+            ddt_number_raw="Delivery Note 28209127",
+            raw_rows=[
+                {
+                    "customer_item_description_raw": "RD98_6082_F_4200mm",
+                    "arconic_item_number_raw": "BG5207534",
+                    "die_dimension_raw": "RD098,00",
+                    "diameter_raw": "RD98_6082_F_4200mm",
+                    "cast_number_raw": "C70025341313",
+                    "net_weight_raw": "6.996",
+                }
+            ],
+        )
+
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate.lega, "6082 F")
+        self.assertEqual(candidate.diametro, "98")
+        self.assertEqual(candidate.article_code, "BG5207534")
+
     def test_arconic_certificate_core_sanitizer_formats_cdq(self):
         fields = _sanitize_arconic_hannover_vision_certificate_fields(
             {

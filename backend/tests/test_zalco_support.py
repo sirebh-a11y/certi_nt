@@ -10,6 +10,7 @@ from app.modules.acquisition.rematch_bridge import (
 )
 from app.modules.acquisition.service import (
     _build_zalco_masked_page,
+    _certificate_number_from_local_sync_is_untrusted,
     _normalize_zalco_certificate_ai_payload,
     _sanitize_zalco_ai_row_groups,
     _supplier_certificate_first_keeps_row_order,
@@ -28,6 +29,11 @@ class ZalcoSupportTest(unittest.TestCase):
     def test_zalco_certificate_first_is_enabled_for_second_run_rematch(self):
         self.assertTrue(_supplier_supports_certificate_first("zalco"))
         self.assertTrue(_supplier_certificate_first_keeps_row_order("zalco"))
+
+    def test_zalco_local_cdq_sync_ignores_en_10204_as_certificate_number(self):
+        self.assertTrue(_certificate_number_from_local_sync_is_untrusted("zalco", "10204"))
+        self.assertFalse(_certificate_number_from_local_sync_is_untrusted("zalco", "20389"))
+        self.assertFalse(_certificate_number_from_local_sync_is_untrusted("grupa_kety", "10204"))
 
     def test_zalco_ddt_sanitizer_reads_packing_list_with_analysis(self):
         candidates = _sanitize_zalco_ai_row_groups(

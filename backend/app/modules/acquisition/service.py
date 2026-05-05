@@ -9540,10 +9540,14 @@ def _extract_grupa_kety_ddt_row_groups_with_vision(
         openai_api_key=openai_api_key,
     )
     return _sanitize_grupa_kety_ai_row_groups(
-        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        ddt_number_raw=_prefer_grupa_kety_ddt_number(fallback_ddt, ddt_number_raw),
         raw_rows=raw_rows,
         ai_document_payload_raw=ai_document_payload_raw,
     )
+
+
+def _prefer_grupa_kety_ddt_number(local_ddt: str | None, ai_ddt: str | None) -> str | None:
+    return _string_or_none(ai_ddt) or _string_or_none(local_ddt)
 
 
 def _build_grupa_kety_ddt_group_crops(
@@ -9592,7 +9596,9 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
                 "Regola utente: una riga acquisition coincide con un certificato/lotto logico, non con ogni sotto-riga di spedizione. "
                 "Se lo stesso certificato/lotto compare su piu sotto-righe, aggregale in una sola riga e somma i Net weight della stessa coppia certificato+Heat. "
                 "Esempio: 10033541_22815 e 10033541_22816 con Heat 25E-7871 diventano una sola riga Cdq 10033541/25, Colata 25E-7871, Peso totale somma. "
-                "Delivery Note o Packing Slip e' il DDT. PO Number / Customer Order Number / Order date e' ordine. "
+                "Delivery Note o Packing Slip e' il DDT. Se vedi anche Shipment ID, non usarlo come DDT. "
+                "ddt_number_raw deve essere il valore accanto a Delivery Note/Packing Slip, non il valore accanto a Shipment ID. "
+                "PO Number / Customer Order Number / Order date e' ordine. "
                 "Il Cdq viene dal numero certificato visibile, oppure dal root lotto piu anno della Heat: 10033539 + 25E-7870 => 10033539/25. "
                 "La Colata e' Batch/Melt o Heat della stessa riga, es. 25E-7870 o H6245. "
                 "Diametro e lega/stato vengono dalla descrizione materiale: Extruded Round Bar 44.00, Alloy 7150, Temper F. "
@@ -10358,12 +10364,22 @@ def _sanitize_arconic_hannover_ai_row_groups(
         customer_item_description_raw = _string_or_none(raw_row.get("customer_item_description_raw"))
         arconic_item_number_raw = _string_or_none(raw_row.get("arconic_item_number_raw"))
         die_dimension_raw = _string_or_none(raw_row.get("die_dimension_raw"))
-        alloy_raw = _string_or_none(raw_row.get("alloy_raw")) or customer_item_description_raw
-        diameter_raw = _string_or_none(raw_row.get("diameter_raw")) or die_dimension_raw or customer_item_description_raw
+        alloy_raw = _string_or_none(raw_row.get("alloy_raw"))
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw"))
         cast_number_raw = _string_or_none(raw_row.get("cast_number_raw"))
         package_ids_raw = _string_or_none(raw_row.get("package_ids_raw"))
         net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
         source_crops = cast(list[str], raw_row.get("source_crops") or [])
+        normalized_alloy = (
+            _normalize_arconic_alloy_from_text(alloy_raw)
+            or _normalize_arconic_alloy_from_text(customer_item_description_raw)
+            or _normalize_arconic_alloy_from_text(die_dimension_raw)
+        )
+        normalized_diameter = (
+            _normalize_arconic_diameter_from_text(diameter_raw)
+            or _normalize_arconic_diameter_from_text(die_dimension_raw)
+            or _normalize_arconic_diameter_from_text(customer_item_description_raw)
+        )
 
         candidate = ReaderRowSplitCandidateResponse(
             candidate_index=index,
@@ -10374,8 +10390,8 @@ def _sanitize_arconic_hannover_ai_row_groups(
             product_code=_normalize_arconic_line_no(line_no_raw),
             customer_code=_normalize_arconic_customer_item_number(customer_item_number_raw),
             article_code=_normalize_arconic_item_number(arconic_item_number_raw),
-            lega=_normalize_arconic_alloy_from_text(alloy_raw),
-            diametro=_normalize_arconic_diameter_from_text(diameter_raw),
+            lega=normalized_alloy,
+            diametro=normalized_diameter,
             colata=_normalize_arconic_cast_number(cast_number_raw),
             lot_batch_no=_normalize_arconic_package_ids(package_ids_raw),
             peso_netto=_normalize_value_for_field("ddt", "peso", net_weight_raw),
@@ -10689,6 +10705,7 @@ def _normalize_arconic_diameter_from_text(value: str | None) -> str | None:
     text = cleaned.upper()
     for pattern in (
         r"\bRD\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\bRD\s*0*([0-9]{1,3})(?=[_\s|/-])",
         r"\bDIA(?:METER)?\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
         r"\bROUND\s+BAR\s+0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
         r"\b([0-9]{1,3}(?:[.,][0-9]+)?)\s*MM\b",
@@ -15706,7 +15723,6 @@ def _build_grupa_kety_certificate_safe_crops(
 def _build_grupa_kety_masked_page(image: Image.Image) -> Image.Image:
     masked = image.convert("RGB")
     words = _extract_ocr_word_blocks(masked)
-    _mask_relative_rectangle(masked, (0.04, 0.03, 0.20, 0.12))
     _mask_grupa_kety_identity_context(masked, words)
     return masked
 
@@ -21912,6 +21928,24 @@ def _sync_row_cdq_from_certificate_document(
     row: AcquisitionRow,
     certificate_document: Document,
 ) -> None:
+    match_certificate_number = _string_or_none(
+        _final_value_for_row(
+            db.query(ReadValue)
+            .filter(
+                ReadValue.acquisition_row_id == row.id,
+                ReadValue.blocco == "match",
+                ReadValue.campo == "numero_certificato_certificato",
+            )
+            .one_or_none()
+        )
+    )
+    if match_certificate_number is not None:
+        if row.cdq != match_certificate_number:
+            row.cdq = match_certificate_number
+            db.add(row)
+            db.flush()
+        return
+
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
     certificate_document = _ensure_document_page_ocr(db, certificate_document)
@@ -21933,6 +21967,11 @@ def _sync_row_cdq_from_certificate_document(
     certificate_number = _string_or_none(
         cast(dict[str, object], certificate_matches.get("numero_certificato_certificato") or {}).get("final")
     )
+    if _certificate_number_from_local_sync_is_untrusted(
+        certificate_template.supplier_key if certificate_template is not None else None,
+        certificate_number,
+    ):
+        certificate_number = None
     delivery_note = _string_or_none(supplier_fields.get("delivery_note_no"))
     changed = False
     if certificate_number is not None:
@@ -21944,6 +21983,10 @@ def _sync_row_cdq_from_certificate_document(
     if changed:
         db.add(row)
         db.flush()
+
+
+def _certificate_number_from_local_sync_is_untrusted(supplier_key: str | None, certificate_number: str | None) -> bool:
+    return supplier_key == "zalco" and reader_normalize_match_token(certificate_number) == "10204"
 
 
 def _final_value_for_row(value: ReadValue | None) -> str | None:
