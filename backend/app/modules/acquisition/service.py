@@ -15009,7 +15009,8 @@ def _build_arconic_hannover_certificate_safe_crops(
 def _build_arconic_hannover_masked_page(image: Image.Image) -> Image.Image:
     masked = image.convert("RGB")
     words = _extract_ocr_word_blocks(masked)
-    _mask_words_matching_terms(
+    _mask_arconic_hannover_supplier_identity(masked, words)
+    _mask_arconic_hannover_customer_context_words(
         masked,
         words,
         ("FORGIALLUMINIO", "ORGIALLUMINIO", "RGIALLUMINIO", "PEDAVENA", "ENRICO", "FERMI"),
@@ -15017,6 +15018,115 @@ def _build_arconic_hannover_masked_page(image: Image.Image) -> Image.Image:
         right_extra=max(4, masked.width // 400),
     )
     return masked
+
+
+def _mask_arconic_hannover_supplier_identity(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+) -> None:
+    if image.height > image.width:
+        _mask_relative_rectangle(image, (0.055, 0.052, 0.205, 0.145))
+    else:
+        _mask_relative_rectangle(image, (0.055, 0.095, 0.200, 0.180))
+
+    if not words:
+        return
+    line_map = _group_ocr_words_by_line(words)
+    supplier_terms = ("ARCONIC", "EXTRUSIONS", "ALCOA", "HANNOVER", "GOTTINGER", "GÖTTINGER", "CHAUSSEE")
+    keep_terms = (
+        "ITEM NUMBER",
+        "ITEM NO",
+        "ITEM DESCR",
+        "CUSTOMER ITEM",
+        "MATERIAL",
+        "DESCRIPTION",
+        "DIE",
+        "DIMENSION",
+        "CAST",
+        "LINE TOTAL",
+        "COMPOSITION",
+        "MECHANICAL",
+    )
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        if "ARCONIC ITEM" in line_text:
+            _mask_words_matching_terms(
+                image,
+                line_words,
+                ("ARCONIC",),
+                left_extra=max(4, image.width // 400),
+                right_extra=max(4, image.width // 400),
+            )
+            continue
+        if any(anchor in line_text for anchor in ("E-MAIL", "EMAIL", "PHONE", "FAX", "ACCOUNT MANAGER", "CSR HANNOVER")):
+            _mask_words_after_anchor(
+                image,
+                line_words,
+                anchor_terms=("E-MAIL", "EMAIL", "PHONE", "FAX", "MANAGER", "CSR"),
+            )
+            continue
+        if any(term in line_text for term in keep_terms):
+            continue
+        if any(term in line_text for term in supplier_terms):
+            _mask_words_matching_terms(
+                image,
+                line_words,
+                supplier_terms,
+                left_extra=max(4, image.width // 400),
+                right_extra=max(4, image.width // 400),
+            )
+
+
+def _mask_arconic_hannover_customer_context_words(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+    terms: tuple[str, ...],
+    *,
+    top_extra: int = 0,
+    bottom_extra: int = 0,
+    left_extra: int = 0,
+    right_extra: int = 0,
+) -> bool:
+    # Arconic DDT rows can contain "FORGIALLUMINIO" inside the material
+    # description. Mask customer terms line-by-line, but keep material rows.
+    if not words:
+        return False
+    line_map = _group_ocr_words_by_line(words)
+    keep_terms = (
+        "CUSTOMER ITEM",
+        "ITEM DESCR",
+        "ITEM DESCRIPTION",
+        "MATERIAL",
+        "DESCRIPTION",
+        "DIE",
+        "DIMENSION",
+        "CAST",
+        "LINE TOTAL",
+        "PACKING",
+        "INCOTERMS",
+    )
+    masked_any = False
+    top_limit = int(image.height * (0.46 if image.height > image.width else 0.62))
+    for line_words in line_map.values():
+        top = min(int(word["top"]) for word in line_words)
+        if top > top_limit:
+            continue
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        if any(term in line_text for term in keep_terms):
+            continue
+        masked_any = (
+            _mask_words_matching_terms(
+                image,
+                line_words,
+                terms,
+                top_extra=top_extra,
+                bottom_extra=bottom_extra,
+                left_extra=left_extra,
+                right_extra=right_extra,
+            )
+            or masked_any
+        )
+    return masked_any
 
 
 def _extract_ocr_line_blocks(image: Image.Image) -> list[dict[str, int | str]]:

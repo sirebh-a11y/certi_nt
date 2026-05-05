@@ -1,5 +1,7 @@
 import unittest
 
+from PIL import Image, ImageChops, ImageDraw
+
 from app.modules.acquisition.rematch_bridge import (
     RematchDecision,
     build_certificate_bridge,
@@ -7,6 +9,9 @@ from app.modules.acquisition.rematch_bridge import (
     score_bridge_match,
 )
 from app.modules.acquisition.service import (
+    _build_arconic_hannover_masked_page,
+    _mask_arconic_hannover_customer_context_words,
+    _mask_arconic_hannover_supplier_identity,
     _format_arconic_certificate_cdq,
     _sanitize_arconic_hannover_ai_row_groups,
     _sanitize_arconic_hannover_vision_certificate_fields,
@@ -179,6 +184,52 @@ class ArconicSupportTest(unittest.TestCase):
         self.assertEqual(fields["job_number"], "44270958")
         self.assertEqual(fields["diameter"], "87")
         self.assertEqual(fields["alloy"], "6082 F")
+
+    def test_arconic_masking_does_not_cover_material_row_context(self):
+        image = Image.new("RGB", (1000, 1400), "white")
+        before = image.copy()
+        words = [
+            {"text": "FORGIALLUMINIO", "left": 120, "top": 250, "right": 260, "bottom": 275, "line_key": (1, 1, 1)},
+            {"text": "FORGIALLUMINIO", "left": 120, "top": 850, "right": 260, "bottom": 875, "line_key": (2, 1, 1)},
+        ]
+
+        _mask_arconic_hannover_customer_context_words(image, words, ("FORGIALLUMINIO",))
+
+        diff = ImageChops.difference(before, image).convert("L")
+        self.assertIsNotNone(diff.crop((90, 220, 290, 310)).getbbox())
+        self.assertIsNone(diff.crop((90, 820, 290, 910)).getbbox())
+
+    def test_arconic_masking_covers_supplier_header_not_material_table(self):
+        image = Image.new("RGB", (1000, 1400), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((60, 70, 190, 155), fill=(80, 80, 80))
+        draw.rectangle((260, 850, 720, 890), fill=(80, 80, 80))
+        before = image.copy()
+
+        masked = _build_arconic_hannover_masked_page(image)
+
+        diff = ImageChops.difference(before, masked).convert("L")
+        self.assertIsNotNone(diff.crop((40, 45, 220, 180)).getbbox())
+        self.assertIsNone(diff.crop((240, 820, 750, 920)).getbbox())
+
+    def test_arconic_supplier_text_masking_keeps_arconic_item_rows(self):
+        image = Image.new("RGB", (1000, 1400), "white")
+        before = image.copy()
+        words = [
+            {"text": "Arconic", "left": 300, "top": 80, "right": 370, "bottom": 105, "line_key": (1, 1, 1)},
+            {"text": "Extrusions", "left": 380, "top": 80, "right": 480, "bottom": 105, "line_key": (1, 1, 1)},
+            {"text": "Hannover", "left": 490, "top": 80, "right": 580, "bottom": 105, "line_key": (1, 1, 1)},
+            {"text": "Arconic", "left": 260, "top": 850, "right": 330, "bottom": 875, "line_key": (2, 1, 1)},
+            {"text": "Item", "left": 340, "top": 850, "right": 390, "bottom": 875, "line_key": (2, 1, 1)},
+            {"text": "number", "left": 400, "top": 850, "right": 470, "bottom": 875, "line_key": (2, 1, 1)},
+        ]
+
+        _mask_arconic_hannover_supplier_identity(image, words)
+
+        diff = ImageChops.difference(before, image).convert("L")
+        self.assertIsNotNone(diff.crop((280, 55, 610, 125)).getbbox())
+        self.assertIsNotNone(diff.crop((240, 820, 350, 910)).getbbox())
+        self.assertIsNone(diff.crop((365, 820, 500, 910)).getbbox())
 
 
 if __name__ == "__main__":
