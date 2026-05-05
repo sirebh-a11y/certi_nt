@@ -16,10 +16,17 @@ from app.modules.acquisition.service import (
     _sanitize_arconic_hannover_ai_row_groups,
     _sanitize_arconic_hannover_vision_certificate_fields,
 )
+from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.matching import _extract_arconic_hannover_match_fields
 
 
 class ArconicSupportTest(unittest.TestCase):
+    def test_arconic_full_name_resolves_before_leichtmetall_hannover(self):
+        template = resolve_supplier_template("Arconic Extrusions Hannover")
+
+        self.assertIsNotNone(template)
+        self.assertEqual(template.supplier_key, "arconic_hannover")
+
     def test_arconic_bridge_matches_real_27697432_case(self):
         left = build_ddt_bridge(
             row_values={

@@ -9515,6 +9515,648 @@ def _apply_arconic_hannover_ai_candidate_to_row(
     return True
 
 
+def _extract_grupa_kety_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_grupa_kety_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to prepare Grupa Kety DDT pages for AI")
+
+    local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="grupa_kety")
+    fallback_ddt = _string_or_none(cast(dict[str, object], local_matches.get("ddt") or {}).get("final"))
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_grupa_kety_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_grupa_kety_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
+def _build_grupa_kety_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_grupa_kety_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"grupa_kety_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _extract_grupa_kety_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un Delivery Note / Packing Slip Grupa Kety e ricostruisci le righe acquisition. "
+                "Regola utente: una riga acquisition coincide con un certificato/lotto logico, non con ogni sotto-riga di spedizione. "
+                "Se lo stesso certificato/lotto compare su piu sotto-righe, aggregale in una sola riga e somma i Net weight della stessa coppia certificato+Heat. "
+                "Esempio: 10033541_22815 e 10033541_22816 con Heat 25E-7871 diventano una sola riga Cdq 10033541/25, Colata 25E-7871, Peso totale somma. "
+                "Delivery Note o Packing Slip e' il DDT. PO Number / Customer Order Number / Order date e' ordine. "
+                "Il Cdq viene dal numero certificato visibile, oppure dal root lotto piu anno della Heat: 10033539 + 25E-7870 => 10033539/25. "
+                "La Colata e' Batch/Melt o Heat della stessa riga, es. 25E-7870 o H6245. "
+                "Diametro e lega/stato vengono dalla descrizione materiale: Extruded Round Bar 44.00, Alloy 7150, Temper F. "
+                "Non usare dati autista, timbri o firme. Non usare nome file. Non fare match con certificati. "
+                "Usa solo testo/segni realmente visibili; se un campo non e chiaro, restituisci null. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"certificate_number_raw\":\"string|null\",\"lot_batch_raw\":\"string|null\",\"heat_raw\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"diameter_raw\":\"string|null\","
+                "\"customer_part_raw\":\"string|null\",\"customer_order_raw\":\"string|null\","
+                "\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": f"Crop label: {crop_label}; role: {crop.get('role') or 'unknown'}; page_number: {crop.get('page_number') or 'unknown'}",
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grupa Kety DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_grupa_kety_row_groups(response.output_text), response.output_text)
+
+
+def _parse_openai_json_payload_for_grupa_kety_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Grupa Kety DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Grupa Kety DDT row-group AI") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Grupa Kety DDT row-group AI payload")
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Grupa Kety DDT row-group AI payload")
+
+    rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (_string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else []))
+            if item is not None
+        ]
+        try:
+            row_index = int(raw_row.get("row_index")) if raw_row.get("row_index") is not None else index
+        except (TypeError, ValueError):
+            row_index = index
+        rows.append(
+            {
+                "row_index": row_index,
+                "certificate_number_raw": _string_or_none(raw_row.get("certificate_number_raw")),
+                "lot_batch_raw": _string_or_none(raw_row.get("lot_batch_raw")),
+                "heat_raw": _string_or_none(raw_row.get("heat_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "temper_raw": _string_or_none(raw_row.get("temper_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "customer_part_raw": _string_or_none(raw_row.get("customer_part_raw")),
+                "customer_order_raw": _string_or_none(raw_row.get("customer_order_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+    return _string_or_none(data.get("ddt_number_raw")), rows
+
+
+def _sanitize_grupa_kety_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
+) -> list[ReaderRowSplitCandidateResponse]:
+    normalized_ddt = _normalize_grupa_kety_ddt_number(ddt_number_raw)
+    grouped: dict[tuple[str | None, str | None], dict[str, object]] = {}
+
+    for raw_row in raw_rows:
+        lot_root = _normalize_grupa_kety_lot_root(
+            _string_or_none(raw_row.get("certificate_number_raw")) or _string_or_none(raw_row.get("lot_batch_raw"))
+        )
+        heat = _normalize_grupa_kety_heat(_string_or_none(raw_row.get("heat_raw")))
+        key = (lot_root, heat)
+        if key == (None, None):
+            key = (_string_or_none(raw_row.get("certificate_number_raw")), _string_or_none(raw_row.get("lot_batch_raw")))
+        bucket = grouped.setdefault(
+            key,
+            {
+                "rows": [],
+                "weight_total": 0.0,
+                "has_weight": False,
+                "source_crops": [],
+            },
+        )
+        cast(list[dict[str, object]], bucket["rows"]).append(raw_row)
+        weight = _parse_weight_float(_string_or_none(raw_row.get("net_weight_raw")))
+        if weight is not None:
+            bucket["weight_total"] = float(bucket["weight_total"]) + weight
+            bucket["has_weight"] = True
+        for source in cast(list[str], raw_row.get("source_crops") or []):
+            if source not in cast(list[str], bucket["source_crops"]):
+                cast(list[str], bucket["source_crops"]).append(source)
+
+    candidates: list[ReaderRowSplitCandidateResponse] = []
+    for index, bucket in enumerate(grouped.values(), start=1):
+        rows = cast(list[dict[str, object]], bucket["rows"])
+        first = rows[0]
+        certificate_raw = _first_string(*(row.get("certificate_number_raw") for row in rows))
+        lot_raw = _first_string(*(row.get("lot_batch_raw") for row in rows))
+        heat_raw = _first_string(*(row.get("heat_raw") for row in rows))
+        heat = _normalize_grupa_kety_heat(heat_raw)
+        lot_root = _normalize_grupa_kety_lot_root(certificate_raw or lot_raw)
+        cdq = _normalize_grupa_kety_certificate_number(certificate_raw, lot_root=lot_root, heat=heat)
+        alloy = _normalize_grupa_kety_alloy(
+            _first_string(*(row.get("alloy_raw") for row in rows)),
+            _first_string(*(row.get("temper_raw") for row in rows)),
+        )
+        diameter = _normalize_grupa_kety_diameter(_first_string(*(row.get("diameter_raw") for row in rows)))
+        weight = _format_weight_float(float(bucket["weight_total"])) if bucket.get("has_weight") else _normalize_weight_value(_string_or_none(first.get("net_weight_raw")))
+        raw_payload = {
+            "rows": rows,
+            "aggregated_weight": weight,
+            "ddt_number_raw": ddt_number_raw,
+        }
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="grupa_kety",
+            ddt_number=normalized_ddt,
+            cdq=cdq,
+            lot_batch_no=lot_root,
+            colata=heat,
+            heat_no=heat,
+            lega=alloy,
+            diametro=diameter,
+            peso_netto=weight,
+            customer_order_no=_normalize_grupa_kety_order(_first_string(*(row.get("customer_order_raw") for row in rows))),
+            article_code=_string_or_none(_first_string(*(row.get("customer_part_raw") for row in rows))),
+            snippets=cast(list[str], bucket["source_crops"])[:6],
+            ai_row_payload_raw=json.dumps(raw_payload, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+        if any(getattr(candidate, field_name) is not None for field_name in ("cdq", "colata", "lot_batch_no", "peso_netto", "ddt_number")):
+            candidates.append(candidate)
+    return candidates
+
+
+def _apply_grupa_kety_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    raw_payload: dict[str, object] = {}
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+        try:
+            parsed_payload = json.loads(ai_candidate.ai_row_payload_raw)
+            if isinstance(parsed_payload, dict):
+                raw_payload = parsed_payload
+        except json.JSONDecodeError:
+            raw_payload = {}
+
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "numero_certificato_ddt": ai_candidate.cdq,
+        "cdq": ai_candidate.cdq,
+        "colata": ai_candidate.colata,
+        "lot_batch_no": ai_candidate.lot_batch_no,
+        "heat_no": ai_candidate.heat_no,
+        "ordine": ai_candidate.customer_order_no,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "article_code": ai_candidate.article_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "peso": ai_candidate.peso_netto,
+        "delivery_note_raw": ai_candidate.ddt_number,
+        "ai_row_payload": json.dumps(raw_payload, ensure_ascii=False) if raw_payload else None,
+    }
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+    if changed_fields == 0:
+        return False
+    _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
+def _get_grupa_kety_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="grupa_kety")
+    page_images = _select_aluminium_bozen_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    raw_payload = _extract_grupa_kety_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
+    )
+    payload = _normalize_grupa_kety_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _extract_grupa_kety_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato Grupa Kety. Usa solo testo visibile: non inventare, non usare nome file. "
+                "Campi core: certificate_number e' il numero in alto, es. 10033539/25 o 750027617/23. "
+                "packing_slip_raw e' Dowod wysylkowy / Packing Slip / Lot, es. 12594 / 10033539: il primo numero e' DDT, il secondo e' root lotto. "
+                "order_no_raw e' Order date / Nr kontraktu klienta se presente, es. 154. "
+                "customer_part_raw e' Order No o Item/dimensions quando utile, es. PPO 44MM 7150/F L:5000. "
+                "alloy_raw viene da Alloy grade, es. EN AW-7150; temper_raw da Temper; heat_raw da Heat; kg_raw da kg; pieces_raw da Pieces. "
+                "diameter_raw viene da Dimensions or drawing o testo articolo, es. 44.00 mm. "
+                "Chimica: estrai solo la riga misurata del lotto/Heat, non i limiti min/max. "
+                "Proprieta: estrai le righe misurate Sample No. Txxx, non i limiti minimi; se piu righe, restituiscile tutte. "
+                "Note: cerca U.S./AMS ultrasonic class, RoHS, radioactive/free. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"certificate_number\":\"string|null\",\"packing_slip_raw\":\"string|null\",\"order_no_raw\":\"string|null\","
+                "\"customer_part_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"heat_raw\":\"string|null\","
+                "\"kg_raw\":\"string|null\",\"pieces_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\","
+                "\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\",\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
+                "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append({"type": "input_text", "text": f"Image label: {image_label}; page_number: {crop.get('page_number') or 'unknown'}"})
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grupa Kety certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_grupa_kety_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+    source_crop = next(iter(page_images.keys()), None)
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_grupa_kety_vision_certificate_fields(core_payload, source_crop)
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": source_crop,
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            source_crop or "page1": {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+    measured_rows = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows if isinstance(measured_rows, list) else [],
+        page_id=last_page_id,
+    )
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    packing_slip = _string_or_none(core_payload.get("packing_slip_raw"))
+    certificate_number = _normalize_grupa_kety_certificate_number(_string_or_none(core_payload.get("certificate_number")))
+    lot_root = _normalize_grupa_kety_lot_root(certificate_number or packing_slip)
+    heat = _normalize_grupa_kety_heat(_string_or_none(core_payload.get("heat_raw")))
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in core_fields.items()
+        },
+        "supplier_fields": {
+            "delivery_note_no": _normalize_grupa_kety_ddt_number(packing_slip),
+            "lot_number": lot_root,
+            "order_no": _normalize_grupa_kety_order(_string_or_none(core_payload.get("order_no_raw"))),
+            "heat": heat,
+            "customer_part_number": _string_or_none(core_payload.get("customer_part_raw")),
+            "certificate_number": certificate_number,
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_grupa_kety_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    certificate_number = _normalize_grupa_kety_certificate_number(_string_or_none(core_payload.get("certificate_number")))
+    packing_slip = _string_or_none(core_payload.get("packing_slip_raw"))
+    ddt_number = _normalize_grupa_kety_ddt_number(packing_slip)
+    order_no = _normalize_grupa_kety_order(_string_or_none(core_payload.get("order_no_raw")))
+    heat = _normalize_grupa_kety_heat(_string_or_none(core_payload.get("heat_raw")))
+    alloy = _normalize_grupa_kety_alloy(_string_or_none(core_payload.get("alloy_raw")), _string_or_none(core_payload.get("temper_raw")))
+    diameter = _normalize_grupa_kety_diameter(_string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("customer_part_raw")))
+    weight = _normalize_grupa_kety_weight(_string_or_none(core_payload.get("kg_raw")))
+    customer_part = _string_or_none(core_payload.get("customer_part_raw"))
+
+    def _payload(value: str | None, evidence: str | None = None) -> dict[str, str | None]:
+        return {"value": value, "evidence": evidence or value, "source_crop": source_crop}
+
+    return {
+        "numero_certificato_certificato": _payload(certificate_number),
+        "ordine_cliente_certificato": _payload(order_no),
+        "articolo_certificato": _payload(customer_part),
+        "lega_certificato": _payload(alloy),
+        "descrizione_profilo_cliente_certificato": _payload(customer_part),
+        "colata_certificato": _payload(heat),
+        "peso_certificato": _payload(weight),
+        "diametro_certificato": _payload(diameter),
+        "ddt_certificato": _payload(ddt_number),
+    }
+
+
+def _first_string(*values: object) -> str | None:
+    for value in values:
+        cleaned = _string_or_none(value)
+        if cleaned is not None:
+            return cleaned
+    return None
+
+
+def _normalize_grupa_kety_ddt_number(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    for pattern in (r"\b(?:DELIVERY\s+NOTE|PACKING\s+SLIP)\s*:?\s*(\d{4,9})\b", r"\b(\d{4,9})\s*/\s*\d{7,9}\b", r"\b(\d{4,9})\b"):
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _normalize_grupa_kety_lot_root(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{7,9})(?:\s*/\s*\d{2}|[_-][A-Z0-9]+|[_-]\d+)?\b", cleaned.upper())
+    return match.group(1) if match is not None else None
+
+
+def _normalize_grupa_kety_certificate_number(
+    value: str | None,
+    *,
+    lot_root: str | None = None,
+    heat: str | None = None,
+) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is not None:
+        match = re.search(r"\b(\d{7,9})\s*/\s*(\d{2})\b", cleaned)
+        if match is not None:
+            return f"{match.group(1)}/{match.group(2)}"
+    root = lot_root or _normalize_grupa_kety_lot_root(cleaned)
+    if root is None:
+        return None
+    heat_year = None
+    heat_value = _string_or_none(heat)
+    if heat_value is not None:
+        year_match = re.match(r"(\d{2})[A-Z]-", heat_value.upper())
+        if year_match is not None:
+            heat_year = year_match.group(1)
+    return f"{root}/{heat_year}" if heat_year else root
+
+
+def _normalize_grupa_kety_heat(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    text = cleaned.upper().replace(" ", "")
+    for pattern in (r"\b(\d{2}[A-Z]-\d{3,5})\b", r"\b([A-Z]\d{4,6})\b", r"\b([A-Z]\d{2,}-\d{2,})\b"):
+        match = re.search(pattern, text)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _normalize_grupa_kety_order(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    match = re.search(r"\b(\d{1,6})\b", cleaned)
+    return match.group(1) if match is not None else None
+
+
+def _normalize_grupa_kety_alloy(alloy_raw: str | None, temper_raw: str | None = None) -> str | None:
+    cleaned = " ".join(item for item in (_string_or_none(alloy_raw), _string_or_none(temper_raw)) if item)
+    if not cleaned:
+        return None
+    text = cleaned.upper().replace("EN AW-", " ").replace("EN AW", " ").replace("ALLOY", " ")
+    alloy_match = re.search(r"\b(20\d{2}A?|26\d{2}A?|5\d{3}A?|6\d{3}A?|7\d{3}A?)\b", text)
+    if alloy_match is None:
+        return None
+    temper_match = re.search(r"\b(T\d+[A-Z0-9]*|F|H\d+)\b", text)
+    return f"{alloy_match.group(1)} {temper_match.group(1)}".strip() if temper_match else alloy_match.group(1)
+
+
+def _normalize_grupa_kety_diameter(value: str | None) -> str | None:
+    return _normalize_diameter_value(value)
+
+
+def _normalize_grupa_kety_weight(value: str | None) -> str | None:
+    parsed = _parse_weight_float(value)
+    return _format_weight_float(parsed) if parsed is not None else None
+
+
+def _parse_weight_float(value: str | None) -> float | None:
+    cleaned = _string_or_none(value)
+    if cleaned is not None:
+        cleaned = re.sub(r"(?<=\d)\s+(?=\d)", "", cleaned)
+    normalized = _normalize_weight_value(cleaned)
+    if normalized is None:
+        return None
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
+def _format_weight_float(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:.3f}".rstrip("0").rstrip(".")
+
+
 def _extract_arconic_hannover_ddt_row_groups_with_vision(
     db: Session,
     *,
@@ -14434,6 +15076,10 @@ def _build_certificate_safe_crops(
         specialized = _build_arconic_hannover_certificate_safe_crops(pages)
         if specialized:
             return specialized
+    if supplier_key == "grupa_kety":
+        specialized = _build_grupa_kety_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
 
     crops: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -14964,6 +15610,119 @@ def _build_neuman_certificate_masked_page(image: Image.Image) -> Image.Image:
     _mask_neuman_customer_occurrence_blocks(masked, lines)
     _mask_neuman_supplier_occurrence_blocks(masked, lines)
     return masked
+
+
+def _build_grupa_kety_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_grupa_kety_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"grupa_kety_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("core_page", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_grupa_kety_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    words = _extract_ocr_word_blocks(masked)
+    _mask_relative_rectangle(masked, (0.04, 0.03, 0.20, 0.12))
+    _mask_grupa_kety_identity_context(masked, words)
+    return masked
+
+
+def _mask_grupa_kety_identity_context(
+    image: Image.Image,
+    words: list[dict[str, int | str | tuple[int, int, int]]],
+) -> None:
+    if not words:
+        return
+    identity_terms = (
+        "FORGIALLUMINIO",
+        "PEDAVENA",
+        "FMASPERO",
+        "ENRICO",
+        "FERMI",
+        "ITALY",
+        "ITALIEN",
+        "WLOCHY",
+        "WŁOCHY",
+        "GRUPA",
+        "KETY",
+        "KĘTY",
+        "KOŚCIUSZKI",
+        "KOSCIUSZKI",
+        "POLAND",
+        "POLSKA",
+    )
+    keep_terms = (
+        "PACKING",
+        "LOT",
+        "ORDER",
+        "DELIVERY",
+        "ITEM",
+        "SPECIFICATION",
+        "DIMENSION",
+        "ALLOY",
+        "HEAT",
+        "KG",
+        "PIECES",
+        "CHEMICAL",
+        "COMPOSITION",
+        "MECHANICAL",
+        "PROPERTIES",
+        "INCOTERMS",
+    )
+    line_map = _group_ocr_words_by_line(words)
+    for line_words in line_map.values():
+        line_text = " ".join(str(word["text"]).upper() for word in line_words)
+        if any(term in line_text for term in keep_terms):
+            continue
+        if any(anchor in line_text for anchor in ("DRIVER", "VEHICLE", "TRAILER")):
+            _mask_words_after_anchor(
+                image,
+                line_words,
+                anchor_terms=("SURNAME", "NUMBER", "DRIVER", "VEHICLE", "TRAILER"),
+                max_gap=max(24, image.width // 24),
+            )
+            continue
+        if any(term in line_text for term in identity_terms):
+            _mask_word_group(
+                image,
+                line_words,
+                top_extra=max(3, image.height // 500),
+                bottom_extra=max(3, image.height // 500),
+                left_extra=max(4, image.width // 500),
+                right_extra=max(4, image.width // 500),
+            )
 
 
 def _build_arconic_hannover_certificate_safe_crops(
@@ -19574,7 +20333,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
-    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover"}
+    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover", "grupa_kety"}
 
 
 def _get_supplier_certificate_ai_payload(
@@ -19629,6 +20388,13 @@ def _get_supplier_certificate_ai_payload(
         )
     if supplier_key == "arconic_hannover":
         return _get_arconic_hannover_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    if supplier_key == "grupa_kety":
+        return _get_grupa_kety_certificate_ai_payload(
             db=db,
             certificate_document=certificate_document,
             openai_api_key=openai_api_key,
@@ -19692,6 +20458,12 @@ def _extract_supplier_ddt_row_groups_with_vision(
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
         )
+    if supplier_key == "grupa_kety":
+        return _extract_grupa_kety_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
     return []
 
 
@@ -19745,6 +20517,14 @@ def _apply_supplier_ai_candidate_to_row(
         )
     if ai_candidate.supplier_key == "arconic_hannover":
         return _apply_arconic_hannover_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
+    if ai_candidate.supplier_key == "grupa_kety":
+        return _apply_grupa_kety_ai_candidate_to_row(
             db=db,
             row=row,
             ai_candidate=ai_candidate,
