@@ -4635,6 +4635,7 @@ def _persist_split_candidate_values(
         "ddt": candidate.ddt_number,
         "cdq": candidate.cdq,
         "profile_code": candidate.profile_code,
+        "customer_code": candidate.customer_code,
         "article_code": candidate.article_code,
         "customer_order_no": candidate.customer_order_no,
         "lot_batch_no": candidate.lot_batch_no,
@@ -9419,6 +9420,652 @@ def _apply_neuman_ai_candidate_to_row(
     return True
 
 
+def _apply_arconic_hannover_ai_candidate_to_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    ai_candidate: ReaderRowSplitCandidateResponse,
+    actor_id: int,
+    document_id: int,
+) -> bool:
+    raw_payload: dict[str, object] = {}
+    if ai_candidate.ai_row_payload_raw:
+        _create_ai_payload_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=document_id,
+            document_page_id=row.ddt_document.pages[0].id if row.ddt_document and row.ddt_document.pages else None,
+            blocco="ddt",
+            payload_text=ai_candidate.ai_row_payload_raw,
+            actor_id=actor_id,
+            confidence=0.72,
+        )
+        try:
+            parsed_payload = json.loads(ai_candidate.ai_row_payload_raw)
+            if isinstance(parsed_payload, dict):
+                raw_payload = parsed_payload
+        except json.JSONDecodeError:
+            raw_payload = {}
+
+    field_values = {
+        "ddt": ai_candidate.ddt_number,
+        "ordine": ai_candidate.customer_order_no,
+        "customer_order_no": ai_candidate.customer_order_no,
+        "supplier_order_no": ai_candidate.supplier_order_no,
+        "article_code": ai_candidate.article_code,
+        "customer_code": ai_candidate.customer_code,
+        "product_code": ai_candidate.product_code,
+        "lega": ai_candidate.lega,
+        "diametro": ai_candidate.diametro,
+        "colata": ai_candidate.colata,
+        "peso": ai_candidate.peso_netto,
+        "lot_batch_no": ai_candidate.lot_batch_no,
+        "heat_no": ai_candidate.heat_no,
+        "line_no": ai_candidate.product_code,
+        "delivery_note_no": ai_candidate.ddt_number,
+        "sales_order_number": ai_candidate.supplier_order_no,
+        "customer_po": ai_candidate.customer_order_no,
+        "customer_item_number": ai_candidate.customer_code,
+        "arconic_item_number": ai_candidate.article_code,
+        "die_dimension_raw": _string_or_none(raw_payload.get("die_dimension_raw")),
+        "customer_item_description_raw": _string_or_none(raw_payload.get("customer_item_description_raw")),
+        "cast_number_raw": _string_or_none(raw_payload.get("cast_number_raw")),
+        "package_ids_raw": _string_or_none(raw_payload.get("package_ids_raw")),
+    }
+
+    changed_fields = 0
+    for field_name, field_value in field_values.items():
+        normalized_value = _string_or_none(field_value)
+        if normalized_value is None:
+            continue
+        if _has_stable_value_protected_from_ai(row, "ddt", field_name):
+            continue
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            campo=field_name,
+            valore_grezzo=normalized_value,
+            valore_standardizzato=normalized_value,
+            valore_finale=normalized_value,
+            stato="proposto",
+            document_evidence_id=None,
+            metodo_lettura="chatgpt",
+            fonte_documentale="ddt",
+            confidenza=0.72,
+            actor_id=actor_id,
+        )
+        changed_fields += 1
+
+    if changed_fields == 0:
+        return False
+
+    _sync_row_from_ddt_values(db, row)
+    _sync_ddt_values_from_row_fields(db, row, actor_id=actor_id)
+    _sync_row_statuses(db, row)
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="ddt",
+        azione="gruppi_riga_ai_applicati",
+        user_id=actor_id,
+        nota_breve=str(changed_fields),
+    )
+    return True
+
+
+def _extract_arconic_hannover_ddt_row_groups_with_vision(
+    db: Session,
+    *,
+    ddt_document: Document,
+    openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
+    if not ddt_document.pages:
+        ddt_document = _index_document_from_path(db, ddt_document)
+    ddt_document = _ensure_document_page_images(db, ddt_document)
+
+    image_pages = [page for page in ddt_document.pages if page.immagine_pagina_storage_key]
+    if not image_pages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
+
+    crop_definitions = _build_arconic_hannover_ddt_group_crops(image_pages)
+    if not crop_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to prepare Arconic DDT pages for AI",
+        )
+
+    local_matches = reader_detect_ddt_core_matches(ddt_document.pages, supplier_key="arconic_hannover")
+    fallback_ddt = _string_or_none(cast(dict[str, object], local_matches.get("ddt") or {}).get("final"))
+
+    ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_arconic_hannover_ddt_row_groups_from_openai(
+        crop_definitions,
+        openai_api_key=openai_api_key,
+    )
+    return _sanitize_arconic_hannover_ai_row_groups(
+        ddt_number_raw=ddt_number_raw or fallback_ddt,
+        raw_rows=raw_rows,
+        ai_document_payload_raw=ai_document_payload_raw,
+    )
+
+
+def _build_arconic_hannover_ddt_group_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_arconic_hannover_masked_page(image)
+            storage_key = _save_ddt_crop(page, masked_page, f"arconic_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            role_specs = [("row_groups_page", "row_groups_page")]
+            if index == 0:
+                role_specs.insert(0, ("header_page", "header_page"))
+            else:
+                role_specs.insert(0, ("continuation_page", "continuation_page"))
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _extract_arconic_hannover_ddt_row_groups_from_openai(
+    crops: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> tuple[str | None, list[dict[str, object]], str]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi queste immagini di un Delivery Note Arconic Hannover e ricostruisci tutte le righe logiche materiale. "
+                "Una riga acquisition corrisponde alla riga materiale del DDT, non al singolo package. "
+                "Non usare annotazioni a penna. Non usare nome file. Non fare match con certificati. "
+                "Per distinguere le righe usa insieme: line_no, Customer Item number, Customer Item Description, "
+                "Arconic Item number, Die / Dimension, CAST Number, package IDs, peso di riga. "
+                "La colata e il CAST Number tecnico, di solito un token che inizia con C; i package IDs sono supporto e non sostituiscono la colata. "
+                "Se la descrizione contiene ROUND BAR, ROD, RD087,00, DIA 87 o simili, estraila in customer_item_description_raw e die_dimension_raw. "
+                "alloy_raw deve venire dalla descrizione materiale o customer item description se visibile, ad esempio 6082 F. "
+                "diameter_raw deve venire da Die / Dimension o descrizione, ad esempio RD087,00 significa diametro 87. "
+                "ddt_number_raw e' il Delivery Note. sales_order_raw e' Sales Order Number. customer_po_raw e' Customer Purchase Order. "
+                "line_no_raw e' il numero riga tipo 2.1. arconic_item_number_raw e' il codice BG.... customer_item_number_raw e' il codice cliente tipo A.... "
+                "net_weight_raw e' il peso netto della riga materiale/line total della stessa riga, non totale documento. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
+                "\"sales_order_raw\":\"string|null\",\"customer_po_raw\":\"string|null\",\"line_no_raw\":\"string|null\","
+                "\"customer_item_number_raw\":\"string|null\",\"customer_item_description_raw\":\"string|null\","
+                "\"arconic_item_number_raw\":\"string|null\",\"die_dimension_raw\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"cast_number_raw\":\"string|null\","
+                "\"package_ids_raw\":\"string|null\",\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
+            ),
+        }
+    ]
+
+    for crop_label, crop in crops.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append(
+            {
+                "type": "input_text",
+                "text": (
+                    f"Crop label: {crop_label}; "
+                    f"role: {crop.get('role') or 'unknown'}; "
+                    f"page_number: {crop.get('page_number') or 'unknown'}"
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Arconic DDT row-group AI request failed") from exc
+
+    return (*_parse_openai_json_payload_for_arconic_row_groups(response.output_text), response.output_text)
+
+
+def _parse_openai_json_payload_for_arconic_row_groups(payload: str) -> tuple[str | None, list[dict[str, object]]]:
+    text = payload.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Arconic DDT row-group AI")
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid JSON from Arconic DDT row-group AI") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Arconic DDT row-group AI payload")
+    rows_payload = data.get("rows")
+    if not isinstance(rows_payload, list):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Missing rows in Arconic DDT row-group AI payload")
+
+    normalized_rows: list[dict[str, object]] = []
+    for index, raw_row in enumerate(rows_payload, start=1):
+        if not isinstance(raw_row, dict):
+            continue
+        source_crops = raw_row.get("source_crops")
+        normalized_sources = [
+            item
+            for item in (_string_or_none(source_crop) for source_crop in (source_crops if isinstance(source_crops, list) else []))
+            if item is not None
+        ]
+        raw_row_index = raw_row.get("row_index")
+        try:
+            normalized_row_index = int(raw_row_index) if raw_row_index is not None else index
+        except (TypeError, ValueError):
+            normalized_row_index = index
+        normalized_rows.append(
+            {
+                "row_index": normalized_row_index,
+                "sales_order_raw": _string_or_none(raw_row.get("sales_order_raw")),
+                "customer_po_raw": _string_or_none(raw_row.get("customer_po_raw")),
+                "line_no_raw": _string_or_none(raw_row.get("line_no_raw")),
+                "customer_item_number_raw": _string_or_none(raw_row.get("customer_item_number_raw")),
+                "customer_item_description_raw": _string_or_none(raw_row.get("customer_item_description_raw")),
+                "arconic_item_number_raw": _string_or_none(raw_row.get("arconic_item_number_raw")),
+                "die_dimension_raw": _string_or_none(raw_row.get("die_dimension_raw")),
+                "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
+                "cast_number_raw": _string_or_none(raw_row.get("cast_number_raw")),
+                "package_ids_raw": _string_or_none(raw_row.get("package_ids_raw")),
+                "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
+                "source_crops": normalized_sources,
+            }
+        )
+    return _string_or_none(data.get("ddt_number_raw")), normalized_rows
+
+
+def _sanitize_arconic_hannover_ai_row_groups(
+    *,
+    ddt_number_raw: str | None,
+    raw_rows: list[dict[str, object]],
+    ai_document_payload_raw: str | None = None,
+) -> list[ReaderRowSplitCandidateResponse]:
+    sanitized_rows: list[ReaderRowSplitCandidateResponse] = []
+    normalized_ddt = _normalize_arconic_ddt_number(ddt_number_raw)
+
+    for index, raw_row in enumerate(raw_rows, start=1):
+        sales_order_raw = _string_or_none(raw_row.get("sales_order_raw"))
+        customer_po_raw = _string_or_none(raw_row.get("customer_po_raw"))
+        line_no_raw = _string_or_none(raw_row.get("line_no_raw"))
+        customer_item_number_raw = _string_or_none(raw_row.get("customer_item_number_raw"))
+        customer_item_description_raw = _string_or_none(raw_row.get("customer_item_description_raw"))
+        arconic_item_number_raw = _string_or_none(raw_row.get("arconic_item_number_raw"))
+        die_dimension_raw = _string_or_none(raw_row.get("die_dimension_raw"))
+        alloy_raw = _string_or_none(raw_row.get("alloy_raw")) or customer_item_description_raw
+        diameter_raw = _string_or_none(raw_row.get("diameter_raw")) or die_dimension_raw or customer_item_description_raw
+        cast_number_raw = _string_or_none(raw_row.get("cast_number_raw"))
+        package_ids_raw = _string_or_none(raw_row.get("package_ids_raw"))
+        net_weight_raw = _string_or_none(raw_row.get("net_weight_raw"))
+        source_crops = cast(list[str], raw_row.get("source_crops") or [])
+
+        candidate = ReaderRowSplitCandidateResponse(
+            candidate_index=index,
+            supplier_key="arconic_hannover",
+            ddt_number=normalized_ddt,
+            customer_order_no=_normalize_arconic_customer_po(customer_po_raw),
+            supplier_order_no=_normalize_arconic_sales_order(sales_order_raw),
+            product_code=_normalize_arconic_line_no(line_no_raw),
+            customer_code=_normalize_arconic_customer_item_number(customer_item_number_raw),
+            article_code=_normalize_arconic_item_number(arconic_item_number_raw),
+            lega=_normalize_arconic_alloy_from_text(alloy_raw),
+            diametro=_normalize_arconic_diameter_from_text(diameter_raw),
+            colata=_normalize_arconic_cast_number(cast_number_raw),
+            lot_batch_no=_normalize_arconic_package_ids(package_ids_raw),
+            peso_netto=_normalize_value_for_field("ddt", "peso", net_weight_raw),
+            snippets=source_crops[:6],
+            ai_row_payload_raw=json.dumps(raw_row, ensure_ascii=False),
+            ai_document_payload_raw=ai_document_payload_raw,
+        )
+
+        if any(
+            getattr(candidate, field_name) is not None
+            for field_name in (
+                "ddt_number",
+                "customer_order_no",
+                "supplier_order_no",
+                "customer_code",
+                "article_code",
+                "product_code",
+                "lega",
+                "diametro",
+                "colata",
+                "peso_netto",
+            )
+        ):
+            sanitized_rows.append(candidate)
+
+    return sanitized_rows
+
+
+def _get_arconic_hannover_certificate_ai_payload(
+    db: Session,
+    *,
+    certificate_document: Document,
+    openai_api_key: str,
+    certificate_ai_cache: dict[int, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
+    if cached is not None:
+        return cached
+
+    if not certificate_document.pages:
+        certificate_document = _index_document_from_path(db, certificate_document)
+    certificate_document = _ensure_document_page_images(db, certificate_document)
+    if not _document_has_image_pages(certificate_document):
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="arconic_hannover")
+    page_images = _select_aluminium_bozen_certificate_document_images(crops)
+    if not page_images:
+        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
+        if certificate_ai_cache is not None:
+            certificate_ai_cache[certificate_document.id] = empty_payload
+        return empty_payload
+
+    raw_payload = _extract_arconic_hannover_certificate_payload_from_openai(
+        page_images,
+        openai_api_key=openai_api_key,
+    )
+    payload = _normalize_arconic_hannover_certificate_ai_payload(page_images, raw_payload)
+    if certificate_ai_cache is not None:
+        certificate_ai_cache[certificate_document.id] = payload
+    return payload
+
+
+def _extract_arconic_hannover_certificate_payload_from_openai(
+    page_images: dict[str, dict[str, str | int]],
+    *,
+    openai_api_key: str,
+) -> dict[str, object]:
+    client = OpenAI(api_key=openai_api_key)
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Leggi questo certificato Arconic Hannover. Usa solo testo visibile: non inventare e non usare il nome file. "
+                "Campi core: cert_number e' Cert Number EEP..., sales_order_number, customer_po, delivery_note_no, line_no, "
+                "customer_item_number, arconic_item_number, item_description_raw, alloy_raw, diameter_raw, cast_job_number, net_weight_raw. "
+                "La colata e' il CAST/Heat che inizia con C; il job/package dopo slash e' supporto. "
+                "Chimica: leggi solo la riga Composition Results in %, escludendo limiti. "
+                "Proprieta: se ci sono piu righe misurate, restituiscile in measured_rows; il sistema usera il minimo per campo. "
+                "Non inserire valori SPECLIMITS/limiti come misurati. "
+                "Restituisci solo JSON con questa struttura: "
+                "{\"core\":{\"cert_number\":\"string|null\",\"sales_order_number\":\"string|null\",\"customer_po\":\"string|null\","
+                "\"delivery_note_no\":\"string|null\",\"line_no\":\"string|null\",\"customer_item_number\":\"string|null\","
+                "\"arconic_item_number\":\"string|null\",\"item_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
+                "\"diameter_raw\":\"string|null\",\"cast_job_number\":\"string|null\",\"net_weight_raw\":\"string|null\"},"
+                "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
+                "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
+                "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\","
+                "\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\",\"Bi+Pb\":\"string|null\"},"
+                "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
+                "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
+                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+            ),
+        }
+    ]
+
+    for image_label, crop in page_images.items():
+        crop_path = _resolve_storage_path(str(crop["storage_key"]))
+        encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
+        content.append({"type": "input_text", "text": f"Image label: {image_label}; page_number: {crop.get('page_number') or 'unknown'}"})
+        content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
+
+    try:
+        response = client.responses.create(
+            model=settings.document_vision_model,
+            input=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Arconic certificate AI extraction request failed") from exc
+
+    return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
+
+
+def _normalize_arconic_hannover_certificate_ai_payload(
+    page_images: dict[str, dict[str, str | int]],
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    first_page_crop = next(iter(page_images.values()), None)
+    first_page_id = int(first_page_crop.get("page_id")) if first_page_crop and first_page_crop.get("page_id") else 0
+    last_page_crop = next(reversed(page_images.values()), None) if page_images else None
+    last_page_id = int(last_page_crop.get("page_id")) if last_page_crop and last_page_crop.get("page_id") else first_page_id
+    source_crop = next(iter(page_images.keys()), None)
+
+    core_payload = cast(dict[str, object], raw_payload.get("core") or {})
+    core_fields = _sanitize_arconic_hannover_vision_certificate_fields(core_payload, source_crop)
+
+    chemistry_payload = cast(dict[str, object], raw_payload.get("chemistry_raw") or {})
+    chemistry_matches = _normalize_vision_numeric_matches(
+        {
+            field_name: {
+                "value": _string_or_none(chemistry_payload.get(field_name)),
+                "evidence": _string_or_none(chemistry_payload.get(field_name)),
+                "source_crop": source_crop,
+            }
+            for field_name in ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", "Ti", "Cd", "Hg", "Pb", "V", "Bi", "Sn", "Zr", "Be", "Zr+Ti", "Mn+Cr", "Bi+Pb")
+        },
+        {
+            source_crop or "page1": {
+                "page_id": first_page_id,
+                "page_number": first_page_crop.get("page_number") if first_page_crop else 1,
+            }
+        },
+    )
+
+    measured_rows = cast(dict[str, object], raw_payload.get("mechanical_raw") or {}).get("measured_rows") or []
+    property_matches = _normalize_aluminium_bozen_measured_rows_payload(
+        measured_rows if isinstance(measured_rows, list) else [],
+        page_id=last_page_id,
+    )
+
+    notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
+    note_matches = _normalize_vision_note_matches(
+        {
+            "nota_us_control_classe": {
+                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_rohs": {
+                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+            "nota_radioactive_free": {
+                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
+            },
+        },
+        {
+            next(reversed(page_images.keys()), "page1"): {
+                "page_id": last_page_id,
+                "page_number": last_page_crop.get("page_number") if last_page_crop else (first_page_crop.get("page_number") if first_page_crop else 1),
+            }
+        },
+    )
+
+    cast_job_raw = _string_or_none(core_payload.get("cast_job_number"))
+    cast_number = _normalize_arconic_cast_number(cast_job_raw)
+    job_number = _normalize_arconic_package_ids(cast_job_raw)
+    return {
+        "match_values": {
+            field_name: _string_or_none(field_payload.get("value"))
+            for field_name, field_payload in core_fields.items()
+        },
+        "supplier_fields": {
+            "delivery_note_no": _normalize_arconic_ddt_number(_string_or_none(core_payload.get("delivery_note_no"))),
+            "sales_order_number": _normalize_arconic_sales_order(_string_or_none(core_payload.get("sales_order_number"))),
+            "customer_po": _normalize_arconic_customer_po(_string_or_none(core_payload.get("customer_po"))),
+            "line_no": _normalize_arconic_line_no(_string_or_none(core_payload.get("line_no"))),
+            "customer_item_number": _normalize_arconic_customer_item_number(_string_or_none(core_payload.get("customer_item_number"))),
+            "arconic_item_number": _normalize_arconic_item_number(_string_or_none(core_payload.get("arconic_item_number"))),
+            "cast_job_number": cast_job_raw,
+            "cast_number": cast_number,
+            "job_number": job_number,
+            "alloy": _normalize_arconic_alloy_from_text(_string_or_none(core_payload.get("alloy_raw")) or _string_or_none(core_payload.get("item_description_raw"))),
+            "diameter": _normalize_arconic_diameter_from_text(_string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("item_description_raw"))),
+        },
+        "core_fields": core_fields,
+        "chemistry": chemistry_matches,
+        "properties": property_matches,
+        "notes": note_matches,
+        "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+
+def _sanitize_arconic_hannover_vision_certificate_fields(
+    core_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    cert_number = _normalize_arconic_certificate_number(_string_or_none(core_payload.get("cert_number")))
+    cast_job_raw = _string_or_none(core_payload.get("cast_job_number"))
+    job_number = _normalize_arconic_package_ids(cast_job_raw)
+    certificate_cdq = _format_arconic_certificate_cdq(cert_number, job_number)
+    customer_po = _normalize_arconic_customer_po(_string_or_none(core_payload.get("customer_po")))
+    arconic_item = _normalize_arconic_item_number(_string_or_none(core_payload.get("arconic_item_number")))
+    customer_item = _normalize_arconic_customer_item_number(_string_or_none(core_payload.get("customer_item_number")))
+    description = _string_or_none(core_payload.get("item_description_raw"))
+    alloy = _normalize_arconic_alloy_from_text(_string_or_none(core_payload.get("alloy_raw")) or description)
+    diameter = _normalize_arconic_diameter_from_text(_string_or_none(core_payload.get("diameter_raw")) or description)
+    cast_number = _normalize_arconic_cast_number(cast_job_raw)
+    weight = _normalize_value_for_field("match", "peso_certificato", _string_or_none(core_payload.get("net_weight_raw")))
+    ddt_number = _normalize_arconic_ddt_number(_string_or_none(core_payload.get("delivery_note_no")))
+
+    def _payload(value: str | None, evidence: str | None = None) -> dict[str, str | None]:
+        return {"value": value, "evidence": evidence or value, "source_crop": source_crop}
+
+    return {
+        "numero_certificato_certificato": _payload(certificate_cdq),
+        "ordine_cliente_certificato": _payload(customer_po),
+        "articolo_certificato": _payload(arconic_item),
+        "codice_cliente_certificato": _payload(customer_item),
+        "descrizione_profilo_cliente_certificato": _payload(description),
+        "lega_certificato": _payload(alloy),
+        "diametro_certificato": _payload(diameter),
+        "colata_certificato": _payload(cast_number),
+        "peso_certificato": _payload(weight),
+        "ddt_certificato": _payload(ddt_number),
+    }
+
+
+def _normalize_arconic_ddt_number(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\b\d{6,9}\b")
+
+
+def _normalize_arconic_certificate_number(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\bEEP[0-9A-Z-]+\b")
+
+
+def _format_arconic_certificate_cdq(cert_number: str | None, package_ids: str | None) -> str | None:
+    cert = _string_or_none(cert_number)
+    package_token = _string_or_none(package_ids)
+    if cert and package_token:
+        first_package = package_token.split("|", 1)[0]
+        return f"{cert}-{first_package}"
+    return cert
+
+
+def _normalize_arconic_sales_order(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\b\d{6,}\b")
+
+
+def _normalize_arconic_customer_po(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\b[0-9][0-9A-Z/-]{0,}\b")
+
+
+def _normalize_arconic_line_no(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\b\d+\.\d+\b")
+
+
+def _normalize_arconic_customer_item_number(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\bA[0-9A-Z]{5,}\b")
+
+
+def _normalize_arconic_item_number(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\bBG[0-9A-Z]+\b")
+
+
+def _normalize_arconic_cast_number(value: str | None) -> str | None:
+    return _extract_token_from_value_or_evidence(value, value, r"\bC\d{9,}\b")
+
+
+def _normalize_arconic_package_ids(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    tokens = re.findall(r"\b\d{8}\b", cleaned)
+    return "|".join(dict.fromkeys(tokens)) if tokens else None
+
+
+def _normalize_arconic_alloy_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    text = cleaned.upper().replace("_", " ").replace("/", " ")
+    match = re.search(r"\b(2014A?|2618A?|5005A?|6005A?|6061A?|6082A?|6111A?|7075A?)\s*(?:[- ]|\s+)?(T\d+[A-Z0-9]*|F|H\d+)?\b", text)
+    if match is None:
+        return None
+    alloy = match.group(1)
+    temper = match.group(2)
+    return f"{alloy} {temper}".strip() if temper else alloy
+
+
+def _normalize_arconic_diameter_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    text = cleaned.upper()
+    for pattern in (
+        r"\bRD\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\bDIA(?:METER)?\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\bROUND\s+BAR\s+0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\b([0-9]{1,3}(?:[.,][0-9]+)?)\s*MM\b",
+    ):
+        match = re.search(pattern, text)
+        if match is None:
+            continue
+        normalized = _normalize_numeric_value(match.group(1))
+        if normalized is None:
+            continue
+        try:
+            numeric_value = float(normalized)
+        except ValueError:
+            continue
+        if 0 < numeric_value <= 400:
+            return str(int(numeric_value)) if numeric_value.is_integer() else normalized
+    return None
+
+
 def _get_metalba_certificate_ai_payload(
     db: Session,
     *,
@@ -12627,6 +13274,29 @@ def _score_certificate_candidate(
                 "weight": _string_or_none(certificate_supplier_fields.get("weight")) or _string_or_none(ai_supplier_fields.get("weight")),
                 "product_raw": _string_or_none(certificate_supplier_fields.get("product_raw")) or _string_or_none(ai_supplier_fields.get("product_raw")),
             }
+        elif supplier_key == "arconic_hannover":
+            certificate_supplier_fields = {
+                "delivery_note_no": _string_or_none(certificate_supplier_fields.get("delivery_note_no"))
+                or _string_or_none(ai_supplier_fields.get("delivery_note_no")),
+                "sales_order_number": _string_or_none(certificate_supplier_fields.get("sales_order_number"))
+                or _string_or_none(ai_supplier_fields.get("sales_order_number")),
+                "customer_po": _string_or_none(certificate_supplier_fields.get("customer_po"))
+                or _string_or_none(ai_supplier_fields.get("customer_po")),
+                "line_no": _string_or_none(certificate_supplier_fields.get("line_no"))
+                or _string_or_none(ai_supplier_fields.get("line_no")),
+                "customer_item_number": _string_or_none(certificate_supplier_fields.get("customer_item_number"))
+                or _string_or_none(ai_supplier_fields.get("customer_item_number")),
+                "arconic_item_number": _string_or_none(certificate_supplier_fields.get("arconic_item_number"))
+                or _string_or_none(ai_supplier_fields.get("arconic_item_number")),
+                "cast_job_number": _string_or_none(certificate_supplier_fields.get("cast_job_number"))
+                or _string_or_none(ai_supplier_fields.get("cast_job_number")),
+                "cast_number": _string_or_none(certificate_supplier_fields.get("cast_number"))
+                or _string_or_none(ai_supplier_fields.get("cast_number")),
+                "job_number": _string_or_none(certificate_supplier_fields.get("job_number"))
+                or _string_or_none(ai_supplier_fields.get("job_number")),
+                "alloy": _string_or_none(certificate_supplier_fields.get("alloy")) or _string_or_none(ai_supplier_fields.get("alloy")),
+                "diameter": _string_or_none(certificate_supplier_fields.get("diameter")) or _string_or_none(ai_supplier_fields.get("diameter")),
+            }
         elif supplier_key == "aww":
             certificate_supplier_fields = {
                 "kunden_teile_nr": _string_or_none(certificate_supplier_fields.get("kunden_teile_nr"))
@@ -12910,6 +13580,77 @@ def _score_certificate_candidate(
         if strong_match_count < 4:
             return None
         if not (delivery_note_match or customer_order_match or strong_match_count >= 5):
+            return None
+    elif supplier_key == "arconic_hannover":
+        delivery_note_match = bool(
+            reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            and reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("delivery_note_no"))
+        )
+        sales_order_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("sales_order_number") or ddt_supplier_fields.get("supplier_order_no"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("sales_order_number") or ddt_supplier_fields.get("supplier_order_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("sales_order_number"))
+        )
+        customer_po_match = bool(
+            reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("customer_po"))
+            and reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("customer_po"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_po"))
+        )
+        line_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("line_no") or ddt_supplier_fields.get("product_code"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("line_no") or ddt_supplier_fields.get("product_code"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("line_no"))
+        )
+        customer_item_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("customer_item_number") or ddt_supplier_fields.get("customer_code"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("customer_item_number") or ddt_supplier_fields.get("customer_code"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("customer_item_number"))
+        )
+        arconic_item_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("arconic_item_number") or ddt_supplier_fields.get("article_code"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("arconic_item_number") or ddt_supplier_fields.get("article_code"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("arconic_item_number"))
+        )
+        cast_match = bool(
+            reader_normalize_match_token(row.colata or ddt_supplier_fields.get("cast_number"))
+            and reader_normalize_match_token(row.colata or ddt_supplier_fields.get("cast_number"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("cast_number") or certificate_cast)
+        )
+        alloy_match = bool(
+            reader_normalize_match_token(row.lega_base or ddt_supplier_fields.get("alloy"))
+            and reader_normalize_match_token(row.lega_base or ddt_supplier_fields.get("alloy"))
+            == reader_normalize_match_token(
+                _string_or_none(matches.get("lega_certificato", {}).get("final")) or certificate_supplier_fields.get("alloy")
+            )
+        )
+        diameter_match = bool(
+            _string_or_none(row.diametro or ddt_supplier_fields.get("diameter"))
+            and _supplier_decimal_tokens_match(
+                _string_or_none(row.diametro or ddt_supplier_fields.get("diameter")),
+                _string_or_none(matches.get("diametro_certificato", {}).get("final"))
+                or _string_or_none(certificate_supplier_fields.get("diameter")),
+            )
+        )
+        strong_mismatch = False
+        if row.ddt and certificate_supplier_fields.get("delivery_note_no") and not delivery_note_match:
+            strong_mismatch = True
+        if row.ordine and certificate_supplier_fields.get("customer_po") and not customer_po_match:
+            strong_mismatch = True
+        if (row.colata or ddt_supplier_fields.get("cast_number")) and (certificate_supplier_fields.get("cast_number") or certificate_cast) and not cast_match:
+            strong_mismatch = True
+        if (row.diametro or ddt_supplier_fields.get("diameter")) and (_string_or_none(matches.get("diametro_certificato", {}).get("final")) or certificate_supplier_fields.get("diameter")) and not diameter_match:
+            strong_mismatch = True
+        if strong_mismatch:
+            return None
+        row_anchor_matches = sum(1 for flag in (line_match, customer_item_match, arconic_item_match, cast_match) if flag)
+        document_support_matches = sum(1 for flag in (delivery_note_match, sales_order_match, customer_po_match) if flag)
+        material_support_matches = sum(1 for flag in (alloy_match, diameter_match) if flag)
+        if row_anchor_matches < 2:
+            return None
+        if not cast_match:
+            return None
+        if document_support_matches < 1 and material_support_matches < 1:
             return None
     elif supplier_key == "aww":
         article_match = bool(
@@ -13343,6 +14084,8 @@ def _ddt_required_fields(supplier_key: str | None = None) -> tuple[str, ...]:
         return ("ddt", "lega", "cdq", "colata", "diametro", "peso")
     if supplier_key == "aww":
         return ("ddt", "lega", "diametro", "peso", "ordine")
+    if supplier_key == "arconic_hannover":
+        return ("ddt", "colata", "diametro", "peso", "ordine")
     return ("ddt", "lega", "cdq", "colata", "diametro", "peso")
 
 
@@ -13357,6 +14100,8 @@ def _ddt_optional_fields(supplier_key: str | None = None) -> tuple[str, ...]:
         return ("numero_certificato_ddt", "ordine")
     if supplier_key == "aww":
         return ("article_code", "profile_code", "supplier_order_no")
+    if supplier_key == "arconic_hannover":
+        return ("cdq", "article_code", "customer_code", "supplier_order_no", "product_code", "lot_batch_no")
     return ("numero_certificato_ddt", "ordine")
 
 
@@ -13683,6 +14428,10 @@ def _build_certificate_safe_crops(
             return specialized
     if supplier_key == "neuman":
         specialized = _build_neuman_certificate_safe_crops(pages)
+        if specialized:
+            return specialized
+    if supplier_key == "arconic_hannover":
+        specialized = _build_arconic_hannover_certificate_safe_crops(pages)
         if specialized:
             return specialized
 
@@ -14214,6 +14963,59 @@ def _build_neuman_certificate_masked_page(image: Image.Image) -> Image.Image:
     _mask_neuman_visual_logo_regions(masked, is_certificate_page=True)
     _mask_neuman_customer_occurrence_blocks(masked, lines)
     _mask_neuman_supplier_occurrence_blocks(masked, lines)
+    return masked
+
+
+def _build_arconic_hannover_certificate_safe_crops(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    crops: dict[str, dict[str, str | int]] = {}
+    image_pages = [page for page in sorted(pages, key=lambda item: item.numero_pagina) if page.immagine_pagina_storage_key]
+    if not image_pages:
+        return crops
+
+    for index, page in enumerate(image_pages):
+        image_path = get_document_page_image_path(page)
+        with Image.open(image_path) as image:
+            masked_page = _build_arconic_hannover_masked_page(image)
+            storage_key = _save_certificate_crop(page, masked_page, f"arconic_masked_page_{page.numero_pagina}")
+            width, height = masked_page.size
+            if index == 0:
+                role_specs = [
+                    ("core_page", "certificate_core_context"),
+                    ("chemistry_page", "chemistry_table"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            else:
+                role_specs = [
+                    ("continuation_page", "certificate_continuation"),
+                    ("properties_page", "properties_table"),
+                    ("notes_page", "notes_block"),
+                ]
+            for suffix, role in role_specs:
+                label = f"page{page.numero_pagina}_{suffix}"
+                crops[label] = {
+                    "label": label,
+                    "role": role,
+                    "page_id": page.id,
+                    "page_number": page.numero_pagina,
+                    "storage_key": storage_key,
+                    "bbox": f"0,0,{width},{height}",
+                }
+    return crops
+
+
+def _build_arconic_hannover_masked_page(image: Image.Image) -> Image.Image:
+    masked = image.convert("RGB")
+    words = _extract_ocr_word_blocks(masked)
+    _mask_words_matching_terms(
+        masked,
+        words,
+        ("FORGIALLUMINIO", "ORGIALLUMINIO", "RGIALLUMINIO", "PEDAVENA", "ENRICO", "FERMI"),
+        left_extra=max(4, masked.width // 400),
+        right_extra=max(4, masked.width // 400),
+    )
     return masked
 
 
@@ -18662,7 +19464,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
-    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww"}
+    return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover"}
 
 
 def _get_supplier_certificate_ai_payload(
@@ -18710,6 +19512,13 @@ def _get_supplier_certificate_ai_payload(
         )
     if supplier_key == "neuman":
         return _get_neuman_certificate_ai_payload(
+            db=db,
+            certificate_document=certificate_document,
+            openai_api_key=openai_api_key,
+            certificate_ai_cache=certificate_ai_cache,
+        )
+    if supplier_key == "arconic_hannover":
+        return _get_arconic_hannover_certificate_ai_payload(
             db=db,
             certificate_document=certificate_document,
             openai_api_key=openai_api_key,
@@ -18767,6 +19576,12 @@ def _extract_supplier_ddt_row_groups_with_vision(
             ddt_document=ddt_document,
             openai_api_key=openai_api_key,
         )
+    if supplier_key == "arconic_hannover":
+        return _extract_arconic_hannover_ddt_row_groups_with_vision(
+            db=db,
+            ddt_document=ddt_document,
+            openai_api_key=openai_api_key,
+        )
     return []
 
 
@@ -18812,6 +19627,14 @@ def _apply_supplier_ai_candidate_to_row(
         )
     if ai_candidate.supplier_key == "neuman":
         return _apply_neuman_ai_candidate_to_row(
+            db=db,
+            row=row,
+            ai_candidate=ai_candidate,
+            actor_id=actor_id,
+            document_id=document_id,
+        )
+    if ai_candidate.supplier_key == "arconic_hannover":
+        return _apply_arconic_hannover_ai_candidate_to_row(
             db=db,
             row=row,
             ai_candidate=ai_candidate,
@@ -19888,45 +20711,6 @@ def _detect_zalco_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[
     return matches
 
 
-def _detect_arconic_hannover_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
-    matches: dict[str, dict[str, str | int]] = {}
-    for page in pages:
-        for line in _page_lines(page):
-            normalized = _normalize_mojibake_numeric_text(line)
-            lowered = normalized.casefold()
-
-            if "ddt" not in matches:
-                delivery_match = re.search(r"\bdelivery\s+note\s+(\d{6,})\b", lowered)
-                if delivery_match is not None:
-                    matches["ddt"] = _build_match(page.id, line, delivery_match.group(1))
-
-            if "ordine" not in matches:
-                customer_po_match = re.search(r"\bcustomer\s+purchase\s+order\s+([0-9][0-9A-Z/-]{1,})\b", normalized, re.IGNORECASE)
-                if customer_po_match is not None:
-                    matches["ordine"] = _build_match(page.id, line, customer_po_match.group(1).upper())
-
-            if "diametro" not in matches:
-                diameter_match = re.search(r"\b(?:die\s*/\s*dimension|die\s*dimension)\s*RD\s*([0-9]+(?:[.,][0-9]+)?)\b", normalized, re.IGNORECASE)
-                if diameter_match is not None:
-                    matches["diametro"] = _build_match(page.id, line, _normalize_decimal_value(diameter_match.group(1)))
-
-            if "colata" not in matches:
-                cast_match = re.search(r"\b(C\d{9,})\b", normalized, re.IGNORECASE)
-                if cast_match is not None:
-                    matches["colata"] = _build_match(page.id, line, cast_match.group(1).upper())
-
-            if "peso" not in matches and "line total" in lowered:
-                total_match = re.search(
-                    r"\bline\s+total\b.*?\b\d+\s+([0-9]+(?:[.,][0-9]+)?)\s+([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s+([0-9]+(?:[.,]\d{3})*(?:[.,]\d+)?)\s+\d+\b",
-                    normalized,
-                    re.IGNORECASE,
-                )
-                if total_match is not None:
-                    matches["peso"] = _build_match(page.id, line, _normalize_weight(total_match.group(2)))
-
-    return matches
-
-
 def _detect_neuman_ddt_core_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -20045,58 +20829,14 @@ def _extract_supplier_match_fields(
     supplier_key: str | None,
     document_type: str,
 ) -> dict[str, str]:
-    if supplier_key is None:
-        return {}
-    lines: list[str] = []
-    for page in pages:
-        lines.extend(_page_lines(page))
-    if not lines:
-        return {}
-
-    supplier_match_extractor = {
-        "metalba": lambda current_lines, current_type: (
-            {
-                "vs_rif": (values := _extract_metalba_ddt_reference_values(current_lines))[0],
-                "rif_ord_root": _normalize_commessa_root(values[1]),
-            }
-            if current_type == "ddt"
-            else {
-                "ordine_cliente": (values := _extract_metalba_certificate_reference_values(current_lines))[0],
-                "commessa_root": _normalize_commessa_root(values[1]),
-            }
-        ),
-        "aww": lambda current_lines, current_type: (
-            {
-                "your_part_number": _extract_value_near_anchor(current_lines, ("your part number",)),
-                "part_number": _extract_code_pattern(current_lines, r"\bP3-\d{5}-\d{4}\b"),
-                "order_confirmation_root": _normalize_order_confirmation_root(
-                    _extract_value_near_anchor(current_lines, ("batch number (oc)", "batch number oc"))
-                ),
-            }
-            if current_type == "ddt"
-            else {
-                "kunden_teile_nr": _extract_value_near_anchor(current_lines, ("kunden-teile-nr", "customer part number")),
-                "artikel_nr": _extract_value_near_anchor(current_lines, ("artikel-nr", "article no", "article number")),
-                "auftragsbestaetigung_root": _normalize_order_confirmation_root(
-                    _extract_value_near_anchor(current_lines, ("auftragsbestätigung", "auftragsbestatigung", "order confirmation"))
-                ),
-            }
-        ),
-        "aluminium_bozen": lambda current_lines, current_type: {
-            "article": _extract_code_pattern(current_lines, r"\b14BT[0-9A-Z-]+\b"),
-            "profile_code": _extract_aluminium_bozen_profile_code(current_lines),
-            "customer_order_normalized": _extract_aluminium_bozen_customer_order(current_lines, document_type=current_type),
-        },
-        "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
-        "arconic_hannover": lambda current_lines, current_type: _extract_arconic_hannover_match_fields(current_lines),
-        "neuman": lambda current_lines, current_type: _extract_neuman_match_fields(current_lines),
-        "grupa_kety": lambda current_lines, current_type: _extract_grupa_kety_match_fields(current_lines, document_type=current_type),
-        "impol": lambda current_lines, current_type: _extract_impol_match_fields(current_lines, document_type=current_type),
-    }.get(supplier_key)
-
-    if supplier_match_extractor is None:
-        return {}
-    return supplier_match_extractor(lines, document_type)
+    # Keep one source of truth for supplier match extraction. The acquisition
+    # module imports the reader extractor everywhere else; this compatibility
+    # wrapper avoids stale local supplier logic if an old call path is reused.
+    return reader_extract_supplier_match_fields(
+        pages,
+        supplier_key=supplier_key,
+        document_type=document_type,
+    )
 
 
 def _extract_value_near_anchor(
@@ -20284,68 +21024,6 @@ def _extract_zalco_code_art(lines: list[str]) -> str | None:
         if match is not None:
             return match.group(1)
     return None
-
-
-def _extract_arconic_hannover_match_fields(lines: list[str]) -> dict[str, str]:
-    return {
-        "delivery_note_no": _extract_arconic_delivery_note(lines),
-        "sales_order_number": _extract_value_near_anchor(lines, ("sales order number",), pattern=r"\b\d{6,}\b"),
-        "customer_po": _extract_value_near_anchor(lines, ("customer purchase order", "customer p/o"), pattern=r"\b[0-9][0-9A-Z/-]{1,}\b"),
-        "arconic_item_number": _extract_value_near_anchor(lines, ("arconic item number", "item no."), pattern=r"\bBG[0-9A-Z]+\b"),
-        "cast_job_number": _extract_arconic_cast_job_number(lines),
-    }
-
-
-def _extract_arconic_delivery_note(lines: list[str]) -> str | None:
-    for line in lines:
-        match = re.search(
-            r"\bdelivery\s+note(?:\s+no\.?)?\s+(\d{6,})\b",
-            _normalize_mojibake_numeric_text(line),
-            re.IGNORECASE,
-        )
-        if match is not None:
-            return match.group(1)
-    return None
-
-
-def _extract_arconic_cast_job_number(lines: list[str]) -> str | None:
-    normalized_lines = [_normalize_mojibake_numeric_text(line).upper() for line in lines]
-
-    for index, line in enumerate(normalized_lines):
-        if "CAST/JOB NUMBER" in line:
-            window = [line, *normalized_lines[index + 1 : min(index + 4, len(normalized_lines))]]
-            normalized = _normalize_arconic_cast_job_tokens(window)
-            if normalized is not None:
-                return normalized
-
-    for line in normalized_lines:
-        if "CAST NUMBER" in line or "PACKAGE" in line or "LINE TOTAL" in line:
-            normalized = _normalize_arconic_cast_job_tokens([line])
-            if normalized is not None:
-                return normalized
-
-    for line in normalized_lines:
-        normalized = _normalize_arconic_cast_job_tokens([line])
-        if normalized is not None and "|" in normalized:
-            return normalized
-    return None
-
-
-def _normalize_arconic_cast_job_tokens(lines: list[str]) -> str | None:
-    cast_token: str | None = None
-    job_token: str | None = None
-    for line in lines:
-        if cast_token is None:
-            cast_match = re.search(r"\b(C\d{9,})\b", line)
-            if cast_match is not None:
-                cast_token = cast_match.group(1)
-        if job_token is None:
-            job_match = re.search(r"\b(\d{8})\b", line)
-            if job_match is not None:
-                job_token = job_match.group(1)
-    if cast_token and job_token:
-        return f"{cast_token}|{job_token}"
-    return cast_token or job_token
 
 
 def _extract_neuman_match_fields(lines: list[str]) -> dict[str, str]:

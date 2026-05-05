@@ -63,6 +63,11 @@ def build_ddt_bridge(
             "ddt": ("ddt",),
             "peso": ("peso",),
             "ordine": ("customer_order_no", "ordine"),
+            "article_code": ("arconic_item_number", "article_code", "articolo"),
+            "customer_code": ("customer_item_number", "customer_code", "codice_cliente"),
+            "line_no": ("line_no", "product_code"),
+            "supplier_order_no": ("sales_order_number", "supplier_order_no"),
+            "lot_batch_no": ("lot_batch_no", "job_number"),
         },
         supplier_id=supplier_id,
         supplier_name=supplier_name,
@@ -93,6 +98,11 @@ def build_certificate_bridge(
             "ddt": ("ddt_certificato", "ddt"),
             "peso": ("peso_certificato", "peso"),
             "ordine": ("ordine_cliente_certificato", "ordine"),
+            "article_code": ("articolo_certificato", "arconic_item_number", "article_code"),
+            "customer_code": ("codice_cliente_certificato", "customer_item_number", "customer_code"),
+            "line_no": ("line_no_certificato", "line_no", "product_code"),
+            "supplier_order_no": ("sales_order_number_certificato", "sales_order_number", "supplier_order_no"),
+            "lot_batch_no": ("lot_batch_no_certificato", "job_number", "lot_batch_no"),
         },
         supplier_id=supplier_id,
         supplier_name=supplier_name,
@@ -125,6 +135,7 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
     matched_fields: list[str] = []
     reasons: list[str] = []
     score = 0
+    arconic_pair = _is_arconic_bridge_pair(ddt_bridge, certificate_bridge)
     weights = {
         "cdq": 150,
         "colata": 100,
@@ -134,6 +145,16 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
         "lega": 45,
         "ddt": 30,
     }
+    if arconic_pair:
+        weights.update(
+            {
+                "article_code": 95,
+                "customer_code": 95,
+                "line_no": 70,
+                "supplier_order_no": 55,
+                "lot_batch_no": 35,
+            }
+        )
     for field_name, points in weights.items():
         if _field_matches(field_name, ddt_bridge.value(field_name), certificate_bridge.value(field_name)):
             matched_fields.append(field_name)
@@ -141,15 +162,26 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
             reasons.append(f"{field_name} coerente")
 
     matched = set(matched_fields)
-    strong_patterns = (
+    strong_patterns = [
         {"cdq"},
         {"colata", "diametro", "peso"},
         {"ordine", "lega", "diametro", "colata"},
-    )
+    ]
+    if arconic_pair:
+        strong_patterns.extend(
+            [
+                {"colata", "customer_code", "article_code"},
+                {"ddt", "line_no", "customer_code", "colata"},
+                {"ddt", "line_no", "article_code", "colata"},
+            ]
+        )
     has_strong_pattern = any(pattern.issubset(matched) for pattern in strong_patterns)
 
     # Lega alone, or only weak supports, must never create a rematch proposal.
-    material_support_count = len(matched & {"colata", "diametro", "peso", "ordine", "cdq"})
+    material_fields = {"colata", "diametro", "peso", "ordine", "cdq"}
+    if arconic_pair:
+        material_fields.update({"article_code", "customer_code", "line_no", "supplier_order_no", "lot_batch_no"})
+    material_support_count = len(matched & material_fields)
     if not has_strong_pattern and material_support_count < 3:
         return RematchScore(
             decision=RematchDecision.NONE,
@@ -222,6 +254,13 @@ def _supplier_blocker(left: RematchBridge, right: RematchBridge) -> str | None:
     return None
 
 
+def _is_arconic_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
+    left_name = _compact_text(left.value("fornitore") or left.supplier_name)
+    right_name = _compact_text(right.value("fornitore") or right.supplier_name)
+    names = [name for name in (left_name, right_name) if name]
+    return any("ARCONIC" in name or "ALCOA" in name for name in names)
+
+
 def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]:
     blockers: list[str] = []
     # Weight is supporting evidence only: one certificate can cover multiple DDT
@@ -247,7 +286,7 @@ def _field_matches(field_name: str, left: str | None, right: str | None) -> bool
         return _weights_match(left, right)
     if field_name == "colata":
         return _normalize_primary_code(left) == _normalize_primary_code(right)
-    if field_name in {"cdq", "ordine", "ddt"}:
+    if field_name in {"cdq", "ordine", "ddt", "article_code", "customer_code", "line_no", "supplier_order_no", "lot_batch_no"}:
         return _compact_text(left) == _compact_text(right)
     if field_name == "fornitore":
         return _compact_text(left) == _compact_text(right)
@@ -274,7 +313,7 @@ def _normalize_primary_code(value: str | None) -> str | None:
     if value is None:
         return None
     text = str(value).upper()
-    text = re.split(r"[\s(;/]+", text.strip(), maxsplit=1)[0]
+    text = re.split(r"[\s(;/|]+", text.strip(), maxsplit=1)[0]
     return _compact_text(text)
 
 

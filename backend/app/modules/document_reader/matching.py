@@ -130,7 +130,7 @@ def extract_supplier_match_fields(
         },
         "leichtmetall": lambda current_lines, current_type: _extract_leichtmetall_match_fields(current_lines, document_type=current_type),
         "zalco": lambda current_lines, current_type: _extract_zalco_match_fields(current_lines, document_type=current_type),
-        "arconic_hannover": lambda current_lines, current_type: _extract_arconic_hannover_match_fields(current_lines),
+        "arconic_hannover": lambda current_lines, current_type: _extract_arconic_hannover_match_fields(current_lines, document_type=current_type),
         "neuman": lambda current_lines, current_type: _extract_neuman_match_fields(current_lines, document_type=current_type),
         "grupa_kety": lambda current_lines, current_type: _extract_grupa_kety_match_fields(current_lines, document_type=current_type),
         "impol": lambda current_lines, current_type: _extract_impol_match_fields(current_lines, document_type=current_type),
@@ -1166,16 +1166,26 @@ def score_supplier_field_matches(
         if same_token(ddt_supplier_fields.get("code_art"), certificate_supplier_fields.get("code_art")):
             add_reason(85, "Code art coerente")
     elif supplier_key == "arconic_hannover":
-        if same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
-            add_reason(120, "Delivery note coerente")
-        if same_token(ddt_supplier_fields.get("sales_order_number"), certificate_supplier_fields.get("sales_order_number")):
-            add_reason(95, "Sales order coerente")
-        if same_token(ddt_supplier_fields.get("customer_po"), certificate_supplier_fields.get("customer_po")):
-            add_reason(95, "Customer P/O coerente")
-        if same_token(ddt_supplier_fields.get("arconic_item_number"), certificate_supplier_fields.get("arconic_item_number")):
-            add_reason(100, "Arconic item coerente")
-        if same_token(ddt_supplier_fields.get("cast_job_number"), certificate_supplier_fields.get("cast_job_number")):
+        if same_token(ddt_supplier_fields.get("cast_number"), certificate_supplier_fields.get("cast_number")):
+            add_reason(130, "Cast Number coerente")
+        elif same_token(ddt_supplier_fields.get("cast_job_number"), certificate_supplier_fields.get("cast_job_number")):
             add_reason(110, "Cast/Job coerente")
+        if same_token(ddt_supplier_fields.get("customer_item_number"), certificate_supplier_fields.get("customer_item_number")):
+            add_reason(115, "Customer item coerente")
+        if same_token(ddt_supplier_fields.get("arconic_item_number"), certificate_supplier_fields.get("arconic_item_number")):
+            add_reason(110, "Arconic item coerente")
+        if same_token(ddt_supplier_fields.get("line_no"), certificate_supplier_fields.get("line_no")):
+            add_reason(90, "Line No. coerente")
+        if same_token(ddt_supplier_fields.get("delivery_note_no"), certificate_supplier_fields.get("delivery_note_no")):
+            add_reason(80, "Delivery note coerente")
+        if same_token(ddt_supplier_fields.get("sales_order_number"), certificate_supplier_fields.get("sales_order_number")):
+            add_reason(75, "Sales order coerente")
+        if same_token(ddt_supplier_fields.get("customer_po"), certificate_supplier_fields.get("customer_po")):
+            add_reason(75, "Customer P/O coerente")
+        if same_token(ddt_supplier_fields.get("alloy"), certificate_supplier_fields.get("alloy")):
+            add_reason(55, "Lega coerente")
+        if same_token(ddt_supplier_fields.get("diameter"), certificate_supplier_fields.get("diameter")):
+            add_reason(55, "Diametro coerente")
     elif supplier_key == "neuman":
         if same_token(ddt_supplier_fields.get("lot_number"), certificate_supplier_fields.get("lot_number")):
             add_reason(110, "Lot coerente")
@@ -2074,20 +2084,31 @@ def _extract_zalco_code_art(lines: list[str]) -> str | None:
     return None
 
 
-def _extract_arconic_hannover_match_fields(lines: list[str]) -> dict[str, str]:
-    return {
+def _extract_arconic_hannover_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:
+    cast_job_number = _extract_arconic_cast_job_number(lines)
+    cast_number, job_number = _split_arconic_cast_job(cast_job_number)
+    description_raw = _extract_arconic_material_description(lines, document_type=document_type)
+    fields = {
         "delivery_note_no": _extract_arconic_delivery_note(lines),
         "sales_order_number": _extract_value_near_anchor(lines, ("sales order number",), pattern=r"\b\d{6,}\b"),
         "customer_po": _extract_value_near_anchor(lines, ("customer purchase order", "customer p/o"), pattern=r"\b[0-9][0-9A-Z/-]{1,}\b"),
-        "arconic_item_number": _extract_value_near_anchor(lines, ("arconic item number", "item no."), pattern=r"\bBG[0-9A-Z]+\b"),
-        "cast_job_number": _extract_arconic_cast_job_number(lines),
+        "line_no": _extract_arconic_line_no(lines),
+        "customer_item_number": _extract_value_near_anchor(lines, ("customer item number", "customer item no", "customer item"), pattern=r"\bA[0-9A-Z]{5,}\b"),
+        "arconic_item_number": _extract_value_near_anchor(lines, ("arconic item number", "item no.", "item number"), pattern=r"\bBG[0-9A-Z]+\b"),
+        "cast_job_number": cast_job_number,
+        "cast_number": cast_number,
+        "job_number": job_number,
+        "material_description_raw": description_raw,
+        "alloy": _normalize_arconic_alloy_from_text(description_raw or "\n".join(lines)),
+        "diameter": _normalize_arconic_diameter_from_text(description_raw or "\n".join(lines)),
     }
+    return {key: value for key, value in fields.items() if value}
 
 
 def _extract_arconic_delivery_note(lines: list[str]) -> str | None:
     for line in lines:
         match = re.search(
-            r"\bdelivery\s+note(?:\s+no\.?)?\s+(\d{6,})\b",
+            r"\bdelivery\s+note(?:\s+no\.?)?\s*:?\s*(\d{6,})\b",
             _normalize_mojibake_numeric_text(line),
             re.IGNORECASE,
         )
@@ -2134,6 +2155,87 @@ def _normalize_arconic_cast_job_tokens(lines: list[str]) -> str | None:
     if cast_token and job_token:
         return f"{cast_token}|{job_token}"
     return cast_token or job_token
+
+
+def _split_arconic_cast_job(value: str | None) -> tuple[str | None, str | None]:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None, None
+    cast_match = re.search(r"\b(C\d{9,})\b", cleaned.upper())
+    job_match = re.search(r"\b(\d{8})\b", cleaned)
+    return (cast_match.group(1) if cast_match else None, job_match.group(1) if job_match else None)
+
+
+def _extract_arconic_line_no(lines: list[str]) -> str | None:
+    for line in lines:
+        normalized = _normalize_mojibake_numeric_text(line)
+        match = re.search(r"\bline\s+no\.?\s*:?\s*(\d+\.\d+)\b", normalized, re.IGNORECASE)
+        if match is not None:
+            return match.group(1)
+    return _extract_value_near_anchor(lines, ("line no",), pattern=r"\b\d+\.\d+\b")
+
+
+def _extract_arconic_material_description(lines: list[str], *, document_type: str) -> str | None:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines]
+    anchors = (
+        ("customer item description", "item description", "die / dimension")
+        if document_type == "ddt"
+        else ("item description", "customer item no", "item no.")
+    )
+    snippets: list[str] = []
+    for index, line in enumerate(normalized_lines):
+        if not any(anchor in line.casefold() for anchor in anchors):
+            continue
+        for candidate in normalized_lines[index : min(index + 6, len(normalized_lines))]:
+            if re.search(r"\b(?:RD|DIA|ROUND|BAR|ROD|6082|6111|7075|T\d|/\s*F|_\s*F)\b", candidate, re.IGNORECASE):
+                snippets.append(candidate)
+        if snippets:
+            break
+    if not snippets:
+        snippets = [
+            line
+            for line in normalized_lines
+            if re.search(r"\b(?:RD|DIA|ROUND|BAR|ROD|6082|6111|7075|T\d|_\s*F)\b", line, re.IGNORECASE)
+        ][:4]
+    return " ".join(snippets) if snippets else None
+
+
+def _normalize_arconic_alloy_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    text = cleaned.upper().replace("_", " ").replace("/", " ")
+    match = re.search(r"\b(2014A?|2618A?|5005A?|6005A?|6061A?|6082A?|6111A?|7075A?)\s*(?:[- ]|\s+)?(T\d+[A-Z0-9]*|F|H\d+)?\b", text)
+    if match is None:
+        return None
+    alloy = match.group(1)
+    temper = match.group(2)
+    return f"{alloy} {temper}".strip() if temper else alloy
+
+
+def _normalize_arconic_diameter_from_text(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    text = cleaned.upper()
+    patterns = (
+        r"\bRD\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\bDIA(?:METER)?\s*0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\bROUND\s+BAR\s+0*([0-9]{1,3}(?:[.,][0-9]+)?)\b",
+        r"\b([0-9]{1,3}(?:[.,][0-9]+)?)\s*MM\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match is None:
+            continue
+        normalized = _normalize_decimal_value(match.group(1))
+        try:
+            numeric_value = float(normalized)
+        except ValueError:
+            continue
+        if 0 < numeric_value <= 400:
+            return str(int(numeric_value)) if numeric_value.is_integer() else normalized
+    return None
 
 
 def _extract_neuman_match_fields(lines: list[str], *, document_type: str) -> dict[str, str]:

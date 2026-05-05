@@ -106,13 +106,15 @@ Il template si riconosce da:
 
 ## 6. Campi Forti Per Match Futuro
 
-* `Delivery Note No.`
-* `Sales Order Number`
-* `Customer Purchase Order`
-* `Customer Item number`
-* `Arconic Item number`
-* `CAST Number`
-* dimensione
+Campi forti di riga DDT:
+
+* `CAST Number`: colata tecnica, campo obbligatorio di match quando leggibile
+* `Customer Item number`: codice cliente della riga, ad esempio `A62087030`
+* `Arconic Item number`: codice Arconic della riga, ad esempio `BG5207530`
+* `Line No.`: distingue righe diverse nello stesso DDT, ad esempio `2.1`
+* `Die / Dimension`: contiene il diametro, ad esempio `RD087,00` -> diametro `87`
+* `Customer Item Description`: contiene materiale/forma, ad esempio round bar e lega/stato
+* `Delivery Note No.`, `Sales Order Number`, `Customer Purchase Order`: forti come supporto documento, ma non bastano da soli per scegliere la riga
 
 ---
 
@@ -121,3 +123,5 @@ Il template si riconosce da:
 * template forte e ricco, molto adatto a parser strutturato
 * il `CAST Number` e' il campo chiave tecnico, ma non basta da solo quando il DDT ha piu' linee
 * serve sempre distinguere la linea materiale corretta prima del match col certificato
+* il DDT normalmente non espone il `CdQ` finale del certificato: non va richiesto come campo obbligatorio DDT
+* i package IDs sono supporto per collegare certificato e riga, ma non devono sostituire la colata

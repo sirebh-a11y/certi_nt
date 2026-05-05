@@ -106,13 +106,23 @@ Regola:
 
 Campi forti:
 
+* `CAST/JOB NUMBER`: separare `CAST Number` e `job/package`
+* `Customer Item No.`
+* `Item No.` / `Arconic Item Number`
+* `Line No.`
 * `Delivery Note No.`
 * `Sales Order Number`
 * `Customer P/O`
-* `Customer Item No.`
-* `CAST/JOB NUMBER`
+* lega e diametro ricavati da `Item Description` quando presenti
+
+Regola `CdQ` in lista:
+
+* il campo `CdQ` del certificato deve usare `Cert Number` + `-` + primo job/package di `CAST/JOB NUMBER`
+* esempio: `Cert Number EEP73417` e `CAST/JOB NUMBER C.../44281864` diventano `EEP73417-44281864`
+* se il package/job non e' leggibile, usare solo `Cert Number`
 
 Nota:
 
 * template molto forte
 * uno stesso DDT puo' matchare piu' certificati quando contiene piu' linee materiale
+* uno stesso certificato puo' coprire piu' package/lot della stessa riga DDT
