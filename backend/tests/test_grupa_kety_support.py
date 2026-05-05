@@ -12,6 +12,8 @@ from app.modules.acquisition.service import (
     _build_grupa_kety_masked_page,
     _normalize_grupa_kety_certificate_ai_payload,
     _sanitize_grupa_kety_ai_row_groups,
+    _supplier_certificate_first_keeps_row_order,
+    _supplier_supports_certificate_first,
 )
 from app.modules.document_reader.registry import resolve_supplier_template
 
@@ -22,6 +24,10 @@ class GrupaKetySupportTest(unittest.TestCase):
             template = resolve_supplier_template(name)
             self.assertIsNotNone(template, name)
             self.assertEqual(template.supplier_key, "grupa_kety")
+
+    def test_grupa_kety_certificate_first_is_enabled_for_second_run_rematch(self):
+        self.assertTrue(_supplier_supports_certificate_first("grupa_kety"))
+        self.assertTrue(_supplier_certificate_first_keeps_row_order("grupa_kety"))
 
     def test_grupa_kety_ddt_sanitizer_aggregates_12594_rows_by_certificate_and_heat(self):
         candidates = _sanitize_grupa_kety_ai_row_groups(

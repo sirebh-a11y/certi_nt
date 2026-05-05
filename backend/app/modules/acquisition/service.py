@@ -11897,7 +11897,7 @@ def _ensure_certificate_first_rows(
             certificate_document.nome_file_originale,
         )
         supplier_key = template.supplier_key if template is not None else None
-        if supplier_key not in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww"}:
+        if not _supplier_supports_certificate_first(supplier_key):
             continue
 
         if use_ai_intervention and openai_api_key:
@@ -11918,20 +11918,38 @@ def _ensure_certificate_first_rows(
             certificate_article = (
                 _string_or_none(ai_supplier_fields.get("article"))
                 or _string_or_none(ai_supplier_fields.get("product_code"))
+                or _string_or_none(ai_supplier_fields.get("arconic_item_number"))
+                or _string_or_none(ai_supplier_fields.get("code_art"))
                 or _string_or_none(ai_match_values.get("articolo_certificato"))
             )
-            certificate_profile_code = _string_or_none(ai_supplier_fields.get("profile_code")) or _string_or_none(ai_supplier_fields.get("customer_code"))
+            certificate_profile_code = (
+                _string_or_none(ai_supplier_fields.get("profile_code"))
+                or _string_or_none(ai_supplier_fields.get("customer_code"))
+                or _string_or_none(ai_supplier_fields.get("customer_item_number"))
+                or _string_or_none(ai_supplier_fields.get("symbol"))
+                or _string_or_none(ai_match_values.get("codice_cliente_certificato"))
+            )
             certificate_customer_order = (
                 _string_or_none(ai_supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(ai_supplier_fields.get("customer_order_no"))
+                or _string_or_none(ai_supplier_fields.get("customer_po"))
+                or _string_or_none(ai_supplier_fields.get("order_no"))
                 or (_string_or_none(ai_supplier_fields.get("customer_order_number")) if supplier_key == "neuman" else None)
                 or (_string_or_none(ai_supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(ai_match_values.get("ordine_cliente_certificato"))
             )
-            certificate_delivery_note = _string_or_none(ai_supplier_fields.get("delivery_note_no"))
-            certificate_packing_list = _string_or_none(ai_supplier_fields.get("packing_list_no"))
+            certificate_delivery_note = (
+                _string_or_none(ai_supplier_fields.get("delivery_note_no"))
+                or _string_or_none(ai_supplier_fields.get("tally_sheet_no"))
+                or _string_or_none(ai_match_values.get("ddt_certificato"))
+            )
+            certificate_packing_list = (
+                _string_or_none(ai_supplier_fields.get("packing_list_no"))
+                or _string_or_none(ai_supplier_fields.get("packing_slip_no"))
+            )
             certificate_supplier_order = (
                 _string_or_none(ai_supplier_fields.get("supplier_order_no"))
+                or _string_or_none(ai_supplier_fields.get("sales_order_number"))
                 or (_string_or_none(ai_supplier_fields.get("auftragsbestaetigung_root")) if supplier_key == "aww" else None)
             )
         else:
@@ -11953,21 +11971,31 @@ def _ensure_certificate_first_rows(
                 _string_or_none(supplier_fields.get("article"))
                 or _string_or_none(supplier_fields.get("product_code"))
                 or _string_or_none(supplier_fields.get("customer_material_number"))
+                or _string_or_none(supplier_fields.get("arconic_item_number"))
+                or _string_or_none(supplier_fields.get("code_art"))
                 or (_string_or_none(supplier_fields.get("kunden_teile_nr")) if supplier_key == "aww" else None)
             )
             certificate_profile_code = (
                 _string_or_none(supplier_fields.get("profile_code"))
                 or _string_or_none(supplier_fields.get("customer_code"))
+                or _string_or_none(supplier_fields.get("customer_item_number"))
+                or _string_or_none(supplier_fields.get("symbol"))
                 or (_string_or_none(supplier_fields.get("artikel_nr")) if supplier_key == "aww" else None)
             )
             certificate_customer_order = (
                 _string_or_none(supplier_fields.get("customer_order_normalized"))
                 or _string_or_none(supplier_fields.get("customer_order_no"))
+                or _string_or_none(supplier_fields.get("customer_po"))
+                or _string_or_none(supplier_fields.get("order_no"))
                 or (_string_or_none(supplier_fields.get("customer_order_number")) if supplier_key == "neuman" else None)
                 or (_string_or_none(supplier_fields.get("ordine_cliente")) if supplier_key == "metalba" else None)
                 or _string_or_none(supplier_fields.get("po_no"))
             )
-            certificate_delivery_note = _string_or_none(supplier_fields.get("delivery_note_no"))
+            certificate_delivery_note = (
+                _string_or_none(supplier_fields.get("delivery_note_no"))
+                or _string_or_none(supplier_fields.get("tally_sheet_no"))
+                or _string_or_none(cast(dict[str, object], certificate_matches.get("ddt_certificato") or {}).get("final"))
+            )
             if supplier_key == "impol":
                 certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_cast = certificate_cast or _string_or_none(supplier_fields.get("charge"))
@@ -11988,9 +12016,13 @@ def _ensure_certificate_first_rows(
                 certificate_alloy = certificate_alloy or _string_or_none(supplier_fields.get("alloy"))
                 certificate_diameter = certificate_diameter or _string_or_none(supplier_fields.get("diameter"))
                 certificate_weight = certificate_weight or _string_or_none(supplier_fields.get("weight"))
-            certificate_packing_list = _string_or_none(supplier_fields.get("packing_list_no"))
+            certificate_packing_list = (
+                _string_or_none(supplier_fields.get("packing_list_no"))
+                or _string_or_none(supplier_fields.get("packing_slip_no"))
+            )
             certificate_supplier_order = (
                 _string_or_none(supplier_fields.get("supplier_order_no"))
+                or _string_or_none(supplier_fields.get("sales_order_number"))
                 or (_string_or_none(supplier_fields.get("auftragsbestaetigung_root")) if supplier_key == "aww" else None)
             )
 
@@ -12117,7 +12149,7 @@ def _ensure_certificate_first_rows(
                 colata=certificate_cast,
                 ddt=certificate_delivery_note,
                 peso=certificate_weight,
-                ordine=certificate_customer_order if supplier_key in {"leichtmetall", "impol", "metalba", "neuman", "aww"} else None,
+                ordine=certificate_customer_order if _supplier_certificate_first_keeps_row_order(supplier_key) else None,
                 note_documento="Certificato caricato in attesa del DDT",
                 stato_tecnico="rosso",
                 stato_workflow="nuova",
@@ -20354,6 +20386,33 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
 def _supplier_supports_ai_vision_pipeline(supplier_key: str | None) -> bool:
     return supplier_key in {"aluminium_bozen", "impol", "metalba", "leichtmetall", "neuman", "aww", "arconic_hannover", "grupa_kety", "zalco"}
+
+
+def _supplier_supports_certificate_first(supplier_key: str | None) -> bool:
+    return supplier_key in {
+        "aluminium_bozen",
+        "impol",
+        "metalba",
+        "leichtmetall",
+        "neuman",
+        "aww",
+        "arconic_hannover",
+        "grupa_kety",
+        "zalco",
+    }
+
+
+def _supplier_certificate_first_keeps_row_order(supplier_key: str | None) -> bool:
+    return supplier_key in {
+        "leichtmetall",
+        "impol",
+        "metalba",
+        "neuman",
+        "aww",
+        "arconic_hannover",
+        "grupa_kety",
+        "zalco",
+    }
 
 
 def _get_supplier_certificate_ai_payload(

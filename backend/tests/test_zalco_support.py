@@ -12,6 +12,8 @@ from app.modules.acquisition.service import (
     _build_zalco_masked_page,
     _normalize_zalco_certificate_ai_payload,
     _sanitize_zalco_ai_row_groups,
+    _supplier_certificate_first_keeps_row_order,
+    _supplier_supports_certificate_first,
 )
 from app.modules.document_reader.registry import resolve_supplier_template
 
@@ -22,6 +24,10 @@ class ZalcoSupportTest(unittest.TestCase):
             template = resolve_supplier_template(name)
             self.assertIsNotNone(template, name)
             self.assertEqual(template.supplier_key, "zalco")
+
+    def test_zalco_certificate_first_is_enabled_for_second_run_rematch(self):
+        self.assertTrue(_supplier_supports_certificate_first("zalco"))
+        self.assertTrue(_supplier_certificate_first_keeps_row_order("zalco"))
 
     def test_zalco_ddt_sanitizer_reads_packing_list_with_analysis(self):
         candidates = _sanitize_zalco_ai_row_groups(

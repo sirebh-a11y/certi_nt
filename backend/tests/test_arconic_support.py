@@ -15,6 +15,8 @@ from app.modules.acquisition.service import (
     _format_arconic_certificate_cdq,
     _sanitize_arconic_hannover_ai_row_groups,
     _sanitize_arconic_hannover_vision_certificate_fields,
+    _supplier_certificate_first_keeps_row_order,
+    _supplier_supports_certificate_first,
 )
 from app.modules.document_reader.registry import resolve_supplier_template
 from app.modules.document_reader.matching import _extract_arconic_hannover_match_fields
@@ -26,6 +28,10 @@ class ArconicSupportTest(unittest.TestCase):
 
         self.assertIsNotNone(template)
         self.assertEqual(template.supplier_key, "arconic_hannover")
+
+    def test_arconic_certificate_first_is_enabled_for_second_run_rematch(self):
+        self.assertTrue(_supplier_supports_certificate_first("arconic_hannover"))
+        self.assertTrue(_supplier_certificate_first_keeps_row_order("arconic_hannover"))
 
     def test_arconic_bridge_matches_real_27697432_case(self):
         left = build_ddt_bridge(
