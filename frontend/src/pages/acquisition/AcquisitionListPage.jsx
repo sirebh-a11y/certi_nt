@@ -20,6 +20,7 @@ const DEFAULT_LIST_STATE = {
   operatorOne: "and",
   operatorTwo: "and",
   rowLimit: "50",
+  showConfirmedOnly: false,
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
   scrollTop: 0,
@@ -50,6 +51,7 @@ function loadPersistedListState() {
       operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
       rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      showConfirmedOnly: Boolean(parsed?.showConfirmedOnly),
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
       scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
@@ -328,6 +330,16 @@ function rowActivityState(row) {
   return { tone: "verde", label: "pronto" };
 }
 
+function isRowFullyConfirmed(row) {
+  return (
+    ddtCoreState(row) === "verde" &&
+    row.block_states?.match === "verde" &&
+    row.block_states?.chimica === "verde" &&
+    row.block_states?.proprieta === "verde" &&
+    row.block_states?.note === "verde"
+  );
+}
+
 function documentMatchVisualState(row) {
   if (documentMatchingClosed(row)) {
     return "documento_chiuso";
@@ -520,6 +532,7 @@ export default function AcquisitionListPage() {
   const [operatorOne, setOperatorOne] = useState(initialListStateRef.current.operatorOne);
   const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
+  const [showConfirmedOnly, setShowConfirmedOnly] = useState(initialListStateRef.current.showConfirmedOnly);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const [documentPlateMetrics, setDocumentPlateMetrics] = useState({});
@@ -571,12 +584,13 @@ export default function AcquisitionListPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
+      showConfirmedOnly,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, showConfirmedOnly, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -594,6 +608,7 @@ export default function AcquisitionListPage() {
 
   const visibleRows = useMemo(() => {
     let nextRows = rows;
+    nextRows = nextRows.filter((row) => (showConfirmedOnly ? isRowFullyConfirmed(row) : !isRowFullyConfirmed(row)));
 
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
@@ -633,7 +648,7 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, sortConfig]);
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, showConfirmedOnly, sortConfig]);
 
   const displayedRows = useMemo(() => {
     if (rowLimit === "all") {
@@ -785,6 +800,7 @@ export default function AcquisitionListPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
+      showConfirmedOnly,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
       scrollTop: viewport?.scrollTop || 0,
@@ -943,6 +959,23 @@ export default function AcquisitionListPage() {
             placeholder="Campi non presi da 1 e 2"
             value={queryThree}
           />
+        </div>
+        <div className="min-w-[120px] max-w-[120px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-confirmed-toggle">
+            Vista
+          </label>
+          <button
+            className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+              showConfirmedOnly
+                ? "border-slate-300 bg-slate-900 text-white hover:bg-slate-800"
+                : "border-border bg-white text-slate-700 hover:bg-slate-100"
+            }`}
+            id="incoming-quality-confirmed-toggle"
+            onClick={() => setShowConfirmedOnly((current) => !current)}
+            type="button"
+          >
+            {showConfirmedOnly ? "Confermati" : "Aperte"}
+          </button>
         </div>
         <div className="ml-auto min-w-[88px] max-w-[88px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-row-limit">
@@ -1133,7 +1166,9 @@ export default function AcquisitionListPage() {
         </div>
 
         {!loading && !visibleRows.length && !error ? (
-          <div className="px-4 py-6 text-sm text-slate-500">Nessuna riga acquisition disponibile.</div>
+          <div className="px-4 py-6 text-sm text-slate-500">
+            {showConfirmedOnly ? "Nessuna riga confermata disponibile." : "Nessuna riga aperta disponibile."}
+          </div>
         ) : null}
       </div>
     </section>
