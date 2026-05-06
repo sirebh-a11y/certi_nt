@@ -34,6 +34,8 @@ const CERTIFICATE_FIRST_FIELDS = [
 ];
 
 const NOTE_CORE_FIELDS = [
+  "nota_us_control_class_a",
+  "nota_us_control_class_b",
   "nota_us_control_classe",
   "nota_rohs",
   "nota_radioactive_free",

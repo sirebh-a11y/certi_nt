@@ -694,21 +694,11 @@ class DocumentLinkCandidateResponse(BaseModel):
 
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):
-    nota_us_control_classe: str | None = Field(default=None, max_length=1)
+    nota_us_control_class_a: bool = False
+    nota_us_control_class_b: bool = False
     nota_rohs: bool = False
     nota_radioactive_free: bool = False
     custom_note_template_ids: list[int] = Field(default_factory=list)
-
-    @field_validator("nota_us_control_classe")
-    @classmethod
-    def validate_us_control_class(cls, value: str | None) -> str | None:
-        normalized = normalize_optional_text(value)
-        if normalized is None:
-            return None
-        upper = normalized.upper()
-        if upper not in {"A", "B"}:
-            raise ValueError("La classe US control deve essere A oppure B")
-        return upper
 
 
 class AcquisitionRowListResponse(BaseModel):

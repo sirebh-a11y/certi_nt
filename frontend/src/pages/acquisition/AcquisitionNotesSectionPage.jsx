@@ -246,14 +246,20 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
 function buildInitialDraft(row) {
   const values = row?.values || [];
   const byField = Object.fromEntries(values.filter((value) => value.blocco === "note").map((value) => [value.campo, value]));
-  const usClass = (byField.nota_us_control_classe?.valore_finale || byField.nota_us_control_classe?.valore_standardizzato || "").trim().toUpperCase();
+  const legacyUsClass = (byField.nota_us_control_classe?.valore_finale || byField.nota_us_control_classe?.valore_standardizzato || "").trim().toUpperCase();
+  const usClassARaw =
+    (byField.nota_us_control_class_a?.valore_finale || byField.nota_us_control_class_a?.valore_standardizzato || "").trim().toLowerCase();
+  const usClassBRaw =
+    (byField.nota_us_control_class_b?.valore_finale || byField.nota_us_control_class_b?.valore_standardizzato || "").trim().toLowerCase();
+  const hasNewUsFields = Boolean(byField.nota_us_control_class_a || byField.nota_us_control_class_b);
   const rohsRaw = (byField.nota_rohs?.valore_finale || byField.nota_rohs?.valore_standardizzato || "").trim().toLowerCase();
   const radioactiveRaw =
     (byField.nota_radioactive_free?.valore_finale || byField.nota_radioactive_free?.valore_standardizzato || "").trim().toLowerCase();
   const customIds = (row?.custom_note_templates || []).map((item) => item.id).sort((left, right) => left - right);
 
   return {
-    usClass: usClass === "A" || usClass === "B" ? usClass : "",
+    usClassA: hasNewUsFields ? usClassARaw === "true" : legacyUsClass === "A",
+    usClassB: hasNewUsFields ? usClassBRaw === "true" : legacyUsClass === "B",
     rohs: rohsRaw === "true",
     radioactiveFree: radioactiveRaw === "true",
     customIds,
@@ -262,7 +268,8 @@ function buildInitialDraft(row) {
 
 function draftsEqual(left, right) {
   return (
-    left.usClass === right.usClass &&
+    left.usClassA === right.usClassA &&
+    left.usClassB === right.usClassB &&
     left.rohs === right.rohs &&
     left.radioactiveFree === right.radioactiveFree &&
     JSON.stringify([...left.customIds].sort((a, b) => a - b)) === JSON.stringify([...right.customIds].sort((a, b) => a - b))
@@ -371,14 +378,6 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
     }
   }
 
-  function setUsClass(value) {
-    setDraft((current) => ({
-      ...current,
-      usClass: current.usClass === value ? "" : value,
-    }));
-    setError("");
-  }
-
   function setBooleanField(field, value) {
     setDraft((current) => ({
       ...current,
@@ -424,7 +423,8 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
         {
           method: "PUT",
           body: JSON.stringify({
-            nota_us_control_classe: draft.usClass || null,
+            nota_us_control_class_a: draft.usClassA,
+            nota_us_control_class_b: draft.usClassB,
             nota_rohs: draft.rohs,
             nota_radioactive_free: draft.radioactiveFree,
             custom_note_template_ids: draft.customIds,
@@ -500,12 +500,13 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
               <div className="mb-3">
                 <p className="text-sm font-semibold text-slate-800">U.S. control</p>
-                <p className="mt-1 text-xs text-slate-500">Scegli una sola classe tra le due disponibili.</p>
+                <p className="mt-1 text-xs text-slate-500">Spunta le classi trovate nel certificato. Se sono presenti entrambe, lascia entrambe selezionate.</p>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
                 {["us_control_class_a", "us_control_class_b"].map((code) => {
                   const template = systemNotesByCode[code];
-                  const checked = draft.usClass === (code.endsWith("_a") ? "A" : "B");
+                  const field = code.endsWith("_a") ? "usClassA" : "usClassB";
+                  const checked = draft[field];
                   return (
                     <label
                       className={`flex gap-3 rounded-xl border px-4 py-3 transition ${
@@ -518,7 +519,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
                       <input
                         checked={checked}
                         className={CHECKBOX_CLASSNAME}
-                        onChange={() => setUsClass(code.endsWith("_a") ? "A" : "B")}
+                        onChange={(event) => setBooleanField(field, event.target.checked)}
                         type="checkbox"
                       />
                       <div className="min-w-0">

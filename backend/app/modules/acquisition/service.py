@@ -2644,7 +2644,9 @@ def _find_best_note_overlay_match(
 
     best_bbox: str | None = None
     best_score = 0
-    expected_class = _normalize_note_us_expected_class(expected_value) if field == "nota_us_control_classe" else None
+    expected_class = _note_us_class_from_field(field)
+    if expected_class is None and field == "nota_us_control_classe":
+        expected_class = _normalize_note_us_expected_class(expected_value)
     max_window = min(2 if expected_class else 3, len(line_boxes))
     for window_size in range(1, max_window + 1):
         for start in range(0, len(line_boxes) - window_size + 1):
@@ -2674,6 +2676,14 @@ def _normalize_note_us_expected_class(value: str | None) -> str | None:
     if re.search(r"\b(?:CLASS|CLASSE)\s*A\b", normalized) or normalized.strip() == "A":
         return "A"
     if re.search(r"\b(?:CLASS|CLASSE)\s*B\b", normalized) or normalized.strip() == "B":
+        return "B"
+    return None
+
+
+def _note_us_class_from_field(field: str) -> str | None:
+    if field == "nota_us_control_class_a":
+        return "A"
+    if field == "nota_us_control_class_b":
         return "B"
     return None
 
@@ -2708,7 +2718,7 @@ def _score_note_overlay_window(
     score = sum(4 for token in tokens if token in normalized)
     score += sum(2 for token in tokens if len(token) >= 6 and token in normalized)
 
-    if field == "nota_us_control_classe":
+    if field in {"nota_us_control_classe", "nota_us_control_class_a", "nota_us_control_class_b"}:
         if expected_class in {"A", "B"}:
             other_class = "B" if expected_class == "A" else "A"
             if f"CLASS {expected_class}" in normalized or f"CLASSE {expected_class}" in normalized:
@@ -7661,21 +7671,42 @@ def save_notes_section(
         for value in row.values
         if value.blocco == "note"
     }
-    _upsert_read_value_model(
-        db=db,
-        acquisition_row_id=row.id,
-        blocco="note",
-        campo="nota_us_control_classe",
-        valore_grezzo=payload.nota_us_control_classe,
-        valore_standardizzato=payload.nota_us_control_classe,
-        valore_finale=payload.nota_us_control_classe,
-        stato="confermato",
-        document_evidence_id=existing_values.get("nota_us_control_classe").document_evidence_id if existing_values.get("nota_us_control_classe") else None,
-        metodo_lettura="utente",
-        fonte_documentale="utente",
-        confidenza=existing_values.get("nota_us_control_classe").confidenza if existing_values.get("nota_us_control_classe") else None,
-        actor_id=actor_id,
-    )
+    for campo, selected in (
+        ("nota_us_control_class_a", payload.nota_us_control_class_a),
+        ("nota_us_control_class_b", payload.nota_us_control_class_b),
+    ):
+        value = "true" if selected else None
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="note",
+            campo=campo,
+            valore_grezzo=value,
+            valore_standardizzato=value,
+            valore_finale=value,
+            stato="confermato",
+            document_evidence_id=existing_values.get(campo).document_evidence_id if existing_values.get(campo) else None,
+            metodo_lettura="utente",
+            fonte_documentale="utente",
+            confidenza=existing_values.get(campo).confidenza if existing_values.get(campo) else None,
+            actor_id=actor_id,
+        )
+    if existing_values.get("nota_us_control_classe") is not None:
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="note",
+            campo="nota_us_control_classe",
+            valore_grezzo=None,
+            valore_standardizzato=None,
+            valore_finale=None,
+            stato="confermato",
+            document_evidence_id=existing_values["nota_us_control_classe"].document_evidence_id,
+            metodo_lettura="utente",
+            fonte_documentale="utente",
+            confidenza=existing_values["nota_us_control_classe"].confidenza,
+            actor_id=actor_id,
+        )
     rohs_value = "true" if payload.nota_rohs else None
     _upsert_read_value_model(
         db=db,
@@ -7724,6 +7755,11 @@ def save_notes_section(
             )
         )
 
+    us_summary = "".join(
+        value
+        for value, selected in (("A", payload.nota_us_control_class_a), ("B", payload.nota_us_control_class_b))
+        if selected
+    ) or "-"
     _record_history_event(
         db=db,
         acquisition_row_id=row.id,
@@ -7731,7 +7767,7 @@ def save_notes_section(
         azione="note_confermate",
         user_id=actor_id,
         nota_breve=(
-            f"US={payload.nota_us_control_classe or '-'}; "
+            f"US={us_summary}; "
             f"RoHS={'Y' if payload.nota_rohs else 'N'}; "
             f"Radio={'Y' if payload.nota_radioactive_free else 'N'}; "
             f"custom={len(requested_ids)}"
@@ -10769,7 +10805,8 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\",\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
                 "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -10827,23 +10864,7 @@ def _normalize_grupa_kety_certificate_ai_payload(
     )
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -11338,7 +11359,8 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
                 "\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\",\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
                 "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -11399,23 +11421,7 @@ def _normalize_arconic_hannover_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -11650,7 +11656,7 @@ def _extract_metalba_certificate_payload_from_openai(
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come BARRA TONDA DIAM. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
@@ -11661,7 +11667,8 @@ def _extract_metalba_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -11721,23 +11728,7 @@ def _normalize_metalba_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -18272,7 +18263,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
                 "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
@@ -18282,7 +18273,8 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -18393,23 +18385,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -18548,7 +18524,7 @@ def _extract_impol_certificate_payload_from_openai(
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come DIA. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
@@ -18559,7 +18535,8 @@ def _extract_impol_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -18627,23 +18604,7 @@ def _normalize_impol_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -20400,7 +20361,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "weight_raw: estrai il peso raw del materiale. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
@@ -20411,7 +20372,8 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -20479,23 +20441,7 @@ def _normalize_leichtmetall_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -20649,7 +20595,8 @@ def _extract_aww_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"standard_measured_row\":{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"},"
                 "\"simulated_measured_row\":{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -20717,23 +20664,7 @@ def _normalize_aww_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -20988,7 +20919,7 @@ def _extract_neuman_certificate_payload_from_openai(
                 "Usa i label e le unita vicine ([HB], [%], [MPa]) per associare correttamente i valori; "
                 "non trattare i limiti min/max come valori misurati. "
                 "Se non esiste una vera riga o un vero blocco misurato, restituisci measured_rows vuoto. "
-                "Note: verifica solo nota_us_control_classe, nota_rohs, nota_radioactive_free. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
@@ -21001,7 +20932,8 @@ def _extract_neuman_certificate_payload_from_openai(
                 "\"Bi+Pb\":\"string|null\"},"
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -21069,23 +21001,7 @@ def _normalize_neuman_certificate_ai_payload(
 
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": next(reversed(page_images.keys()), None) if page_images else None,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, next(reversed(page_images.keys()), None) if page_images else None),
         {
             next(reversed(page_images.keys()), "page1"): {
                 "page_id": last_page_id,
@@ -21912,15 +21828,15 @@ def _extract_zalco_certificate_payload_from_openai(
                 "diameter_raw e' DIAMETER OR SIZES/FORMAT; weight_raw e' NET; cast_raw e' No. COULEE/CAST Nr. completo; "
                 "alloy_raw e' lega/stato visibile come 6082 HO. "
                 "Chimica: leggi solo riga valori misurati, non limiti e non testo legale. "
-                "Note: se trovi US inspection/compliant, RoHS o free from radioactivity, riportale come testo. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"tally_sheet_raw\":\"string|null\",\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\","
                 "\"code_art_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\","
                 "\"cast_raw\":\"string|null\",\"alloy_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\","
                 "\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
-                "\"notes_raw\":{\"nota_us_control_classe_raw\":\"string|null\",\"nota_rohs_raw\":\"string|null\","
-                "\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -21965,23 +21881,7 @@ def _normalize_zalco_certificate_ai_payload(
     notes_payload = cast(dict[str, object], raw_payload.get("notes_raw") or {})
     notes_source_crop = next(reversed(page_images.keys()), None) if page_images else None
     note_matches = _normalize_vision_note_matches(
-        {
-            "nota_us_control_classe": {
-                "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
-                "source_crop": notes_source_crop,
-            },
-            "nota_rohs": {
-                "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
-                "source_crop": notes_source_crop,
-            },
-            "nota_radioactive_free": {
-                "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
-                "source_crop": notes_source_crop,
-            },
-        },
+        _build_vision_note_extracted_payload(notes_payload, notes_source_crop),
         {notes_source_crop or "page1": {"page_id": last_page_id, "page_number": last_page_crop.get("page_number") if last_page_crop else 1}},
     )
     tally = _normalize_zalco_tally_number(_string_or_none(core_payload.get("tally_sheet_raw")))
@@ -23977,14 +23877,15 @@ def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str |
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
         for line in lines:
             normalized_line = line.lower()
-            if "nota_us_control_classe" not in matches:
-                us_control_value = _detect_us_control_class(normalized_line)
-                if us_control_value is not None:
-                    matches["nota_us_control_classe"] = {
+            us_control_classes = _detect_us_control_classes(normalized_line)
+            for us_control_value in sorted(us_control_classes):
+                field_name = f"nota_us_control_class_{us_control_value.lower()}"
+                if field_name not in matches:
+                    matches[field_name] = {
                         "page_id": page.id,
                         "snippet": line,
-                        "standardized": us_control_value,
-                        "final": us_control_value,
+                        "standardized": "true",
+                        "final": "true",
                     }
             if "nota_rohs" not in matches and "rohs" in normalized_line:
                 matches["nota_rohs"] = {
@@ -25188,10 +25089,12 @@ def _detect_note_matches_with_vision(
     extracted = _extract_certificate_fields_from_openai(
         crops,
         openai_api_key=openai_api_key,
-        field_names=["nota_us_control_classe", "nota_rohs", "nota_radioactive_free"],
+        field_names=["nota_us_control_class_a", "nota_us_control_class_b", "nota_rohs", "nota_radioactive_free"],
         instruction=(
             "Leggi le note tecniche finali del certificato materiale. "
-            "Per nota_us_control_classe restituisci solo A o B se una nota ASTM/AMS indica chiaramente la classe. "
+            "Per nota_us_control_class_a restituisci true se una nota ASTM/AMS indica chiaramente Class A. "
+            "Per nota_us_control_class_b restituisci true se una nota ASTM/AMS indica chiaramente Class B. "
+            "Se nel certificato compaiono sia Class A sia Class B, restituisci true per entrambe. "
             "Per nota_rohs restituisci true solo se la conformita RoHS e chiaramente dichiarata. "
             "Per nota_radioactive_free restituisci true solo se il certificato dichiara esplicitamente assenza di contaminazione radioattiva."
         ),
@@ -25275,11 +25178,19 @@ def _normalize_vision_note_matches(
 
         final_value: str | None = None
         if field_name == "nota_us_control_classe":
-            normalized_evidence = evidence.strip().upper()
-            if normalized_evidence in {"A", "B"}:
-                final_value = normalized_evidence
-            else:
-                final_value = _detect_us_control_class(evidence.lower())
+            for us_class in sorted(_detect_us_control_classes_from_note_value(raw_value, evidence)):
+                normalized[f"nota_us_control_class_{us_class.lower()}"] = {
+                    "page_id": page_id,
+                    "snippet": evidence,
+                    "standardized": "true",
+                    "final": "true",
+                    "method": "chatgpt",
+                }
+            continue
+        if field_name in {"nota_us_control_class_a", "nota_us_control_class_b"}:
+            expected_class = "A" if field_name.endswith("_a") else "B"
+            if _note_value_has_us_control_class(raw_value, evidence, expected_class):
+                final_value = "true"
         elif field_name == "nota_rohs":
             haystack = evidence.lower()
             if haystack.strip() == "true" or "rohs" in haystack:
@@ -25299,6 +25210,67 @@ def _normalize_vision_note_matches(
             "method": "chatgpt",
         }
     return normalized
+
+
+def _build_vision_note_extracted_payload(
+    notes_payload: dict[str, object],
+    source_crop: str | None,
+) -> dict[str, dict[str, str | None]]:
+    return {
+        "nota_us_control_class_a": {
+            "value": _string_or_none(notes_payload.get("nota_us_control_class_a_raw")),
+            "evidence": _string_or_none(notes_payload.get("nota_us_control_class_a_raw")),
+            "source_crop": source_crop,
+        },
+        "nota_us_control_class_b": {
+            "value": _string_or_none(notes_payload.get("nota_us_control_class_b_raw")),
+            "evidence": _string_or_none(notes_payload.get("nota_us_control_class_b_raw")),
+            "source_crop": source_crop,
+        },
+        # Legacy fallback for old prompts and persisted AI payloads.
+        "nota_us_control_classe": {
+            "value": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+            "evidence": _string_or_none(notes_payload.get("nota_us_control_classe_raw")),
+            "source_crop": source_crop,
+        },
+        "nota_rohs": {
+            "value": _string_or_none(notes_payload.get("nota_rohs_raw")),
+            "evidence": _string_or_none(notes_payload.get("nota_rohs_raw")),
+            "source_crop": source_crop,
+        },
+        "nota_radioactive_free": {
+            "value": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+            "evidence": _string_or_none(notes_payload.get("nota_radioactive_free_raw")),
+            "source_crop": source_crop,
+        },
+    }
+
+
+def _detect_us_control_classes_from_note_value(*values: str | None) -> set[str]:
+    classes: set[str] = set()
+    for value in values:
+        normalized = _normalize_mojibake_numeric_text(value or "").strip()
+        if not normalized:
+            continue
+        upper = normalized.upper()
+        if upper == "A" or upper == "TRUE_A":
+            classes.add("A")
+        if upper == "B" or upper == "TRUE_B":
+            classes.add("B")
+        lowered = normalized.lower()
+        classes.update(_detect_us_control_classes(lowered))
+        if re.search(r"\bclass\s*a\b|\bclasse\s*a\b", lowered):
+            classes.add("A")
+        if re.search(r"\bclass\s*b\b|\bclasse\s*b\b", lowered):
+            classes.add("B")
+    return classes
+
+
+def _note_value_has_us_control_class(raw_value: str | None, evidence: str, expected_class: str) -> bool:
+    normalized_raw = _normalize_mojibake_numeric_text(raw_value or "").strip().lower()
+    if normalized_raw == "true":
+        return True
+    return expected_class in _detect_us_control_classes_from_note_value(raw_value, evidence)
 
 
 def _parse_properties_from_spec_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
@@ -26445,13 +26417,23 @@ def _collect_vertical_numeric_values(lines: list[str], start_index: int, expecte
 
 
 def _detect_us_control_class(line: str) -> str | None:
-    if "astm" not in line and "ams" not in line:
-        return None
-    if re.search(r"(class|classe)\s*a", line):
+    classes = _detect_us_control_classes(line)
+    if "A" in classes:
         return "A"
-    if re.search(r"(class|classe)\s*b", line):
+    if "B" in classes:
         return "B"
     return None
+
+
+def _detect_us_control_classes(line: str) -> set[str]:
+    if "astm" not in line and "ams" not in line:
+        return set()
+    classes: set[str] = set()
+    if re.search(r"(class|classe)\s*a", line):
+        classes.add("A")
+    if re.search(r"(class|classe)\s*b", line):
+        classes.add("B")
+    return classes
 
 
 def _is_radioactive_free_line(line: str) -> bool:
