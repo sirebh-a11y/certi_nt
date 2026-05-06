@@ -4986,10 +4986,11 @@ def _apply_document_identity_detection(db: Session, document: Document) -> Docum
 
 
 def _detect_document_type(document: Document) -> str | None:
-    search_text = _document_identity_text(document)
-    if not search_text:
+    raw_search_text = _document_identity_text(document)
+    if not raw_search_text:
         return None
 
+    search_text = _normalize_identity_text(_normalize_mojibake_numeric_text(raw_search_text))
     file_name = document.nome_file_originale.lower()
     impol_type = _detect_impol_document_type(search_text, file_name)
     if impol_type is not None:
@@ -5037,6 +5038,9 @@ def _detect_document_type(document: Document) -> str | None:
     for marker, weight in ddt_markers.items():
         if marker in search_text:
             ddt_score += weight
+
+    if "packing list" in search_text and "delivery note" in search_text:
+        ddt_score += 5
 
     if _looks_like_impol_identity_text(search_text):
         if "packing list" in search_text:
