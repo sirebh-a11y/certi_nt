@@ -85,6 +85,54 @@ class ArconicOverlayTest(unittest.TestCase):
         self.assertLess(left, 462)
         self.assertGreaterEqual(right, 482)
 
+    def test_properties_overlay_recognizes_grupa_a_column_written_as_single_a(self):
+        page = SimpleNamespace(id=1, numero_pagina=1, immagine_pagina_storage_key="page.png")
+        header_words = [
+            {"text": "Rm", "left": 260, "top": 100, "width": 20, "height": 12},
+            {"text": "R0,2", "left": 390, "top": 100, "width": 34, "height": 12},
+            {"text": "A", "left": 520, "top": 100, "width": 14, "height": 12},
+            {"text": "Hardness", "left": 650, "top": 100, "width": 60, "height": 12},
+            {"text": "IACS", "left": 925, "top": 185, "width": 38, "height": 12},
+        ]
+        percent_words = [
+            {"text": "[MPa]", "left": 255, "top": 122, "width": 40, "height": 12},
+            {"text": "[MPa]", "left": 385, "top": 122, "width": 40, "height": 12},
+            {"text": "[%]", "left": 515, "top": 122, "width": 26, "height": 12},
+            {"text": "[HB]", "left": 660, "top": 122, "width": 30, "height": 12},
+        ]
+        t005_words = [
+            {"text": "T005", "left": 120, "top": 170, "width": 38, "height": 12},
+            {"text": "599", "normalized": "599", "left": 260, "top": 170, "width": 26, "height": 12},
+            {"text": "565", "normalized": "565", "left": 390, "top": 170, "width": 26, "height": 12},
+            {"text": "11.4", "normalized": "11.4", "left": 520, "top": 170, "width": 30, "height": 12},
+            {"text": "170", "normalized": "170", "left": 650, "top": 170, "width": 26, "height": 12},
+            {"text": "35.6", "normalized": "35.6", "left": 925, "top": 210, "width": 30, "height": 12},
+        ]
+        t006_words = [
+            {"text": "T006", "left": 120, "top": 195, "width": 38, "height": 12},
+            {"text": "598", "normalized": "598", "left": 260, "top": 195, "width": 26, "height": 12},
+            {"text": "561", "normalized": "561", "left": 390, "top": 195, "width": 26, "height": 12},
+            {"text": "13.5", "normalized": "13.5", "left": 520, "top": 195, "width": 30, "height": 12},
+            {"text": "169", "normalized": "169", "left": 650, "top": 195, "width": 26, "height": 12},
+        ]
+        line_boxes = [
+            {"words": header_words[:4], "x0": 260, "y0": 100, "x1": 710, "y1": 112},
+            {"words": percent_words, "x0": 255, "y0": 122, "x1": 690, "y1": 134},
+            {"words": t005_words, "x0": 120, "y0": 170, "x1": 955, "y1": 222},
+            {"words": t006_words, "x0": 120, "y0": 195, "x1": 676, "y1": 207},
+            {"words": header_words[4:], "x0": 925, "y0": 185, "x1": 963, "y1": 197},
+        ]
+
+        with patch("app.modules.acquisition.service._extract_ocr_line_boxes", return_value=(line_boxes, 1200, 600)):
+            items = _build_properties_overlay_items_from_column_words(
+                page=page,
+                field_values={"Rm": "598", "Rp0.2": "561", "A%": "11,4", "HB": "169", "IACS%": "35,6"},
+            )
+
+        by_field = {item.field: item for item in items}
+        self.assertIn("A%", by_field)
+        self.assertEqual(by_field["A%"].bbox, "520,170,550,182")
+
 
 if __name__ == "__main__":
     unittest.main()

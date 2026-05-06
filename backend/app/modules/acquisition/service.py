@@ -3228,14 +3228,23 @@ def _properties_overlay_anchor_words_by_field(
     anchors: dict[str, dict[str, object]] = {}
     for line_box in line_boxes:
         words = cast(list[dict[str, object]], line_box.get("words") or [])
+        line_compacts = {
+            re.sub(r"[^a-z0-9.%]", "", str(word.get("text") or "").strip().lower())
+            for word in words
+        }
+        mechanical_context = bool(
+            {"rm", "rml"} & line_compacts
+            or any(token.startswith("rp02") or token.startswith("rp0.2") or token.startswith("rp0,2") or token.startswith("r02") for token in line_compacts)
+            or any(token == "hbw" or token.startswith("hbw") for token in line_compacts)
+        )
         for word in words:
             text = str(word.get("text") or "").strip().lower()
             compact = re.sub(r"[^a-z0-9.%]", "", text)
             if compact in {"rm", "rml"}:
                 anchors.setdefault("Rm", word)
-            elif compact.startswith("rp02") or compact.startswith("rp0.2") or compact.startswith("rp0,2"):
+            elif compact.startswith("rp02") or compact.startswith("rp0.2") or compact.startswith("rp0,2") or compact.startswith("r02"):
                 anchors.setdefault("Rp0.2", word)
-            elif compact in {"a5", "a5l", "a%"} or compact.startswith("a5"):
+            elif compact in {"a5", "a5l", "a%"} or compact.startswith("a5") or (compact == "a" and mechanical_context):
                 anchors.setdefault("A%", word)
             elif compact == "hbw" or compact.startswith("hbw"):
                 anchors.setdefault("HB", word)
