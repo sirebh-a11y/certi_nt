@@ -1069,12 +1069,18 @@ def build_chemistry_overlay_preview(
     if not field_values:
         return ChemistryOverlayPreviewResponse(items=[])
 
+    template = resolve_supplier_template(_row_supplier_name(row))
+    supplier_key = template.supplier_key if template is not None else None
     best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
     best_score: tuple[int, int, int] = (0, 0, 0)
     for page in certificate_document.pages:
         if not page.immagine_pagina_storage_key:
             continue
-        staged_match = _find_best_chemistry_overlay_match(page=page, field_values=field_values)
+        staged_match = _find_best_chemistry_overlay_match(
+            page=page,
+            field_values=field_values,
+            supplier_key=supplier_key,
+        )
         if staged_match is None:
             continue
         line_box, matched_fields, image_width, image_height, score = staged_match
@@ -1083,10 +1089,19 @@ def build_chemistry_overlay_preview(
             best_match = (page, line_box, matched_fields, image_width, image_height)
 
     if best_match is None or best_score[1] < 3:
+        if supplier_key == "arconic_hannover":
+            for page in certificate_document.pages:
+                if not page.immagine_pagina_storage_key:
+                    continue
+                items = _build_arconic_chemistry_overlay_items_from_table_geometry(
+                    page=page,
+                    field_values=field_values,
+                )
+                if items:
+                    return ChemistryOverlayPreviewResponse(items=items)
         return ChemistryOverlayPreviewResponse(items=[])
 
     page, line_box, matched_fields, image_width, image_height = best_match
-    template = resolve_supplier_template(_row_supplier_name(row))
     items = _build_chemistry_overlay_items(
         page=page,
         line_box=line_box,
@@ -1107,8 +1122,17 @@ def _build_chemistry_overlay_preview_items_for_page(
 ) -> list[ChemistryOverlayPreviewItemResponse]:
     if not field_values or not page.immagine_pagina_storage_key:
         return []
-    staged_match = _find_best_chemistry_overlay_match(page=page, field_values=field_values)
+    staged_match = _find_best_chemistry_overlay_match(
+        page=page,
+        field_values=field_values,
+        supplier_key=supplier_key,
+    )
     if staged_match is None:
+        if supplier_key == "arconic_hannover":
+            return _build_arconic_chemistry_overlay_items_from_table_geometry(
+                page=page,
+                field_values=field_values,
+            )
         return []
     line_box, matched_fields, image_width, image_height, score = staged_match
     if score[1] < 3:
@@ -1153,6 +1177,8 @@ def build_properties_overlay_preview(
     if not field_values:
         return PropertiesOverlayPreviewResponse(items=[])
 
+    template = resolve_supplier_template(_row_supplier_name(row))
+    supplier_key = template.supplier_key if template is not None else None
     best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
     best_score: tuple[int, int, int] = (0, 0, 0)
     for page in certificate_document.pages:
@@ -1193,6 +1219,19 @@ def build_properties_overlay_preview(
             )
             if _count_overlay_fields(items) >= len(field_values):
                 break
+            items = _merge_overlay_preview_items(
+                items,
+                _build_properties_overlay_items_from_column_words(page=page, field_values=field_values),
+            )
+            if _count_overlay_fields(items) >= len(field_values):
+                break
+            if supplier_key == "arconic_hannover":
+                items = _merge_overlay_preview_items(
+                    items,
+                    _build_arconic_properties_overlay_items_from_table_geometry(page=page, field_values=field_values),
+                )
+                if _count_overlay_fields(items) >= len(field_values):
+                    break
     return PropertiesOverlayPreviewResponse(items=items)
 
 
@@ -2480,6 +2519,11 @@ def _build_properties_overlay_preview_items_for_page(
             items,
             _build_properties_overlay_items_from_anchor_line(page=page, field_values=field_values),
         )
+    if _count_overlay_fields(items) < len(field_values):
+        items = _merge_overlay_preview_items(
+            items,
+            _build_properties_overlay_items_from_column_words(page=page, field_values=field_values),
+        )
     return items
 
 
@@ -2950,6 +2994,331 @@ def _build_properties_overlay_items_from_anchor_line(
     return items
 
 
+def _build_properties_overlay_items_from_column_words(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    anchor_by_field = _properties_overlay_anchor_words_by_field(line_boxes)
+    if not anchor_by_field:
+        return []
+
+    anchor_centers = sorted(
+        int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+        for word in anchor_by_field.values()
+        if int(word.get("width") or 0) > 0
+    )
+    gaps = [right - left for left, right in zip(anchor_centers, anchor_centers[1:]) if right > left]
+    half_width = int(max(42, min(120, (min(gaps) * 0.45) if gaps else image_width * 0.07)))
+
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+    used_word_ids: set[int] = set()
+    for field_name in PROPERTY_CAPTURE_FIELD_ORDER:
+        if field_name not in field_values or field_name == "Rp0.2 / Rm":
+            continue
+        anchor = anchor_by_field.get(field_name)
+        if anchor is None:
+            continue
+        item = _build_property_overlay_item_from_column_words(
+            page=page,
+            line_boxes=line_boxes,
+            field_name=field_name,
+            target_value=field_values.get(field_name),
+            anchor_word=anchor,
+            half_width=half_width,
+            used_word_ids=used_word_ids,
+            image_width=image_width,
+            image_height=image_height,
+        )
+        if item is not None:
+            items.append(item)
+    return items
+
+
+ARCONIC_MECHANICAL_RESULT_FIELDS = ("Rm", "Rp0.2", "A%")
+
+
+def _build_arconic_properties_overlay_items_from_table_geometry(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[PropertiesOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    known = _find_arconic_mechanical_result_words(line_boxes=line_boxes, field_values=field_values)
+    if not known:
+        return []
+    gap = _arconic_mechanical_column_gap(known=known, image_width=image_width)
+    if gap <= 0:
+        return []
+    reference_field, reference_word = min(
+        known.items(),
+        key=lambda item: ARCONIC_MECHANICAL_RESULT_FIELDS.index(item[0])
+        if item[0] in ARCONIC_MECHANICAL_RESULT_FIELDS
+        else 99,
+    )
+    if reference_field not in ARCONIC_MECHANICAL_RESULT_FIELDS:
+        return []
+    reference_index = ARCONIC_MECHANICAL_RESULT_FIELDS.index(reference_field)
+    reference_center = int(reference_word.get("left") or 0) + int(reference_word.get("width") or 0) / 2
+    rm_center = int(reference_center - reference_index * gap)
+    top = int(reference_word.get("top") or 0)
+    bottom = top + int(reference_word.get("height") or 0)
+    if bottom <= top:
+        bottom = top + max(18, int(image_height * 0.012))
+    half_width = max(36, min(78, int(gap * 0.18)))
+
+    items: list[PropertiesOverlayPreviewItemResponse] = []
+    for index, field_name in enumerate(ARCONIC_MECHANICAL_RESULT_FIELDS):
+        if field_name not in field_values:
+            continue
+        center = int(rm_center + index * gap)
+        left = max(0, center - half_width)
+        right = min(image_width, center + half_width)
+        if right <= left:
+            continue
+        items.append(
+            PropertiesOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{right},{bottom}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+    if "HB" in field_values:
+        hb_line = _find_arconic_hb_result_line(line_boxes=line_boxes, target_value=field_values.get("HB"))
+        if hb_line is not None:
+            top = int(hb_line.get("y0") or 0)
+            bottom = int(hb_line.get("y1") or 0)
+            if bottom <= top:
+                bottom = top + max(18, int(image_height * 0.012))
+            left = max(0, rm_center - half_width)
+            right = min(image_width, rm_center + half_width)
+            if right > left:
+                items.append(
+                    PropertiesOverlayPreviewItemResponse(
+                        page_id=page.id,
+                        page_number=page.numero_pagina,
+                        field="HB",
+                        bbox=f"{left},{top},{right},{bottom}",
+                        image_width=image_width,
+                        image_height=image_height,
+                    )
+                )
+    return items
+
+
+def _find_arconic_hb_result_line(
+    *,
+    line_boxes: list[dict[str, object]],
+    target_value: str | None,
+) -> dict[str, object] | None:
+    target_normalized = _normalize_property_capture_value(target_value)
+    if target_normalized is None:
+        return None
+    best_line: dict[str, object] | None = None
+    best_score: tuple[int, int] | None = None
+    for line_box in line_boxes:
+        y0 = int(line_box.get("y0") or 0)
+        if y0 < 1200:
+            continue
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        line_text = " ".join(str(word.get("text") or "") for word in words).lower()
+        if any(marker in line_text for marker in ("spec limits", "min", "max", "limit", "uom", "hardness", "hbw")):
+            continue
+        if not any(re.search(r"\d{6,}", str(word.get("text") or "")) for word in words):
+            continue
+        rank = 10
+        for word in words:
+            candidate_rank = _properties_overlay_word_match_rank(
+                target_value=target_normalized,
+                word_value=cast(str | None, word.get("text")),
+            )
+            if candidate_rank is not None:
+                rank = min(rank, candidate_rank)
+        if rank == 10:
+            continue
+        score = (rank, y0)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_line = line_box
+    return best_line
+
+
+def _find_arconic_mechanical_result_words(
+    *,
+    line_boxes: list[dict[str, object]],
+    field_values: dict[str, str],
+) -> dict[str, dict[str, object]]:
+    found: dict[str, dict[str, object]] = {}
+    for line_box in line_boxes:
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        line_text = " ".join(str(word.get("text") or "") for word in words).lower()
+        if any(marker in line_text for marker in ("spec limits", "min", "max", "limit", "uom")):
+            continue
+        if "hardness" in line_text or "hbw" in line_text:
+            continue
+        for word in words:
+            for field_name in ARCONIC_MECHANICAL_RESULT_FIELDS:
+                target_value = field_values.get(field_name)
+                if target_value is None:
+                    continue
+                if _properties_overlay_word_match_rank(target_value=target_value, word_value=cast(str | None, word.get("text"))) == 0:
+                    found.setdefault(field_name, word)
+    return found
+
+
+def _arconic_mechanical_column_gap(*, known: dict[str, dict[str, object]], image_width: int) -> int:
+    centers: list[tuple[int, float]] = []
+    for field_name, word in known.items():
+        if field_name not in ARCONIC_MECHANICAL_RESULT_FIELDS:
+            continue
+        index = ARCONIC_MECHANICAL_RESULT_FIELDS.index(field_name)
+        center = int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+        centers.append((index, center))
+    gaps = [
+        int((right_center - left_center) / (right_index - left_index))
+        for left_index, left_center in centers
+        for right_index, right_center in centers
+        if right_index > left_index and right_center > left_center
+    ]
+    if gaps:
+        return _median_int(gaps)
+    return int(image_width * 0.145)
+
+
+def _properties_overlay_anchor_words_by_field(
+    line_boxes: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    anchors: dict[str, dict[str, object]] = {}
+    for line_box in line_boxes:
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        for word in words:
+            text = str(word.get("text") or "").strip().lower()
+            compact = re.sub(r"[^a-z0-9.%]", "", text)
+            if compact in {"rm", "rml"}:
+                anchors.setdefault("Rm", word)
+            elif compact.startswith("rp02") or compact.startswith("rp0.2") or compact.startswith("rp0,2"):
+                anchors.setdefault("Rp0.2", word)
+            elif compact in {"a5", "a5l", "a%"} or compact.startswith("a5"):
+                anchors.setdefault("A%", word)
+            elif compact == "hbw" or compact.startswith("hbw"):
+                anchors.setdefault("HB", word)
+            elif compact == "iacs" or compact.startswith("iacs"):
+                anchors.setdefault("IACS%", word)
+    return anchors
+
+
+def _build_property_overlay_item_from_column_words(
+    *,
+    page: DocumentPage,
+    line_boxes: list[dict[str, object]],
+    field_name: str,
+    target_value: str | None,
+    anchor_word: dict[str, object],
+    half_width: int,
+    used_word_ids: set[int],
+    image_width: int,
+    image_height: int,
+) -> PropertiesOverlayPreviewItemResponse | None:
+    target_normalized = _normalize_property_capture_value(target_value)
+    if target_normalized is None:
+        return None
+    anchor_center = int(anchor_word.get("left") or 0) + int(anchor_word.get("width") or 0) / 2
+    anchor_bottom = int(anchor_word.get("top") or 0) + int(anchor_word.get("height") or 0)
+    best_word: dict[str, object] | None = None
+    best_score: tuple[int, int, int, int] | None = None
+    for line_box in line_boxes:
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        line_text = " ".join(str(word.get("text") or "") for word in words).lower()
+        if any(marker in line_text for marker in ("spec limits", "min", "max", "limit", "uom")):
+            line_penalty = 80
+        else:
+            line_penalty = 0
+        for word in words:
+            if id(word) in used_word_ids:
+                continue
+            word_center = int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+            x_distance = int(abs(word_center - anchor_center))
+            if x_distance > half_width:
+                continue
+            word_top = int(word.get("top") or 0)
+            if word_top <= anchor_bottom:
+                continue
+            match_rank = _properties_overlay_word_match_rank(
+                target_value=target_normalized,
+                word_value=cast(str | None, word.get("text")),
+            )
+            normalized_word = cast(str | None, word.get("normalized"))
+            if match_rank is None and normalized_word:
+                match_rank = _properties_overlay_word_match_rank(
+                    target_value=target_normalized,
+                    word_value=normalized_word,
+                )
+            if match_rank is None:
+                continue
+            y_distance = max(0, word_top - anchor_bottom)
+            score = (match_rank + line_penalty, x_distance, y_distance, int(word.get("left") or 0))
+            if best_score is None or score < best_score:
+                best_score = score
+                best_word = word
+
+    if best_word is None:
+        return None
+    used_word_ids.add(id(best_word))
+    left = int(best_word.get("left") or 0)
+    top = int(best_word.get("top") or 0)
+    width = int(best_word.get("width") or 0)
+    height = int(best_word.get("height") or 0)
+    if best_score is not None and best_score[0] > 0:
+        left = max(0, left - max(6, int(width * 0.8)))
+        width += max(6, int(width * 0.8))
+    if width <= 0 or height <= 0:
+        return None
+    return PropertiesOverlayPreviewItemResponse(
+        page_id=page.id,
+        page_number=page.numero_pagina,
+        field=field_name,
+        bbox=f"{left},{top},{min(image_width, left + width)},{min(image_height, top + height)}",
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+def _properties_overlay_word_match_rank(*, target_value: str, word_value: str | None) -> int | None:
+    target_normalized = _normalize_property_capture_value(target_value)
+    word_normalized = _normalize_property_capture_value(word_value)
+    if target_normalized is None or word_normalized is None:
+        return None
+    if target_normalized == word_normalized:
+        return 0
+
+    target_digits = _property_overlay_digit_keys(target_normalized)
+    word_digits = _property_overlay_digit_keys(word_normalized)
+    target_number = parse_property_number(target_normalized)
+    word_number = parse_property_number(word_normalized)
+    if target_number is None or word_number is None or target_number < 100:
+        return None
+    for target_key in target_digits:
+        for word_key in word_digits:
+            if len(word_key) >= 2 and target_key.endswith(word_key) and word_number < target_number:
+                return 1
+    return None
+
+
+def _property_overlay_digit_keys(value: str | None) -> set[str]:
+    normalized = _normalize_property_capture_value(value)
+    if normalized is None:
+        return set()
+    keys = {re.sub(r"\D", "", normalized)}
+    number = parse_property_number(normalized)
+    if number is not None and abs(number - round(number)) < 0.001:
+        keys.add(str(int(round(number))))
+    return {key for key in keys if key}
+
+
 def _build_property_overlay_item_from_click(
     *,
     page: DocumentPage,
@@ -3024,6 +3393,7 @@ def _find_best_chemistry_overlay_match(
     *,
     page: DocumentPage,
     field_values: dict[str, str],
+    supplier_key: str | None = None,
 ) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
     primary = _score_chemistry_overlay_lines(page=page, field_values=field_values, psms=(4,))
     if primary is not None and (primary[4][0] >= 3 or primary[4][1] >= 6):
@@ -3031,7 +3401,204 @@ def _find_best_chemistry_overlay_match(
     fallback = _score_chemistry_overlay_lines(page=page, field_values=field_values, psms=(4, 6))
     if fallback is not None:
         return fallback
+    if supplier_key == "arconic_hannover":
+        geometry_fallback = _find_chemistry_overlay_header_geometry_match(page=page, field_values=field_values)
+        if geometry_fallback is not None:
+            return geometry_fallback
     return primary
+
+
+def _find_chemistry_overlay_header_geometry_match(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> tuple[dict[str, object], list[str], int, int, tuple[int, int, int]] | None:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    best_line: dict[str, object] | None = None
+    best_score: tuple[int, int, int] | None = None
+    for header_line in line_boxes:
+        header_words = cast(list[dict[str, object]], header_line.get("words") or [])
+        header_entries = _chemistry_overlay_header_slot_words_from_words(header_words)
+        real_fields = [slot for slot, _word in header_entries if slot is not None]
+        if len(real_fields) < 5:
+            continue
+        header_y1 = int(header_line.get("y1") or 0)
+        header_x0 = int(header_line.get("x0") or 0)
+        header_x1 = int(header_line.get("x1") or 0)
+        for candidate in line_boxes:
+            candidate_y0 = int(candidate.get("y0") or 0)
+            if candidate_y0 <= header_y1:
+                continue
+            distance = candidate_y0 - header_y1
+            if distance > max(220, int(image_height * 0.18)):
+                continue
+            words = cast(list[dict[str, object]], candidate.get("words") or [])
+            text = " ".join(str(word.get("text") or "") for word in words).lower()
+            if any(token in text for token in ("min", "max", "limit", "norma", "norme", "soll", "set value", "uom")):
+                continue
+            value_words = _chemistry_overlay_value_words(candidate)
+            if len(value_words) < 2:
+                continue
+            candidate_x0 = int(candidate.get("x0") or 0)
+            candidate_x1 = int(candidate.get("x1") or 0)
+            overlap = max(0, min(header_x1, candidate_x1) - max(header_x0, candidate_x0))
+            matched_fields = _match_chemistry_overlay_fields(field_values, candidate)
+            score = (len(matched_fields), len(value_words), overlap - distance)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_line = candidate
+    if best_line is None or best_score is None:
+        return None
+    matched_fields = _match_chemistry_overlay_fields(field_values, best_line)
+    synthetic_field_count = max(3, len(matched_fields))
+    return best_line, matched_fields, image_width, image_height, (best_score[0], synthetic_field_count, best_score[2])
+
+
+ARCONIC_CHEMISTRY_GEOMETRY_SLOTS: list[str | None] = [
+    "Si",
+    "Fe",
+    "Cu",
+    "Mn",
+    "Mg",
+    "Cr",
+    "Zn",
+    "Ti",
+    "Pb",
+    "Zr",
+    None,  # H2 is shown in Arconic tables but is not a captured chemistry field.
+]
+
+
+def _build_arconic_chemistry_overlay_items_from_table_geometry(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    title_line = _find_arconic_chemistry_title_line(line_boxes)
+    if title_line is None:
+        return []
+    value_line = _find_arconic_chemistry_value_line(line_boxes=line_boxes, title_line=title_line, image_height=image_height)
+    if value_line is None:
+        return []
+
+    value_words = cast(list[dict[str, object]], value_line.get("words") or [])
+    numeric_words = [
+        word
+        for word in value_words
+        if re.fullmatch(r"(?:<=|<|≤)?\s*\d+(?:[.,]\d+)?", str(word.get("text") or "").strip())
+    ]
+    numeric_centers = sorted(
+        int(word.get("left") or 0) + int(word.get("width") or 0) / 2
+        for word in numeric_words
+        if int(word.get("width") or 0) > 0
+    )
+    if len(numeric_centers) >= 2:
+        gaps = [right - left for left, right in zip(numeric_centers, numeric_centers[1:]) if right > left]
+        column_width = int(_median_int(gaps)) if gaps else 0
+        if column_width <= 0:
+            return []
+        first_center = int(numeric_centers[-1] - (len(ARCONIC_CHEMISTRY_GEOMETRY_SLOTS) - 1) * column_width)
+    else:
+        cast_words = [
+            word
+            for word in value_words
+            if re.search(r"[A-Z]\d{5,}", str(word.get("text") or "").upper())
+        ]
+        if not cast_words:
+            return []
+        cast_center = int(cast_words[0].get("left") or 0) + int(cast_words[0].get("width") or 0) / 2
+        table_right = max(int(value_line.get("x1") or 0), image_width - int(image_width * 0.1))
+        column_width = int((table_right - cast_center) / (len(ARCONIC_CHEMISTRY_GEOMETRY_SLOTS) + 0.6))
+        if column_width <= 0:
+            return []
+        first_center = int(cast_center + column_width * 2.15)
+
+    top = int(value_line.get("y0") or 0)
+    bottom = int(value_line.get("y1") or 0)
+    if bottom <= top:
+        bottom = top + max(18, int(image_height * 0.012))
+    half_width = max(22, min(58, int(column_width * 0.28)))
+
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+    for index, field_name in enumerate(ARCONIC_CHEMISTRY_GEOMETRY_SLOTS):
+        if field_name is None or field_name not in field_values:
+            continue
+        center = int(first_center + index * column_width)
+        left = max(0, center - half_width)
+        right = min(image_width, center + half_width)
+        if right <= left:
+            continue
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{right},{bottom}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+    return items
+
+
+def _find_arconic_chemistry_title_line(line_boxes: list[dict[str, object]]) -> dict[str, object] | None:
+    best_line: dict[str, object] | None = None
+    best_y = -1
+    for line_box in line_boxes:
+        text = " ".join(str(word.get("text") or "") for word in cast(list[dict[str, object]], line_box.get("words") or [])).lower()
+        if "composition" not in text or "result" not in text:
+            continue
+        y0 = int(line_box.get("y0") or 0)
+        if y0 > best_y:
+            best_y = y0
+            best_line = line_box
+    return best_line
+
+
+def _find_arconic_chemistry_value_line(
+    *,
+    line_boxes: list[dict[str, object]],
+    title_line: dict[str, object],
+    image_height: int,
+) -> dict[str, object] | None:
+    title_y1 = int(title_line.get("y1") or 0)
+    best_line: dict[str, object] | None = None
+    best_score: tuple[int, int, int] | None = None
+    for line_box in line_boxes:
+        y0 = int(line_box.get("y0") or 0)
+        if y0 <= title_y1:
+            continue
+        distance = y0 - title_y1
+        if distance > max(220, int(image_height * 0.18)):
+            continue
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        text = " ".join(str(word.get("text") or "") for word in words).lower()
+        if any(marker in text for marker in ("mechanical", "property", "test limits", "spec limits", "min", "max")):
+            continue
+        numeric_count = sum(
+            1
+            for word in words
+            if re.fullmatch(r"(?:<=|<|≤)?\s*\d+(?:[.,]\d+)?", str(word.get("text") or "").strip())
+        )
+        cast_count = sum(1 for word in words if re.search(r"[A-Z]\d{5,}", str(word.get("text") or "").upper()))
+        if numeric_count < 2 and cast_count < 1:
+            continue
+        score = (cast_count, numeric_count, -distance)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_line = line_box
+    return best_line
+
+
+def _median_int(values: list[int]) -> int:
+    ordered = sorted(value for value in values if value > 0)
+    if not ordered:
+        return 0
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return int((ordered[middle - 1] + ordered[middle]) / 2)
 
 
 def _score_chemistry_overlay_lines(
@@ -3429,6 +3996,7 @@ def _chemistry_overlay_header_words_by_field(
 
 CHEMISTRY_OVERLAY_FALLBACK_SLOTS_BY_SUPPLIER: dict[str, list[str | None]] = {
     "aluminium_bozen": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Ni", "Zn", None, "V", "Ti", "Pb", "Zr", "Bi", "Sn"],
+    "arconic_hannover": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Pb", "Zr", None],
     "aww": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Pb"],
     "leichtmetall": ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", None, None],
     "metalba": ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr", None, None],
