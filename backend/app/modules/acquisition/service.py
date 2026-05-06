@@ -1071,6 +1071,21 @@ def build_chemistry_overlay_preview(
 
     template = resolve_supplier_template(_row_supplier_name(row))
     supplier_key = template.supplier_key if template is not None else None
+    if supplier_key == "zalco":
+        best_zalco_items: list[ChemistryOverlayPreviewItemResponse] = []
+        for page in certificate_document.pages:
+            if not page.immagine_pagina_storage_key:
+                continue
+            zalco_items = _build_zalco_chemistry_overlay_items_from_compact_table(
+                page=page,
+                field_values=field_values,
+                row=row,
+            )
+            if _count_chemistry_overlay_fields(zalco_items) > _count_chemistry_overlay_fields(best_zalco_items):
+                best_zalco_items = zalco_items
+        if _count_chemistry_overlay_fields(best_zalco_items) >= min(len(field_values), 6):
+            return ChemistryOverlayPreviewResponse(items=best_zalco_items)
+
     best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
     best_score: tuple[int, int, int] = (0, 0, 0)
     for page in certificate_document.pages:
@@ -1102,6 +1117,14 @@ def build_chemistry_overlay_preview(
         return ChemistryOverlayPreviewResponse(items=[])
 
     page, line_box, matched_fields, image_width, image_height = best_match
+    if supplier_key == "zalco":
+        zalco_items = _build_zalco_chemistry_overlay_items_from_analysis_block(
+            page=page,
+            field_values=field_values,
+            row=row,
+        )
+        if _count_chemistry_overlay_fields(zalco_items) > len(matched_fields):
+            return ChemistryOverlayPreviewResponse(items=zalco_items)
     items = _build_chemistry_overlay_items(
         page=page,
         line_box=line_box,
@@ -3406,6 +3429,263 @@ def _find_best_chemistry_overlay_match(
         if geometry_fallback is not None:
             return geometry_fallback
     return primary
+
+
+ZALCO_ANALYSIS_FIELDS_BY_LABEL = {
+    "SI": "Si",
+    "ST": "Si",
+    "FE": "Fe",
+    "CU": "Cu",
+    "MN": "Mn",
+    "MG": "Mg",
+    "CR": "Cr",
+    "ZN": "Zn",
+    "TI": "Ti",
+}
+
+ZALCO_COMPACT_ANALYSIS_FIELDS = ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti")
+
+
+def _build_zalco_chemistry_overlay_items_from_compact_table(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+    row: AcquisitionRow | None = None,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    best_items: list[ChemistryOverlayPreviewItemResponse] = []
+    best_score: tuple[int, int, int] | None = None
+    for line_box in line_boxes:
+        anchor_score = _zalco_compact_row_anchor_score(line_box=line_box, row=row)
+        if anchor_score <= 0:
+            continue
+        anchor_right = _zalco_compact_row_anchor_right(line_box=line_box, row=row)
+        if anchor_right is None:
+            continue
+        value_words = [
+            word
+            for word in _chemistry_overlay_value_words(line_box)
+            if int(word.get("left") or 0) > anchor_right
+        ]
+        if len(value_words) < 5:
+            continue
+        value_words.sort(key=lambda word: int(word.get("left") or 0))
+        items: list[ChemistryOverlayPreviewItemResponse] = []
+        for index, field_name in enumerate(ZALCO_COMPACT_ANALYSIS_FIELDS):
+            if field_name not in field_values or index >= len(value_words):
+                continue
+            word = value_words[index]
+            target_keys = _chemistry_overlay_match_keys(field_values.get(field_name))
+            word_keys = _chemistry_overlay_word_match_keys(word)
+            if target_keys and not (target_keys & word_keys):
+                continue
+            left = int(word.get("left") or 0)
+            top = int(word.get("top") or 0)
+            width = int(word.get("width") or 0)
+            height = int(word.get("height") or 0)
+            if width <= 0 or height <= 0:
+                continue
+            items.append(
+                ChemistryOverlayPreviewItemResponse(
+                    page_id=page.id,
+                    page_number=page.numero_pagina,
+                    field=field_name,
+                    bbox=f"{left},{top},{left + width},{top + height}",
+                    image_width=image_width,
+                    image_height=image_height,
+                )
+            )
+        item_count = _count_chemistry_overlay_fields(items)
+        score = (item_count, anchor_score, -int(line_box.get("y0") or 0))
+        if item_count >= 5 and (best_score is None or score > best_score):
+            best_score = score
+            best_items = items
+    return best_items
+
+
+def _zalco_compact_row_anchor_score(*, line_box: dict[str, object], row: AcquisitionRow | None) -> int:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    normalized_text = _normalize_zalco_overlay_anchor_text(
+        " ".join(str(word.get("text") or "") for word in words)
+    )
+    cast_parts = _zalco_overlay_cast_parts(row)
+    if cast_parts:
+        cast_score = 0
+        for part in cast_parts:
+            normalized_part = _normalize_zalco_overlay_anchor_text(part)
+            if normalized_part and normalized_part in normalized_text:
+                cast_score += 2 if "-" in part else 1
+        if cast_score <= 0:
+            return 0
+    else:
+        cast_score = 0
+
+    weight_score = 0
+    for part in _zalco_overlay_weight_parts(row):
+        if part and part in normalized_text:
+            weight_score = 2
+            break
+    return cast_score + weight_score
+
+
+def _zalco_compact_row_anchor_right(*, line_box: dict[str, object], row: AcquisitionRow | None) -> int | None:
+    anchor_parts = [_normalize_zalco_overlay_anchor_text(part) for part in _zalco_overlay_cast_parts(row)]
+    anchor_parts.extend(_zalco_overlay_weight_parts(row))
+    anchor_parts = [part for part in anchor_parts if part]
+    if not anchor_parts:
+        return None
+    right_edges: list[int] = []
+    for word in cast(list[dict[str, object]], line_box.get("words") or []):
+        word_text = _normalize_zalco_overlay_anchor_text(str(word.get("text") or ""))
+        if not word_text:
+            continue
+        if any(part in word_text or word_text in part for part in anchor_parts):
+            right_edges.append(int(word.get("left") or 0) + int(word.get("width") or 0))
+    return max(right_edges) if right_edges else None
+
+
+def _normalize_zalco_overlay_anchor_text(value: str | None) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", _normalize_mojibake_numeric_text(value or "").upper())
+
+
+def _zalco_overlay_weight_parts(row: AcquisitionRow | None) -> list[str]:
+    if row is None:
+        return []
+    raw_parts: list[str] = []
+    for value in row.values:
+        if value.blocco in {"certificato", "ddt"} and value.campo in {"peso", "peso_kg"}:
+            raw_parts.append(value.valore_finale or value.valore_standardizzato or value.valore_grezzo or "")
+    if getattr(row, "peso_kg", None):
+        raw_parts.append(str(getattr(row, "peso_kg")))
+    parts: list[str] = []
+    for raw in raw_parts:
+        cleaned = re.sub(r"[^0-9]+", "", _normalize_mojibake_numeric_text(raw))
+        if cleaned:
+            parts.append(cleaned)
+    return list(dict.fromkeys(parts))
+
+
+def _build_zalco_chemistry_overlay_items_from_analysis_block(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+    row: AcquisitionRow | None = None,
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+    value_lines = _find_zalco_analysis_value_lines(line_boxes=line_boxes, row=row)
+    if not value_lines:
+        return []
+    items: dict[str, ChemistryOverlayPreviewItemResponse] = {}
+    for line_box in value_lines:
+        for field_name, word in _zalco_analysis_value_words_by_field(line_box).items():
+            if field_name not in field_values or field_name in items:
+                continue
+            target_keys = _chemistry_overlay_match_keys(field_values.get(field_name))
+            word_keys = _chemistry_overlay_word_match_keys(word)
+            if target_keys and not (target_keys & word_keys):
+                continue
+            left = int(word.get("left") or 0)
+            top = int(word.get("top") or 0)
+            width = int(word.get("width") or 0)
+            height = int(word.get("height") or 0)
+            if width <= 0 or height <= 0:
+                continue
+            items[field_name] = ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=f"{left},{top},{left + width},{top + height}",
+                image_width=image_width,
+                image_height=image_height,
+            )
+    return [items[field_name] for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER if field_name in items]
+
+
+def _find_zalco_analysis_value_lines(
+    *,
+    line_boxes: list[dict[str, object]],
+    row: AcquisitionRow | None,
+) -> list[dict[str, object]]:
+    normalized_cast_parts = _zalco_overlay_cast_parts(row)
+    best_start_index: int | None = None
+    best_score: tuple[int, int, int] | None = None
+    for index, line_box in enumerate(line_boxes):
+        words = cast(list[dict[str, object]], line_box.get("words") or [])
+        fields = _zalco_analysis_value_words_by_field(line_box)
+        if len(fields) < 3:
+            continue
+        text = " ".join(str(word.get("text") or "") for word in words).upper()
+        cast_score = sum(1 for part in normalized_cast_parts if part and part in text)
+        if normalized_cast_parts and cast_score == 0:
+            continue
+        label_score = len(fields)
+        score = (cast_score, label_score, -int(line_box.get("y0") or 0))
+        if best_score is None or score > best_score:
+            best_score = score
+            best_start_index = index
+    if best_start_index is None:
+        return []
+
+    selected = [line_boxes[best_start_index]]
+    first_bottom = int(line_boxes[best_start_index].get("y1") or 0)
+    first_x0 = int(line_boxes[best_start_index].get("x0") or 0)
+    first_x1 = int(line_boxes[best_start_index].get("x1") or 0)
+    for candidate in line_boxes[best_start_index + 1 : best_start_index + 5]:
+        candidate_y0 = int(candidate.get("y0") or 0)
+        if candidate_y0 - first_bottom > 120:
+            break
+        candidate_x0 = int(candidate.get("x0") or 0)
+        candidate_x1 = int(candidate.get("x1") or 0)
+        overlap = max(0, min(first_x1, candidate_x1) - max(first_x0, candidate_x0))
+        fields = _zalco_analysis_value_words_by_field(candidate)
+        if overlap > 0 and fields:
+            selected.append(candidate)
+            if {"Mg", "Cr", "Zn", "Ti"} & set(fields):
+                break
+    return selected
+
+
+def _zalco_overlay_cast_parts(row: AcquisitionRow | None) -> list[str]:
+    if row is None:
+        return []
+    raw_parts: list[str] = []
+    for value in row.values:
+        if value.blocco in {"certificato", "ddt"} and value.campo in {"colata", "colata_certificato"}:
+            raw_parts.append(value.valore_finale or value.valore_standardizzato or value.valore_grezzo or "")
+    if getattr(row, "colata", None):
+        raw_parts.append(str(getattr(row, "colata")))
+    parts: list[str] = []
+    for raw in raw_parts:
+        cleaned = re.sub(r"[^A-Z0-9-]+", "", _normalize_mojibake_numeric_text(raw).upper())
+        if not cleaned:
+            continue
+        parts.append(cleaned)
+        parts.extend(part for part in cleaned.split("-") if part)
+    return list(dict.fromkeys(parts))
+
+
+def _zalco_analysis_value_words_by_field(line_box: dict[str, object]) -> dict[str, dict[str, object]]:
+    words = cast(list[dict[str, object]], line_box.get("words") or [])
+    by_field: dict[str, dict[str, object]] = {}
+    for index, word in enumerate(words):
+        raw_label = str(word.get("text") or "").upper()
+        label = re.sub(r"[^A-Z]", "", raw_label)
+        field_name = ZALCO_ANALYSIS_FIELDS_BY_LABEL.get(label)
+        if field_name is None:
+            continue
+        value_word = next(
+            (
+                candidate
+                for candidate in words[index + 1 : index + 4]
+                if _chemistry_overlay_token_candidates(cast(str | None, candidate.get("text")))
+                or _chemistry_overlay_token_candidates(cast(str | None, candidate.get("normalized")))
+            ),
+            None,
+        )
+        if value_word is None:
+            continue
+        by_field.setdefault(field_name, value_word)
+    return by_field
 
 
 def _find_chemistry_overlay_header_geometry_match(

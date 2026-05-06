@@ -673,6 +673,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     setDraft(nextInitial);
     setSessionSourceOverrides({});
     setDraftOverlayItems([]);
+    setOverlayPreviewItems([]);
     onDirtyChange?.(false);
   }, [persistedInitialDraft, persistedSignature]);
 
