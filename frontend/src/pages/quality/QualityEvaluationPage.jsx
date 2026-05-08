@@ -263,6 +263,7 @@ export default function QualityEvaluationPage() {
   const [queryThree, setQueryThree] = useState("");
   const [operatorOne, setOperatorOne] = useState("and");
   const [operatorTwo, setOperatorTwo] = useState("and");
+  const [rowLimit, setRowLimit] = useState("25");
   const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
@@ -351,6 +352,19 @@ export default function QualityEvaluationPage() {
     });
   }, [drafts, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, sortConfig]);
 
+  const displayedRows = useMemo(() => {
+    if (rowLimit === "all") {
+      return visibleRows;
+    }
+
+    const limit = Number(rowLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return visibleRows;
+    }
+
+    return visibleRows.slice(0, limit);
+  }, [rowLimit, visibleRows]);
+
   useEffect(() => {
     function updateScrollMetrics() {
       const viewport = tableViewportRef.current;
@@ -379,7 +393,7 @@ export default function QualityEvaluationPage() {
       window.removeEventListener("resize", updateScrollMetrics);
       observer?.disconnect();
     };
-  }, [rows.length]);
+  }, [displayedRows.length, rows.length]);
 
   function setCellState(key, nextState) {
     setCellStates((current) => {
@@ -550,7 +564,8 @@ export default function QualityEvaluationPage() {
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          <span className="font-semibold text-ink">{visibleRows.length}</span> righe visibili
+          <span className="font-semibold text-ink">{displayedRows.length}</span> righe visibili
+          {displayedRows.length !== visibleRows.length ? <span className="ml-2 text-slate-500">su {visibleRows.length}</span> : null}
           {changedRows ? <span className="ml-3 text-amber-700">{changedRows} modificate</span> : null}
         </div>
       </div>
@@ -623,6 +638,23 @@ export default function QualityEvaluationPage() {
             value={queryThree}
           />
         </div>
+        <div className="ml-auto min-w-[88px] max-w-[88px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quality-row-limit">
+            Righe
+          </label>
+          <select
+            className="w-full rounded-xl border border-border bg-white px-2 py-2 text-sm text-slate-700"
+            id="quality-row-limit"
+            onChange={(event) => setRowLimit(event.target.value)}
+            value={rowLimit}
+          >
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="75">75</option>
+            <option value="100">100</option>
+            <option value="all">Tutte</option>
+          </select>
+        </div>
       </div>
 
       <div className="mt-8 sticky top-0 z-20 rounded-xl border border-border bg-slate-50 px-3 py-2 shadow-sm">
@@ -667,7 +699,7 @@ export default function QualityEvaluationPage() {
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((row) => {
+            {displayedRows.map((row) => {
               const draft = drafts[row.id] || buildDraft(row);
               return (
                 <tr key={row.id} className="border-b border-slate-100 align-middle hover:bg-slate-50/70 last:border-0">
