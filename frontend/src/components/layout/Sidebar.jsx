@@ -6,12 +6,12 @@ const navItems = [
   { label: "Dashboard", to: "/dashboard", roles: ["user", "manager", "admin"] },
   { label: "Carica Documenti", to: "/acquisition/upload", roles: ["user", "manager", "admin"] },
   { label: "Incoming Quality", to: "/acquisition", roles: ["user", "manager", "admin"] },
+  { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
   { type: "divider" },
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
   { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
   { label: "Reparti", to: "/departments", roles: ["admin"] },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },
-  { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
   { label: "Note", to: "/notes", roles: ["user", "manager", "admin"] },
   { label: "Log", to: "/logs", roles: ["manager", "admin"] },
 ];

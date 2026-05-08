@@ -7,6 +7,7 @@ import Sidebar from "./Sidebar";
 export default function AppShell() {
   const location = useLocation();
   const isAcquisitionRoute = location.pathname.startsWith("/acquisition");
+  const isWideRoute = isAcquisitionRoute || location.pathname.startsWith("/quality-evaluation");
 
   return (
     <div className="h-screen overflow-hidden bg-shell text-ink">
@@ -17,7 +18,7 @@ export default function AppShell() {
         <div className="flex h-screen min-h-0 flex-col overflow-hidden">
           <Header />
           <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-shell to-slate-100 p-6">
-            <div className={`mx-auto w-full ${isAcquisitionRoute ? "max-w-none" : "max-w-6xl"}`}>
+            <div className={`mx-auto w-full ${isWideRoute ? "max-w-none" : "max-w-6xl"}`}>
               <Outlet />
             </div>
           </main>

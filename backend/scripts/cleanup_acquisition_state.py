@@ -23,6 +23,7 @@ TABLE_COUNTS = (
     "documenti_fornitore_pagine",
     "match_certificato",
     "match_certificato_candidati",
+    "match_blocchi_manual",
     "storico_eventi_acquisition",
     "storico_valori_acquisition",
     "valori_letti_acquisition",
@@ -66,6 +67,7 @@ def _delete_database_state(db) -> None:
         "update acquisition_processing_runs set current_row_id = null where current_row_id is not null",
         "delete from storico_valori_acquisition",
         "delete from acquisition_row_note_templates",
+        "delete from match_blocchi_manual",
         """
         delete from match_certificato_candidati
         where match_certificato_id in (select id from match_certificato)
