@@ -1442,6 +1442,18 @@ def build_document_core_overlay_preview(
         live_field_items = [item for item in live_field_items if item.field != "material_block"]
         live_field_items.extend(anchored_material_items)
 
+    value_window_items = _build_document_core_overlay_items_from_value_ocr_window(
+        row=row,
+        document=document,
+        source_key=source_key,
+        value_map=value_map,
+    )
+    if value_window_items:
+        live_field_items = _merge_document_core_overlay_items_prefer_existing(
+            live_field_items,
+            value_window_items,
+        )
+
     items: list[DocumentCoreOverlayPreviewItemResponse] = list(live_field_items)
     seen_fields = {item.field for item in items}
     for ui_field, candidate_fields in field_map.items():
@@ -1508,6 +1520,20 @@ def build_document_core_overlay_preview(
 
     items = _collapse_document_core_material_items(items)
     return DocumentCoreOverlayPreviewResponse(items=items)
+
+
+def _merge_document_core_overlay_items_prefer_existing(
+    existing: list[DocumentCoreOverlayPreviewItemResponse],
+    candidates: list[DocumentCoreOverlayPreviewItemResponse],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    merged = list(existing)
+    seen_fields = {item.field for item in merged}
+    for item in candidates:
+        if item.field in seen_fields:
+            continue
+        merged.append(item)
+        seen_fields.add(item.field)
+    return merged
 
 
 def _document_core_overlay_item_allowed(
@@ -1681,6 +1707,294 @@ def _document_core_match_snippet_contains_final_value(
     if not token or len(token) < 3:
         return True
     return token in _normalize_row_signature_token(snippet)
+
+
+def _build_document_core_overlay_items_from_value_ocr_window(
+    *,
+    row: AcquisitionRow,
+    document: Document,
+    source_key: str,
+    value_map: dict[str, ReadValue],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    if source_key == "certificato":
+        field_values = {
+            "lega_base": _read_value_display_text(value_map.get("lega_certificato")) or row.lega_base,
+            "diametro": _read_value_display_text(value_map.get("diametro_certificato")) or row.diametro,
+            "cdq": _read_value_display_text(value_map.get("numero_certificato_certificato")) or row.cdq,
+            "colata": _read_value_display_text(value_map.get("colata_certificato")) or row.colata,
+            "ddt": _read_value_display_text(value_map.get("ddt_certificato")) or row.ddt,
+            "peso": _read_value_display_text(value_map.get("peso_certificato")) or row.peso,
+            "ordine": _read_value_display_text(value_map.get("ordine_cliente_certificato")) or row.ordine,
+        }
+        field_weights = {
+            "cdq": 80,
+            "colata": 75,
+            "ddt": 65,
+            "ordine": 60,
+            "peso": 55,
+            "diametro": 45,
+            "lega_base": 40,
+        }
+        minimum_score = 120
+        max_window_size = 8
+    else:
+        field_values = {
+            "lega": row.lega_base,
+            "diametro": row.diametro,
+            "cdq": row.cdq,
+            "colata": row.colata,
+            "ddt": row.ddt,
+            "peso": row.peso,
+            "ordine": row.ordine,
+        }
+        field_weights = {
+            "ddt": 80,
+            "cdq": 75,
+            "colata": 75,
+            "peso": 65,
+            "ordine": 60,
+            "diametro": 45,
+            "lega": 40,
+        }
+        minimum_score = 115
+        max_window_size = 6
+
+    selected = _select_best_document_core_value_ocr_window(
+        pages=document.pages,
+        field_values=field_values,
+        field_weights=field_weights,
+        minimum_score=minimum_score,
+        max_window_size=max_window_size,
+    )
+    if selected is None:
+        return []
+
+    page, window, matched_fields, image_width, image_height = selected
+    material_window = _select_best_document_core_material_subwindow(window=window, field_values=field_values) or window
+    field_bboxes = {}
+    for field_name in matched_fields:
+        lookup_window = material_window if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS else window
+        field_bboxes[field_name] = _document_core_field_bbox_from_ocr_window(
+            window=lookup_window,
+            field_name=field_name,
+            value=field_values.get(field_name),
+        )
+    fallback_bbox = _document_core_bbox_from_line_boxes(window)
+    if fallback_bbox is None:
+        return []
+
+    items: list[DocumentCoreOverlayPreviewItemResponse] = []
+    material_fields = [field_name for field_name in matched_fields if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS]
+    material_bboxes = [
+        bbox
+        for field_name, bbox in field_bboxes.items()
+        if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS and bbox is not None
+    ]
+    if len(set(material_fields)) >= 2:
+        material_bbox = _merge_document_core_overlay_bbox_values(material_bboxes) or fallback_bbox
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field="material_block",
+                bbox=material_bbox,
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+
+    for field_name in ("cdq", "ddt", "ordine"):
+        if field_name not in matched_fields:
+            continue
+        items.append(
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=field_bboxes.get(field_name) or fallback_bbox,
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+    return items
+
+
+def _select_best_document_core_value_ocr_window(
+    *,
+    pages: list[DocumentPage],
+    field_values: dict[str, str | None],
+    field_weights: dict[str, int],
+    minimum_score: int,
+    max_window_size: int,
+) -> tuple[DocumentPage, list[dict[str, object]], list[str], int, int] | None:
+    field_tokens: list[tuple[str, str, int]] = []
+    for field_name, value in field_values.items():
+        token = _normalize_row_signature_token(value)
+        if not token:
+            continue
+        if field_name == "diametro" and len(token) < 2:
+            continue
+        field_tokens.append((field_name, token, field_weights.get(field_name, 30)))
+    if not field_tokens:
+        return None
+
+    best: tuple[DocumentPage, list[dict[str, object]], list[str], int, int, int] | None = None
+    for page in pages:
+        if not page.immagine_pagina_storage_key:
+            continue
+        line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6))
+        line_boxes = sorted(
+            line_boxes,
+            key=lambda box: (int(box.get("y0") or 0), int(box.get("x0") or 0)),
+        )
+        max_window = min(max_window_size, len(line_boxes))
+        for window_size in range(1, max_window + 1):
+            for start in range(0, len(line_boxes) - window_size + 1):
+                window = line_boxes[start : start + window_size]
+                window_lines = [
+                    _normalize_row_signature_token(_document_core_line_box_text(line_box))
+                    for line_box in window
+                ]
+                window_key = " ".join(window_lines)
+                if not window_key:
+                    continue
+
+                matched_fields: list[str] = []
+                score = 0
+                for field_name, token, weight in field_tokens:
+                    if _document_core_window_contains_token(
+                        field_name=field_name,
+                        window_lines=window_lines,
+                        window_key=window_key,
+                        token=token,
+                    ):
+                        matched_fields.append(field_name)
+                        score += weight
+
+                unique_fields = list(dict.fromkeys(matched_fields))
+                if len(unique_fields) < 2:
+                    continue
+                score += 20 * len(unique_fields)
+                if {"cdq", "colata"} <= set(unique_fields):
+                    score += 35
+                if {"peso", "diametro"} <= set(unique_fields):
+                    score += 25
+                if {"colata", "peso"} <= set(unique_fields):
+                    score += 25
+                score -= _document_core_material_negative_score(window_key)
+                if score < minimum_score:
+                    continue
+                if best is None or score > best[5]:
+                    best = (page, window, unique_fields, int(image_width or 0), int(image_height or 0), score)
+
+    if best is None:
+        return None
+    page, window, fields, image_width, image_height, _score = best
+    return page, window, fields, image_width, image_height
+
+
+def _select_best_document_core_material_subwindow(
+    *,
+    window: list[dict[str, object]],
+    field_values: dict[str, str | None],
+) -> list[dict[str, object]] | None:
+    material_fields = [field_name for field_name in field_values if field_name in _DOCUMENT_CORE_MATERIAL_BLOCK_FIELDS]
+    best_line: dict[str, object] | None = None
+    best_score = 0
+    for line_box in window:
+        line_key = _normalize_row_signature_token(_document_core_line_box_text(line_box))
+        if not line_key:
+            continue
+        score = 0
+        for field_name in material_fields:
+            token = _normalize_row_signature_token(field_values.get(field_name))
+            if not token:
+                continue
+            if _document_core_window_contains_token(
+                field_name=field_name,
+                window_lines=[line_key],
+                window_key=line_key,
+                token=token,
+            ):
+                score += 1
+        # Colata e peso aiutano a scegliere la riga materiale giusta nei DDT multiriga.
+        for field_name in ("colata", "peso", "cdq"):
+            token = _normalize_row_signature_token(field_values.get(field_name))
+            if token and _document_core_window_contains_token(
+                field_name=field_name,
+                window_lines=[line_key],
+                window_key=line_key,
+                token=token,
+            ):
+                score += 1
+        if score > best_score:
+            best_line = line_box
+            best_score = score
+    if best_line is None or best_score < 2:
+        return None
+    return [best_line]
+
+
+def _document_core_field_bbox_from_ocr_window(
+    *,
+    window: list[dict[str, object]],
+    field_name: str,
+    value: str | None,
+) -> str | None:
+    token = _normalize_row_signature_token(value)
+    if not token:
+        return None
+    matching_words: list[dict[str, object]] = []
+    for line_box in window:
+        line_key = _normalize_row_signature_token(_document_core_line_box_text(line_box))
+        if not _document_core_window_contains_token(
+            field_name=field_name,
+            window_lines=[line_key],
+            window_key=line_key,
+            token=token,
+        ):
+            continue
+        for word in cast(list[dict[str, object]], line_box.get("words") or []):
+            word_key = _normalize_row_signature_token(str(word.get("normalized") or word.get("text") or ""))
+            if not word_key:
+                continue
+            if field_name == "diametro":
+                if word_key in token or token in word_key or word_key in {"DIA", "DIAM", "DIAMETER", "MM", "RD"}:
+                    matching_words.append(word)
+            elif word_key in token or token in word_key:
+                matching_words.append(word)
+        if matching_words:
+            break
+        line_bbox = _document_core_bbox_from_line_boxes([line_box])
+        if line_bbox is not None:
+            return line_bbox
+    if not matching_words:
+        return None
+    return _document_core_bbox_from_words(matching_words)
+
+
+def _document_core_bbox_from_words(words: list[dict[str, object]]) -> str | None:
+    if not words:
+        return None
+    left = min(int(word.get("left") or 0) for word in words)
+    top = min(int(word.get("top") or 0) for word in words)
+    right = max(int(word.get("left") or 0) + int(word.get("width") or 0) for word in words)
+    bottom = max(int(word.get("top") or 0) + int(word.get("height") or 0) for word in words)
+    if right <= left or bottom <= top:
+        return None
+    return f"{left},{top},{right},{bottom}"
+
+
+def _merge_document_core_overlay_bbox_values(bbox_values: list[str | None]) -> str | None:
+    boxes = [_parse_document_core_bbox(bbox) for bbox in bbox_values if bbox]
+    boxes = [box for box in boxes if box is not None]
+    if not boxes:
+        return None
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[2] for box in boxes)
+    bottom = max(box[3] for box in boxes)
+    return f"{int(left)},{int(top)},{int(right)},{int(bottom)}"
 
 
 def _build_document_core_material_items_from_anchored_ocr(
@@ -2135,14 +2449,16 @@ def _document_core_diameter_token_matches(*, line: str, token: str) -> bool:
     token_variants = [token]
     if token.endswith("00") and len(token) > 2:
         token_variants.append(token[:-2])
-    anchors = ("DIA", "DIAMETER", "DURCHMESSER", "ABMESSUNG", "RUNDSTANGE", "TONDA")
+    anchors = ("DIA", "DIAMETER", "DURCHMESSER", "ABMESSUNG", "RUNDSTANGE", "TONDA", "RD")
     has_diameter_anchor = any(anchor in line for anchor in anchors)
     for variant in dict.fromkeys(token_variants):
         if not variant:
             continue
-        if has_diameter_anchor and re.search(rf"{re.escape(variant)}0*(?!\d)", line):
+        if re.search(rf"(?:RD|DIA|DIAMETER)0*{re.escape(variant)}0*", line):
             return True
-        if re.search(rf"(?<!\d){re.escape(variant)}0*(?!\d)", line):
+        if has_diameter_anchor and re.search(rf"0*{re.escape(variant)}0*(?!\d)", line):
+            return True
+        if re.search(rf"(?<!\d)0*{re.escape(variant)}0*(?!\d)", line):
             return True
     return False
 
