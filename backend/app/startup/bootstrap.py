@@ -36,6 +36,7 @@ from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_s
 def initialize_application() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
+    ensure_acquisition_quality_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
@@ -60,6 +61,40 @@ def ensure_document_upload_columns() -> None:
         statements.append("ALTER TABLE documenti_fornitore ADD COLUMN upload_batch_id VARCHAR(64)")
     if "scadenza_batch" not in columns:
         statements.append("ALTER TABLE documenti_fornitore ADD COLUMN scadenza_batch TIMESTAMP WITH TIME ZONE")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def ensure_acquisition_quality_columns() -> None:
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("datimaterialeincoming")}
+    statements: list[str] = []
+
+    if "qualita_data_ricezione" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_data_ricezione DATE")
+    if "qualita_data_accettazione" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_data_accettazione DATE")
+    if "qualita_data_richiesta" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_data_richiesta DATE")
+    if "qualita_numero_analisi" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_numero_analisi VARCHAR(128)")
+    if "qualita_valutazione" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_valutazione VARCHAR(32)")
+    if "qualita_note" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note TEXT")
+    if "qualita_numero_analisi_da_ricontrollare" not in columns:
+        statements.append(
+            "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_numero_analisi_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    if "qualita_note_da_ricontrollare" not in columns:
+        statements.append(
+            "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"
+        )
 
     if not statements:
         return

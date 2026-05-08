@@ -25,6 +25,7 @@ MatchState = Literal["proposto", "confermato", "cambiato"]
 MatchSource = Literal["sistema", "chatgpt", "utente", "archivio"]
 CandidateState = Literal["candidato", "scartato", "scelto"]
 AutomationRunState = Literal["in_coda", "in_esecuzione", "completato", "errore"]
+QualityEvaluationState = Literal["accettato", "accettato_con_riserva", "respinto"]
 
 
 def normalize_optional_text(value: str | None) -> str | None:
@@ -691,6 +692,49 @@ class DocumentLinkCandidateResponse(BaseModel):
     source_row_deleted: bool = False
     created_row_id: int | None = None
     message: str
+
+
+class AcquisitionQualityRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    fornitore_nome: str | None
+    lega_base: str | None
+    lega_designazione: str | None
+    variante_lega: str | None
+    diametro: str | None
+    cdq: str | None
+    colata: str | None
+    ddt: str | None
+    peso: str | None
+    ordine: str | None
+    qualita_data_ricezione: date | None
+    qualita_data_accettazione: date | None
+    qualita_data_richiesta: date | None
+    qualita_numero_analisi: str | None
+    qualita_valutazione: QualityEvaluationState | None
+    qualita_note: str | None
+    qualita_numero_analisi_da_ricontrollare: bool
+    qualita_note_da_ricontrollare: bool
+    updated_at: datetime
+
+
+class AcquisitionQualityRowListResponse(BaseModel):
+    items: list[AcquisitionQualityRowResponse]
+
+
+class AcquisitionQualityUpdateRequest(BaseModel):
+    qualita_data_ricezione: date | None = None
+    qualita_data_accettazione: date | None = None
+    qualita_data_richiesta: date | None = None
+    qualita_numero_analisi: str | None = Field(default=None, max_length=128)
+    qualita_valutazione: QualityEvaluationState | None = None
+    qualita_note: str | None = None
+
+    @field_validator("qualita_numero_analisi", "qualita_note")
+    @classmethod
+    def normalize_optional_quality_fields(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
 
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):

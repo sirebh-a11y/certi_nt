@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -8,17 +9,21 @@ from app.core.departments.models import Department  # noqa: F401
 from app.core.users.models import User  # noqa: F401
 from app.modules.acquisition.models import (
     AcquisitionRow,
+    CertificateMatch,
     Document,
     DocumentEvidence,
     ManualMatchBlock,
     ReadValue,
 )
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
+from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
     _plan_cross_run_auto_rematch,
     detach_document_match,
     get_acquisition_row,
+    list_quality_rows,
+    update_quality_row,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.suppliers.models import Supplier
@@ -67,6 +72,9 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             ddt="12594",
             peso="1331",
             ordine="154",
+            qualita_numero_analisi="205",
+            qualita_valutazione="accettato",
+            qualita_note="Accettato",
         )
         self.db.add(row)
         self.db.flush()
@@ -136,6 +144,11 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertIsNone(ddt_row.document_certificato_id)
         self.assertEqual(ddt_row.cdq, "10033539/25")
         self.assertEqual(ddt_row.ddt, "12594")
+        self.assertEqual(ddt_row.qualita_numero_analisi, "205")
+        self.assertIsNone(ddt_row.qualita_valutazione)
+        self.assertEqual(ddt_row.qualita_note, "Accettato")
+        self.assertTrue(ddt_row.qualita_numero_analisi_da_ricontrollare)
+        self.assertTrue(ddt_row.qualita_note_da_ricontrollare)
         self.assertEqual({value.blocco for value in ddt_row.values}, {"ddt"})
 
         self.assertIsNone(certificate_row.document_ddt_id)
@@ -159,6 +172,97 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             [],
         )
         self.assertEqual(self.db.query(ManualMatchBlock).filter(ManualMatchBlock.attivo.is_(True)).count(), 1)
+
+    def test_quality_rows_include_only_fully_confirmed_rows_and_clear_review_flags_on_update(self):
+        supplier = Supplier(ragione_sociale="Test Supplier")
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert.pdf",
+            storage_key="cert.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="1001",
+            lega_base="6082",
+            diametro="100",
+            colata="C1001",
+            ddt="D1001",
+            peso="1200",
+            ordine="333",
+            qualita_numero_analisi="205",
+            qualita_note="Da ricontrollare",
+            qualita_numero_analisi_da_ricontrollare=True,
+            qualita_note_da_ricontrollare=True,
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+            )
+        )
+
+        for block, field, value in [
+            ("ddt", "ddt", "D1001"),
+            ("ddt", "lega", "6082"),
+            ("ddt", "cdq", "1001"),
+            ("ddt", "numero_certificato_ddt", "1001"),
+            ("ddt", "colata", "C1001"),
+            ("ddt", "diametro", "100"),
+            ("ddt", "peso", "1200"),
+            ("ddt", "customer_order_no", "333"),
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="sistema",
+                    fonte_documentale="sistema",
+                )
+            )
+        self.db.commit()
+
+        quality_rows = list_quality_rows(self.db).items
+
+        self.assertEqual([item.id for item in quality_rows], [row.id])
+
+        updated = update_quality_row(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityUpdateRequest(
+                qualita_data_ricezione=date(2026, 1, 19),
+                qualita_data_accettazione=date(2026, 1, 20),
+                qualita_data_richiesta=date(2026, 1, 21),
+                qualita_numero_analisi="206",
+                qualita_valutazione="accettato_con_riserva",
+                qualita_note="Accettato con riserva",
+            ),
+            actor_id=1,
+        )
+
+        self.assertEqual(updated.qualita_numero_analisi, "206")
+        self.assertEqual(updated.qualita_valutazione, "accettato_con_riserva")
+        self.assertFalse(updated.qualita_numero_analisi_da_ricontrollare)
+        self.assertFalse(updated.qualita_note_da_ricontrollare)
 
 
 if __name__ == "__main__":

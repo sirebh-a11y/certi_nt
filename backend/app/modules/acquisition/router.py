@@ -8,6 +8,9 @@ from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
     AutonomousRunStartRequest,
+    AcquisitionQualityRowListResponse,
+    AcquisitionQualityRowResponse,
+    AcquisitionQualityUpdateRequest,
     AcquisitionRowCreateRequest,
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
@@ -75,6 +78,7 @@ from app.modules.acquisition.service import (
     detect_standard_notes,
     detach_document_match,
     link_document_match_candidate,
+    list_quality_rows,
     extract_ddt_fields_with_vision,
     extract_core_fields,
     get_acquisition_row,
@@ -105,6 +109,7 @@ from app.modules.acquisition.service import (
     upsert_match,
     upsert_read_value,
     update_acquisition_row,
+    update_quality_row,
     validate_final_row,
 )
 from app.modules.document_reader.schemas import DocumentRowSplitPlanResponse, ReaderPlanResponse
@@ -472,6 +477,21 @@ def list_acquisition_rows_route(
             has_certificate=has_certificate,
         )
     )
+
+
+@router.get("/quality-rows", response_model=AcquisitionQualityRowListResponse)
+def list_quality_rows_route(_: CurrentUser, db: DbSession) -> AcquisitionQualityRowListResponse:
+    return list_quality_rows(db)
+
+
+@router.patch("/quality-rows/{row_id}", response_model=AcquisitionQualityRowResponse)
+def update_quality_row_route(
+    row_id: int,
+    payload: AcquisitionQualityUpdateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionQualityRowResponse:
+    return update_quality_row(db=db, row=get_acquisition_row(db, row_id), payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows", response_model=AcquisitionRowDetailResponse)

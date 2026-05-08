@@ -18,6 +18,7 @@ import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import NotesPage from "../pages/notes/NotesPage";
+import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
 import StandardsPage from "../pages/standards/StandardsPage";
 import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
@@ -128,6 +129,7 @@ export function AppRouter() {
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
+          <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>

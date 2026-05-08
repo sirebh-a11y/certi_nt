@@ -11,6 +11,7 @@ const navItems = [
   { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
   { label: "Reparti", to: "/departments", roles: ["admin"] },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },
+  { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
   { label: "Note", to: "/notes", roles: ["user", "manager", "admin"] },
   { label: "Log", to: "/logs", roles: ["manager", "admin"] },
 ];

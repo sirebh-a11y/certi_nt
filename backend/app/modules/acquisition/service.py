@@ -41,6 +41,9 @@ from app.modules.acquisition.models import (
 from app.modules.acquisition.schemas import (
     AcquisitionNotesSectionUpdateRequest,
     AcquisitionHistoryEventResponse,
+    AcquisitionQualityRowListResponse,
+    AcquisitionQualityRowResponse,
+    AcquisitionQualityUpdateRequest,
     AutonomousRunResponse,
     AutonomousRunStartRequest,
     AcquisitionRowCreateRequest,
@@ -410,6 +413,31 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         certificate_match=serialize_match(row.certificate_match) if row.certificate_match else None,
         history_events=[serialize_history_event(event) for event in row.history_events],
         value_history=[serialize_value_history(entry) for entry in row.value_history],
+    )
+
+
+def serialize_quality_row(row: AcquisitionRow) -> AcquisitionQualityRowResponse:
+    return AcquisitionQualityRowResponse(
+        id=row.id,
+        fornitore_nome=row.supplier.ragione_sociale if row.supplier is not None else None,
+        lega_base=row.lega_base,
+        lega_designazione=row.lega_designazione,
+        variante_lega=row.variante_lega,
+        diametro=_normalize_value_for_field("ddt", "diametro", row.diametro),
+        cdq=row.cdq,
+        colata=row.colata,
+        ddt=row.ddt,
+        peso=_normalize_value_for_field("ddt", "peso", row.peso),
+        ordine=row.ordine,
+        qualita_data_ricezione=row.qualita_data_ricezione,
+        qualita_data_accettazione=row.qualita_data_accettazione,
+        qualita_data_richiesta=row.qualita_data_richiesta,
+        qualita_numero_analisi=row.qualita_numero_analisi,
+        qualita_valutazione=row.qualita_valutazione,
+        qualita_note=row.qualita_note,
+        qualita_numero_analisi_da_ricontrollare=row.qualita_numero_analisi_da_ricontrollare,
+        qualita_note_da_ricontrollare=row.qualita_note_da_ricontrollare,
+        updated_at=row.updated_at,
     )
 
 
@@ -6749,6 +6777,75 @@ def list_acquisition_rows(
     return [serialize_acquisition_row_list_item(row) for row in rows]
 
 
+def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:
+    rows = (
+        db.query(AcquisitionRow)
+        .options(
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.certificate_match),
+        )
+        .order_by(AcquisitionRow.updated_at.desc(), AcquisitionRow.id.desc())
+        .all()
+    )
+    quality_rows: list[AcquisitionQualityRowResponse] = []
+    for row in rows:
+        _ensure_row_supplier_link(db, row)
+        if _is_row_fully_confirmed_for_quality(db, row):
+            quality_rows.append(serialize_quality_row(row))
+    return AcquisitionQualityRowListResponse(items=quality_rows)
+
+
+def update_quality_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionQualityUpdateRequest,
+    actor_id: int,
+) -> AcquisitionQualityRowResponse:
+    if not _is_row_fully_confirmed_for_quality(db, row):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quality evaluation requires a fully confirmed row")
+
+    fields_set = payload.model_fields_set
+    field_names = (
+        "qualita_data_ricezione",
+        "qualita_data_accettazione",
+        "qualita_data_richiesta",
+        "qualita_numero_analisi",
+        "qualita_valutazione",
+        "qualita_note",
+    )
+    changed_fields: list[str] = []
+    for field_name in field_names:
+        if field_name not in fields_set:
+            continue
+        next_value = getattr(payload, field_name)
+        if getattr(row, field_name) != next_value:
+            setattr(row, field_name, next_value)
+            changed_fields.append(field_name)
+
+    if "qualita_numero_analisi" in fields_set:
+        row.qualita_numero_analisi_da_ricontrollare = False
+    if "qualita_note" in fields_set:
+        row.qualita_note_da_ricontrollare = False
+    if "qualita_valutazione" in fields_set and payload.qualita_valutazione is not None:
+        row.qualita_numero_analisi_da_ricontrollare = False
+        row.qualita_note_da_ricontrollare = False
+
+    db.add(row)
+    if changed_fields:
+        _record_history_event(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="quality",
+            azione="valutazione_qualita_aggiornata",
+            user_id=actor_id,
+            nota_breve=", ".join(changed_fields),
+        )
+    db.commit()
+    return serialize_quality_row(get_acquisition_row(db, row.id))
+
+
 def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
     row = (
         db.query(AcquisitionRow)
@@ -7179,6 +7276,9 @@ def detach_document_match(
         db.delete(current_row.certificate_match)
     current_row.document_certificato_id = None
     current_row.validata_finale = False
+    current_row.qualita_valutazione = None
+    current_row.qualita_numero_analisi_da_ricontrollare = True
+    current_row.qualita_note_da_ricontrollare = True
     _apply_document_side_fields_to_row(current_row, ddt_fields)
 
     _ensure_manual_match_block(
@@ -15708,6 +15808,14 @@ def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
         row.priorita_operativa = "bassa"
 
     db.add(row)
+
+
+def _is_row_fully_confirmed_for_quality(db: Session, row: AcquisitionRow) -> bool:
+    block_states = _compute_block_states_from_db(db, row)
+    return all(
+        block_states.get(block) == "verde"
+        for block in ("ddt", "match", "chimica", "proprieta", "note")
+    )
 
 
 def _document_storage_root() -> Path:
