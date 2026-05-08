@@ -2,7 +2,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.modules.acquisition.service import _build_document_core_overlay_items_from_value_ocr_window
+from app.modules.acquisition.schemas import DocumentCoreOverlayPreviewItemResponse
+from app.modules.acquisition.service import (
+    _build_document_core_overlay_items_from_value_ocr_window,
+    _merge_document_core_overlay_items_prefer_existing,
+)
 
 
 def _words(tokens, *, left=80, top=100):
@@ -342,6 +346,46 @@ class DocumentCoreOverlayTest(unittest.TestCase):
                 self.assertIn("material_block", by_field)
                 self.assertIn("cdq", by_field)
                 self.assertEqual(by_field["material_block"].bbox.split(",")[1], "190")
+
+    def test_value_window_replaces_generic_material_block_that_points_to_address(self):
+        existing = [
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=1,
+                page_number=1,
+                field="material_block",
+                bbox="20,40,400,90",
+                image_width=1200,
+                image_height=500,
+            )
+        ]
+        candidates = [
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=1,
+                page_number=1,
+                field="material_block",
+                bbox="80,210,500,222",
+                image_width=1200,
+                image_height=500,
+            ),
+            DocumentCoreOverlayPreviewItemResponse(
+                page_id=1,
+                page_number=1,
+                field="cdq",
+                bbox="540,210,620,222",
+                image_width=1200,
+                image_height=500,
+            ),
+        ]
+
+        merged = _merge_document_core_overlay_items_prefer_existing(
+            existing,
+            candidates,
+            replace_material_block=True,
+        )
+
+        by_field = {item.field: item for item in merged}
+        self.assertEqual(by_field["material_block"].bbox, "80,210,500,222")
+        self.assertEqual(by_field["cdq"].bbox, "540,210,620,222")
 
 
 if __name__ == "__main__":

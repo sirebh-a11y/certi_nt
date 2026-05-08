@@ -1452,6 +1452,7 @@ def build_document_core_overlay_preview(
         live_field_items = _merge_document_core_overlay_items_prefer_existing(
             live_field_items,
             value_window_items,
+            replace_material_block=True,
         )
 
     items: list[DocumentCoreOverlayPreviewItemResponse] = list(live_field_items)
@@ -1525,8 +1526,12 @@ def build_document_core_overlay_preview(
 def _merge_document_core_overlay_items_prefer_existing(
     existing: list[DocumentCoreOverlayPreviewItemResponse],
     candidates: list[DocumentCoreOverlayPreviewItemResponse],
+    *,
+    replace_material_block: bool = False,
 ) -> list[DocumentCoreOverlayPreviewItemResponse]:
     merged = list(existing)
+    if replace_material_block and any(item.field == "material_block" for item in candidates):
+        merged = [item for item in merged if item.field != "material_block"]
     seen_fields = {item.field for item in merged}
     for item in candidates:
         if item.field in seen_fields:
@@ -2158,8 +2163,17 @@ def _document_core_material_negative_score(window_key: str) -> int:
         "PEC",
         "EMAIL",
         "WWW",
+        "ADDRESS",
         "CAPITALE",
         "PIVA",
+        "ITALIA",
+        "ITALY",
+        "METALBA",
+        "SOCIETA",
+        "STRADA",
+        "TEL",
+        "TELEFONO",
+        "VIA",
         "DESTINAZIONEMERCE",
         "SPETTLE",
         "VETTORI",
