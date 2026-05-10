@@ -11,6 +11,7 @@ from app.core.logs.router import router as logs_router
 from app.core.users.router import router as users_router
 from app.modules.acquisition.router import router as acquisition_router
 from app.modules.notes.router import router as notes_router
+from app.modules.quarta_taglio.router import router as quarta_taglio_router
 from app.modules.standards.router import router as standards_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.startup.bootstrap import initialize_application
@@ -41,6 +42,7 @@ app.include_router(standards_router, prefix="/api/standards", tags=["standards"]
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(suppliers_router, prefix="/api/suppliers", tags=["suppliers"])
 app.include_router(acquisition_router, prefix="/api/acquisition", tags=["acquisition"])
+app.include_router(quarta_taglio_router, prefix="/api/quarta-taglio", tags=["quarta-taglio"])
 
 
 @app.get("/api/health")

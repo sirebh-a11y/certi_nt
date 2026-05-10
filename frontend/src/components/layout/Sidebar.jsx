@@ -7,6 +7,7 @@ const navItems = [
   { label: "Carica Documenti", to: "/acquisition/upload", roles: ["user", "manager", "admin"] },
   { label: "Incoming Quality", to: "/acquisition", roles: ["user", "manager", "admin"] },
   { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
+  { label: "Certificazione", to: "/quarta-taglio", roles: ["user", "manager", "admin"] },
   { type: "divider" },
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },

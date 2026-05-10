@@ -20,6 +20,7 @@ import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
+import QuartaTaglioPage from "../pages/quartaTaglio/QuartaTaglioPage";
 import StandardsPage from "../pages/standards/StandardsPage";
 import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
@@ -140,6 +141,7 @@ export function AppRouter() {
           <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
+          <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />
           <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>

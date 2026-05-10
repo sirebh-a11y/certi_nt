@@ -25,6 +25,7 @@ from app.modules.acquisition.models import (  # noqa: F401
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401
 from app.modules.notes.service import seed_note_templates
+from app.modules.quarta_taglio.models import QuartaTaglioRow, QuartaTaglioSyncRun  # noqa: F401
 from app.modules.standards.models import (  # noqa: F401
     NormativeStandard,
     NormativeStandardChemistry,
