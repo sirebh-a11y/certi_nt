@@ -36,6 +36,8 @@ services:
       SMTP_TLS: ${SMTP_TLS:-false}
       MAIL_FROM_EMAIL: ${MAIL_FROM_EMAIL:-noreply@certi.local}
       MAIL_FROM_NAME: ${MAIL_FROM_NAME:-CERTI_nt System}
+      ESOLVER_PASSWORD: ${ESOLVER_PASSWORD:-}
+      QUARTA_PASSWORD: ${QUARTA_PASSWORD:-}
     ports:
       - "8000:8000"
     volumes:

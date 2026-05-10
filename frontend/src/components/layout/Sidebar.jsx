@@ -9,10 +9,12 @@ const navItems = [
   { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
   { type: "divider" },
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
-  { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
-  { label: "Reparti", to: "/departments", roles: ["admin"] },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },
   { label: "Note", to: "/notes", roles: ["user", "manager", "admin"] },
+  { type: "divider", key: "admin-divider" },
+  { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
+  { label: "Reparti", to: "/departments", roles: ["admin"] },
+  { label: "Integrazioni", to: "/integrations", roles: ["admin"] },
   { label: "Log", to: "/logs", roles: ["manager", "admin"] },
 ];
 
@@ -32,7 +34,7 @@ export default function Sidebar() {
       <nav className="sticky top-0 flex flex-col gap-2">
         {navItems.map((item) => {
           if (item.type === "divider") {
-            return <div key="divider" className="my-2 border-t border-border" />;
+            return <div key={item.key || "divider"} className="my-2 border-t border-border" />;
           }
 
           if (!item.roles.includes(user?.role)) {

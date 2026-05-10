@@ -5,6 +5,8 @@ from app.core.database import Base, SessionLocal, engine
 from app.core.departments.models import Department  # noqa: F401
 from app.core.departments.service import seed_departments
 from app.core.logs.service import log_service
+from app.core.integrations.models import ExternalConnection  # noqa: F401
+from app.core.integrations.service import seed_external_connections
 from app.core.roles.constants import ROLE_ADMIN
 from app.core.security.passwords import hash_password
 from app.core.users.models import User
@@ -37,10 +39,12 @@ def initialize_application() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
     ensure_acquisition_quality_columns()
+    ensure_external_connection_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
         bootstrap_admin_user(db)
+        seed_external_connections(db)
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
         seed_note_templates(db)
@@ -94,6 +98,27 @@ def ensure_acquisition_quality_columns() -> None:
     if "qualita_note_da_ricontrollare" not in columns:
         statements.append(
             "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def ensure_external_connection_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("external_connections"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("external_connections")}
+    statements: list[str] = []
+
+    if "driver_name" not in columns:
+        statements.append(
+            "ALTER TABLE external_connections ADD COLUMN driver_name VARCHAR(128) NOT NULL DEFAULT 'ODBC Driver 18 for SQL Server'"
         )
 
     if not statements:

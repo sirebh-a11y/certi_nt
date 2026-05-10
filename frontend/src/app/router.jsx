@@ -16,6 +16,7 @@ import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionS
 import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
+import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
@@ -98,6 +99,14 @@ function LogsRoute() {
   );
 }
 
+function IntegrationsRoute() {
+  return (
+    <RoleGuard allowedRoles={["admin"]}>
+      <IntegrationsPage />
+    </RoleGuard>
+  );
+}
+
 function NotesRoute() {
   return <NotesPage />;
 }
@@ -128,6 +137,7 @@ export function AppRouter() {
           <Route path="/suppliers/new" element={<NewSupplierPage />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
+          <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/notes" element={<NotesRoute />} />
