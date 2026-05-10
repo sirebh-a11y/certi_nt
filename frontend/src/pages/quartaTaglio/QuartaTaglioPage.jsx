@@ -50,6 +50,13 @@ function statusClass(color) {
   return STATUS_CLASSES[color] || STATUS_CLASSES.red;
 }
 
+function splitDisplayList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function parseSortableNumber(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -100,6 +107,15 @@ function searchableFieldValues(item) {
     item.qta_totale,
     item.lotti_count,
     ...(item.matching_row_ids || []),
+    ...(item.certificates || []).flatMap((certificate) => [
+      certificate.cdq,
+      certificate.colata,
+      certificate.cod_art,
+      certificate.status_color,
+      STATUS_LABELS[certificate.status_color],
+      certificate.status_message,
+      ...(certificate.status_details || []),
+    ]),
   ]
     .filter((value) => value !== null && value !== undefined && value !== "")
     .map((value) => String(value).toLowerCase());
@@ -272,6 +288,7 @@ export default function QuartaTaglioPage() {
     return {
       total: items.length,
       ol: ol.size,
+      cdq: items.reduce((total, item) => total + (item.certificates?.length || splitDisplayList(item.cdq).length), 0),
       green: items.filter((item) => item.status_color === "green").length,
       yellow: items.filter((item) => item.status_color === "yellow").length,
       red: items.filter((item) => item.status_color === "red").length,
@@ -349,7 +366,7 @@ export default function QuartaTaglioPage() {
 
       <div className="grid gap-2 md:grid-cols-5">
         <SummaryCell label="OL" value={summary.ol} />
-        <SummaryCell label="CDQ" value={summary.total} />
+        <SummaryCell label="CDQ" value={summary.cdq} />
         <SummaryCell label="Verdi" value={summary.green} />
         <SummaryCell label="Gialli" value={summary.yellow} />
         <SummaryCell label="Rossi" value={summary.red} />
@@ -470,7 +487,7 @@ export default function QuartaTaglioPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-          <table className="min-w-[1740px] divide-y divide-slate-200 text-sm" ref={tableRef}>
+          <table className="min-w-[1840px] divide-y divide-slate-200 text-sm" ref={tableRef}>
             <thead className="bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
@@ -495,9 +512,29 @@ export default function QuartaTaglioPage() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-800">{item.cod_odp}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-800">{item.cdq}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{item.colata || "-"}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{item.cod_art || "-"}</td>
+                  <td className="min-w-[260px] max-w-[320px] px-3 py-2.5 font-semibold text-slate-800">
+                    {item.certificates?.length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {item.certificates.map((certificate) => (
+                          <span
+                            className={`inline-flex rounded-lg border px-2 py-1 text-xs font-semibold ${statusClass(certificate.status_color)}`}
+                            key={`${item.id}-${certificate.cdq}-${certificate.colata || ""}`}
+                            title={certificate.status_message}
+                          >
+                            {certificate.cdq}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="whitespace-normal break-words">{item.cdq}</div>
+                    )}
+                  </td>
+                  <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
+                    <div className="whitespace-normal break-words">{item.colata || "-"}</div>
+                  </td>
+                  <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
+                    <div className="whitespace-normal break-words">{item.cod_art || "-"}</div>
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatNumber(item.qta_totale)}</td>
                   <td className="px-3 py-2.5 text-slate-700">
                     <div className="font-medium">{item.lotti_count}</div>

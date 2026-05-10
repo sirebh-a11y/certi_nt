@@ -13,7 +13,18 @@ from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.models import AcquisitionRow
 from app.modules.acquisition.service import _compute_block_states_from_db
 from app.modules.quarta_taglio.models import QuartaTaglioRow, QuartaTaglioSyncRun
-from app.modules.quarta_taglio.schemas import QuartaTaglioListResponse, QuartaTaglioRowResponse, QuartaTaglioSyncRunResponse
+from app.modules.quarta_taglio.schemas import (
+    QuartaTaglioCertificateResponse,
+    QuartaTaglioListResponse,
+    QuartaTaglioRowResponse,
+    QuartaTaglioSyncRunResponse,
+)
+
+STATUS_SEVERITY = {
+    "green": 1,
+    "yellow": 2,
+    "red": 3,
+}
 
 
 TAGLIO_QUERY = """
@@ -89,16 +100,13 @@ def sync_and_list_quarta_taglio(db: Session, *, actor_id: int | None = None) -> 
             raise
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Aggiornamento Quarta fallito: {exc}") from exc
 
-    return QuartaTaglioListResponse(
-        sync_run=_serialize_run(run),
-        items=[
-            _serialize_row(item)
-            for item in db.query(QuartaTaglioRow)
-            .filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
-            .order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc())
-            .all()
-        ],
+    rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
+        .order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc())
+        .all()
     )
+    return QuartaTaglioListResponse(sync_run=_serialize_run(run), items=_serialize_grouped_rows(rows))
 
 
 def _fetch_quarta_taglio_rows(db: Session) -> list[dict[str, Any]]:
@@ -233,6 +241,103 @@ def _serialize_run(run: QuartaTaglioSyncRun) -> QuartaTaglioSyncRunResponse:
 
 def _serialize_row(row: QuartaTaglioRow) -> QuartaTaglioRowResponse:
     return QuartaTaglioRowResponse.model_validate(row)
+
+
+def _serialize_grouped_rows(rows: list[QuartaTaglioRow]) -> list[QuartaTaglioRowResponse]:
+    rows_by_ol: dict[str, list[QuartaTaglioRow]] = defaultdict(list)
+    for row in rows:
+        rows_by_ol[row.cod_odp].append(row)
+
+    return [_serialize_ol_group(group_rows) for group_rows in rows_by_ol.values()]
+
+
+def _serialize_ol_group(rows: list[QuartaTaglioRow]) -> QuartaTaglioRowResponse:
+    primary = rows[0]
+    worst_color = max((row.status_color for row in rows), key=lambda color: STATUS_SEVERITY.get(color, 0))
+    status_details = _group_status_details(rows)
+    return QuartaTaglioRowResponse(
+        id=primary.id,
+        codice_registro=primary.codice_registro,
+        data_registro=primary.data_registro,
+        cod_odp=primary.cod_odp,
+        cod_art=", ".join(_unique_clean(row.cod_art for row in rows)) or None,
+        cdq=", ".join(_unique_clean(row.cdq for row in rows)),
+        colata=", ".join(_unique_clean(row.colata for row in rows)) or None,
+        qta_totale=_sum_optional(row.qta_totale for row in rows),
+        righe_materiale=sum(row.righe_materiale for row in rows),
+        lotti_count=len(_unique_clean(lotto for row in rows for lotto in row.cod_lotti)),
+        cod_lotti=_unique_clean(lotto for row in rows for lotto in row.cod_lotti),
+        saldo=all(row.saldo for row in rows),
+        status_color=worst_color,
+        status_message=_group_status_message(worst_color, rows),
+        status_details=status_details,
+        matching_row_ids=sorted({row_id for row in rows for row_id in row.matching_row_ids}),
+        certificates=[_serialize_certificate(row) for row in rows],
+        seen_in_last_sync=all(row.seen_in_last_sync for row in rows),
+        first_seen_at=min(row.first_seen_at for row in rows),
+        last_seen_at=max(row.last_seen_at for row in rows),
+    )
+
+
+def _serialize_certificate(row: QuartaTaglioRow) -> QuartaTaglioCertificateResponse:
+    return QuartaTaglioCertificateResponse(
+        cdq=row.cdq,
+        colata=row.colata,
+        cod_art=row.cod_art,
+        qta_totale=row.qta_totale,
+        righe_materiale=row.righe_materiale,
+        lotti_count=row.lotti_count,
+        cod_lotti=row.cod_lotti,
+        status_color=row.status_color,
+        status_message=row.status_message,
+        status_details=row.status_details,
+        matching_row_ids=row.matching_row_ids,
+    )
+
+
+def _group_status_message(color: str, rows: list[QuartaTaglioRow]) -> str:
+    if len(rows) == 1:
+        return rows[0].status_message
+    if color == "red":
+        return "Uno o più CDQ bloccano la certificazione"
+    if color == "yellow":
+        return "Uno o più CDQ da completare"
+    return "Tutti i CDQ coerenti e completi"
+
+
+def _group_status_details(rows: list[QuartaTaglioRow]) -> list[str]:
+    details: list[str] = []
+    for row in rows:
+        if row.status_color == "green":
+            continue
+        prefix = f"CDQ {row.cdq}"
+        row_details = row.status_details or [row.status_message]
+        details.extend(f"{prefix}: {detail}" for detail in row_details if detail)
+    return sorted(set(details))
+
+
+def _unique_clean(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = _clean_text(value)
+        key = _norm(cleaned)
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
+
+
+def _sum_optional(values: Any) -> float | None:
+    total = 0.0
+    found = False
+    for value in values:
+        if value is None:
+            continue
+        total += float(value)
+        found = True
+    return total if found else None
 
 
 def _clean_text(value: Any) -> str | None:
