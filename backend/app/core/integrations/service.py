@@ -28,14 +28,8 @@ DEFAULT_CONNECTIONS = {
         "object_settings": {
             "anagrafiche_view": "CertiCliForF3",
             "righe_ddt_view": "CertiRigheDDT",
-            "odp_field": "ORP",
-            "ddt_field": "DDT",
-            "supplier_field": "RagSoc",
-            "lot_field": "RifLottoAlfanum",
-            "quantity_field": "QtaUmMag",
-            "certificate_present_field": "CertificatoPresente",
         },
-        "notes": "Vista righe DDT e anagrafiche clienti/fornitori in sola lettura.",
+        "notes": "",
     },
     "quarta": {
         "label": "QuartaEVO",
@@ -53,17 +47,8 @@ DEFAULT_CONNECTIONS = {
         "schema_name": "dbo",
         "object_settings": {
             "traceability_view": "CFG_Q3ESS_ONGIUDET_TRACMP",
-            "company_field": "COD_AZIENDA",
-            "odp_field": "COD_ODP",
-            "article_field": "COD_ART",
-            "description_field": "DES_ART",
-            "raw_lot_field": "COD_LOTTO",
-            "raw_material_field": "COD_MP",
-            "supplier_certificate_field": "CERT_FORN",
-            "heat_field": "COLATA",
-            "quantity_field": "QTA",
         },
-        "notes": "Vista tracciabilita materiali per ODP in sola lettura.",
+        "notes": "",
     },
 }
 
