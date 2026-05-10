@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -199,6 +199,7 @@ function SortableHeader({ field, label, onSort, sortConfig }) {
 
 export default function QuartaTaglioPage() {
   const { token } = useAuth();
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [syncRun, setSyncRun] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -343,6 +344,12 @@ export default function QuartaTaglioPage() {
     window.requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
+  }
+
+  function openDetail(codOdp) {
+    if (codOdp) {
+      navigate(`/quarta-taglio/${encodeURIComponent(codOdp)}`);
+    }
   }
 
   return (
@@ -505,13 +512,26 @@ export default function QuartaTaglioPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {displayedItems.map((item) => (
-                <tr className="align-top hover:bg-slate-50/70" key={item.id}>
+                <tr
+                  className="cursor-pointer align-top hover:bg-slate-50/70"
+                  key={item.id}
+                  onClick={() => openDetail(item.cod_odp)}
+                  title={`Apri certificato OL ${item.cod_odp}`}
+                >
                   <td className="px-3 py-2.5">
                     <span className={`inline-flex min-w-[74px] justify-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status_color)}`}>
                       {STATUS_LABELS[item.status_color] || "Rosso"}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-800">{item.cod_odp}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 font-semibold">
+                    <Link
+                      className="text-accent hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                      to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}`}
+                    >
+                      {item.cod_odp}
+                    </Link>
+                  </td>
                   <td className="min-w-[260px] max-w-[320px] px-3 py-2.5 font-semibold text-slate-800">
                     {item.certificates?.length ? (
                       <div className="flex flex-wrap gap-1.5">
@@ -557,7 +577,12 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">
                     {item.matching_row_ids?.length
                       ? item.matching_row_ids.map((rowId) => (
-                          <Link className="mr-2 font-semibold text-accent hover:underline" key={rowId} to={`/acquisition/${rowId}`}>
+                          <Link
+                            className="mr-2 font-semibold text-accent hover:underline"
+                            key={rowId}
+                            onClick={(event) => event.stopPropagation()}
+                            to={`/acquisition/${rowId}`}
+                          >
                             #{rowId}
                           </Link>
                         ))

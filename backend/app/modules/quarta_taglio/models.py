@@ -50,3 +50,15 @@ class QuartaTaglioRow(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     latest_run = relationship("QuartaTaglioSyncRun")
+
+
+class QuartaTaglioStandardSelection(Base):
+    __tablename__ = "quarta_taglio_standard_selections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    standard_id: Mapped[int] = mapped_column(ForeignKey("normative_standards.id"), nullable=False, index=True)
+    selected_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    standard = relationship("NormativeStandard")

@@ -59,3 +59,70 @@ class QuartaTaglioRowResponse(BaseModel):
 class QuartaTaglioListResponse(BaseModel):
     sync_run: QuartaTaglioSyncRunResponse
     items: list[QuartaTaglioRowResponse]
+
+
+class QuartaTaglioMissingItemResponse(BaseModel):
+    cdq: str
+    colata: str | None = None
+    status_color: str
+    message: str
+    details: list[str] = Field(default_factory=list)
+
+
+class QuartaTaglioMaterialResponse(BaseModel):
+    cdq: str
+    colata: str | None = None
+    cod_art: str | None = None
+    qta_totale: float | None = None
+    righe_materiale: int
+    cod_lotti: list[str] = Field(default_factory=list)
+    matching_row_ids: list[int] = Field(default_factory=list)
+
+
+class QuartaTaglioStandardCandidateResponse(BaseModel):
+    id: int
+    code: str
+    label: str
+    confidence: str
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class QuartaTaglioAggregateValueResponse(BaseModel):
+    field: str
+    value: float | None = None
+    method: str
+    standard_min: float | None = None
+    standard_max: float | None = None
+    status: str
+    message: str | None = None
+
+
+class QuartaTaglioNoteResponse(BaseModel):
+    code: str
+    label: str
+    value: str | None = None
+    status: str
+    message: str
+
+
+class QuartaTaglioDetailResponse(BaseModel):
+    cod_odp: str
+    ready: bool
+    status_color: str
+    status_message: str
+    header: dict[str, str | None]
+    materials: list[QuartaTaglioMaterialResponse]
+    missing_items: list[QuartaTaglioMissingItemResponse]
+    standard_candidates: list[QuartaTaglioStandardCandidateResponse]
+    selected_standard: QuartaTaglioStandardCandidateResponse | None = None
+    selected_standard_confirmed: bool = False
+    chemistry: list[QuartaTaglioAggregateValueResponse]
+    properties: list[QuartaTaglioAggregateValueResponse]
+    notes: list[QuartaTaglioNoteResponse]
+    second_page_placeholder: bool = True
+
+
+class QuartaTaglioStandardSelectionRequest(BaseModel):
+    standard_id: int
