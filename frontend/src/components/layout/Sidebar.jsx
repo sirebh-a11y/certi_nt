@@ -14,7 +14,7 @@ const navItems = [
   { type: "divider", key: "admin-divider" },
   { label: "Utenti", to: "/users", roles: ["manager", "admin"] },
   { label: "Reparti", to: "/departments", roles: ["admin"] },
-  { label: "Integrazioni", to: "/integrations", roles: ["admin"] },
+  { label: "Connettori eSolver Quarta", to: "/integrations", roles: ["admin"] },
   { label: "Log", to: "/logs", roles: ["manager", "admin"] },
 ];
 
