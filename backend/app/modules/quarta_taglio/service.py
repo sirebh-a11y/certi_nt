@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import re
+import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.config import settings
 from app.core.integrations.models import ExternalConnection
+from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
+from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionRow, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db
+from app.modules.quarta_taglio.certificate_docx import build_forgialluminio_draft_docx
 from app.modules.quarta_taglio.models import (
     QuartaTaglioArticleOverride,
     QuartaTaglioEsolverLink,
+    QuartaTaglioFinalCertificate,
     QuartaTaglioRow,
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
@@ -32,9 +40,10 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioRowResponse,
     QuartaTaglioStandardCandidateResponse,
     QuartaTaglioSyncRunResponse,
+    QuartaTaglioWordDraftResponse,
 )
 from app.modules.standards.models import NormativeStandard
-from app.modules.notes.models import AcquisitionRowNoteTemplate
+from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 
 STATUS_SEVERITY = {
     "green": 1,
@@ -277,7 +286,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
                 details=["Cliente, ordine, DDT e quantità finale non ancora disponibili"] if esolver_status in {"missing", "not_checked"} else [],
             )
         )
-    notes = _evaluate_notes(app_rows)
+    notes = _evaluate_notes(app_rows, system_note_texts=_system_note_texts(db))
     ready = group.status_color == "green" and esolver_status == "ok"
     detail_status_color = group.status_color if esolver_status == "ok" else _max_status_color(group.status_color, _esolver_block_color(esolver_status))
     des_art = _join_unique((row.des_art for row in rows), separator=" | ")
@@ -391,6 +400,118 @@ def update_quarta_taglio_article_data(
     db.add(override)
     db.commit()
     return get_quarta_taglio_detail(db, cod_odp=cod_odp)
+
+
+def create_quarta_taglio_word_draft(
+    db: Session,
+    *,
+    cod_odp: str,
+    actor: User,
+) -> QuartaTaglioWordDraftResponse:
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    _ensure_word_draft_can_be_created(detail)
+
+    draft_number = f"BOZZA-{_safe_file_part(cod_odp)}"
+    storage_key = _certificate_docx_storage_key(cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    quality_manager = _select_quality_manager(db)
+    build_forgialluminio_draft_docx(
+        detail=detail,
+        output_path=output_path,
+        draft_number=draft_number,
+        certified_by=actor,
+        quality_manager=quality_manager,
+    )
+
+    certificate = QuartaTaglioFinalCertificate(
+        cod_odp=cod_odp,
+        status="draft",
+        certificate_number=None,
+        draft_number=draft_number,
+        cdq_signature=_cdq_signature_from_detail(detail),
+        cdq_values=[
+            {
+                "cdq": item.cdq,
+                "colata": item.colata,
+                "cod_art": item.cod_art,
+                "qta_totale": item.qta_totale,
+                "lotti": item.cod_lotti,
+            }
+            for item in detail.materials
+        ],
+        storage_key_docx=storage_key,
+        download_token=secrets.token_urlsafe(32),
+        created_by_user_id=actor.id,
+        certified_by_user_id=actor.id,
+        quality_manager_user_id=quality_manager.id if quality_manager else None,
+    )
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+
+    return QuartaTaglioWordDraftResponse(
+        id=certificate.id,
+        cod_odp=certificate.cod_odp,
+        draft_number=certificate.draft_number,
+        file_name=_certificate_file_name(certificate),
+        download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
+        created_at=certificate.created_at,
+    )
+
+
+def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:
+    certificate = db.get(QuartaTaglioFinalCertificate, draft_id)
+    if certificate is None or not certificate.storage_key_docx:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bozza Word non trovata")
+    if not certificate.download_token or not download_token or not secrets.compare_digest(certificate.download_token, download_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Download non autorizzato")
+    path = _certificate_storage_path(certificate.storage_key_docx)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
+    return path, _certificate_file_name(certificate)
+
+
+def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> None:
+    if not detail.ready:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dati ancora mancanti per creare il certificato")
+    if not detail.selected_standard_confirmed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confermare lo standard prima di creare il certificato")
+
+
+def _certificate_docx_storage_key(cod_odp: str) -> str:
+    now = datetime.now(timezone.utc)
+    filename = f"{uuid4().hex}_{_safe_file_part(cod_odp)}_bozza.docx"
+    return f"certificati_finali/{now:%Y/%m}/{filename}"
+
+
+def _certificate_storage_path(storage_key: str) -> Path:
+    root = Path(settings.document_storage_root).resolve()
+    path = (root / Path(storage_key)).resolve()
+    if root not in path.parents and path != root:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Percorso certificato non valido")
+    return path
+
+
+def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
+    return f"{_safe_file_part(certificate.draft_number)}_{_safe_file_part(certificate.cod_odp)}.docx"
+
+
+def _cdq_signature_from_detail(detail: QuartaTaglioDetailResponse) -> list[str]:
+    return sorted({_norm(item.cdq) for item in detail.materials if _norm(item.cdq)})
+
+
+def _select_quality_manager(db: Session) -> User | None:
+    return (
+        db.query(User)
+        .filter(User.active.is_(True), User.role.in_([ROLE_MANAGER, ROLE_ADMIN]))
+        .order_by((User.role == ROLE_MANAGER).desc(), User.name)
+        .first()
+    )
+
+
+def _safe_file_part(value: Any) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return safe.strip("._") or "certificato"
 
 
 def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[AcquisitionRow]:
@@ -601,7 +722,8 @@ def _check_against_limits(
     return "ok", None
 
 
-def _evaluate_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResponse]:
+def _evaluate_notes(app_rows: list[AcquisitionRow], system_note_texts: dict[str, str] | None = None) -> list[QuartaTaglioNoteResponse]:
+    system_note_texts = system_note_texts or {}
     notes: list[QuartaTaglioNoteResponse] = []
     for code, label in NOTE_FIELDS:
         values = [_clean_note_value(_read_value(row, "note", code)) for row in app_rows]
@@ -621,7 +743,7 @@ def _evaluate_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResp
                 QuartaTaglioNoteResponse(
                     code=code,
                     label=label,
-                    value=unique_values[0],
+                    value=system_note_texts.get(code) or unique_values[0],
                     status="ok",
                     message="Nota uniforme: può essere riportata",
                 )
@@ -637,6 +759,15 @@ def _evaluate_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResp
             )
     notes.extend(_evaluate_custom_notes(app_rows))
     return notes
+
+
+def _system_note_texts(db: Session) -> dict[str, str]:
+    notes = (
+        db.query(NoteTemplate)
+        .filter(NoteTemplate.is_system.is_(True), NoteTemplate.is_active.is_(True), NoteTemplate.note_key.isnot(None))
+        .all()
+    )
+    return {str(note.note_key): note.text for note in notes if note.note_key}
 
 
 def _evaluate_custom_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResponse]:

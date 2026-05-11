@@ -31,6 +31,14 @@ class QuartaTaglioNotesTest(unittest.TestCase):
         self.assertEqual(notes["nota_us_control_class_b"].status, "ok")
         self.assertNotIn("nota_us_control_classe", notes)
 
+    def test_system_notes_use_configured_note_text(self):
+        row = SimpleNamespace(id=1, cdq="CDQ-1", values=[_note("nota_rohs")])
+
+        notes = {item.code: item for item in _evaluate_notes([row], system_note_texts={"nota_rohs": "Frase decisa in pagina Note"})}
+
+        self.assertEqual(notes["nota_rohs"].status, "ok")
+        self.assertEqual(notes["nota_rohs"].value, "Frase decisa in pagina Note")
+
     def test_custom_user_notes_are_reported_when_uniform(self):
         template = SimpleNamespace(id=10, text="Nota custom da pagina Note", is_system=False, is_active=True, sort_order=100)
         rows = [

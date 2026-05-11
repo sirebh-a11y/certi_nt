@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { apiRequest } from "../../app/api";
+import { apiRequest, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
 const STATUS_CLASSES = {
@@ -118,6 +118,7 @@ export default function QuartaTaglioDetailPage() {
   const [manualStandardId, setManualStandardId] = useState("");
   const [articleDraft, setArticleDraft] = useState({ descrizione: "", disegno: "" });
   const [articleStates, setArticleStates] = useState({});
+  const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -298,6 +299,30 @@ export default function QuartaTaglioDetailPage() {
     queueArticleSave(field, value, 0);
   }
 
+  async function generateWordDraft() {
+    setWordDraftState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const response = await apiRequest(
+        `/quarta-taglio/${encodeURIComponent(codOdp)}/word-draft`,
+        { method: "POST" },
+        token,
+      );
+      const link = document.createElement("a");
+      link.href = resolveApiAssetUrl(response.download_url);
+      link.download = response.file_name || `${codOdp}_bozza.docx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setWordDraftState({ status: "saved", message: `Bozza Word creata: ${response.draft_number}` });
+    } catch (requestError) {
+      setWordDraftState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore generazione bozza Word"),
+      });
+    }
+  }
+
   const headerRows = useMemo(() => {
     const header = data?.header || {};
     return [
@@ -341,6 +366,30 @@ export default function QuartaTaglioDetailPage() {
         <span className={`inline-flex w-fit rounded-lg border px-3 py-1.5 text-sm font-semibold ${statusClass(data.status_color)}`}>
           {STATUS_LABELS[data.status_color] || data.status_color}
         </span>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-xl border border-border bg-white p-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Bozza Word</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            {data.ready && data.selected_standard_confirmed
+              ? "Dati pronti per creare la bozza DOCX."
+              : "Serve riga pronta e standard confermato prima di creare il Word."}
+          </p>
+          {wordDraftState.message ? (
+            <p className={`mt-1 text-sm ${wordDraftState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+              {wordDraftState.message}
+            </p>
+          ) : null}
+        </div>
+        <button
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
+          disabled={wordDraftState.status === "saving" || !data.ready || !data.selected_standard_confirmed}
+          onClick={generateWordDraft}
+          type="button"
+        >
+          {wordDraftState.status === "saving" ? "Creazione..." : "Genera bozza Word"}
+        </button>
       </div>
 
       {!data.ready ? (

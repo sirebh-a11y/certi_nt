@@ -28,6 +28,7 @@ from app.modules.notes.service import seed_note_templates
 from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioArticleOverride,
     QuartaTaglioEsolverLink,
+    QuartaTaglioFinalCertificate,
     QuartaTaglioRow,
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
@@ -74,12 +75,10 @@ def ensure_document_upload_columns() -> None:
     if "scadenza_batch" not in columns:
         statements.append("ALTER TABLE documenti_fornitore ADD COLUMN scadenza_batch TIMESTAMP WITH TIME ZONE")
 
-    if not statements:
-        return
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
 
 def ensure_acquisition_quality_columns() -> None:
@@ -108,12 +107,10 @@ def ensure_acquisition_quality_columns() -> None:
             "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"
         )
 
-    if not statements:
-        return
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
 
 def ensure_external_connection_columns() -> None:
@@ -129,12 +126,10 @@ def ensure_external_connection_columns() -> None:
             "ALTER TABLE external_connections ADD COLUMN driver_name VARCHAR(128) NOT NULL DEFAULT 'ODBC Driver 18 for SQL Server'"
         )
 
-    if not statements:
-        return
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
 
 def ensure_quarta_taglio_columns() -> None:
@@ -148,12 +143,20 @@ def ensure_quarta_taglio_columns() -> None:
     if "des_art" not in columns:
         statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN des_art TEXT")
 
-    if not statements:
-        return
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+    if inspector.has_table("quarta_taglio_final_certificates"):
+        certificate_columns = {column["name"] for column in inspector.get_columns("quarta_taglio_final_certificates")}
+        certificate_statements: list[str] = []
+        if "download_token" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN download_token VARCHAR(128)")
+        if certificate_statements:
+            with engine.begin() as connection:
+                for statement in certificate_statements:
+                    connection.execute(text(statement))
 
 
 def bootstrap_admin_user(db: Session) -> None:

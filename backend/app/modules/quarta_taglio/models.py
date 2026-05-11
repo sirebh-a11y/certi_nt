@@ -92,3 +92,24 @@ class QuartaTaglioArticleOverride(Base):
     disegno: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class QuartaTaglioFinalCertificate(Base):
+    __tablename__ = "quarta_taglio_final_certificates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    certificate_number: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    draft_number: Mapped[str] = mapped_column(String(128), nullable=False)
+    cdq_signature: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    cdq_values: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    storage_key_docx: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    storage_key_pdf: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    download_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    certified_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    quality_manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

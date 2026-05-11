@@ -157,3 +157,12 @@ class QuartaTaglioStandardSelectionRequest(BaseModel):
 class QuartaTaglioArticleDataRequest(BaseModel):
     descrizione: str | None = None
     disegno: str | None = None
+
+
+class QuartaTaglioWordDraftResponse(BaseModel):
+    id: int
+    cod_odp: str
+    draft_number: str
+    file_name: str
+    download_url: str
+    created_at: datetime

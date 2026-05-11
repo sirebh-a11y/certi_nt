@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
 from app.modules.quarta_taglio.schemas import (
@@ -6,10 +7,13 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioDetailResponse,
     QuartaTaglioListResponse,
     QuartaTaglioStandardSelectionRequest,
+    QuartaTaglioWordDraftResponse,
 )
 from app.modules.quarta_taglio.service import (
     confirm_quarta_taglio_standard,
+    create_quarta_taglio_word_draft,
     get_quarta_taglio_detail,
+    get_quarta_taglio_word_draft_file,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
 )
@@ -51,4 +55,27 @@ def update_quarta_taglio_article_data_route(
         disegno=payload.disegno,
         fields_set=payload.model_fields_set,
         actor_id=current_user.id,
+    )
+
+
+@router.post("/{cod_odp}/word-draft", response_model=QuartaTaglioWordDraftResponse)
+def create_quarta_taglio_word_draft_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioWordDraftResponse:
+    return create_quarta_taglio_word_draft(db, cod_odp=cod_odp, actor=current_user)
+
+
+@router.get("/word-drafts/{draft_id}/file")
+def get_quarta_taglio_word_draft_file_route(
+    draft_id: int,
+    db: DbSession,
+    download_token: str | None = Query(default=None),
+) -> FileResponse:
+    path, file_name = get_quarta_taglio_word_draft_file(db, draft_id=draft_id, download_token=download_token)
+    return FileResponse(
+        path=path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=file_name,
     )
