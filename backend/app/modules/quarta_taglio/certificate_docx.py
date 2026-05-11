@@ -18,6 +18,22 @@ ASSET_ROOT = APP_ROOT / "assets" / "certificates"
 LOGO_PATH = ASSET_ROOT / "forgialluminio_logo.png"
 QUALITY_MANAGER_SIGNATURE_PATH = ASSET_ROOT / "quality_manager_signature.png"
 
+PROPERTY_HEADER_LABELS = {
+    "HB": "HB",
+    "Rp0.2": "Rp 0,20\n(N/mm²)",
+    "Rp0.20": "Rp 0,20\n(N/mm²)",
+    "Rm": "Rm\n(N/mm²)",
+    "A%": "A(%)",
+    "IACS%": "IACS(%)",
+    "Rp0.2 / Rm": "Rp/Rm",
+    "Rp0.2/Rm": "Rp/Rm",
+    "diametro": "Ø(mm)",
+    "Diametro": "Ø(mm)",
+    "Ø": "Ø(mm)",
+    "S": "S(mm²)",
+}
+PROPERTY_WORD_FIELDS = ["HB", "diametro", "S", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm"]
+
 
 def build_forgialluminio_draft_docx(
     *,
@@ -44,7 +60,7 @@ def build_forgialluminio_draft_docx(
     _add_chemistry_table(document, detail=detail)
     _add_notes(document, detail=detail)
     _add_properties_table(document, detail=detail)
-    _add_signatures(document, certified_by=certified_by, quality_manager=quality_manager)
+    _add_footer_signatures(document, certified_by=certified_by, quality_manager=quality_manager)
     _add_second_page_placeholder(document)
 
     document.save(output_path)
@@ -61,7 +77,7 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     if LOGO_PATH.exists():
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.15))
+        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.45))
     else:
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -143,43 +159,57 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
     if not chemistry:
         document.add_paragraph("No chemical elements available from selected standard.")
         return
-    font_size = 9 if len(chemistry) <= 12 else 8
     table = _new_table(document, [""] + [item.field for item in chemistry])
     min_row = table.add_row().cells
     max_row = table.add_row().cells
     value_row = table.add_row().cells
-    min_row[0].text = "min"
-    max_row[0].text = "max"
-    value_row[0].text = "value"
+    min_row[0].text = "% min"
+    max_row[0].text = "% max"
+    value_row[0].text = "% val"
     for index, item in enumerate(chemistry, start=1):
         min_row[index].text = _format_value(item.standard_min)
         max_row[index].text = _format_value(item.standard_max)
         value_row[index].text = _format_value(item.value)
-    _set_table_font(table, size=font_size)
+    _set_table_font(table, size=10)
+    _set_table_cell_margins(table, left=35, right=35)
+    for row in table.rows:
+        for cell in row.cells:
+            _set_cell_no_wrap(cell)
     _bold_row(value_row)
     _set_table_width(table, Inches(7.1))
 
 
 def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
     _add_bullet_section_title(document, "Mechanical properties: raw material acc. to EN 755-2")
-    properties = [item for item in detail.properties if item.value is not None or item.standard_min is not None or item.standard_max is not None]
-    if not properties:
+    available_properties = {
+        item.field: item
+        for item in detail.properties
+        if item.value is not None or item.standard_min is not None or item.standard_max is not None
+    }
+    if not available_properties:
         document.add_paragraph("No mechanical properties available.")
         return
-    table = _new_table(document, [""] + [item.field for item in properties])
+    fields = [field for field in PROPERTY_WORD_FIELDS if field in available_properties or field in {"diametro", "S"}]
+    extra_fields = [field for field in available_properties if field not in fields]
+    fields.extend(extra_fields)
+    table = _new_table(document, [""] + [_property_header(field) for field in fields])
+    for cell in table.rows[0].cells:
+        _set_cell_no_wrap(cell)
     min_row = table.add_row().cells
-    max_row = table.add_row().cells
-    value_row = table.add_row().cells
-    min_row[0].text = "min"
-    max_row[0].text = "max"
-    value_row[0].text = "value"
-    for index, item in enumerate(properties, start=1):
-        min_row[index].text = _format_value(item.standard_min)
-        max_row[index].text = _format_value(item.standard_max)
-        value_row[index].text = _format_value(item.value)
-    _set_table_font(table, size=9)
-    _bold_row(value_row)
-    _set_table_width(table, Inches(min(6.4, 1.0 + len(properties) * 0.85)))
+    spec_row = table.add_row().cells
+    min_row[0].text = "Min."
+    spec_row[0].text = "Spec."
+    for index, field in enumerate(fields, start=1):
+        item = available_properties.get(field)
+        min_row[index].text = _format_value(item.standard_min if item else None)
+        spec_row[index].text = _property_spec_value(item, field=field)
+    _set_table_font(table, size=10)
+    _set_table_cell_margins(table, left=35, right=35)
+    for row in table.rows:
+        for cell in row.cells:
+            _set_cell_no_wrap(cell)
+    _bold_row(spec_row)
+    _set_table_width(table, Inches(7.1))
 
 
 def _add_notes(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
@@ -202,21 +232,39 @@ def _add_notes(document: Document, *, detail: QuartaTaglioDetailResponse) -> Non
             paragraph.paragraph_format.line_spacing = 1
             run = paragraph.add_run(text)
             run.font.name = "Times New Roman"
-            run.font.size = Pt(9)
+            run.font.size = Pt(10)
 
 
-def _add_signatures(document: Document, *, certified_by: User, quality_manager: User | None) -> None:
-    _add_section_title(document, "Signatures")
-    table = document.add_table(rows=2, cols=2)
-    table.style = "Table Grid"
-    table.cell(0, 0).text = "Certified by / Certificatore"
-    table.cell(0, 1).text = "Quality Manager"
-    table.cell(1, 0).text = certified_by.name
-    qm_cell = table.cell(1, 1)
-    qm_cell.text = quality_manager.name if quality_manager else "Da configurare"
+def _add_footer_signatures(document: Document, *, certified_by: User, quality_manager: User | None) -> None:
+    footer = document.sections[0].footer
+    footer.is_linked_to_previous = False
+    if footer.paragraphs:
+        footer.paragraphs[0].text = ""
+        footer.paragraphs[0].paragraph_format.space_after = Pt(0)
+
+    table = footer.add_table(rows=1, cols=3, width=Inches(6.7))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _clear_table_borders(table)
+    _set_column_widths(table, [Inches(3.4), Inches(1.8), Inches(1.5)])
+    for cell in table.rows[0].cells:
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+    operator_paragraph = table.cell(0, 0).paragraphs[0]
+    operator_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    operator_paragraph.paragraph_format.space_after = Pt(0)
+    _add_signature_label_value(operator_paragraph, "Operator:", certified_by.name)
+
+    qm_paragraph = table.cell(0, 1).paragraphs[0]
+    qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    qm_paragraph.paragraph_format.space_after = Pt(0)
+    _add_signature_label_value(qm_paragraph, "Quality Manager:", "")
+    signature_paragraph = table.cell(0, 2).paragraphs[0]
+    signature_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    signature_paragraph.paragraph_format.space_after = Pt(0)
     if QUALITY_MANAGER_SIGNATURE_PATH.exists():
-        paragraph = qm_cell.add_paragraph()
-        paragraph.add_run().add_picture(str(QUALITY_MANAGER_SIGNATURE_PATH), width=Inches(1.1))
+        signature_paragraph.add_run().add_picture(str(QUALITY_MANAGER_SIGNATURE_PATH), width=Inches(0.75))
+    elif quality_manager:
+        signature_paragraph.add_run(quality_manager.name)
 
 
 def _add_second_page_placeholder(document: Document) -> None:
@@ -280,20 +328,24 @@ def _fill_header_data_cell(cell, english_label: str, italian_label: str, value: 
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     paragraph = cell.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1
     if english_label:
         label_run = paragraph.add_run(f"{english_label} ")
         label_run.bold = True
         label_run.font.name = "Arial"
-        label_run.font.size = Pt(14)
+        label_run.font.size = Pt(12)
     if value not in (None, ""):
         value_run = paragraph.add_run(str(value))
         value_run.font.name = "Times New Roman"
         value_run.font.size = Pt(12)
     italian = cell.add_paragraph()
     italian.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    italian.paragraph_format.space_after = Pt(0)
+    italian.paragraph_format.line_spacing = 1
     run = italian.add_run(italian_label)
     run.font.name = "Arial"
-    run.font.size = Pt(9)
+    run.font.size = Pt(8)
 
 
 def _add_inline_label_value(paragraph, label: str, value: object) -> None:
@@ -307,6 +359,18 @@ def _add_inline_label_value(paragraph, label: str, value: object) -> None:
     value_run.font.size = Pt(12)
 
 
+def _add_signature_label_value(paragraph, label: str, value: object) -> None:
+    label_run = paragraph.add_run(f"{label} ")
+    label_run.bold = True
+    label_run.font.name = "Times New Roman"
+    label_run.font.size = Pt(12)
+    value_text = _empty_dash(value) if value not in (None, "") else ""
+    if value_text:
+        value_run = paragraph.add_run(value_text)
+        value_run.font.name = "Times New Roman"
+        value_run.font.size = Pt(12)
+
+
 def _alloy_label(detail: QuartaTaglioDetailResponse) -> str:
     if detail.selected_standard and detail.selected_standard.label:
         parts = [part.strip() for part in detail.selected_standard.label.split("·") if part.strip()]
@@ -318,6 +382,16 @@ def _alloy_code(detail: QuartaTaglioDetailResponse) -> str:
     if detail.selected_standard and detail.selected_standard.label:
         return detail.selected_standard.label.split("·")[0].strip()
     return ""
+
+
+def _property_header(field: str) -> str:
+    return PROPERTY_HEADER_LABELS.get(field, field)
+
+
+def _property_spec_value(item, *, field: str) -> str:
+    if field in {"diametro", "S", "Ø", "Diametro"} and item is None:
+        return "/"
+    return _format_value(item.value if item else None)
 
 
 def _new_table(document: Document, headers: list[str]):
@@ -370,6 +444,27 @@ def _set_column_widths(table, widths) -> None:
     for column, width in zip(table.columns, widths):
         for cell in column.cells:
             cell.width = width
+
+
+def _set_table_cell_margins(table, *, left: int, right: int) -> None:
+    tbl_pr = table._tbl.tblPr
+    tbl_cell_mar = tbl_pr.first_child_found_in("w:tblCellMar")
+    if tbl_cell_mar is None:
+        tbl_cell_mar = OxmlElement("w:tblCellMar")
+        tbl_pr.append(tbl_cell_mar)
+    for edge, value in {"left": left, "right": right}.items():
+        element = tbl_cell_mar.find(qn(f"w:{edge}"))
+        if element is None:
+            element = OxmlElement(f"w:{edge}")
+            tbl_cell_mar.append(element)
+        element.set(qn("w:w"), str(value))
+        element.set(qn("w:type"), "dxa")
+
+
+def _set_cell_no_wrap(cell) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    if tc_pr.find(qn("w:noWrap")) is None:
+        tc_pr.append(OxmlElement("w:noWrap"))
 
 
 def _clear_table_borders(table) -> None:
