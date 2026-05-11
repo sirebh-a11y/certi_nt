@@ -316,8 +316,9 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     disegno_override = article_override.disegno if article_override else None
     descrizione = descrizione_override or descrizione_proposta
     disegno = disegno_override or disegno_proposta
-    esolver_header_rows = [row for row in esolver_rows if row.cod_f3_matches_quarta] or esolver_rows
+    esolver_header_rows = esolver_rows
     esolver_qta = _sum_optional(row.qta_um_mag for row in esolver_header_rows)
+    esolver_cod_f3 = _join_unique(row.cod_f3 for row in esolver_header_rows) or None
 
     return QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
@@ -330,7 +331,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
             "ordine_cliente": _join_unique(row.odv_cli for row in esolver_header_rows) or None,
             "conferma_ordine": _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
             "ddt": _join_unique(row.ddt for row in esolver_header_rows) or None,
-            "codice_f3": group.cod_art,
+            "codice_f3": esolver_cod_f3 or group.cod_art,
             "descrizione_articolo_quarta": des_art,
             "descrizione": descrizione,
             "descrizione_proposta": descrizione_proposta,
@@ -1140,9 +1141,7 @@ def _esolver_status_for_rows(
 ) -> tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]:
     if not rows:
         return [], "missing", "Nessuna riga DDT eSolver trovata per questo OL"
-    if cod_art_keys and not any(row.cod_f3_matches_quarta for row in rows):
-        return rows, "mismatch", "Righe eSolver trovate, ma CodF3 diverso da Quarta"
-    unique_ddt = _unique_clean(row.ddt for row in rows if row.cod_f3_matches_quarta)
+    unique_ddt = _unique_clean(row.ddt for row in rows)
     if len(unique_ddt) > 1:
         return rows, "ok", f"Dati eSolver/DDT collegati: {len(unique_ddt)} DDT trovati"
     return rows, "ok", "Dati eSolver/DDT collegati"
@@ -1183,7 +1182,7 @@ def _apply_esolver_link_values(
     message: str | None,
     checked_at: datetime,
 ) -> None:
-    header_rows = [row for row in esolver_rows if row.cod_f3_matches_quarta] or esolver_rows
+    header_rows = esolver_rows
     link.status = status_value
     link.message = message
     link.cod_f3 = _join_unique(row.cod_f3 for row in header_rows) or None

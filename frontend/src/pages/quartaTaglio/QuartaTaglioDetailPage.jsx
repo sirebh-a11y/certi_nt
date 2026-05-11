@@ -535,7 +535,7 @@ export default function QuartaTaglioDetailPage() {
           <StatusPill status={data.esolver_status || "not_checked"} />
         </div>
         <Table
-          columns={["Cod F3", "OL", "Cliente", "Ordine cliente", "C.d.O.", "DDT", "Quantità", "Match"]}
+          columns={["Cod F3", "OL", "Cliente", "Ordine cliente", "C.d.O.", "DDT", "Quantità"]}
           rows={(data.esolver_rows || []).map((item) => [
             item.cod_f3 || "-",
             item.orp || "-",
@@ -544,7 +544,6 @@ export default function QuartaTaglioDetailPage() {
             item.odv_f3 || "-",
             item.ddt || "-",
             formatNumber(item.qta_um_mag, 2),
-            item.cod_f3_matches_quarta ? <StatusPill key="match" status="ok" /> : <StatusPill key="match" status="mismatch" />,
           ])}
           emptyText="Nessuna riga DDT eSolver collegata a questo OL."
         />
