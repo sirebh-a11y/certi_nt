@@ -41,10 +41,9 @@ def build_forgialluminio_draft_docx(
     normal_style.font.size = Pt(9)
 
     _add_header(document, detail=detail, draft_number=draft_number)
-    _add_materials_table(document, detail=detail)
     _add_chemistry_table(document, detail=detail)
-    _add_properties_table(document, detail=detail)
     _add_notes(document, detail=detail)
+    _add_properties_table(document, detail=detail)
     _add_signatures(document, certified_by=certified_by, quality_manager=quality_manager)
     _add_second_page_placeholder(document)
 
@@ -57,11 +56,12 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     table = document.add_table(rows=1, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_table_borders(table)
+    _set_column_widths(table, [Inches(1.2), Inches(4.4), Inches(1.5)])
     left, center, right = table.rows[0].cells
     if LOGO_PATH.exists():
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.0))
+        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.15))
     else:
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -74,20 +74,25 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     p = right.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run = p.add_run("Pag. 1 / 1")
-    run.font.size = Pt(10)
+    run.font.size = Pt(11)
 
     title_table = document.add_table(rows=1, cols=2)
     _clear_table_borders(title_table)
     title_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_width(title_table, Inches(7.1))
     left_title, right_title = title_table.rows[0].cells
     left_paragraph = left_title.paragraphs[0]
+    left_paragraph.paragraph_format.space_before = Pt(4)
+    left_paragraph.paragraph_format.space_after = Pt(8)
     left_run = left_paragraph.add_run("EN 10204 - 3.1")
     left_run.bold = True
-    left_run.font.size = Pt(18)
+    left_run.font.size = Pt(17)
     right_paragraph = right_title.paragraphs[0]
     right_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    right_paragraph.paragraph_format.space_before = Pt(6)
+    right_paragraph.paragraph_format.space_after = Pt(8)
     right_run = right_paragraph.add_run(f"Certificate n°{draft_number} dated -")
-    right_run.font.size = Pt(13)
+    right_run.font.size = Pt(12)
 
     data_rows = [
         (("Purchaser:", "Cliente:", header.get("cliente")), ("Cod. F3:", "Cod. F3:", header.get("codice_f3"))),
@@ -101,22 +106,26 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
 
 def _add_chemistry_intro(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
     paragraph = document.add_paragraph()
-    paragraph.paragraph_format.space_before = Pt(10)
-    paragraph.paragraph_format.space_after = Pt(8)
+    paragraph.paragraph_format.space_before = Pt(16)
+    paragraph.paragraph_format.space_after = Pt(10)
     run = paragraph.add_run("•  Chemical composition: acc. to EN UNI 573-3")
     run.bold = True
-    run.font.size = Pt(13)
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(11)
 
     info_table = document.add_table(rows=1, cols=3)
     _clear_table_borders(info_table)
     info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_width(info_table, Inches(6.7))
     alloy_cell, charge_cell, ref_cell = info_table.rows[0].cells
-    _add_inline_label_value(alloy_cell.paragraphs[0], "Alloy:", detail.selected_standard.label if detail.selected_standard else "-")
+    _add_inline_label_value(alloy_cell.paragraphs[0], "Alloy:", _alloy_label(detail))
     _add_inline_label_value(charge_cell.paragraphs[0], "Charge:", detail.cod_odp)
     _add_inline_label_value(ref_cell.paragraphs[0], "Ref.:", "-")
+    document.add_paragraph().paragraph_format.space_after = Pt(4)
 
 
 def _add_materials_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
+    document.add_page_break()
     _add_section_title(document, "Supplier certificates / Certificati fornitore")
     table = _new_table(document, ["CDQ", "Colata", "Cod. art.", "Quantita", "Lotti"])
     for item in detail.materials:
@@ -134,7 +143,7 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
     if not chemistry:
         document.add_paragraph("No chemical elements available from selected standard.")
         return
-    font_size = 9 if len(chemistry) <= 14 else 8
+    font_size = 9 if len(chemistry) <= 12 else 8
     table = _new_table(document, [""] + [item.field for item in chemistry])
     min_row = table.add_row().cells
     max_row = table.add_row().cells
@@ -152,7 +161,7 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
 
 
 def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
-    _add_section_title(document, "Mechanical properties / Proprieta meccaniche")
+    _add_bullet_section_title(document, "Mechanical properties: raw material acc. to EN 755-2")
     properties = [item for item in detail.properties if item.value is not None or item.standard_min is not None or item.standard_max is not None]
     if not properties:
         document.add_paragraph("No mechanical properties available.")
@@ -174,15 +183,26 @@ def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailRespo
 
 
 def _add_notes(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
-    _add_section_title(document, "Notes")
     ok_notes = [item for item in detail.notes if item.status == "ok"]
     if not ok_notes:
-        document.add_paragraph("No confirmed notes.")
         return
+    title = document.add_paragraph()
+    title.paragraph_format.space_before = Pt(10)
+    title.paragraph_format.space_after = Pt(0)
+    run = title.add_run("Notes:")
+    run.bold = True
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(10)
     for item in ok_notes:
         text = item.value
         if text:
-            document.add_paragraph(text, style=None)
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.left_indent = Inches(0.25)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 1
+            run = paragraph.add_run(text)
+            run.font.name = "Times New Roman"
+            run.font.size = Pt(9)
 
 
 def _add_signatures(document: Document, *, certified_by: User, quality_manager: User | None) -> None:
@@ -216,6 +236,16 @@ def _add_section_title(document: Document, text: str) -> None:
     run.bold = True
     run.font.size = Pt(10)
     run.font.color.rgb = RGBColor(51, 51, 51)
+
+
+def _add_bullet_section_title(document: Document, text: str) -> None:
+    paragraph = document.add_paragraph()
+    paragraph.paragraph_format.space_before = Pt(22)
+    paragraph.paragraph_format.space_after = Pt(10)
+    run = paragraph.add_run(f"•  {text}")
+    run.bold = True
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(11)
 
 
 def _add_box_table(document: Document, rows: list[tuple[tuple[str, object], tuple[str, object]]]) -> None:
@@ -277,6 +307,19 @@ def _add_inline_label_value(paragraph, label: str, value: object) -> None:
     value_run.font.size = Pt(12)
 
 
+def _alloy_label(detail: QuartaTaglioDetailResponse) -> str:
+    if detail.selected_standard and detail.selected_standard.label:
+        parts = [part.strip() for part in detail.selected_standard.label.split("·") if part.strip()]
+        return " ".join(parts[:3]) if parts else detail.selected_standard.label
+    return "-"
+
+
+def _alloy_code(detail: QuartaTaglioDetailResponse) -> str:
+    if detail.selected_standard and detail.selected_standard.label:
+        return detail.selected_standard.label.split("·")[0].strip()
+    return ""
+
+
 def _new_table(document: Document, headers: list[str]):
     table = document.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
@@ -319,6 +362,14 @@ def _set_table_width(table, width) -> None:
     for column in table.columns:
         for cell in column.cells:
             cell.width = column_width
+
+
+def _set_column_widths(table, widths) -> None:
+    table.autofit = False
+    table.allow_autofit = False
+    for column, width in zip(table.columns, widths):
+        for cell in column.cells:
+            cell.width = width
 
 
 def _clear_table_borders(table) -> None:
