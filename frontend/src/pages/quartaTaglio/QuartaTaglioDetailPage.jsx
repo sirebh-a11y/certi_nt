@@ -108,7 +108,7 @@ function standardLabel(standard) {
 
 export default function QuartaTaglioDetailPage() {
   const { codOdp } = useParams();
-  const { token } = useAuth();
+  const { clearAuth, token } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -123,6 +123,15 @@ export default function QuartaTaglioDetailPage() {
   const articleVersionsRef = useRef({});
   const latestArticleDraftRef = useRef({ descrizione: "", disegno: "" });
 
+  function handleRequestError(requestError, fallbackMessage = "Errore richiesta") {
+    const message = requestError.message || fallbackMessage;
+    if (requestError.status === 401 || /invalid token/i.test(message)) {
+      clearAuth();
+      return "Sessione scaduta: effettua nuovamente il login.";
+    }
+    return message;
+  }
+
   useEffect(() => {
     let ignore = false;
     setLoading(true);
@@ -135,7 +144,7 @@ export default function QuartaTaglioDetailPage() {
       })
       .catch((requestError) => {
         if (!ignore) {
-          setError(requestError.message);
+          setError(handleRequestError(requestError, "Errore caricamento certificato"));
         }
       })
       .finally(() => {
@@ -204,7 +213,7 @@ export default function QuartaTaglioDetailPage() {
         setData(response);
       })
       .catch((requestError) => {
-        setStandardError(requestError.message);
+        setStandardError(handleRequestError(requestError, "Errore conferma standard"));
       })
       .finally(() => {
         setSavingStandardId(null);
@@ -277,7 +286,7 @@ export default function QuartaTaglioDetailPage() {
       clearArticleSavedFeedback(field, version);
     } catch (requestError) {
       if (articleVersionsRef.current[field] === version) {
-        const message = requestError.message || "Errore salvataggio automatico";
+        const message = handleRequestError(requestError, "Errore salvataggio automatico");
         setArticleState(field, { status: "error", message });
         setError(message);
       }

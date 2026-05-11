@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "./api";
+import { apiRequest, onAuthExpired } from "./api";
 
 const AuthContext = createContext(null);
 
@@ -64,6 +64,8 @@ export function AuthProvider({ children }) {
     localStorage.removeItem(STORAGE_KEYS.user);
     localStorage.removeItem(STORAGE_KEYS.setupToken);
   }
+
+  useEffect(() => onAuthExpired(clearAuth), []);
 
   async function login(email, password) {
     const data = await apiRequest("/auth/login", {

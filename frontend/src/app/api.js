@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+const AUTH_EXPIRED_EVENT = "certi_nt:auth-expired";
 
 export async function apiRequest(path, options = {}, token = null) {
   const headers = new Headers(options.headers || {});
@@ -22,8 +23,9 @@ export async function apiRequest(path, options = {}, token = null) {
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const detail = formatErrorDetail(data?.detail);
-    throw new Error(detail);
+    const error = createApiError(response.status, data?.detail, response.statusText);
+    notifyAuthExpiredIfNeeded(error, token);
+    throw error;
   }
   return data;
 }
@@ -46,17 +48,43 @@ export async function fetchApiBlob(path, token) {
 
   const response = await fetch(resolveApiAssetUrl(path), { headers });
   if (!response.ok) {
-    let detail = "Request failed";
+    let error;
     try {
       const data = await response.json();
-      detail = formatErrorDetail(data?.detail);
+      error = createApiError(response.status, data?.detail, response.statusText);
     } catch {
-      detail = response.statusText || detail;
+      error = createApiError(response.status, response.statusText, response.statusText);
     }
-    throw new Error(detail);
+    notifyAuthExpiredIfNeeded(error, token);
+    throw error;
   }
 
   return response.blob();
+}
+
+function createApiError(status, detail, fallback = "Request failed") {
+  const message = formatErrorDetail(detail) || fallback || "Request failed";
+  const error = new Error(message);
+  error.status = status;
+  error.detail = message;
+  return error;
+}
+
+function notifyAuthExpiredIfNeeded(error, token) {
+  if (!token || !isAuthExpiredError(error)) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+}
+
+function isAuthExpiredError(error) {
+  const message = error?.message || "";
+  return error?.status === 401 || /invalid token|invalid token type|user not available/i.test(message);
+}
+
+export function onAuthExpired(callback) {
+  window.addEventListener(AUTH_EXPIRED_EVENT, callback);
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, callback);
 }
 
 function formatErrorDetail(detail) {
