@@ -83,6 +83,26 @@ NOTE_FIELDS = [
     ("nota_us_control_class_b", "US control Class B"),
 ]
 
+US_CONTROL_NOTE_KEYS = {"nota_us_control_class_a", "nota_us_control_class_b"}
+
+SYSTEM_NOTE_TEXT_FALLBACKS = {
+    "nota_us_control_class_a": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class A.",
+    "nota_us_control_class_b": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class B.",
+    "nota_rohs": (
+        "We hereby declare that material is in compliance with DIRECTIVE 2011/65/EU OF THE "
+        "EUROPEAN PARLIAMENT AND OF THE COUNCIL of 8 June 2011 on the restriction of the use "
+        "of certain hazardous substances (ROHS II) in electrical and electronic equipment."
+    ),
+    "nota_radioactive_free": "Material free from radioactive contamination.",
+}
+
+SYSTEM_NOTE_CODE_KEYS = {
+    "us_control_class_a": "nota_us_control_class_a",
+    "us_control_class_b": "nota_us_control_class_b",
+    "rohs": "nota_rohs",
+    "radioactive_free": "nota_radioactive_free",
+}
+
 
 TAGLIO_QUERY = """
 with taglio_saldato as (
@@ -725,11 +745,18 @@ def _check_against_limits(
 def _evaluate_notes(app_rows: list[AcquisitionRow], system_note_texts: dict[str, str] | None = None) -> list[QuartaTaglioNoteResponse]:
     system_note_texts = system_note_texts or {}
     notes: list[QuartaTaglioNoteResponse] = []
+    values_by_code = {
+        code: [_clean_note_value(_read_value(row, "note", code)) for row in app_rows]
+        for code, _ in NOTE_FIELDS
+    }
+    us_control_present = any(value for code in US_CONTROL_NOTE_KEYS for value in values_by_code.get(code, []) if value)
     for code, label in NOTE_FIELDS:
-        values = [_clean_note_value(_read_value(row, "note", code)) for row in app_rows]
+        values = values_by_code[code]
         filled = [value for value in values if value]
         unique_values = sorted(set(filled))
         if not filled:
+            if code in US_CONTROL_NOTE_KEYS and us_control_present:
+                continue
             notes.append(
                 QuartaTaglioNoteResponse(
                     code=code,
@@ -743,7 +770,7 @@ def _evaluate_notes(app_rows: list[AcquisitionRow], system_note_texts: dict[str,
                 QuartaTaglioNoteResponse(
                     code=code,
                     label=label,
-                    value=system_note_texts.get(code) or unique_values[0],
+                    value=_system_note_display_text(code, system_note_texts, unique_values[0]),
                     status="ok",
                     message="Nota uniforme: può essere riportata",
                 )
@@ -767,7 +794,24 @@ def _system_note_texts(db: Session) -> dict[str, str]:
         .filter(NoteTemplate.is_system.is_(True), NoteTemplate.is_active.is_(True), NoteTemplate.note_key.isnot(None))
         .all()
     )
-    return {str(note.note_key): note.text for note in notes if note.note_key}
+    result: dict[str, str] = {}
+    for note in notes:
+        if note.note_key:
+            result[str(note.note_key)] = note.text
+        code_key = SYSTEM_NOTE_CODE_KEYS.get(str(note.code))
+        if code_key:
+            result[code_key] = note.text
+    return result
+
+
+def _system_note_display_text(code: str, system_note_texts: dict[str, str], extracted_value: str) -> str:
+    configured = _clean_text(system_note_texts.get(code))
+    if configured:
+        return configured
+    fallback = SYSTEM_NOTE_TEXT_FALLBACKS.get(code)
+    if fallback and _norm(extracted_value) in {"true", "si", "sì", "yes", "ok", "1"}:
+        return fallback
+    return extracted_value
 
 
 def _evaluate_custom_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResponse]:

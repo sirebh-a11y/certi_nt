@@ -39,6 +39,16 @@ class QuartaTaglioNotesTest(unittest.TestCase):
         self.assertEqual(notes["nota_rohs"].status, "ok")
         self.assertEqual(notes["nota_rohs"].value, "Frase decisa in pagina Note")
 
+    def test_system_notes_use_fallback_phrase_instead_of_ok(self):
+        row = SimpleNamespace(id=1, cdq="CDQ-1", values=[_note("nota_us_control_class_b")])
+
+        notes = {item.code: item for item in _evaluate_notes([row])}
+
+        self.assertEqual(notes["nota_us_control_class_b"].status, "ok")
+        self.assertIn("class B", notes["nota_us_control_class_b"].value)
+        self.assertNotEqual(notes["nota_us_control_class_b"].value, "OK")
+        self.assertNotIn("nota_us_control_class_a", notes)
+
     def test_custom_user_notes_are_reported_when_uniform(self):
         template = SimpleNamespace(id=10, text="Nota custom da pagina Note", is_system=False, is_active=True, sort_order=100)
         rows = [

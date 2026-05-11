@@ -114,9 +114,21 @@ def update_note_template(
 
 def seed_note_templates(db: Session) -> None:
     inserted = 0
+    updated = 0
     for seed in SYSTEM_NOTE_SEEDS:
         existing = db.query(NoteTemplate).filter(NoteTemplate.code == seed["code"]).one_or_none()
         if existing is not None:
+            changed = False
+            for field in ("note_key", "note_value", "sort_order"):
+                seed_value = seed[field]
+                if getattr(existing, field) != seed_value:
+                    setattr(existing, field, seed_value)
+                    changed = True
+            if not existing.is_system:
+                existing.is_system = True
+                changed = True
+            if changed:
+                updated += 1
             continue
         db.add(
             NoteTemplate(
@@ -130,9 +142,12 @@ def seed_note_templates(db: Session) -> None:
             )
         )
         inserted += 1
-    if inserted:
+    if inserted or updated:
         db.commit()
-        log_service.record("notes", f"Initial note templates seeded: {inserted}")
+        if inserted:
+            log_service.record("notes", f"Initial note templates seeded: {inserted}")
+        if updated:
+            log_service.record("notes", f"System note templates updated: {updated}")
 
 
 def _build_custom_code(db: Session, text: str) -> str:
