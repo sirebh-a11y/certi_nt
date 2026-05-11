@@ -62,7 +62,8 @@ PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 NOTE_FIELDS = [
     ("nota_rohs", "RoHS"),
     ("nota_radioactive_free", "Radioactive free"),
-    ("nota_us_control_classe", "US control class"),
+    ("nota_us_control_class_a", "US control Class A"),
+    ("nota_us_control_class_b", "US control Class B"),
 ]
 
 
