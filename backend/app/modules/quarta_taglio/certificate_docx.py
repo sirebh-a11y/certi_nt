@@ -163,9 +163,9 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
     min_row = table.add_row().cells
     max_row = table.add_row().cells
     value_row = table.add_row().cells
-    min_row[0].text = "% min"
-    max_row[0].text = "% max"
-    value_row[0].text = "% val"
+    min_row[0].text = "%\u00a0min"
+    max_row[0].text = "%\u00a0max"
+    value_row[0].text = "%\u00a0val"
     for index, item in enumerate(chemistry, start=1):
         min_row[index].text = _format_value(item.standard_min)
         max_row[index].text = _format_value(item.standard_max)
@@ -176,7 +176,7 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
         for cell in row.cells:
             _set_cell_no_wrap(cell)
     _bold_row(value_row)
-    _set_table_width(table, Inches(7.1))
+    _set_table_width_with_first_column(table, total_inches=7.1, first_column_inches=0.62)
 
 
 def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
@@ -444,6 +444,21 @@ def _set_column_widths(table, widths) -> None:
     for column, width in zip(table.columns, widths):
         for cell in column.cells:
             cell.width = width
+
+
+def _set_table_width_with_first_column(table, *, total_inches: float, first_column_inches: float) -> None:
+    table.autofit = False
+    table.allow_autofit = False
+    column_count = len(table.columns)
+    if column_count == 0:
+        return
+    if column_count == 1:
+        _set_column_widths(table, [Inches(total_inches)])
+        return
+    remaining_inches = max(total_inches - first_column_inches, 0.1)
+    other_column_inches = remaining_inches / (column_count - 1)
+    widths = [Inches(first_column_inches)] + [Inches(other_column_inches)] * (column_count - 1)
+    _set_column_widths(table, widths)
 
 
 def _set_table_cell_margins(table, *, left: int, right: int) -> None:
