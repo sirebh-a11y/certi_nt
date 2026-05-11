@@ -14,6 +14,7 @@ import AcquisitionListPage from "../pages/acquisition/AcquisitionListPage";
 import AcquisitionManualDdtPage, { AcquisitionManualCertificatePage } from "../pages/acquisition/AcquisitionManualDdtPage";
 import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionSectionPlaceholderPage";
 import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
+import AIConfigPage from "../pages/ai/AIConfigPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
@@ -109,6 +110,14 @@ function IntegrationsRoute() {
   );
 }
 
+function AIConfigRoute() {
+  return (
+    <RoleGuard allowedRoles={["admin"]}>
+      <AIConfigPage />
+    </RoleGuard>
+  );
+}
+
 function NotesRoute() {
   return <NotesPage />;
 }
@@ -140,6 +149,7 @@ export function AppRouter() {
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/integrations" element={<IntegrationsRoute />} />
+          <Route path="/ai" element={<AIConfigRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />

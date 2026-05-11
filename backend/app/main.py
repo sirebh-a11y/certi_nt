@@ -4,6 +4,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.ai.router import router as ai_router
 from app.core.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.departments.router import router as departments_router
@@ -44,6 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(departments_router, prefix="/api/departments", tags=["departments"])
 app.include_router(integrations_router, prefix="/api/integrations", tags=["integrations"])

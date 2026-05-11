@@ -2,6 +2,8 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
+from app.core.ai.models import AIModel, AIProvider  # noqa: F401
+from app.core.ai.service import seed_ai_configuration
 from app.core.departments.models import Department  # noqa: F401
 from app.core.departments.service import seed_departments
 from app.core.logs.service import log_service
@@ -53,6 +55,7 @@ def initialize_application() -> None:
     try:
         seed_departments(db)
         bootstrap_admin_user(db)
+        seed_ai_configuration(db)
         seed_external_connections(db)
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
