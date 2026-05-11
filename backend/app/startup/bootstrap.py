@@ -25,7 +25,13 @@ from app.modules.acquisition.models import (  # noqa: F401
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401
 from app.modules.notes.service import seed_note_templates
-from app.modules.quarta_taglio.models import QuartaTaglioRow, QuartaTaglioStandardSelection, QuartaTaglioSyncRun  # noqa: F401
+from app.modules.quarta_taglio.models import (  # noqa: F401
+    QuartaTaglioArticleOverride,
+    QuartaTaglioEsolverLink,
+    QuartaTaglioRow,
+    QuartaTaglioStandardSelection,
+    QuartaTaglioSyncRun,
+)
 from app.modules.standards.models import (  # noqa: F401
     NormativeStandard,
     NormativeStandardChemistry,
@@ -41,6 +47,7 @@ def initialize_application() -> None:
     ensure_document_upload_columns()
     ensure_acquisition_quality_columns()
     ensure_external_connection_columns()
+    ensure_quarta_taglio_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
@@ -121,6 +128,25 @@ def ensure_external_connection_columns() -> None:
         statements.append(
             "ALTER TABLE external_connections ADD COLUMN driver_name VARCHAR(128) NOT NULL DEFAULT 'ODBC Driver 18 for SQL Server'"
         )
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def ensure_quarta_taglio_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("quarta_taglio_rows"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("quarta_taglio_rows")}
+    statements: list[str] = []
+
+    if "des_art" not in columns:
+        statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN des_art TEXT")
 
     if not statements:
         return

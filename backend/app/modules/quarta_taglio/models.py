@@ -34,6 +34,7 @@ class QuartaTaglioRow(Base):
     data_registro: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     cod_art: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    des_art: Mapped[str | None] = mapped_column(Text, nullable=True)
     cdq: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     colata: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     qta_totale: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -62,3 +63,32 @@ class QuartaTaglioStandardSelection(Base):
     selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     standard = relationship("NormativeStandard")
+
+
+class QuartaTaglioEsolverLink(Base):
+    __tablename__ = "quarta_taglio_esolver_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="missing", nullable=False, index=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cod_f3: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ordine_cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conferma_ordine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ddt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qta_totale: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class QuartaTaglioArticleOverride(Base):
+    __tablename__ = "quarta_taglio_article_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    descrizione: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disegno: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

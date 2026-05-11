@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.core.deps import CurrentUser, DbSession
 from app.modules.quarta_taglio.schemas import (
+    QuartaTaglioArticleDataRequest,
     QuartaTaglioDetailResponse,
     QuartaTaglioListResponse,
     QuartaTaglioStandardSelectionRequest,
@@ -10,6 +11,7 @@ from app.modules.quarta_taglio.service import (
     confirm_quarta_taglio_standard,
     get_quarta_taglio_detail,
     sync_and_list_quarta_taglio,
+    update_quarta_taglio_article_data,
 )
 
 router = APIRouter()
@@ -33,3 +35,20 @@ def confirm_quarta_taglio_standard_route(
     db: DbSession,
 ) -> QuartaTaglioDetailResponse:
     return confirm_quarta_taglio_standard(db, cod_odp=cod_odp, standard_id=payload.standard_id, actor_id=current_user.id)
+
+
+@router.patch("/{cod_odp}/article-data", response_model=QuartaTaglioDetailResponse)
+def update_quarta_taglio_article_data_route(
+    cod_odp: str,
+    payload: QuartaTaglioArticleDataRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioDetailResponse:
+    return update_quarta_taglio_article_data(
+        db,
+        cod_odp=cod_odp,
+        descrizione=payload.descrizione,
+        disegno=payload.disegno,
+        fields_set=payload.model_fields_set,
+        actor_id=current_user.id,
+    )

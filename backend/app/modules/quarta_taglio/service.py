@@ -13,11 +13,18 @@ from app.core.integrations.models import ExternalConnection
 from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.models import AcquisitionRow, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db
-from app.modules.quarta_taglio.models import QuartaTaglioRow, QuartaTaglioStandardSelection, QuartaTaglioSyncRun
+from app.modules.quarta_taglio.models import (
+    QuartaTaglioArticleOverride,
+    QuartaTaglioEsolverLink,
+    QuartaTaglioRow,
+    QuartaTaglioStandardSelection,
+    QuartaTaglioSyncRun,
+)
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioAggregateValueResponse,
     QuartaTaglioCertificateResponse,
     QuartaTaglioDetailResponse,
+    QuartaTaglioEsolverDdtRowResponse,
     QuartaTaglioListResponse,
     QuartaTaglioMaterialResponse,
     QuartaTaglioMissingItemResponse,
@@ -101,6 +108,7 @@ select
     l.DATA_REGISTRO,
     l.SALDO,
     tr.COD_ART,
+    max(cast(tr.DES_ART as nvarchar(max))) as DES_ART,
     tr.CERT_FORN as CDQ,
     tr.COLATA,
     count(*) as RIGHE_MATERIALE,
@@ -112,6 +120,38 @@ join dbo.CFG_Q3ESS_ONGIUDET_TRACMP tr
     on tr.COD_ODP = l.COD_ODP
 group by l.COD_ODP, l.CODICE_REGISTRO, l.DATA_REGISTRO, l.SALDO, tr.COD_ART, tr.CERT_FORN, tr.COLATA
 order by l.DATA_REGISTRO desc, l.COD_ODP desc, tr.CERT_FORN, tr.COLATA;
+"""
+
+
+ESOLVER_DDT_QUERY_TEMPLATE = """
+select
+    cast(CodF3 as varchar(128)) as CodF3,
+    cast(ORP as varchar(128)) as ORP,
+    cast(RagSoc as varchar(255)) as RagSoc,
+    cast(ODVCli as varchar(128)) as ODVCli,
+    cast(ODVF3 as varchar(128)) as ODVF3,
+    cast(DDT as varchar(128)) as DDT,
+    QtaUmMag,
+    CertificatoPresente
+from {qualified_view}
+where ltrim(rtrim(cast(ORP as varchar(128)))) = %s
+order by DDT, IdDocumento, IdRigaDoc
+"""
+
+
+ESOLVER_DDT_BATCH_QUERY_TEMPLATE = """
+select
+    cast(CodF3 as varchar(128)) as CodF3,
+    cast(ORP as varchar(128)) as ORP,
+    cast(RagSoc as varchar(255)) as RagSoc,
+    cast(ODVCli as varchar(128)) as ODVCli,
+    cast(ODVF3 as varchar(128)) as ODVF3,
+    cast(DDT as varchar(128)) as DDT,
+    QtaUmMag,
+    CertificatoPresente
+from {qualified_view}
+where ltrim(rtrim(cast(ORP as varchar(128)))) in ({placeholders})
+order by ORP, DDT, IdDocumento, IdRigaDoc
 """
 
 
@@ -147,7 +187,8 @@ def sync_and_list_quarta_taglio(db: Session, *, actor_id: int | None = None) -> 
         .order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc())
         .all()
     )
-    return QuartaTaglioListResponse(sync_run=_serialize_run(run), items=_serialize_grouped_rows(rows))
+    esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
+    return QuartaTaglioListResponse(sync_run=_serialize_run(run), items=_serialize_grouped_rows(rows, esolver_links=esolver_links))
 
 
 def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetailResponse:
@@ -160,13 +201,16 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
-    group = _serialize_ol_group(rows)
+    esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
+    esolver_link = esolver_links.get(cod_odp)
+    group = _serialize_ol_group(rows, esolver_link=esolver_link)
     app_rows = _load_matching_app_rows(db, rows)
     materials = [
         QuartaTaglioMaterialResponse(
             cdq=row.cdq,
             colata=row.colata,
             cod_art=row.cod_art,
+            des_art=row.des_art,
             qta_totale=row.qta_totale,
             righe_materiale=row.righe_materiale,
             cod_lotti=row.cod_lotti,
@@ -221,23 +265,59 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         material_weights=material_weights,
         standard=selected_standard_model,
     )
+    esolver_rows = _esolver_rows_from_link(esolver_link)
+    esolver_status = esolver_link.status if esolver_link else "not_checked"
+    esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
+    if esolver_status != "ok":
+        missing_items.append(
+            QuartaTaglioMissingItemResponse(
+                cdq="eSolver/DDT",
+                status_color=_esolver_block_color(esolver_status),
+                message=esolver_message or "Dati eSolver mancanti",
+                details=["Cliente, ordine, DDT e quantità finale non ancora disponibili"] if esolver_status in {"missing", "not_checked"} else [],
+            )
+        )
     notes = _evaluate_notes(app_rows)
-    ready = group.status_color == "green"
+    ready = group.status_color == "green" and esolver_status == "ok"
+    detail_status_color = group.status_color if esolver_status == "ok" else _max_status_color(group.status_color, _esolver_block_color(esolver_status))
+    des_art = _join_unique((row.des_art for row in rows), separator=" | ")
+    descrizione_proposta, disegno_proposta, disegno_confidenza = _split_des_art(des_art)
+    article_override = db.query(QuartaTaglioArticleOverride).filter(QuartaTaglioArticleOverride.cod_odp == group.cod_odp).one_or_none()
+    descrizione_override = article_override.descrizione if article_override else None
+    disegno_override = article_override.disegno if article_override else None
+    descrizione = descrizione_override or descrizione_proposta
+    disegno = disegno_override or disegno_proposta
+    esolver_header_rows = [row for row in esolver_rows if row.cod_f3_matches_quarta] or esolver_rows
+    esolver_qta = _sum_optional(row.qta_um_mag for row in esolver_header_rows)
 
     return QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
         ready=ready,
-        status_color=group.status_color,
+        status_color=detail_status_color,
         status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
         header={
             "numero_certificato": None,
-            "cliente": None,
-            "ordine_cliente": None,
-            "ddt": None,
+            "cliente": _join_unique(row.rag_soc for row in esolver_header_rows) or None,
+            "ordine_cliente": _join_unique(row.odv_cli for row in esolver_header_rows) or None,
+            "conferma_ordine": _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
+            "ddt": _join_unique(row.ddt for row in esolver_header_rows) or None,
             "codice_f3": group.cod_art,
-            "descrizione": None,
+            "descrizione_articolo_quarta": des_art,
+            "descrizione": descrizione,
+            "descrizione_proposta": descrizione_proposta,
+            "descrizione_override": descrizione_override,
+            "descrizione_origine": "utente" if descrizione_override else "quarta",
+            "descrizione_diversa_da_quarta": "true" if descrizione_override and _norm(descrizione_override) != _norm(descrizione_proposta) else None,
+            "disegno": disegno,
+            "disegno_proposta": disegno_proposta,
+            "disegno_override": disegno_override,
+            "disegno_origine": "utente" if disegno_override else "quarta",
+            "disegno_diverso_da_quarta": "true" if disegno_override and _norm(disegno_override) != _norm(disegno_proposta) else None,
+            "disegno_confidenza": disegno_confidenza,
             "colata": group.colata,
-            "quantita": str(group.qta_totale) if group.qta_totale is not None else None,
+            "quantita": str(esolver_qta if esolver_qta is not None else group.qta_totale)
+            if (esolver_qta is not None or group.qta_totale is not None)
+            else None,
         },
         materials=materials,
         missing_items=missing_items,
@@ -247,6 +327,9 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         chemistry=chemistry,
         properties=properties,
         notes=notes,
+        esolver_status=esolver_status,
+        esolver_message=esolver_message,
+        esolver_rows=esolver_rows,
     )
 
 
@@ -279,6 +362,33 @@ def confirm_quarta_taglio_standard(
     selection.standard_id = standard.id
     selection.selected_by_user_id = actor_id
     db.add(selection)
+    db.commit()
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp)
+
+
+def update_quarta_taglio_article_data(
+    db: Session,
+    *,
+    cod_odp: str,
+    descrizione: str | None,
+    disegno: str | None,
+    fields_set: set[str],
+    actor_id: int | None,
+) -> QuartaTaglioDetailResponse:
+    exists = db.query(QuartaTaglioRow.id).filter(QuartaTaglioRow.cod_odp == cod_odp).first()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
+
+    override = db.query(QuartaTaglioArticleOverride).filter(QuartaTaglioArticleOverride.cod_odp == cod_odp).one_or_none()
+    if override is None:
+        override = QuartaTaglioArticleOverride(cod_odp=cod_odp)
+
+    if "descrizione" in fields_set:
+        override.descrizione = _clean_text(descrizione)
+    if "disegno" in fields_set:
+        override.disegno = _clean_text(disegno)
+    override.updated_by_user_id = actor_id
+    db.add(override)
     db.commit()
     return get_quarta_taglio_detail(db, cod_odp=cod_odp)
 
@@ -776,6 +886,162 @@ def _fetch_quarta_taglio_rows(db: Session) -> list[dict[str, Any]]:
             return list(cursor.fetchall())
 
 
+def _load_esolver_ddt_rows(
+    db: Session,
+    *,
+    cod_odp: str,
+    cod_art_values: list[str | None],
+) -> tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]:
+    result = _fetch_esolver_ddt_rows_batch(db, {cod_odp: cod_art_values})
+    return result.get(cod_odp, ([], "missing", "Nessuna riga DDT eSolver trovata per questo OL"))
+
+
+def _fetch_esolver_ddt_rows_batch(
+    db: Session,
+    groups: dict[str, list[str | None]],
+) -> dict[str, tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]]:
+    if not groups:
+        return {}
+
+    connection = db.query(ExternalConnection).filter(ExternalConnection.code == "esolver").one_or_none()
+    if connection is None or not connection.enabled:
+        return {cod_odp: ([], "missing", "Connessione eSolver non configurata o disabilitata") for cod_odp in groups}
+    if not connection.password_encrypted:
+        return {cod_odp: ([], "missing", "Password eSolver non configurata") for cod_odp in groups}
+
+    try:
+        import pymssql
+    except ImportError:
+        return {cod_odp: ([], "error", "Driver SQL Server pymssql non installato") for cod_odp in groups}
+
+    object_settings = connection.object_settings or {}
+    view_name = _sql_identifier(str(object_settings.get("righe_ddt_view") or "CertiRigheDDT"))
+    schema_name = _sql_identifier(connection.schema_name or "dbo")
+    if view_name is None or schema_name is None:
+        return {cod_odp: ([], "error", "Nome vista eSolver non valido") for cod_odp in groups}
+
+    result: dict[str, tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]] = {}
+    try:
+        password = decrypt_secret(connection.password_encrypted)
+        with pymssql.connect(
+            server=connection.server_host,
+            port=connection.port,
+            user=connection.username,
+            password=password,
+            database=connection.database_name,
+            login_timeout=connection.connection_timeout,
+            timeout=connection.query_timeout,
+            as_dict=True,
+        ) as sql_connection:
+            with sql_connection.cursor() as cursor:
+                cod_odps = list(groups.keys())
+                placeholders = ", ".join(["%s"] * len(cod_odps))
+                query = ESOLVER_DDT_BATCH_QUERY_TEMPLATE.format(
+                    qualified_view=f"[{schema_name}].[{view_name}]",
+                    placeholders=placeholders,
+                )
+                cursor.execute(query, tuple(cod_odps))
+                raw_rows_by_odp: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                odp_key_map = {_norm(cod_odp): cod_odp for cod_odp in cod_odps}
+                for raw_row in list(cursor.fetchall()):
+                    source_odp = odp_key_map.get(_norm(raw_row.get("ORP")))
+                    if source_odp:
+                        raw_rows_by_odp[source_odp].append(raw_row)
+
+                for cod_odp, cod_art_values in groups.items():
+                    cod_art_keys = {_norm(value) for value in cod_art_values if _norm(value)}
+                    rows = [_serialize_esolver_ddt_row(row, cod_art_keys=cod_art_keys) for row in raw_rows_by_odp.get(cod_odp, [])]
+                    result[cod_odp] = _esolver_status_for_rows(rows, cod_art_keys=cod_art_keys)
+    except Exception as exc:
+        return {cod_odp: ([], "error", f"Lettura eSolver fallita: {exc}") for cod_odp in groups}
+
+    return result
+
+
+def _esolver_status_for_rows(
+    rows: list[QuartaTaglioEsolverDdtRowResponse],
+    *,
+    cod_art_keys: set[str],
+) -> tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]:
+    if not rows:
+        return [], "missing", "Nessuna riga DDT eSolver trovata per questo OL"
+    if cod_art_keys and not any(row.cod_f3_matches_quarta for row in rows):
+        return rows, "mismatch", "Righe eSolver trovate, ma CodF3 diverso da Quarta"
+    unique_ddt = _unique_clean(row.ddt for row in rows if row.cod_f3_matches_quarta)
+    if len(unique_ddt) > 1:
+        return rows, "ok", f"Dati eSolver/DDT collegati: {len(unique_ddt)} DDT trovati"
+    return rows, "ok", "Dati eSolver/DDT collegati"
+
+
+def _refresh_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow]) -> dict[str, QuartaTaglioEsolverLink]:
+    groups: dict[str, list[str | None]] = defaultdict(list)
+    for row in rows:
+        if row.cod_odp:
+            groups[row.cod_odp].append(row.cod_art)
+
+    if not groups:
+        return {}
+
+    fetched = _fetch_esolver_ddt_rows_batch(db, groups)
+    now = datetime.now(timezone.utc)
+    existing_links = {
+        link.cod_odp: link
+        for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(groups.keys())).all()
+    }
+    for cod_odp in groups:
+        esolver_rows, esolver_status, esolver_message = fetched.get(cod_odp, ([], "missing", "Nessuna riga DDT eSolver trovata per questo OL"))
+        link = existing_links.get(cod_odp)
+        if link is None:
+            link = QuartaTaglioEsolverLink(cod_odp=cod_odp)
+            existing_links[cod_odp] = link
+        _apply_esolver_link_values(link, esolver_rows=esolver_rows, status_value=esolver_status, message=esolver_message, checked_at=now)
+        db.add(link)
+    db.commit()
+    return existing_links
+
+
+def _apply_esolver_link_values(
+    link: QuartaTaglioEsolverLink,
+    *,
+    esolver_rows: list[QuartaTaglioEsolverDdtRowResponse],
+    status_value: str,
+    message: str | None,
+    checked_at: datetime,
+) -> None:
+    header_rows = [row for row in esolver_rows if row.cod_f3_matches_quarta] or esolver_rows
+    link.status = status_value
+    link.message = message
+    link.cod_f3 = _join_unique(row.cod_f3 for row in header_rows) or None
+    link.cliente = _join_unique(row.rag_soc for row in header_rows) or None
+    link.ordine_cliente = _join_unique(row.odv_cli for row in header_rows) or None
+    link.conferma_ordine = _join_unique(row.odv_f3 for row in header_rows) or None
+    link.ddt = _join_unique(row.ddt for row in header_rows) or None
+    link.qta_totale = _sum_optional(row.qta_um_mag for row in header_rows)
+    link.rows = [row.model_dump() for row in esolver_rows]
+    link.last_checked_at = checked_at
+
+
+def _esolver_rows_from_link(link: QuartaTaglioEsolverLink | None) -> list[QuartaTaglioEsolverDdtRowResponse]:
+    if link is None:
+        return []
+    return [QuartaTaglioEsolverDdtRowResponse(**row) for row in (link.rows or [])]
+
+
+def _serialize_esolver_ddt_row(row: dict[str, Any], *, cod_art_keys: set[str]) -> QuartaTaglioEsolverDdtRowResponse:
+    cod_f3 = _clean_text(row.get("CodF3"))
+    return QuartaTaglioEsolverDdtRowResponse(
+        cod_f3=cod_f3,
+        orp=_clean_text(row.get("ORP")),
+        rag_soc=_clean_text(row.get("RagSoc")),
+        odv_cli=_clean_text(row.get("ODVCli")),
+        odv_f3=_clean_text(row.get("ODVF3")),
+        ddt=_clean_text(row.get("DDT")),
+        qta_um_mag=_as_float(row.get("QtaUmMag")),
+        certificato_presente=_as_bool(row.get("CertificatoPresente")),
+        cod_f3_matches_quarta=not cod_art_keys or _norm(cod_f3) in cod_art_keys,
+    )
+
+
 def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows: list[dict[str, Any]]) -> None:
     app_rows = (
         db.query(AcquisitionRow)
@@ -793,6 +1059,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
         cdq = _clean_text(external_row.get("CDQ"))
         cod_odp = _clean_text(external_row.get("COD_ODP"))
         cod_art = _clean_text(external_row.get("COD_ART"))
+        des_art = _clean_text(external_row.get("DES_ART"))
         colata = _clean_text(external_row.get("COLATA"))
         if not cdq or not cod_odp:
             continue
@@ -820,6 +1087,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
         item.latest_run_id = run.id
         item.codice_registro = _clean_text(external_row.get("CODICE_REGISTRO")) or ""
         item.data_registro = _as_datetime(external_row.get("DATA_REGISTRO"))
+        item.des_art = des_art
         item.saldo = str(external_row.get("SALDO") or "").strip() == "1"
         item.righe_materiale = int(external_row.get("RIGHE_MATERIALE") or 0)
         item.lotti_count = int(external_row.get("LOTTI") or 0)
@@ -882,15 +1150,19 @@ def _serialize_row(row: QuartaTaglioRow) -> QuartaTaglioRowResponse:
     return QuartaTaglioRowResponse.model_validate(row)
 
 
-def _serialize_grouped_rows(rows: list[QuartaTaglioRow]) -> list[QuartaTaglioRowResponse]:
+def _serialize_grouped_rows(
+    rows: list[QuartaTaglioRow],
+    *,
+    esolver_links: dict[str, QuartaTaglioEsolverLink] | None = None,
+) -> list[QuartaTaglioRowResponse]:
     rows_by_ol: dict[str, list[QuartaTaglioRow]] = defaultdict(list)
     for row in rows:
         rows_by_ol[row.cod_odp].append(row)
 
-    return [_serialize_ol_group(group_rows) for group_rows in rows_by_ol.values()]
+    return [_serialize_ol_group(group_rows, esolver_link=(esolver_links or {}).get(group_rows[0].cod_odp)) for group_rows in rows_by_ol.values()]
 
 
-def _serialize_ol_group(rows: list[QuartaTaglioRow]) -> QuartaTaglioRowResponse:
+def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTaglioEsolverLink | None = None) -> QuartaTaglioRowResponse:
     primary = rows[0]
     worst_color = max((row.status_color for row in rows), key=lambda color: STATUS_SEVERITY.get(color, 0))
     status_details = _group_status_details(rows)
@@ -900,6 +1172,7 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow]) -> QuartaTaglioRowResponse:
         data_registro=primary.data_registro,
         cod_odp=primary.cod_odp,
         cod_art=", ".join(_unique_clean(row.cod_art for row in rows)) or None,
+        des_art=_join_unique(row.des_art for row in rows) or None,
         cdq=", ".join(_unique_clean(row.cdq for row in rows)),
         colata=", ".join(_unique_clean(row.colata for row in rows)) or None,
         qta_totale=_sum_optional(row.qta_totale for row in rows),
@@ -911,6 +1184,14 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow]) -> QuartaTaglioRowResponse:
         status_message=_group_status_message(worst_color, rows),
         status_details=status_details,
         matching_row_ids=sorted({row_id for row in rows for row_id in row.matching_row_ids}),
+        esolver_status=esolver_link.status if esolver_link else "not_checked",
+        esolver_message=esolver_link.message if esolver_link else None,
+        esolver_cliente=esolver_link.cliente if esolver_link else None,
+        esolver_ordine_cliente=esolver_link.ordine_cliente if esolver_link else None,
+        esolver_conferma_ordine=esolver_link.conferma_ordine if esolver_link else None,
+        esolver_ddt=esolver_link.ddt if esolver_link else None,
+        esolver_qta_totale=esolver_link.qta_totale if esolver_link else None,
+        esolver_last_checked_at=esolver_link.last_checked_at if esolver_link else None,
         certificates=[_serialize_certificate(row) for row in rows],
         seen_in_last_sync=all(row.seen_in_last_sync for row in rows),
         first_seen_at=min(row.first_seen_at for row in rows),
@@ -923,6 +1204,7 @@ def _serialize_certificate(row: QuartaTaglioRow) -> QuartaTaglioCertificateRespo
         cdq=row.cdq,
         colata=row.colata,
         cod_art=row.cod_art,
+        des_art=row.des_art,
         qta_totale=row.qta_totale,
         righe_materiale=row.righe_materiale,
         lotti_count=row.lotti_count,
@@ -942,6 +1224,18 @@ def _group_status_message(color: str, rows: list[QuartaTaglioRow]) -> str:
     if color == "yellow":
         return "Uno o più CDQ da completare"
     return "Tutti i CDQ coerenti e completi"
+
+
+def _max_status_color(left: str, right: str) -> str:
+    return max((left, right), key=lambda color: STATUS_SEVERITY.get(color, 0))
+
+
+def _esolver_block_color(status_value: str) -> str:
+    if status_value == "ok":
+        return "green"
+    if status_value in {"mismatch", "error"}:
+        return "red"
+    return "yellow"
 
 
 def _group_status_details(rows: list[QuartaTaglioRow]) -> list[str]:
@@ -977,6 +1271,61 @@ def _sum_optional(values: Any) -> float | None:
         total += float(value)
         found = True
     return total if found else None
+
+
+def _join_unique(values: Any, separator: str = ", ") -> str:
+    return separator.join(_unique_clean(values))
+
+
+def _split_des_art(value: str | None) -> tuple[str | None, str | None, str]:
+    text = _clean_text(value)
+    if not text:
+        return None, None, "mancante"
+    if "|" in text:
+        return text, None, "multiplo"
+
+    dis_match = re.search(r"\bDIS\.?\s+(.+)$", text, flags=re.IGNORECASE)
+    if dis_match:
+        drawing = f"DIS. {dis_match.group(1).strip()}"
+        description = text[: dis_match.start()].strip()
+        return description or text, drawing, "proposta"
+
+    parts = text.rsplit(" ", 1)
+    if len(parts) == 2:
+        description, last_token = parts[0].strip(), parts[1].strip()
+        has_digit = bool(re.search(r"\d", last_token))
+        looks_like_drawing = has_digit and (
+            "/" in last_token
+            or "." in last_token
+            or bool(re.match(r"^[A-Z]?\d{4,}[A-Z0-9.-]*$", last_token, flags=re.IGNORECASE))
+            or bool(re.match(r"^[A-Z]\d{4,}[A-Z0-9.-]*/[A-Z0-9.-]+$", last_token, flags=re.IGNORECASE))
+        )
+        if description and looks_like_drawing:
+            return description, last_token, "proposta"
+
+    return text, None, "da_verificare"
+
+
+def _sql_identifier(value: str) -> str | None:
+    cleaned = _clean_text(value)
+    if not cleaned or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", cleaned):
+        return None
+    return cleaned
+
+
+def _as_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float, Decimal)):
+        return bool(value)
+    normalized = _norm(value)
+    if normalized in {"1", "true", "si", "sì", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n"}:
+        return False
+    return None
 
 
 def _clean_text(value: Any) -> str | None:

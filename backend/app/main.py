@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from app.core.users.router import router as users_router
 from app.modules.acquisition.router import router as acquisition_router
 from app.modules.notes.router import router as notes_router
 from app.modules.quarta_taglio.router import router as quarta_taglio_router
+from app.modules.quarta_taglio.scheduler import quarta_taglio_periodic_sync_loop
 from app.modules.standards.router import router as standards_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.startup.bootstrap import initialize_application
@@ -20,7 +22,15 @@ from app.startup.bootstrap import initialize_application
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_application()
-    yield
+    sync_task = asyncio.create_task(quarta_taglio_periodic_sync_loop())
+    try:
+        yield
+    finally:
+        sync_task.cancel()
+        try:
+            await sync_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="CERTI_nt Core API", version="0.1.0", lifespan=lifespan)

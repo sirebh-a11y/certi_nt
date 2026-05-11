@@ -8,18 +8,33 @@ const STATUS_CLASSES = {
   green: "border-emerald-200 bg-emerald-50 text-emerald-800",
   yellow: "border-amber-200 bg-amber-50 text-amber-800",
   red: "border-rose-200 bg-rose-50 text-rose-800",
+  ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  missing: "border-amber-200 bg-amber-50 text-amber-800",
+  mismatch: "border-rose-200 bg-rose-50 text-rose-800",
+  error: "border-rose-200 bg-rose-50 text-rose-800",
+  not_checked: "border-slate-200 bg-slate-50 text-slate-700",
 };
 
 const STATUS_LABELS = {
   green: "Verde",
   yellow: "Giallo",
   red: "Rosso",
+  ok: "OK",
+  missing: "DDT mancante",
+  mismatch: "Non coerente",
+  error: "Errore",
+  not_checked: "Non controllato",
 };
 
 const STATUS_SORT_RANK = {
   red: 1,
   yellow: 2,
   green: 3,
+  error: 1,
+  mismatch: 1,
+  missing: 2,
+  not_checked: 2,
+  ok: 3,
 };
 
 const LIST_STATE_STORAGE_KEY = "certi_nt.quarta_taglio_list_state.v1";
@@ -170,6 +185,14 @@ function searchableFieldValues(item) {
     item.status_color,
     STATUS_LABELS[item.status_color],
     item.status_message,
+    item.esolver_status,
+    STATUS_LABELS[item.esolver_status],
+    item.esolver_message,
+    item.esolver_cliente,
+    item.esolver_ordine_cliente,
+    item.esolver_conferma_ordine,
+    item.esolver_ddt,
+    item.esolver_qta_totale,
     ...(item.status_details || []),
     ...(item.cod_lotti || []),
     item.qta_totale,
@@ -241,6 +264,14 @@ function taglioSortValue(item, field) {
       return item.status_message || "";
     case "matching_rows":
       return item.matching_row_ids?.length || 0;
+    case "esolver_status":
+      return STATUS_SORT_RANK[item.esolver_status] || 0;
+    case "esolver_cliente":
+      return item.esolver_cliente || "";
+    case "esolver_ddt":
+      return item.esolver_ddt || "";
+    case "esolver_qta_totale":
+      return parseSortableNumber(item.esolver_qta_totale);
     default:
       return null;
   }
@@ -646,7 +677,7 @@ export default function QuartaTaglioPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-          <table className="min-w-[1840px] divide-y divide-slate-200 text-sm" ref={tableRef}>
+          <table className="min-w-[2320px] divide-y divide-slate-200 text-sm" ref={tableRef}>
             <thead className="bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
@@ -658,6 +689,10 @@ export default function QuartaTaglioPage() {
                 <SortableHeader field="lotti_count" label="Lotti" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="codice_registro" label="Registro" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="data_registro" label="Data registro" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="esolver_status" label="eSolver" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="esolver_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="esolver_ddt" label="DDT" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="esolver_qta_totale" label="Qta DDT" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="status_message" label="Motivo" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="matching_rows" label="Righe app" onSort={toggleSort} sortConfig={sortConfig} />
               </tr>
@@ -719,6 +754,20 @@ export default function QuartaTaglioPage() {
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-700">{item.codice_registro}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatDateTime(item.data_registro)}</td>
+                  <td className="min-w-[160px] px-3 py-2.5">
+                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.esolver_status || "not_checked")}`}>
+                      {STATUS_LABELS[item.esolver_status] || item.esolver_status || "Non controllato"}
+                    </span>
+                    {item.esolver_message ? <div className="mt-1 text-xs text-slate-500">{item.esolver_message}</div> : null}
+                  </td>
+                  <td className="min-w-[220px] max-w-[300px] px-3 py-2.5 text-slate-700">
+                    <div className="whitespace-normal break-words">{item.esolver_cliente || "-"}</div>
+                  </td>
+                  <td className="min-w-[150px] max-w-[220px] px-3 py-2.5 text-slate-700">
+                    <div className="whitespace-normal break-words">{item.esolver_ddt || "-"}</div>
+                    {item.esolver_ordine_cliente ? <div className="mt-1 text-xs text-slate-500">Ord. {item.esolver_ordine_cliente}</div> : null}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatNumber(item.esolver_qta_totale)}</td>
                   <td className="min-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="font-medium">{item.status_message}</div>
                     {item.status_details?.length ? (

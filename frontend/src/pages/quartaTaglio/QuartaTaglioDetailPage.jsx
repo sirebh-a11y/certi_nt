@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
@@ -15,6 +15,8 @@ const STATUS_CLASSES = {
   out_of_range: "border-rose-200 bg-rose-50 text-rose-800",
   not_in_standard: "border-rose-200 bg-rose-50 text-rose-800",
   not_checked: "border-slate-200 bg-slate-50 text-slate-700",
+  mismatch: "border-rose-200 bg-rose-50 text-rose-800",
+  error: "border-rose-200 bg-rose-50 text-rose-800",
 };
 
 const STATUS_LABELS = {
@@ -28,6 +30,8 @@ const STATUS_LABELS = {
   out_of_range: "Fuori standard",
   not_in_standard: "Non previsto",
   not_checked: "Non verificato",
+  mismatch: "Non coerente",
+  error: "Errore",
 };
 
 const METHOD_LABELS = {
@@ -36,6 +40,9 @@ const METHOD_LABELS = {
   single: "singolo",
   missing: "-",
 };
+
+const ARTICLE_AUTOSAVE_DELAY_MS = 800;
+const ARTICLE_SAVED_FEEDBACK_MS = 1200;
 
 function statusClass(status) {
   return STATUS_CLASSES[status] || STATUS_CLASSES.not_checked;
@@ -61,6 +68,32 @@ function formatLimit(min, max) {
   return `<= ${formatNumber(max)}`;
 }
 
+function articleFieldClass(status) {
+  if (status === "error") {
+    return "border-rose-400 bg-rose-50 text-rose-900";
+  }
+  if (status === "saving") {
+    return "border-sky-300 bg-sky-50 text-slate-900";
+  }
+  if (status === "saved") {
+    return "border-emerald-300 bg-emerald-50 text-slate-900";
+  }
+  return "border-slate-200 bg-white text-slate-900";
+}
+
+function articleAutosaveTitle(cellState) {
+  if (!cellState) {
+    return undefined;
+  }
+  if (cellState.status === "saving") {
+    return "Salvataggio automatico...";
+  }
+  if (cellState.status === "saved") {
+    return "Salvato";
+  }
+  return cellState.message || "Errore salvataggio automatico";
+}
+
 function standardLabel(standard) {
   return [
     standard.lega_base,
@@ -83,6 +116,12 @@ export default function QuartaTaglioDetailPage() {
   const [standardError, setStandardError] = useState("");
   const [standards, setStandards] = useState([]);
   const [manualStandardId, setManualStandardId] = useState("");
+  const [articleDraft, setArticleDraft] = useState({ descrizione: "", disegno: "" });
+  const [articleStates, setArticleStates] = useState({});
+  const articleTimersRef = useRef({});
+  const articleSavedTimersRef = useRef({});
+  const articleVersionsRef = useRef({});
+  const latestArticleDraftRef = useRef({ descrizione: "", disegno: "" });
 
   useEffect(() => {
     let ignore = false;
@@ -129,6 +168,27 @@ export default function QuartaTaglioDetailPage() {
     };
   }, [token]);
 
+  useEffect(() => {
+    if (!data?.cod_odp) {
+      return;
+    }
+    const nextDraft = {
+      descrizione: data.header?.descrizione || "",
+      disegno: data.header?.disegno || "",
+    };
+    latestArticleDraftRef.current = nextDraft;
+    setArticleDraft(nextDraft);
+    setArticleStates({});
+  }, [data?.cod_odp]);
+
+  useEffect(
+    () => () => {
+      Object.values(articleTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+      Object.values(articleSavedTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+    },
+    [],
+  );
+
   function confirmStandard(standardId) {
     setSavingStandardId(standardId);
     setStandardError("");
@@ -151,15 +211,93 @@ export default function QuartaTaglioDetailPage() {
       });
   }
 
+  function setArticleState(field, nextState) {
+    setArticleStates((current) => {
+      if (!nextState) {
+        const { [field]: _removed, ...rest } = current;
+        return rest;
+      }
+      return { ...current, [field]: nextState };
+    });
+  }
+
+  function clearArticleSavedFeedback(field, version) {
+    window.clearTimeout(articleSavedTimersRef.current[field]);
+    articleSavedTimersRef.current[field] = window.setTimeout(() => {
+      if (articleVersionsRef.current[field] === version) {
+        setArticleState(field, null);
+      }
+    }, ARTICLE_SAVED_FEEDBACK_MS);
+  }
+
+  function updateArticleDraftAndAutosave(field, value, delay = ARTICLE_AUTOSAVE_DELAY_MS) {
+    const nextDraft = { ...latestArticleDraftRef.current, [field]: value };
+    latestArticleDraftRef.current = nextDraft;
+    setArticleDraft(nextDraft);
+    queueArticleSave(field, value, delay);
+  }
+
+  function queueArticleSave(field, value, delay = ARTICLE_AUTOSAVE_DELAY_MS) {
+    window.clearTimeout(articleTimersRef.current[field]);
+    window.clearTimeout(articleSavedTimersRef.current[field]);
+    const version = (articleVersionsRef.current[field] || 0) + 1;
+    articleVersionsRef.current[field] = version;
+    articleTimersRef.current[field] = window.setTimeout(() => {
+      void saveArticleField(field, value, version);
+    }, delay);
+  }
+
+  async function saveArticleField(field, value, version) {
+    window.clearTimeout(articleTimersRef.current[field]);
+    if (articleVersionsRef.current[field] !== version) {
+      return;
+    }
+    setArticleState(field, { status: "saving" });
+    setError("");
+    try {
+      const response = await apiRequest(
+        `/quarta-taglio/${encodeURIComponent(codOdp)}/article-data`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ [field]: value.trim() ? value : null }),
+        },
+        token,
+      );
+      if (articleVersionsRef.current[field] !== version) {
+        return;
+      }
+      setData(response);
+      const nextDraft = {
+        descrizione: response.header?.descrizione || "",
+        disegno: response.header?.disegno || "",
+      };
+      latestArticleDraftRef.current = nextDraft;
+      setArticleDraft(nextDraft);
+      setArticleState(field, { status: "saved" });
+      clearArticleSavedFeedback(field, version);
+    } catch (requestError) {
+      if (articleVersionsRef.current[field] === version) {
+        const message = requestError.message || "Errore salvataggio automatico";
+        setArticleState(field, { status: "error", message });
+        setError(message);
+      }
+    }
+  }
+
+  function flushArticleField(field) {
+    const value = latestArticleDraftRef.current[field] || "";
+    queueArticleSave(field, value, 0);
+  }
+
   const headerRows = useMemo(() => {
     const header = data?.header || {};
     return [
       ["Certificato", header.numero_certificato || "Da assegnare"],
       ["Cliente", header.cliente || "Da eSolver"],
       ["Ordine cliente", header.ordine_cliente || "Da eSolver"],
+      ["C.d.O.", header.conferma_ordine || "Da eSolver"],
       ["DDT", header.ddt || "Da eSolver"],
       ["Codice F3", header.codice_f3 || "-"],
-      ["Descrizione", header.descrizione || "Da completare con dati articolo/eSolver"],
       ["Colata", header.colata || "-"],
       ["Quantità", header.quantita ? formatNumber(header.quantita, 2) : "-"],
     ];
@@ -227,7 +365,36 @@ export default function QuartaTaglioDetailPage() {
                 <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
               </div>
             ))}
+            <EditableArticleField
+              label="Descrizione"
+              onBlur={() => flushArticleField("descrizione")}
+              onChange={(value) => updateArticleDraftAndAutosave("descrizione", value)}
+              origin={data.header?.descrizione_origine}
+              proposal={data.header?.descrizione_proposta}
+              state={articleStates.descrizione}
+              title={articleAutosaveTitle(articleStates.descrizione)}
+              value={articleDraft.descrizione}
+              warning={data.header?.descrizione_diversa_da_quarta === "true"}
+            />
+            <EditableArticleField
+              label="Disegno"
+              onBlur={() => flushArticleField("disegno")}
+              onChange={(value) => updateArticleDraftAndAutosave("disegno", value)}
+              origin={data.header?.disegno_origine}
+              proposal={data.header?.disegno_proposta}
+              state={articleStates.disegno}
+              title={articleAutosaveTitle(articleStates.disegno)}
+              value={articleDraft.disegno}
+              warning={data.header?.disegno_diverso_da_quarta === "true"}
+            />
           </div>
+          {data.header?.descrizione_articolo_quarta ? (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">DES_ART Quarta</div>
+              <div className="mt-1 font-medium text-slate-900">{data.header.descrizione_articolo_quarta}</div>
+              <div className="mt-1 text-xs text-slate-500">Separazione disegno: {data.header.disegno_confidenza || "da verificare"}</div>
+            </div>
+          ) : null}
         </Panel>
 
         <Panel title="Standard">
@@ -304,13 +471,37 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       </div>
 
+      <Panel title="Dati eSolver">
+        <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="text-sm text-slate-600">{data.esolver_message || "Collegamento eSolver non verificato."}</div>
+          <StatusPill status={data.esolver_status || "not_checked"} />
+        </div>
+        <Table
+          columns={["Cod F3", "OL", "Cliente", "Ordine cliente", "C.d.O.", "DDT", "Quantità", "Match"]}
+          rows={(data.esolver_rows || []).map((item) => [
+            item.cod_f3 || "-",
+            item.orp || "-",
+            item.rag_soc || "-",
+            item.odv_cli || "-",
+            item.odv_f3 || "-",
+            item.ddt || "-",
+            formatNumber(item.qta_um_mag, 2),
+            item.cod_f3_matches_quarta ? <StatusPill key="match" status="ok" /> : <StatusPill key="match" status="mismatch" />,
+          ])}
+          emptyText="Nessuna riga DDT eSolver collegata a questo OL."
+        />
+      </Panel>
+
       <Panel title="Materiali collegati">
         <Table
           columns={["CDQ", "Colata", "Articolo", "Quantità", "Lotti", "Righe app"]}
           rows={(data.materials || []).map((item) => [
             item.cdq,
             item.colata || "-",
-            item.cod_art || "-",
+            <div key="article">
+              <div className="font-medium">{item.cod_art || "-"}</div>
+              {item.des_art ? <div className="mt-1 text-xs text-slate-500">{item.des_art}</div> : null}
+            </div>,
             formatNumber(item.qta_totale, 2),
             (item.cod_lotti || []).join(", ") || "-",
             item.matching_row_ids?.length
@@ -355,6 +546,28 @@ function Panel({ title, children }) {
     <div className="rounded-xl border border-border bg-white p-4">
       <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</h3>
       <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+function EditableArticleField({ label, onBlur, onChange, origin, proposal, state, title, value, warning }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</label>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+          {state?.status === "saving" ? "salvataggio" : state?.status === "saved" ? "salvato" : origin === "utente" ? "utente" : "quarta"}
+        </span>
+      </div>
+      <input
+        className={`mt-1 w-full rounded-lg border px-2 py-1.5 text-sm font-medium ${articleFieldClass(state?.status)}`}
+        onBlur={onBlur}
+        onChange={(event) => onChange(event.target.value)}
+        title={title}
+        value={value || ""}
+      />
+      {warning ? <div className="mt-1 text-xs text-amber-700">Valore salvato diverso dalla proposta Quarta.</div> : null}
+      {proposal && origin === "utente" ? <div className="mt-1 truncate text-xs text-slate-500">Quarta: {proposal}</div> : null}
     </div>
   );
 }
