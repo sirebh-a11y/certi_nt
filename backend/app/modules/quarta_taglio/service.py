@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.integrations.models import ExternalConnection
 from app.core.security.crypto import decrypt_secret
@@ -27,6 +27,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioSyncRunResponse,
 )
 from app.modules.standards.models import NormativeStandard
+from app.modules.notes.models import AcquisitionRowNoteTemplate
 
 STATUS_SEVERITY = {
     "green": 1,
@@ -207,7 +208,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
 
     material_weights = {row.cdq: row.qta_totale for row in rows}
     chemistry = _aggregate_block_values(
-        fields=CHEMISTRY_FIELDS,
+        fields=_chemistry_fields_for_detail(standard=selected_standard_model, app_rows=app_rows),
         block="chimica",
         app_rows=app_rows,
         material_weights=material_weights,
@@ -288,7 +289,11 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
         return []
     return (
         db.query(AcquisitionRow)
-        .options(selectinload(AcquisitionRow.values), selectinload(AcquisitionRow.certificate_match))
+        .options(
+            selectinload(AcquisitionRow.values),
+            selectinload(AcquisitionRow.certificate_match),
+            selectinload(AcquisitionRow.custom_note_links).joinedload(AcquisitionRowNoteTemplate.note_template),
+        )
         .filter(AcquisitionRow.id.in_(row_ids))
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
@@ -310,6 +315,42 @@ def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> 
     )
 
 
+def _chemistry_fields_for_detail(
+    *,
+    standard: NormativeStandard | None,
+    app_rows: list[AcquisitionRow],
+) -> list[str]:
+    recovered_fields = _block_field_names(app_rows, "chimica")
+    if standard is None:
+        return recovered_fields
+
+    standard_fields = [limit.elemento for limit in standard.chemistry_limits]
+    standard_keys = {_field_key(field) for field in standard_fields}
+    extra_fields = [field for field in recovered_fields if _field_key(field) not in standard_keys]
+    return _unique_clean([*standard_fields, *extra_fields])
+
+
+def _block_field_names(app_rows: list[AcquisitionRow], block: str) -> list[str]:
+    fields: list[str] = []
+    seen: set[str] = set()
+    for row in app_rows:
+        for value in row.values:
+            if _norm(value.blocco) != _norm(block):
+                continue
+            key = _field_key(value.campo)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            fields.append(value.campo)
+    return fields
+
+
+def _standard_chemistry_field_keys(standard: NormativeStandard | None) -> set[str]:
+    if standard is None:
+        return set()
+    return {_field_key(limit.elemento) for limit in standard.chemistry_limits}
+
+
 def _aggregate_block_values(
     *,
     fields: list[str],
@@ -319,6 +360,7 @@ def _aggregate_block_values(
     standard: NormativeStandard | None,
 ) -> list[QuartaTaglioAggregateValueResponse]:
     result: list[QuartaTaglioAggregateValueResponse] = []
+    standard_chemistry_keys = _standard_chemistry_field_keys(standard) if block == "chimica" else set()
     for field in fields:
         values: list[tuple[float, float | None]] = []
         missing_rows: list[str] = []
@@ -329,13 +371,31 @@ def _aggregate_block_values(
                 continue
             values.append((value, material_weights.get(row.cdq or "")))
 
+        if block == "chimica" and standard is not None and _field_key(field) not in standard_chemistry_keys:
+            if values:
+                result.append(
+                    QuartaTaglioAggregateValueResponse(
+                        field=field,
+                        value=round(sum(value for value, _ in values) / len(values), 4),
+                        method="average" if len(values) > 1 else "single",
+                        status="not_in_standard",
+                        message="Elemento trovato nei certificati fornitore ma non previsto dallo standard: non riportare nel certificato finale",
+                    )
+                )
+            continue
+
         if not values:
+            missing_message = (
+                "Elemento previsto dallo standard ma non trovato nei certificati fornitore collegati"
+                if block == "chimica" and standard is not None and _field_key(field) in standard_chemistry_keys
+                else "Valore non trovato nei certificati collegati"
+            )
             result.append(
                 QuartaTaglioAggregateValueResponse(
                     field=field,
                     method="missing",
-                    status="missing",
-                    message="Valore non trovato nei certificati collegati",
+                    status="missing_from_supplier" if block == "chimica" and standard is not None else "missing",
+                    message=missing_message,
                 )
             )
             continue
@@ -352,12 +412,18 @@ def _aggregate_block_values(
             method = "average"
 
         limit_min, limit_max = _standard_limits_for_field(standard, block=block, field=field, app_rows=app_rows)
-        check_status, message = _check_against_limits(
-            value=aggregated,
-            limit_min=limit_min,
-            limit_max=limit_max,
-            missing_rows=missing_rows,
-        )
+        if block == "chimica" and standard is None:
+            check_status = "not_checked"
+            message = "Confermare lo standard per sapere se l'elemento va riportato"
+        else:
+            check_status, message = _check_against_limits(
+                value=aggregated,
+                limit_min=limit_min,
+                limit_max=limit_max,
+                missing_rows=missing_rows,
+            )
+            if block == "chimica" and standard is not None and check_status == "missing":
+                check_status = "missing_from_supplier"
         result.append(
             QuartaTaglioAggregateValueResponse(
                 field=field,
@@ -459,6 +525,54 @@ def _evaluate_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResp
                     message="Note non uniformi: non riportare automaticamente",
                 )
             )
+    notes.extend(_evaluate_custom_notes(app_rows))
+    return notes
+
+
+def _evaluate_custom_notes(app_rows: list[AcquisitionRow]) -> list[QuartaTaglioNoteResponse]:
+    if not app_rows:
+        return []
+
+    row_ids = {row.id for row in app_rows}
+    cdq_by_row_id = {row.id: row.cdq or f"riga #{row.id}" for row in app_rows}
+    templates_by_id: dict[int, Any] = {}
+    present_by_template_id: dict[int, set[int]] = defaultdict(set)
+
+    for row in app_rows:
+        for link in getattr(row, "custom_note_links", []):
+            template = link.note_template
+            if template is None or template.is_system or not template.is_active:
+                continue
+            templates_by_id[template.id] = template
+            present_by_template_id[template.id].add(row.id)
+
+    notes: list[QuartaTaglioNoteResponse] = []
+    for template in sorted(templates_by_id.values(), key=lambda item: (item.sort_order, item.id)):
+        present_row_ids = present_by_template_id[template.id]
+        missing_row_ids = row_ids - present_row_ids
+        if not missing_row_ids:
+            notes.append(
+                QuartaTaglioNoteResponse(
+                    code=f"custom_note_{template.id}",
+                    label="Nota utente",
+                    value=template.text,
+                    status="ok",
+                    message="Nota utente uniforme: può essere riportata",
+                )
+            )
+            continue
+
+        present_cdq = ", ".join(sorted(cdq_by_row_id[row_id] for row_id in present_row_ids))
+        missing_cdq = ", ".join(sorted(cdq_by_row_id[row_id] for row_id in missing_row_ids))
+        notes.append(
+            QuartaTaglioNoteResponse(
+                code=f"custom_note_{template.id}",
+                label="Nota utente",
+                value=template.text,
+                status="different",
+                message=f"Nota utente non uniforme: presente su {present_cdq}; manca su {missing_cdq}",
+            )
+        )
     return notes
 
 

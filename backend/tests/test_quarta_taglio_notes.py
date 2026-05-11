@@ -31,6 +31,30 @@ class QuartaTaglioNotesTest(unittest.TestCase):
         self.assertEqual(notes["nota_us_control_class_b"].status, "ok")
         self.assertNotIn("nota_us_control_classe", notes)
 
+    def test_custom_user_notes_are_reported_when_uniform(self):
+        template = SimpleNamespace(id=10, text="Nota custom da pagina Note", is_system=False, is_active=True, sort_order=100)
+        rows = [
+            SimpleNamespace(id=1, cdq="CDQ-1", values=[], custom_note_links=[SimpleNamespace(note_template=template)]),
+            SimpleNamespace(id=2, cdq="CDQ-2", values=[], custom_note_links=[SimpleNamespace(note_template=template)]),
+        ]
+
+        notes = {item.code: item for item in _evaluate_notes(rows)}
+
+        self.assertEqual(notes["custom_note_10"].status, "ok")
+        self.assertEqual(notes["custom_note_10"].value, "Nota custom da pagina Note")
+
+    def test_custom_user_notes_are_not_reported_automatically_when_not_uniform(self):
+        template = SimpleNamespace(id=10, text="Nota custom da pagina Note", is_system=False, is_active=True, sort_order=100)
+        rows = [
+            SimpleNamespace(id=1, cdq="CDQ-1", values=[], custom_note_links=[SimpleNamespace(note_template=template)]),
+            SimpleNamespace(id=2, cdq="CDQ-2", values=[], custom_note_links=[]),
+        ]
+
+        notes = {item.code: item for item in _evaluate_notes(rows)}
+
+        self.assertEqual(notes["custom_note_10"].status, "different")
+        self.assertIn("manca su CDQ-2", notes["custom_note_10"].message)
+
 
 if __name__ == "__main__":
     unittest.main()

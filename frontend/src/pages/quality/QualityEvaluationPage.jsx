@@ -22,6 +22,73 @@ const EDITABLE_FIELDS = [
 
 const AUTOSAVE_DELAY_MS = 800;
 const AUTOSAVE_SAVED_FEEDBACK_MS = 1200;
+const LIST_STATE_STORAGE_KEY = "certi_nt.quality_evaluation_list_state.v1";
+const DEFAULT_LIST_STATE = {
+  queryOne: "",
+  queryTwo: "",
+  queryThree: "",
+  operatorOne: "and",
+  operatorTwo: "and",
+  rowLimit: "25",
+  sortConfig: { field: null, direction: "asc" },
+  scrollLeft: 0,
+  scrollTop: 0,
+  windowScrollY: 0,
+};
+
+function loadPersistedListState() {
+  if (typeof window === "undefined") {
+    return DEFAULT_LIST_STATE;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(LIST_STATE_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_LIST_STATE;
+    }
+    const parsed = JSON.parse(raw);
+    const sortConfig =
+      parsed?.sortConfig && typeof parsed.sortConfig === "object"
+        ? {
+            field: typeof parsed.sortConfig.field === "string" ? parsed.sortConfig.field : null,
+            direction: parsed.sortConfig.direction === "desc" ? "desc" : "asc",
+          }
+        : DEFAULT_LIST_STATE.sortConfig;
+    return {
+      queryOne: typeof parsed?.queryOne === "string" ? parsed.queryOne : DEFAULT_LIST_STATE.queryOne,
+      queryTwo: typeof parsed?.queryTwo === "string" ? parsed.queryTwo : DEFAULT_LIST_STATE.queryTwo,
+      queryThree: typeof parsed?.queryThree === "string" ? parsed.queryThree : DEFAULT_LIST_STATE.queryThree,
+      operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
+      operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
+      rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      sortConfig,
+      scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
+      scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
+      windowScrollY: Number.isFinite(Number(parsed?.windowScrollY)) ? Number(parsed.windowScrollY) : 0,
+    };
+  } catch {
+    return DEFAULT_LIST_STATE;
+  }
+}
+
+function savePersistedListState(nextState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(LIST_STATE_STORAGE_KEY, JSON.stringify(nextState));
+}
+
+function getScrollablePageContainer(element) {
+  let current = element?.parentElement || null;
+  while (current) {
+    const style = window.getComputedStyle(current);
+    const overflowY = style.overflowY;
+    if ((overflowY === "auto" || overflowY === "scroll") && current.scrollHeight > current.clientHeight) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
 
 function textValue(value) {
   return String(value ?? "");
@@ -253,23 +320,26 @@ function SupplierCell({ row }) {
 
 export default function QualityEvaluationPage() {
   const { token } = useAuth();
+  const initialListStateRef = useRef(loadPersistedListState());
   const [rows, setRows] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [loading, setLoading] = useState(true);
   const [cellStates, setCellStates] = useState({});
   const [error, setError] = useState("");
-  const [queryOne, setQueryOne] = useState("");
-  const [queryTwo, setQueryTwo] = useState("");
-  const [queryThree, setQueryThree] = useState("");
-  const [operatorOne, setOperatorOne] = useState("and");
-  const [operatorTwo, setOperatorTwo] = useState("and");
-  const [rowLimit, setRowLimit] = useState("25");
-  const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
+  const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
+  const [queryTwo, setQueryTwo] = useState(initialListStateRef.current.queryTwo);
+  const [queryThree, setQueryThree] = useState(initialListStateRef.current.queryThree);
+  const [operatorOne, setOperatorOne] = useState(initialListStateRef.current.operatorOne);
+  const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
+  const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
+  const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
   const tableViewportRef = useRef(null);
   const tableRef = useRef(null);
   const syncingScrollRef = useRef(false);
+  const restoredScrollRef = useRef(false);
+  const sectionRef = useRef(null);
   const latestDraftsRef = useRef({});
   const rowsRef = useRef([]);
   const saveTimersRef = useRef({});
@@ -297,6 +367,37 @@ export default function QualityEvaluationPage() {
   useEffect(() => {
     void refresh();
   }, [token]);
+
+  useEffect(() => {
+    const viewport = tableViewportRef.current;
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    savePersistedListState({
+      queryOne,
+      queryTwo,
+      queryThree,
+      operatorOne,
+      operatorTwo,
+      rowLimit,
+      sortConfig,
+      scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
+      scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
+      windowScrollY: pageScroller?.scrollTop || 0,
+    });
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+
+  useEffect(() => {
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    function handlePageScroll() {
+      const currentState = loadPersistedListState();
+      savePersistedListState({
+        ...currentState,
+        windowScrollY: pageScroller?.scrollTop || 0,
+      });
+    }
+
+    pageScroller?.addEventListener("scroll", handlePageScroll, { passive: true });
+    return () => pageScroller?.removeEventListener("scroll", handlePageScroll);
+  }, []);
 
   useEffect(() => {
     rowsRef.current = rows;
@@ -394,6 +495,30 @@ export default function QualityEvaluationPage() {
       observer?.disconnect();
     };
   }, [displayedRows.length, rows.length]);
+
+  useEffect(() => {
+    if (loading || restoredScrollRef.current) {
+      return;
+    }
+    const viewport = tableViewportRef.current;
+    const topScroll = topScrollRef.current;
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    if (!viewport) {
+      return;
+    }
+    const { scrollLeft, scrollTop, windowScrollY } = initialListStateRef.current;
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = scrollLeft || 0;
+      viewport.scrollTop = scrollTop || 0;
+      if (topScroll) {
+        topScroll.scrollLeft = scrollLeft || 0;
+      }
+      if (pageScroller) {
+        pageScroller.scrollTop = windowScrollY || 0;
+      }
+      restoredScrollRef.current = true;
+    });
+  }, [loading, displayedRows.length]);
 
   function setCellState(key, nextState) {
     setCellStates((current) => {
@@ -548,13 +673,21 @@ export default function QualityEvaluationPage() {
     }
     syncingScrollRef.current = true;
     target.scrollLeft = source.scrollLeft;
+    const currentState = loadPersistedListState();
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    savePersistedListState({
+      ...currentState,
+      scrollLeft: source.scrollLeft,
+      scrollTop: tableViewportRef.current ? tableViewportRef.current.scrollTop : currentState.scrollTop,
+      windowScrollY: pageScroller?.scrollTop || currentState.windowScrollY || 0,
+    });
     window.requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
   }
 
   return (
-    <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
+    <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8" ref={sectionRef}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione qualità</p>

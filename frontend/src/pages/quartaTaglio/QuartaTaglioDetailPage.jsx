@@ -10,8 +10,10 @@ const STATUS_CLASSES = {
   red: "border-rose-200 bg-rose-50 text-rose-800",
   ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
   missing: "border-amber-200 bg-amber-50 text-amber-800",
+  missing_from_supplier: "border-rose-200 bg-rose-50 text-rose-800",
   different: "border-amber-200 bg-amber-50 text-amber-800",
   out_of_range: "border-rose-200 bg-rose-50 text-rose-800",
+  not_in_standard: "border-rose-200 bg-rose-50 text-rose-800",
   not_checked: "border-slate-200 bg-slate-50 text-slate-700",
 };
 
@@ -21,8 +23,10 @@ const STATUS_LABELS = {
   red: "Bloccato",
   ok: "OK",
   missing: "Manca",
+  missing_from_supplier: "Manca da fornitore",
   different: "Diverso",
   out_of_range: "Fuori standard",
+  not_in_standard: "Non previsto",
   not_checked: "Non verificato",
 };
 

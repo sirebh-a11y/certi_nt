@@ -22,6 +22,74 @@ const STATUS_SORT_RANK = {
   green: 3,
 };
 
+const LIST_STATE_STORAGE_KEY = "certi_nt.quarta_taglio_list_state.v1";
+const DEFAULT_LIST_STATE = {
+  queryOne: "",
+  queryTwo: "",
+  queryThree: "",
+  operatorOne: "and",
+  operatorTwo: "and",
+  rowLimit: "25",
+  sortConfig: { field: null, direction: "asc" },
+  scrollLeft: 0,
+  scrollTop: 0,
+  windowScrollY: 0,
+};
+
+function loadPersistedListState() {
+  if (typeof window === "undefined") {
+    return DEFAULT_LIST_STATE;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(LIST_STATE_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_LIST_STATE;
+    }
+    const parsed = JSON.parse(raw);
+    const sortConfig =
+      parsed?.sortConfig && typeof parsed.sortConfig === "object"
+        ? {
+            field: typeof parsed.sortConfig.field === "string" ? parsed.sortConfig.field : null,
+            direction: parsed.sortConfig.direction === "desc" ? "desc" : "asc",
+          }
+        : DEFAULT_LIST_STATE.sortConfig;
+    return {
+      queryOne: typeof parsed?.queryOne === "string" ? parsed.queryOne : DEFAULT_LIST_STATE.queryOne,
+      queryTwo: typeof parsed?.queryTwo === "string" ? parsed.queryTwo : DEFAULT_LIST_STATE.queryTwo,
+      queryThree: typeof parsed?.queryThree === "string" ? parsed.queryThree : DEFAULT_LIST_STATE.queryThree,
+      operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
+      operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
+      rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      sortConfig,
+      scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
+      scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
+      windowScrollY: Number.isFinite(Number(parsed?.windowScrollY)) ? Number(parsed.windowScrollY) : 0,
+    };
+  } catch {
+    return DEFAULT_LIST_STATE;
+  }
+}
+
+function savePersistedListState(nextState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(LIST_STATE_STORAGE_KEY, JSON.stringify(nextState));
+}
+
+function getScrollablePageContainer(element) {
+  let current = element?.parentElement || null;
+  while (current) {
+    const style = window.getComputedStyle(current);
+    const overflowY = style.overflowY;
+    if ((overflowY === "auto" || overflowY === "scroll") && current.scrollHeight > current.clientHeight) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
 function formatDateTime(value) {
   if (!value) {
     return "-";
@@ -200,22 +268,25 @@ function SortableHeader({ field, label, onSort, sortConfig }) {
 export default function QuartaTaglioPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
+  const initialListStateRef = useRef(loadPersistedListState());
   const [items, setItems] = useState([]);
   const [syncRun, setSyncRun] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [queryOne, setQueryOne] = useState("");
-  const [queryTwo, setQueryTwo] = useState("");
-  const [queryThree, setQueryThree] = useState("");
-  const [operatorOne, setOperatorOne] = useState("and");
-  const [operatorTwo, setOperatorTwo] = useState("and");
-  const [rowLimit, setRowLimit] = useState("25");
-  const [sortConfig, setSortConfig] = useState({ field: null, direction: "asc" });
+  const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
+  const [queryTwo, setQueryTwo] = useState(initialListStateRef.current.queryTwo);
+  const [queryThree, setQueryThree] = useState(initialListStateRef.current.queryThree);
+  const [operatorOne, setOperatorOne] = useState(initialListStateRef.current.operatorOne);
+  const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
+  const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
+  const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
   const tableViewportRef = useRef(null);
   const tableRef = useRef(null);
   const syncingScrollRef = useRef(false);
+  const restoredScrollRef = useRef(false);
+  const sectionRef = useRef(null);
 
   useEffect(() => {
     let ignore = false;
@@ -243,6 +314,37 @@ export default function QuartaTaglioPage() {
       ignore = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    const viewport = tableViewportRef.current;
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    savePersistedListState({
+      queryOne,
+      queryTwo,
+      queryThree,
+      operatorOne,
+      operatorTwo,
+      rowLimit,
+      sortConfig,
+      scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
+      scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
+      windowScrollY: pageScroller?.scrollTop || 0,
+    });
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+
+  useEffect(() => {
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    function handlePageScroll() {
+      const currentState = loadPersistedListState();
+      savePersistedListState({
+        ...currentState,
+        windowScrollY: pageScroller?.scrollTop || 0,
+      });
+    }
+
+    pageScroller?.addEventListener("scroll", handlePageScroll, { passive: true });
+    return () => pageScroller?.removeEventListener("scroll", handlePageScroll);
+  }, []);
 
   const visibleItems = useMemo(() => {
     let nextItems = items;
@@ -326,6 +428,30 @@ export default function QuartaTaglioPage() {
     };
   }, [displayedItems.length, visibleItems.length]);
 
+  useEffect(() => {
+    if (loading || restoredScrollRef.current) {
+      return;
+    }
+    const viewport = tableViewportRef.current;
+    const topScroll = topScrollRef.current;
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    if (!viewport) {
+      return;
+    }
+    const { scrollLeft, scrollTop, windowScrollY } = initialListStateRef.current;
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = scrollLeft || 0;
+      viewport.scrollTop = scrollTop || 0;
+      if (topScroll) {
+        topScroll.scrollLeft = scrollLeft || 0;
+      }
+      if (pageScroller) {
+        pageScroller.scrollTop = windowScrollY || 0;
+      }
+      restoredScrollRef.current = true;
+    });
+  }, [loading, displayedItems.length]);
+
   function toggleSort(field) {
     setSortConfig((current) => {
       if (current.field !== field) {
@@ -341,19 +467,45 @@ export default function QuartaTaglioPage() {
     }
     syncingScrollRef.current = true;
     target.scrollLeft = source.scrollLeft;
+    const currentState = loadPersistedListState();
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    savePersistedListState({
+      ...currentState,
+      scrollLeft: source.scrollLeft,
+      scrollTop: tableViewportRef.current ? tableViewportRef.current.scrollTop : currentState.scrollTop,
+      windowScrollY: pageScroller?.scrollTop || currentState.windowScrollY || 0,
+    });
     window.requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
   }
 
+  function persistCurrentListState() {
+    const viewport = tableViewportRef.current;
+    const pageScroller = getScrollablePageContainer(sectionRef.current);
+    savePersistedListState({
+      queryOne,
+      queryTwo,
+      queryThree,
+      operatorOne,
+      operatorTwo,
+      rowLimit,
+      sortConfig,
+      scrollLeft: viewport?.scrollLeft || 0,
+      scrollTop: viewport?.scrollTop || 0,
+      windowScrollY: pageScroller?.scrollTop || 0,
+    });
+  }
+
   function openDetail(codOdp) {
     if (codOdp) {
+      persistCurrentListState();
       navigate(`/quarta-taglio/${encodeURIComponent(codOdp)}`);
     }
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-3" ref={sectionRef}>
       <div className="flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Certificazione</p>
@@ -526,7 +678,10 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 font-semibold">
                     <Link
                       className="text-accent hover:underline"
-                      onClick={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        persistCurrentListState();
+                      }}
                       to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}`}
                     >
                       {item.cod_odp}
@@ -580,7 +735,10 @@ export default function QuartaTaglioPage() {
                           <Link
                             className="mr-2 font-semibold text-accent hover:underline"
                             key={rowId}
-                            onClick={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              persistCurrentListState();
+                            }}
                             to={`/acquisition/${rowId}`}
                           >
                             #{rowId}
