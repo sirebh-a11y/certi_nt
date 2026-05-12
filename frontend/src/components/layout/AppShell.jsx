@@ -11,7 +11,8 @@ export default function AppShell() {
     isAcquisitionRoute ||
     location.pathname.startsWith("/quality-evaluation") ||
     location.pathname.startsWith("/quarta-taglio") ||
-    location.pathname.startsWith("/notes");
+    location.pathname.startsWith("/notes") ||
+    location.pathname.startsWith("/ai");
 
   return (
     <div className="h-screen overflow-hidden bg-shell text-ink">

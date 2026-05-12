@@ -7060,10 +7060,6 @@ def confirm_document_side_fields(
 
     db.flush()
     _sync_row_core_from_document_side_values(db, current_row)
-    conflicts = _document_side_field_conflicts(db, row=current_row)
-    if conflicts:
-        _mark_match_conflicted(db=db, row=current_row, actor_id=actor_id, reason="; ".join(conflicts))
-
     _record_history_event(
         db=db,
         acquisition_row_id=current_row.id,
@@ -7074,8 +7070,7 @@ def confirm_document_side_fields(
     db.flush()
     db.expire(current_row, ["values", "certificate_match"])
     refreshed_row = get_acquisition_row(db, current_row.id)
-    if not conflicts:
-        _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
+    _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
     db.commit()
@@ -7843,12 +7838,11 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         certificate_row_id=None,
     ):
         return
-    conflicts = _document_side_field_conflicts(db, row=row)
-    if conflicts:
-        _mark_match_conflicted(db=db, row=row, actor_id=actor_id, reason="; ".join(conflicts))
+    if not _document_side_has_confirmed_payload(db, row=row, block="ddt", field_map=DDT_SIDE_FIELD_MAP):
         return
-    if not _combined_document_match_fields_are_confirmed(db, row=row):
+    if not _document_side_has_confirmed_payload(db, row=row, block="match", field_map=CERTIFICATE_SIDE_FIELD_MAP):
         return
+
     match_values = (
         db.query(ReadValue)
         .filter(
@@ -7863,8 +7857,14 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         return
 
     refreshed = get_acquisition_row(db, row.id)
+    pre_match_issues = _document_side_pre_match_issues(db, row=refreshed)
+    if pre_match_issues:
+        _mark_match_conflicted(db=db, row=refreshed, actor_id=actor_id, reason="; ".join(pre_match_issues))
+        return
+
     score = score_bridge_match(_build_row_ddt_bridge(refreshed), _build_row_certificate_bridge(refreshed))
     if score.decision != RematchDecision.STRONG:
+        _mark_match_conflicted(db=db, row=refreshed, actor_id=actor_id, reason=_document_side_match_failure_reason(score))
         return
     match = (
         db.query(CertificateMatch)
@@ -7890,6 +7890,46 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         user_id=actor_id,
         nota_breve=match.motivo_breve,
     )
+
+
+def _document_side_has_confirmed_payload(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    block: str,
+    field_map: dict[str, tuple[str, ...]],
+) -> bool:
+    fields = tuple(field for mapped_fields in field_map.values() for field in mapped_fields)
+    values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            ReadValue.blocco == block,
+            ReadValue.campo.in_(fields),
+            ReadValue.stato == "confermato",
+        )
+        .all()
+    )
+    return any(_read_value_has_payload(value) for value in values)
+
+
+def _document_side_pre_match_issues(db: Session, *, row: AcquisitionRow) -> list[str]:
+    side_values = _document_side_confirmed_payloads(db, row=row)
+    missing: list[str] = []
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        if side_values["ddt"].get(ui_field) is None and side_values["match"].get(ui_field) is None:
+            label = DOCUMENT_SIDE_FIELD_LABELS.get(ui_field, ui_field)
+            missing.append(f"Manca {label} nella riga finale")
+    return missing + _document_side_field_conflicts(db, row=row, side_values=side_values)
+
+
+def _document_side_match_failure_reason(score: RematchScore) -> str:
+    if score.blockers:
+        return "Match non confermato: " + "; ".join(score.blockers)
+    if score.matched_fields:
+        fields = ", ".join(score.matched_fields)
+        return f"Match non confermato: logica match non forte. Campi coerenti: {fields}"
+    return "Match non confermato: nessun campo ponte forte coerente"
 
 
 def _mark_match_conflicted(*, db: Session, row: AcquisitionRow, actor_id: int, reason: str) -> None:
@@ -7949,10 +7989,15 @@ def _combined_document_match_fields_are_confirmed(db: Session, *, row: Acquisiti
     return True
 
 
-def _document_side_field_conflicts(db: Session, *, row: AcquisitionRow) -> list[str]:
+def _document_side_field_conflicts(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    side_values: dict[str, dict[str, str | None]] | None = None,
+) -> list[str]:
     if row.document_ddt_id is None or row.document_certificato_id is None:
         return []
-    side_values = _document_side_confirmed_payloads(db, row=row)
+    side_values = side_values or _document_side_confirmed_payloads(db, row=row)
     conflicts: list[str] = []
     for ui_field in DOCUMENT_SIDE_UI_FIELDS:
         ddt_value = side_values["ddt"].get(ui_field)
@@ -8004,9 +8049,64 @@ def _document_side_compare_token(field_name: str, value: str) -> str:
 
 
 def _document_side_values_match(field_name: str, ddt_value: str, certificate_value: str) -> bool:
+    if field_name == "lega_base":
+        return _document_side_alloy_token(ddt_value) == _document_side_alloy_token(certificate_value)
+    if field_name == "diametro":
+        return _normalize_value_for_field("ddt", "diametro", ddt_value) == _normalize_value_for_field("ddt", "diametro", certificate_value)
+    if field_name == "cdq":
+        return _document_side_cdq_values_match(ddt_value, certificate_value)
+    if field_name == "colata":
+        return _document_side_primary_code_token(ddt_value) == _document_side_primary_code_token(certificate_value)
     if field_name == "peso":
         return _document_side_weights_match(ddt_value, certificate_value)
-    return _document_side_compare_token(field_name, ddt_value) == _document_side_compare_token(field_name, certificate_value)
+    return _document_side_compact_token(ddt_value) == _document_side_compact_token(certificate_value)
+
+
+def _document_side_compact_token(value: str | None) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    compact = re.sub(r"[^A-Z0-9]+", "", text.upper())
+    return compact or None
+
+
+def _document_side_alloy_token(value: str | None) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    normalized = text.upper()
+    normalized = re.sub(r"\bEN\s*AW\b", "", normalized)
+    normalized = re.sub(r"\bAA\b", "", normalized)
+    return _document_side_compact_token(normalized)
+
+
+def _document_side_primary_code_token(value: str | None) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    primary = re.split(r"[\s(;/|]+", text.upper().strip(), maxsplit=1)[0]
+    return _document_side_compact_token(primary)
+
+
+def _document_side_cdq_values_match(ddt_value: str | None, certificate_value: str | None) -> bool:
+    ddt_root, ddt_suffix = _document_side_cdq_parts(ddt_value)
+    certificate_root, certificate_suffix = _document_side_cdq_parts(certificate_value)
+    if ddt_root is None or certificate_root is None or ddt_root != certificate_root:
+        return False
+    if ddt_suffix is not None and certificate_suffix is not None and ddt_suffix != certificate_suffix:
+        return False
+    return True
+
+
+def _document_side_cdq_parts(value: str | None) -> tuple[str | None, str | None]:
+    text = _string_or_none(value)
+    if text is None:
+        return None, None
+    normalized = text.upper().strip()
+    match = re.fullmatch(r"([A-Z0-9]+)\s*/\s*(\d{2})", normalized)
+    if match is not None:
+        return _document_side_compact_token(match.group(1)), match.group(2)
+    return _document_side_compact_token(normalized), None
 
 
 def _document_side_weights_match(ddt_value: str | None, certificate_value: str | None) -> bool:

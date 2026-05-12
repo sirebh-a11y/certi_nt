@@ -227,8 +227,8 @@ export default function AIConfigPage() {
   function renderProvider(item) {
     const draft = providerDrafts[item.id] || providerDraft(item);
     return (
-      <form className="rounded-xl border border-slate-200 bg-white p-4" key={item.id} onSubmit={(event) => saveProvider(event, item)}>
-        <div className="flex items-start justify-between gap-3">
+      <form className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" key={item.id} onSubmit={(event) => saveProvider(event, item)}>
+        <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">{item.code}</p>
             <h3 className="mt-1 text-lg font-semibold text-slate-950">{item.label}</h3>
@@ -241,12 +241,12 @@ export default function AIConfigPage() {
             <input value={draft.label} onChange={(event) => updateProviderDraft(item.id, { label: event.target.value })} />
           </label>
           <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Tipo
+            Tipo provider
             <input value={draft.provider_type} onChange={(event) => updateProviderDraft(item.id, { provider_type: event.target.value })} />
           </label>
           <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Base URL
-            <input placeholder="Vuoto se standard" value={draft.base_url} onChange={(event) => updateProviderDraft(item.id, { base_url: event.target.value })} />
+            Base URL opzionale
+            <input placeholder="Vuoto per provider standard" value={draft.base_url} onChange={(event) => updateProviderDraft(item.id, { base_url: event.target.value })} />
           </label>
           <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
             <input checked={draft.enabled} type="checkbox" onChange={(event) => updateProviderDraft(item.id, { enabled: event.target.checked })} />
@@ -257,7 +257,7 @@ export default function AIConfigPage() {
             <textarea rows={2} value={draft.notes} onChange={(event) => updateProviderDraft(item.id, { notes: event.target.value })} />
           </label>
         </div>
-        <button className="mt-4 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={saving === `provider-${item.id}`} type="submit">
+        <button className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={saving === `provider-${item.id}`} type="submit">
           {saving === `provider-${item.id}` ? "Salvataggio..." : "Salva provider"}
         </button>
       </form>
@@ -267,8 +267,8 @@ export default function AIConfigPage() {
   function renderModel(item) {
     const draft = modelDrafts[item.id] || modelDraft(item);
     return (
-      <form className="rounded-xl border border-slate-200 bg-white p-4" key={item.id} onSubmit={(event) => saveModel(event, item)}>
-        <div className="flex items-start justify-between gap-3">
+      <form className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" key={item.id} onSubmit={(event) => saveModel(event, item)}>
+        <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">{item.provider_label}</p>
             <h3 className="mt-1 text-lg font-semibold text-slate-950">{item.label}</h3>
@@ -302,7 +302,7 @@ export default function AIConfigPage() {
             <input value={draft.label} onChange={(event) => updateModelDraft(item.id, { label: event.target.value })} />
           </label>
           <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Model ID
+            Model ID reale
             <input value={draft.model_id} onChange={(event) => updateModelDraft(item.id, { model_id: event.target.value })} />
           </label>
           <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -318,7 +318,7 @@ export default function AIConfigPage() {
             <textarea rows={2} value={draft.notes} onChange={(event) => updateModelDraft(item.id, { notes: event.target.value })} />
           </label>
         </div>
-        <button className="mt-4 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={saving === `model-${item.id}`} type="submit">
+        <button className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={saving === `model-${item.id}`} type="submit">
           {saving === `model-${item.id}` ? "Salvataggio..." : "Salva modello"}
         </button>
       </form>
@@ -326,45 +326,54 @@ export default function AIConfigPage() {
   }
 
   return (
-    <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
+    <section className="rounded-3xl border border-border bg-panel p-4 shadow-lg shadow-slate-200/40 xl:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">AI</p>
-          <h2 className="mt-2 text-2xl font-semibold">Collega AI</h2>
+          <h2 className="mt-2 text-2xl font-semibold">Assistente AI</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
             Configura provider e modelli disponibili. Le API key restano personali nella scheda utente.
           </p>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          Default: <span className="font-semibold text-ink">{defaultModel ? `${defaultModel.provider_label} · ${defaultModel.model_id}` : "Da impostare"}</span>
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          Modello default: <span className="font-semibold text-ink">{defaultModel ? `${defaultModel.provider_label} - ${defaultModel.model_id}` : "Da impostare"}</span>
         </div>
       </div>
 
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento configurazione AI...</p> : null}
       {message ? <p className="mt-6 text-sm text-slate-600">{message}</p> : null}
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-slate-950">Provider</h3>
+      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(340px,0.8fr)_minmax(0,1.2fr)]">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mb-4 border-b border-slate-200 pb-3">
+            <h3 className="text-lg font-semibold text-slate-950">Fornitori AI</h3>
+            <p className="mt-1 text-sm text-slate-500">OpenAI o altri provider compatibili.</p>
+          </div>
+          <div className="grid gap-3">
           {providers.map(renderProvider)}
-          <form className="rounded-xl border border-dashed border-slate-300 bg-white p-4" onSubmit={createProvider}>
+          <form className="rounded-xl border border-dashed border-slate-300 bg-white p-3" onSubmit={createProvider}>
             <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Nuovo provider</h4>
             <div className="mt-4 grid gap-3">
               <input placeholder="Codice, es. openai" value={newProvider.code} onChange={(event) => setNewProvider({ ...newProvider, code: event.target.value })} />
               <input placeholder="Nome, es. OpenAI" value={newProvider.label} onChange={(event) => setNewProvider({ ...newProvider, label: event.target.value })} />
               <input placeholder="Tipo provider" value={newProvider.provider_type} onChange={(event) => setNewProvider({ ...newProvider, provider_type: event.target.value })} />
-              <input placeholder="Base URL opzionale" value={newProvider.base_url} onChange={(event) => setNewProvider({ ...newProvider, base_url: event.target.value })} />
+              <input placeholder="Base URL opzionale, solo se serve" value={newProvider.base_url} onChange={(event) => setNewProvider({ ...newProvider, base_url: event.target.value })} />
             </div>
-            <button className="mt-4 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={saving === "provider-new"} type="submit">
+            <button className="mt-4 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={saving === "provider-new"} type="submit">
               {saving === "provider-new" ? "Creazione..." : "Aggiungi provider"}
             </button>
           </form>
+          </div>
         </div>
 
-        <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-slate-950">Modelli</h3>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mb-4 border-b border-slate-200 pb-3">
+            <h3 className="text-lg font-semibold text-slate-950">Modelli AI</h3>
+            <p className="mt-1 text-sm text-slate-500">Modelli disponibili oggi e modelli futuri inseribili manualmente.</p>
+          </div>
+          <div className="grid gap-3">
           {models.map(renderModel)}
-          <form className="rounded-xl border border-dashed border-slate-300 bg-white p-4" onSubmit={createModel}>
+          <form className="rounded-xl border border-dashed border-slate-300 bg-white p-3" onSubmit={createModel}>
             <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Nuovo modello</h4>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <select value={newModel.provider_id} onChange={(event) => setNewModel({ ...newModel, provider_id: event.target.value })}>
@@ -392,10 +401,11 @@ export default function AIConfigPage() {
                 Default
               </label>
             </div>
-            <button className="mt-4 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={saving === "model-new" || !newModel.provider_id} type="submit">
+            <button className="mt-4 rounded-xl border border-border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={saving === "model-new" || !newModel.provider_id} type="submit">
               {saving === "model-new" ? "Creazione..." : "Aggiungi modello"}
             </button>
           </form>
+          </div>
         </div>
       </div>
     </section>

@@ -242,6 +242,137 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(synced_row.lega_base, "7150 T76")
         self.assertEqual(synced_row.diametro, "35")
 
+    def test_grupa_kety_match_confirmation_accepts_cdq_year_suffix_when_bridge_is_strong(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-suffix.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            fornitore_id=None,
+            nome_file_originale="cert.pdf",
+            storage_key="cert-suffix.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="750027617",
+            lega_base="7150 F",
+            diametro="44",
+            colata="H6245",
+            ddt="201149900",
+            peso="1721",
+            ordine="110",
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        ddt_fields = {
+            "lega_base": "7150 F",
+            "diametro": "44",
+            "cdq": "750027617",
+            "colata": "H6245",
+            "ddt": "201149900",
+            "peso": "1721",
+            "ordine": "110",
+        }
+        certificate_fields = {
+            "lega_base": "7150 F",
+            "diametro": "",
+            "cdq": "750027617/23",
+            "colata": "H6245",
+            "ddt": "201149900",
+            "peso": "",
+            "ordine": "110",
+        }
+
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=ddt_fields),
+            actor_id=1,
+        )
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="certificato", fields=certificate_fields),
+            actor_id=1,
+        )
+
+        confirmed = get_acquisition_row(self.db, row.id).certificate_match
+        self.assertIsNotNone(confirmed)
+        self.assertEqual(confirmed.stato, "confermato")
+
+    def test_match_confirmation_reports_missing_final_field_before_match(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-missing.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            fornitore_id=None,
+            nome_file_originale="cert.pdf",
+            storage_key="cert-missing.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="750027617",
+            lega_base=None,
+            diametro="44",
+            colata="H6245",
+            ddt="201149900",
+            peso="1721",
+            ordine="110",
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        ddt_fields = {
+            "lega_base": "",
+            "diametro": "44",
+            "cdq": "750027617",
+            "colata": "H6245",
+            "ddt": "201149900",
+            "peso": "1721",
+            "ordine": "110",
+        }
+        certificate_fields = {
+            "lega_base": "",
+            "diametro": "",
+            "cdq": "750027617/23",
+            "colata": "H6245",
+            "ddt": "201149900",
+            "peso": "",
+            "ordine": "110",
+        }
+
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=ddt_fields),
+            actor_id=1,
+        )
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="certificato", fields=certificate_fields),
+            actor_id=1,
+        )
+
+        not_confirmed = get_acquisition_row(self.db, row.id).certificate_match
+        self.assertIsNotNone(not_confirmed)
+        self.assertEqual(not_confirmed.stato, "proposto")
+        self.assertIn("Manca Lega", not_confirmed.motivo_breve)
+
     def test_confirmed_match_is_reopened_when_document_side_fields_conflict(self):
         supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
         ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-conflict.pdf")
