@@ -136,6 +136,27 @@ class GrupaKetySupportTest(unittest.TestCase):
 
         self.assertEqual(candidates[0].cdq, "10033539/25")
 
+    def test_grupa_kety_ddt_sanitizer_prefers_full_lot_root_over_truncated_certificate(self):
+        candidates = _sanitize_grupa_kety_ai_row_groups(
+            ddt_number_raw="201138817",
+            raw_rows=[
+                {
+                    "certificate_number_raw": "74008344/23",
+                    "lot_batch_raw": "740083448-C460460; 740083448-C460479",
+                    "heat_raw": "H6215",
+                    "alloy_raw": "7150",
+                    "temper_raw": "T76",
+                    "diameter_raw": "35",
+                    "customer_order_raw": "100",
+                    "net_weight_raw": "2016",
+                }
+            ],
+            ai_document_payload_raw=None,
+        )
+
+        self.assertEqual(candidates[0].cdq, "740083448/23")
+        self.assertEqual(candidates[0].lot_batch_no, "740083448")
+
     def test_grupa_kety_certificate_payload_maps_user_match_fields(self):
         payload = _normalize_grupa_kety_certificate_ai_payload(
             {"page1_core_page": {"page_id": 10, "page_number": 1}},
@@ -169,6 +190,29 @@ class GrupaKetySupportTest(unittest.TestCase):
         self.assertEqual(payload["supplier_fields"]["heat"], "25E-7870")
         self.assertIn("Cu", payload["chemistry"])
         self.assertIn("Rm", payload["properties"])
+
+    def test_grupa_kety_certificate_payload_does_not_parse_standard_number_as_diameter(self):
+        payload = _normalize_grupa_kety_certificate_ai_payload(
+            {"page1_core_page": {"page_id": 10, "page_number": 1}},
+            {
+                "core": {
+                    "certificate_number": "740083448/23",
+                    "packing_slip_raw": "201138817 / 740083448",
+                    "order_no_raw": "100",
+                    "customer_part_raw": "Extruded bar PN-EN 573-3",
+                    "alloy_raw": "EN AW-7150",
+                    "temper_raw": "T76",
+                    "heat_raw": "H6215",
+                    "kg_raw": None,
+                    "diameter_raw": None,
+                },
+            },
+        )
+
+        self.assertIsNone(payload["core_fields"]["diametro_certificato"]["value"])
+        self.assertIsNone(payload["match_values"]["diametro_certificato"])
+        self.assertIsNone(payload["core_fields"]["articolo_certificato"]["value"])
+        self.assertIsNone(payload["supplier_fields"]["customer_part_number"])
 
     def test_grupa_kety_bridge_matches_on_excel_user_fields(self):
         ddt = build_ddt_bridge(
@@ -206,6 +250,40 @@ class GrupaKetySupportTest(unittest.TestCase):
         self.assertEqual(result.decision, RematchDecision.STRONG, result)
         self.assertIn("cdq", result.matched_fields)
         self.assertIn("colata", result.matched_fields)
+
+    def test_grupa_kety_bridge_rejects_common_ddt_when_heat_differs(self):
+        ddt = build_ddt_bridge(
+            row_values={
+                "fornitore": "Grupa Kety",
+                "lega_base": "7150 T76",
+                "diametro": "35",
+                "cdq": "740083449/23",
+                "colata": "H6216",
+                "ddt": "201138817",
+                "peso": "2006",
+                "ordine": "100",
+            },
+            supplier_name="Grupa Kety",
+        )
+        cert = build_certificate_bridge(
+            row_values={
+                "fornitore": "Grupa Kety",
+                "cdq": "740083448/23",
+            },
+            read_values={
+                "numero_certificato_certificato": "740083448/23",
+                "colata_certificato": "H6215",
+                "ddt_certificato": "201138817",
+                "ordine_cliente_certificato": "100",
+                "lega_certificato": "7150 T76",
+            },
+            supplier_name="Grupa Kety",
+        )
+
+        result = score_bridge_match(ddt, cert)
+
+        self.assertEqual(result.decision, RematchDecision.NONE, result)
+        self.assertIn("colata diverso", result.blockers)
 
     def test_grupa_kety_masking_keeps_material_tables(self):
         image = Image.new("RGB", (1000, 1400), "white")

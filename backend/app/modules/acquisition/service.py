@@ -10927,8 +10927,11 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
                 "ddt_number_raw deve essere il valore accanto a Delivery Note/Packing Slip, non il valore accanto a Shipment ID. "
                 "PO Number / Customer Order Number / Order date e' ordine. "
                 "Il Cdq viene dal numero certificato visibile, oppure dal root lotto piu anno della Heat: 10033539 + 25E-7870 => 10033539/25. "
+                "Se certificate_number_raw sembra tronco ma lot_batch_raw contiene un root piu lungo, conserva lot_batch_raw completo; non accorciare il root lotto. "
                 "La Colata e' Batch/Melt o Heat della stessa riga, es. 25E-7870 o H6245. "
                 "Diametro e lega/stato vengono dalla descrizione materiale: Extruded Round Bar 44.00, Alloy 7150, Temper F. "
+                "diameter_raw deve essere solo una dimensione fisica in mm/diameter/round bar; non usare mai norme come EN 573, PN-EN 573-3, EN 755 o EN 10204 come diametro. "
+                "customer_part_raw deve essere solo un codice articolo/part number visibile; non usare descrizioni generiche, norme EN/PN-EN, lega, temper o diametro come codice articolo. "
                 "Non usare dati autista, timbri o firme. Non usare nome file. Non fare match con certificati. "
                 "Usa solo testo/segni realmente visibili; se un campo non e chiaro, restituisci null. "
                 "Restituisci solo JSON con questa struttura: "
@@ -11026,7 +11029,7 @@ def _sanitize_grupa_kety_ai_row_groups(
 
     for raw_row in raw_rows:
         lot_root = _normalize_grupa_kety_lot_root(
-            _string_or_none(raw_row.get("certificate_number_raw")) or _string_or_none(raw_row.get("lot_batch_raw"))
+            _string_or_none(raw_row.get("lot_batch_raw")) or _string_or_none(raw_row.get("certificate_number_raw"))
         )
         heat = _normalize_grupa_kety_heat(_string_or_none(raw_row.get("heat_raw")))
         key = (lot_root, heat)
@@ -11058,7 +11061,7 @@ def _sanitize_grupa_kety_ai_row_groups(
         lot_raw = _first_string(*(row.get("lot_batch_raw") for row in rows))
         heat_raw = _first_string(*(row.get("heat_raw") for row in rows))
         heat = _normalize_grupa_kety_heat(heat_raw)
-        lot_root = _normalize_grupa_kety_lot_root(certificate_raw or lot_raw)
+        lot_root = _normalize_grupa_kety_lot_root(lot_raw) or _normalize_grupa_kety_lot_root(certificate_raw)
         cdq = _normalize_grupa_kety_certificate_number(certificate_raw, lot_root=lot_root, heat=heat)
         alloy = _normalize_grupa_kety_alloy(
             _first_string(*(row.get("alloy_raw") for row in rows)),
@@ -11083,7 +11086,7 @@ def _sanitize_grupa_kety_ai_row_groups(
             diametro=diameter,
             peso_netto=weight,
             customer_order_no=_normalize_grupa_kety_order(_first_string(*(row.get("customer_order_raw") for row in rows))),
-            article_code=_string_or_none(_first_string(*(row.get("customer_part_raw") for row in rows))),
+            article_code=_normalize_grupa_kety_customer_part(_first_string(*(row.get("customer_part_raw") for row in rows))),
             snippets=cast(list[str], bucket["source_crops"])[:6],
             ai_row_payload_raw=json.dumps(raw_payload, ensure_ascii=False),
             ai_document_payload_raw=ai_document_payload_raw,
@@ -11228,9 +11231,11 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "Campi core: certificate_number e' il numero in alto, es. 10033539/25 o 750027617/23. "
                 "packing_slip_raw e' Dowod wysylkowy / Packing Slip / Lot, es. 12594 / 10033539: il primo numero e' DDT, il secondo e' root lotto. "
                 "order_no_raw e' Order date / Nr kontraktu klienta se presente, es. 154. "
-                "customer_part_raw e' Order No o Item/dimensions quando utile, es. PPO 44MM 7150/F L:5000. "
+                "customer_part_raw e' solo un codice articolo/part number cliente visibile, es. PPO 44MM 7150/F L:5000. "
+                "Se vedi solo una descrizione tipo Extruded bar o una norma tipo PN-EN 573-3 / EN 573 / EN 755, customer_part_raw deve essere null. "
                 "alloy_raw viene da Alloy grade, es. EN AW-7150; temper_raw da Temper; heat_raw da Heat; kg_raw da kg; pieces_raw da Pieces. "
-                "diameter_raw viene da Dimensions or drawing o testo articolo, es. 44.00 mm. "
+                "diameter_raw viene solo da Dimensions/drawing o da un testo articolo che contiene una misura fisica esplicita in mm/diameter/round bar, es. 44.00 mm. "
+                "Non usare mai EN 573, PN-EN 573-3, EN 755, EN 10204 o altri numeri di norma come diameter_raw. Se il diametro non e chiaramente fisico, metti null. "
                 "Chimica: estrai solo la riga misurata del lotto/Heat, non i limiti min/max. "
                 "Proprieta: estrai le righe misurate Sample No. Txxx, non i limiti minimi; se piu righe, restituiscile tutte. "
                 "Note: cerca U.S./AMS ultrasonic class, RoHS, radioactive/free. "
@@ -11326,7 +11331,7 @@ def _normalize_grupa_kety_certificate_ai_payload(
             "lot_number": lot_root,
             "order_no": _normalize_grupa_kety_order(_string_or_none(core_payload.get("order_no_raw"))),
             "heat": heat,
-            "customer_part_number": _string_or_none(core_payload.get("customer_part_raw")),
+            "customer_part_number": _normalize_grupa_kety_customer_part(_string_or_none(core_payload.get("customer_part_raw"))),
             "certificate_number": certificate_number,
         },
         "core_fields": core_fields,
@@ -11347,9 +11352,9 @@ def _sanitize_grupa_kety_vision_certificate_fields(
     order_no = _normalize_grupa_kety_order(_string_or_none(core_payload.get("order_no_raw")))
     heat = _normalize_grupa_kety_heat(_string_or_none(core_payload.get("heat_raw")))
     alloy = _normalize_grupa_kety_alloy(_string_or_none(core_payload.get("alloy_raw")), _string_or_none(core_payload.get("temper_raw")))
-    diameter = _normalize_grupa_kety_diameter(_string_or_none(core_payload.get("diameter_raw")) or _string_or_none(core_payload.get("customer_part_raw")))
+    diameter = _normalize_grupa_kety_diameter(_string_or_none(core_payload.get("diameter_raw")))
     weight = _normalize_grupa_kety_weight(_string_or_none(core_payload.get("kg_raw")))
-    customer_part = _string_or_none(core_payload.get("customer_part_raw"))
+    customer_part = _normalize_grupa_kety_customer_part(_string_or_none(core_payload.get("customer_part_raw")))
 
     def _payload(value: str | None, evidence: str | None = None) -> dict[str, str | None]:
         return {"value": value, "evidence": evidence or value, "source_crop": source_crop}
@@ -11404,7 +11409,10 @@ def _normalize_grupa_kety_certificate_number(
     if cleaned is not None:
         match = re.search(r"\b(\d{7,9})\s*/\s*(\d{2})\b", cleaned)
         if match is not None:
-            return f"{match.group(1)}/{match.group(2)}"
+            matched_root = match.group(1)
+            if lot_root is not None and len(lot_root) > len(matched_root) and lot_root.startswith(matched_root):
+                return f"{lot_root}/{match.group(2)}"
+            return f"{matched_root}/{match.group(2)}"
     root = lot_root or _normalize_grupa_kety_lot_root(cleaned)
     if root is None:
         return None
@@ -11450,7 +11458,27 @@ def _normalize_grupa_kety_alloy(alloy_raw: str | None, temper_raw: str | None = 
 
 
 def _normalize_grupa_kety_diameter(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    upper = cleaned.upper()
+    if re.search(r"\b(?:PN[-\s]*EN|EN)\s*573\b", upper) and not re.search(r"\b(?:MM|DIA|DIAM|DIAMETER|ROUND|ROD|BAR|Ø)\b", upper):
+        return None
     return _normalize_diameter_value(value)
+
+
+def _normalize_grupa_kety_customer_part(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    upper = cleaned.upper()
+    if re.search(r"\b(?:PN[-\s]*EN|EN)\s*(?:573|755|10204)\b", upper):
+        has_part_like_token = bool(re.search(r"\b[A-Z]{2,}\d{2,}[A-Z0-9/-]*\b|\b\d+[A-Z]{2,}[A-Z0-9/-]*\b", upper))
+        if not has_part_like_token:
+            return None
+    if upper in {"EXTRUDED BAR", "EXTRUDED ROUND BAR", "ROUND BAR"}:
+        return None
+    return cleaned
 
 
 def _normalize_grupa_kety_weight(value: str | None) -> str | None:
@@ -15278,6 +15306,21 @@ def _score_certificate_candidate(
                 "alloy": _string_or_none(certificate_supplier_fields.get("alloy")) or _string_or_none(ai_supplier_fields.get("alloy")),
                 "diameter": _string_or_none(certificate_supplier_fields.get("diameter")) or _string_or_none(ai_supplier_fields.get("diameter")),
             }
+        elif supplier_key == "grupa_kety":
+            certificate_supplier_fields = {
+                "delivery_note_no": _string_or_none(certificate_supplier_fields.get("delivery_note_no"))
+                or _string_or_none(ai_supplier_fields.get("delivery_note_no")),
+                "lot_number": _string_or_none(certificate_supplier_fields.get("lot_number"))
+                or _string_or_none(ai_supplier_fields.get("lot_number")),
+                "order_no": _string_or_none(certificate_supplier_fields.get("order_no"))
+                or _string_or_none(ai_supplier_fields.get("order_no")),
+                "heat": _string_or_none(certificate_supplier_fields.get("heat"))
+                or _string_or_none(ai_supplier_fields.get("heat")),
+                "customer_part_number": _string_or_none(certificate_supplier_fields.get("customer_part_number"))
+                or _string_or_none(ai_supplier_fields.get("customer_part_number")),
+                "certificate_number": _string_or_none(certificate_supplier_fields.get("certificate_number"))
+                or _string_or_none(ai_supplier_fields.get("certificate_number")),
+            }
         elif supplier_key == "zalco":
             certificate_supplier_fields = {
                 "tally_sheet_no": _string_or_none(certificate_supplier_fields.get("tally_sheet_no"))
@@ -15640,6 +15683,46 @@ def _score_certificate_candidate(
         if not cast_match:
             return None
         if document_support_matches < 1 and material_support_matches < 1:
+            return None
+    elif supplier_key == "grupa_kety":
+        row_heat = row.colata or ddt_supplier_fields.get("heat")
+        certificate_heat = certificate_supplier_fields.get("heat") or certificate_cast
+        heat_match = bool(
+            reader_normalize_match_token(row_heat)
+            and reader_normalize_match_token(row_heat) == reader_normalize_match_token(certificate_heat)
+        )
+        delivery_note_match = bool(
+            reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            and reader_normalize_match_token(row.ddt or ddt_supplier_fields.get("delivery_note_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("delivery_note_no"))
+        )
+        order_match = bool(
+            reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("order_no"))
+            and reader_normalize_match_token(row.ordine or ddt_supplier_fields.get("order_no"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("order_no"))
+        )
+        certificate_number_match = bool(
+            reader_normalize_match_token(ddt_certificate_number)
+            and reader_normalize_match_token(ddt_certificate_number)
+            == reader_normalize_match_token(certificate_number or certificate_supplier_fields.get("certificate_number"))
+        )
+        lot_match = bool(
+            reader_normalize_match_token(ddt_supplier_fields.get("lot_number"))
+            and reader_normalize_match_token(ddt_supplier_fields.get("lot_number"))
+            == reader_normalize_match_token(certificate_supplier_fields.get("lot_number"))
+        )
+        alloy_match = bool(
+            reader_normalize_match_token(row.lega_base)
+            and reader_normalize_match_token(row.lega_base)
+            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
+        )
+        if row_heat and certificate_heat and not heat_match:
+            return None
+        if not (heat_match or certificate_number_match or lot_match):
+            return None
+        if not (delivery_note_match or order_match or certificate_number_match):
+            return None
+        if row.lega_base and _string_or_none(matches.get("lega_certificato", {}).get("final")) and not alloy_match:
             return None
     elif supplier_key == "aww":
         article_match = bool(

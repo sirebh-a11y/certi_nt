@@ -22,7 +22,7 @@ from app.modules.document_reader.schemas import (
 )
 from app.modules.document_reader.table_analysis import analyze_measurement_table
 
-GPT54_INPUT_USD_PER_1M = 2.50
+DOCUMENT_VISION_INPUT_USD_PER_1M = 2.50
 LOW_DETAIL_IMAGE_TOKENS = 85
 
 
@@ -351,7 +351,7 @@ def _estimate_planned_crops(template, row: AcquisitionRow) -> int:
 
 def _build_openai_estimate(template, planned_crops: int) -> OpenAIDoubleCheckEstimateResponse:
     estimated_input_tokens = planned_crops * LOW_DETAIL_IMAGE_TOKENS
-    estimated_input_cost_usd = round((estimated_input_tokens / 1_000_000) * GPT54_INPUT_USD_PER_1M, 6)
+    estimated_input_cost_usd = round((estimated_input_tokens / 1_000_000) * DOCUMENT_VISION_INPUT_USD_PER_1M, 6)
     notes = [
         "Stima su detail=low per crop mirati.",
         "Costo output escluso: dipende da prompt e JSON restituito.",
@@ -361,7 +361,7 @@ def _build_openai_estimate(template, planned_crops: int) -> OpenAIDoubleCheckEst
         notes.append(f"Blocchi consigliati: {', '.join(template.openai_double_check_blocks)}")
     return OpenAIDoubleCheckEstimateResponse(
         model_default=settings.document_vision_model,
-        escalation_model="gpt-5.4-pro",
+        escalation_model=settings.document_vision_model,
         recommended_detail="low",
         blocked_without_consent=True,
         planned_crops=planned_crops,

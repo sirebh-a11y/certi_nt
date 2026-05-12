@@ -79,6 +79,37 @@ class ArconicSupportTest(unittest.TestCase):
         self.assertIn("article_code", result.matched_fields)
         self.assertIn("customer_code", result.matched_fields)
 
+    def test_arconic_bridge_auto_matches_when_certificate_lacks_diameter_but_has_ddt_article_and_cast(self):
+        left = build_ddt_bridge(
+            row_values={
+                "fornitore": "Arconic Hannover",
+                "diametro": "68",
+                "colata": "C3802220451",
+                "ddt": "27697432",
+                "peso": "7656",
+                "ordine": "318",
+            },
+            read_values={"article_code": "BG5203862"},
+            supplier_name="Arconic Hannover",
+        )
+        right = build_certificate_bridge(
+            row_values={"fornitore": "Arconic Hannover", "cdq": "EEP66506-43440412"},
+            read_values={
+                "numero_certificato_certificato": "EEP66506-43440412",
+                "colata_certificato": "C3802220451",
+                "ddt_certificato": "27697432",
+                "ordine_cliente_certificato": "318",
+                "articolo_certificato": "BG5203862",
+            },
+            supplier_name="Arconic Hannover",
+        )
+
+        result = score_bridge_match(left, right)
+
+        self.assertEqual(result.decision, RematchDecision.STRONG, result)
+        self.assertIn("ddt", result.matched_fields)
+        self.assertIn("article_code", result.matched_fields)
+
     def test_arconic_bridge_matches_same_ddt_multiple_certificate_rows(self):
         base_ddt = {
             "fornitore": "Arconic Hannover",

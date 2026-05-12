@@ -12,6 +12,7 @@ from app.modules.acquisition.models import (
     CertificateMatch,
     Document,
     DocumentEvidence,
+    DocumentPage,
     ManualMatchBlock,
     ReadValue,
 )
@@ -20,6 +21,8 @@ from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
     _plan_cross_run_auto_rematch,
+    _run_cross_run_auto_rematch,
+    _score_certificate_candidate,
     detach_document_match,
     get_acquisition_row,
     list_quality_rows,
@@ -173,6 +176,68 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         )
         self.assertEqual(self.db.query(ManualMatchBlock).filter(ManualMatchBlock.attivo.is_(True)).count(), 1)
 
+    def test_grupa_kety_score_rejects_certificate_for_different_heat(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="201138817.pdf", storage_key="ddt.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="CQF_740083448_23.pdf",
+            storage_key="cert.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        self.db.add_all(
+            [
+                DocumentPage(document_id=ddt_document.id, numero_pagina=1, testo_estratto=""),
+                DocumentPage(document_id=certificate_document.id, numero_pagina=1, testo_estratto=""),
+            ]
+        )
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="740083449/23",
+            lega_base="7150 T76",
+            diametro="35",
+            colata="H6216",
+            ddt="201138817",
+            peso="2006",
+            ordine="100",
+        )
+        self.db.add(row)
+        self.db.flush()
+
+        candidate = _score_certificate_candidate(
+            self.db,
+            row=row,
+            certificate_document=certificate_document,
+            ddt_certificate_number="740083449/23",
+            row_ddt_values={"lot_batch_no": "740083449", "heat_no": "H6216", "ddt": "201138817", "ordine": "100"},
+            certificate_ai_cache={
+                certificate_document.id: {
+                    "match_values": {
+                        "numero_certificato_certificato": "740083448/23",
+                        "colata_certificato": "H6215",
+                        "ddt_certificato": "201138817",
+                        "ordine_cliente_certificato": "100",
+                        "lega_certificato": "7150 T76",
+                    },
+                    "supplier_fields": {
+                        "delivery_note_no": "201138817",
+                        "lot_number": "740083448",
+                        "order_no": "100",
+                        "heat": "H6215",
+                        "certificate_number": "740083448/23",
+                    },
+                }
+            },
+            ai_only_mode=True,
+        )
+
+        self.assertIsNone(candidate)
+
     def test_quality_rows_include_only_fully_confirmed_rows_and_clear_review_flags_on_update(self):
         supplier = Supplier(ragione_sociale="Test Supplier")
         ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt.pdf")
@@ -263,6 +328,97 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(updated.qualita_valutazione, "accettato_con_riserva")
         self.assertFalse(updated.qualita_numero_analisi_da_ricontrollare)
         self.assertFalse(updated.qualita_note_da_ricontrollare)
+
+    def test_certificate_first_arconic_row_merges_when_matching_ddt_arrives_later(self):
+        supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="CQF_EEP66506-43440412_6111A68_2023.pdf",
+            storage_key="cert-arconic.pdf",
+        )
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="27697432.pdf", storage_key="ddt-arconic.pdf")
+        self.db.add_all([supplier, certificate_document, ddt_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        ddt_document.fornitore_id = supplier.id
+        self.db.add(
+            DocumentPage(
+                document_id=certificate_document.id,
+                numero_pagina=1,
+                ocr_text=(
+                    "Certificate EEP66506 Cast Job C3802220451 / 43440412 "
+                    "Delivery note 27697432 Arconic Item Number BG5203862"
+                ),
+                stato_estrazione="completata",
+            )
+        )
+
+        certificate_row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="EEP66506-43440412",
+            colata="C3802220451",
+            ddt="27697432",
+            ordine="318",
+        )
+        ddt_row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            colata="C3802220451",
+            ddt="27697432",
+            diametro="68",
+            peso="7656",
+            ordine="318",
+        )
+        self.db.add_all([certificate_row, ddt_row])
+        self.db.flush()
+
+        for block, field, value, row in [
+            ("match", "numero_certificato_certificato", "EEP66506-43440412", certificate_row),
+            ("match", "colata_certificato", "C3802220451", certificate_row),
+            ("match", "ddt_certificato", "27697432", certificate_row),
+            ("match", "ordine_cliente_certificato", "318", certificate_row),
+            ("match", "articolo_certificato", "BG5203862", certificate_row),
+            ("ddt", "colata", "C3802220451", ddt_row),
+            ("ddt", "ddt", "27697432", ddt_row),
+            ("ddt", "ordine", "318", ddt_row),
+            ("ddt", "article_code", "BG5203862", ddt_row),
+            ("ddt", "arconic_item_number", "BG5203862", ddt_row),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="proposto",
+                    metodo_lettura="chatgpt" if block == "match" else "sistema",
+                    fonte_documentale="certificato" if block == "match" else "ddt",
+                )
+            )
+        self.db.commit()
+
+        plans = _plan_cross_run_auto_rematch(db=self.db, supplier_ids={supplier.id})
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0].row_id, ddt_row.id)
+        self.assertEqual(plans[0].document_id, certificate_document.id)
+
+        applied = _run_cross_run_auto_rematch(db=self.db, supplier_ids={supplier.id}, actor_id=1)
+
+        self.assertEqual(applied, 1)
+        rows = self.db.query(AcquisitionRow).filter(AcquisitionRow.fornitore_id == supplier.id).all()
+        self.assertEqual(len(rows), 1)
+        merged = rows[0]
+        self.assertEqual(merged.document_ddt_id, ddt_document.id)
+        self.assertEqual(merged.document_certificato_id, certificate_document.id)
+        self.assertEqual(merged.cdq, "EEP66506-43440412")
+        self.assertIsNotNone(merged.certificate_match)
+        self.assertEqual(merged.certificate_match.document_certificato_id, certificate_document.id)
 
 
 if __name__ == "__main__":
