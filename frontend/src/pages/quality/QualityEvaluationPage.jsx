@@ -11,6 +11,13 @@ const EVALUATION_OPTIONS = [
   { value: "respinto", label: "Respinto" },
 ];
 
+const EVALUATION_SORT_RANK = {
+  "": 0,
+  accettato: 1,
+  accettato_con_riserva: 2,
+  respinto: 3,
+};
+
 const EDITABLE_FIELDS = [
   "qualita_data_ricezione",
   "qualita_data_accettazione",
@@ -271,7 +278,7 @@ function qualitySortValue(row, draft, field) {
     case "numero_analisi":
       return draft.qualita_numero_analisi || "";
     case "valutazione":
-      return draft.qualita_valutazione || "";
+      return EVALUATION_SORT_RANK[draft.qualita_valutazione || ""] ?? 99;
     case "note":
       return draft.qualita_note || "";
     default:
