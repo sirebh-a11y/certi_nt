@@ -7943,7 +7943,7 @@ def _document_side_field_conflicts(db: Session, *, row: AcquisitionRow) -> list[
         certificate_value = side_values["match"].get(ui_field)
         if ddt_value is None or certificate_value is None:
             continue
-        if _document_side_compare_token(ui_field, ddt_value) != _document_side_compare_token(ui_field, certificate_value):
+        if not _document_side_values_match(ui_field, ddt_value, certificate_value):
             label = DOCUMENT_SIDE_FIELD_LABELS.get(ui_field, ui_field)
             conflicts.append(f"{label} diversa: DDT {ddt_value} / Certificato {certificate_value}")
     return conflicts
@@ -7985,6 +7985,21 @@ def _document_side_confirmed_payloads(db: Session, *, row: AcquisitionRow) -> di
 def _document_side_compare_token(field_name: str, value: str) -> str:
     normalized = _normalize_document_side_field(field_name, value) or value
     return re.sub(r"\s+", " ", normalized).strip().upper()
+
+
+def _document_side_values_match(field_name: str, ddt_value: str, certificate_value: str) -> bool:
+    if field_name == "peso":
+        return _document_side_weights_match(ddt_value, certificate_value)
+    return _document_side_compare_token(field_name, ddt_value) == _document_side_compare_token(field_name, certificate_value)
+
+
+def _document_side_weights_match(ddt_value: str | None, certificate_value: str | None) -> bool:
+    ddt_weight = _safe_float(_normalize_weight_value(ddt_value))
+    certificate_weight = _safe_float(_normalize_weight_value(certificate_value))
+    if ddt_weight is None or certificate_weight is None:
+        return False
+    tolerance = max(1.0, max(abs(ddt_weight), abs(certificate_weight)) * 0.001)
+    return abs(ddt_weight - certificate_weight) <= tolerance
 
 
 def refresh_certificate_first_row(
