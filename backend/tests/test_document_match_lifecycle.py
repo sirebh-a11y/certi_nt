@@ -1,6 +1,7 @@
 import unittest
 from datetime import date
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -18,11 +19,13 @@ from app.modules.acquisition.models import (
 )
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
+from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
     _plan_cross_run_auto_rematch,
     _run_cross_run_auto_rematch,
     _score_certificate_candidate,
+    confirm_document_side_fields,
     detach_document_match,
     get_acquisition_row,
     list_quality_rows,
@@ -175,6 +178,74 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             [],
         )
         self.assertEqual(self.db.query(ManualMatchBlock).filter(ManualMatchBlock.attivo.is_(True)).count(), 1)
+
+    def test_match_confirmation_requires_all_visible_row_fields(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            fornitore_id=None,
+            nome_file_originale="cert.pdf",
+            storage_key="cert.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="740083448/23",
+            lega_base="7150 T76",
+            diametro="35",
+            colata="H6216",
+            ddt="201138817",
+            peso="2006",
+            ordine="100",
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        complete_fields = {
+            "lega_base": "7150 T76",
+            "diametro": "35",
+            "cdq": "740083448/23",
+            "colata": "H6216",
+            "ddt": "201138817",
+            "peso": "2006",
+            "ordine": "100",
+        }
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=complete_fields),
+            actor_id=1,
+        )
+
+        incomplete_certificate_fields = dict(complete_fields)
+        incomplete_certificate_fields["lega_base"] = None
+        with self.assertRaises(HTTPException) as exc:
+            confirm_document_side_fields(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=DocumentSideFieldsConfirmRequest(side="certificato", fields=incomplete_certificate_fields),
+                actor_id=1,
+            )
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail, "Manca Lega")
+        self.assertIsNone(get_acquisition_row(self.db, row.id).certificate_match)
+
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="certificato", fields=complete_fields),
+            actor_id=1,
+        )
+        confirmed = get_acquisition_row(self.db, row.id).certificate_match
+        self.assertIsNotNone(confirmed)
+        self.assertEqual(confirmed.stato, "confermato")
 
     def test_grupa_kety_score_rejects_certificate_for_different_heat(self):
         supplier = Supplier(ragione_sociale="Grupa Kety S.A.")

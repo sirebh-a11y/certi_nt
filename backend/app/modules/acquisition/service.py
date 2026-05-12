@@ -6982,6 +6982,15 @@ def update_acquisition_row(
 
 
 DOCUMENT_SIDE_UI_FIELDS: tuple[str, ...] = ("lega_base", "diametro", "cdq", "colata", "ddt", "peso", "ordine")
+DOCUMENT_SIDE_FIELD_LABELS: dict[str, str] = {
+    "lega_base": "Lega",
+    "diametro": "Diametro",
+    "cdq": "CDQ",
+    "colata": "Colata",
+    "ddt": "DDT",
+    "peso": "Peso",
+    "ordine": "Ordine",
+}
 DDT_SIDE_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "lega_base": ("lega",),
     "diametro": ("diametro",),
@@ -7014,6 +7023,7 @@ def confirm_document_side_fields(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
     if payload.side == "certificato" and current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
+    _raise_if_document_side_fields_missing(payload.fields)
 
     _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
     block = "ddt" if payload.side == "ddt" else "match"
@@ -7046,12 +7056,22 @@ def confirm_document_side_fields(
         user_id=actor_id,
     )
     db.flush()
+    db.expire(current_row, ["values", "certificate_match"])
     refreshed_row = get_acquisition_row(db, current_row.id)
     _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, current_row.id))
+
+
+def _raise_if_document_side_fields_missing(fields: dict[str, str | None]) -> None:
+    missing = [field for field in DOCUMENT_SIDE_UI_FIELDS if not _string_or_none(fields.get(field))]
+    if not missing:
+        return
+    labels = [DOCUMENT_SIDE_FIELD_LABELS.get(field, field) for field in missing]
+    message = f"Manca {labels[0]}" if len(labels) == 1 else f"Mancano: {', '.join(labels)}"
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
 
 def create_manual_document_row(
@@ -7782,6 +7802,10 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         return
     if not _ddt_required_fields_are_confirmed(row):
         return
+    if not _document_side_required_fields_are_confirmed(db, row=row, side="ddt"):
+        return
+    if not _document_side_required_fields_are_confirmed(db, row=row, side="certificato"):
+        return
     match_values = (
         db.query(ReadValue)
         .filter(
@@ -7833,6 +7857,34 @@ def _ddt_required_fields_are_confirmed(row: AcquisitionRow) -> bool:
         return False
     if any(field in required_fields for field in summary["pending"]):
         return False
+    return True
+
+
+def _document_side_required_fields_are_confirmed(db: Session, *, row: AcquisitionRow, side: str) -> bool:
+    block = "ddt" if side == "ddt" else "match"
+    field_map = DDT_SIDE_FIELD_MAP if side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
+    values_by_field: dict[str, list[ReadValue]] = {}
+    read_fields = tuple(field for fields in field_map.values() for field in fields)
+    values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            ReadValue.blocco == block,
+            ReadValue.campo.in_(read_fields),
+        )
+        .all()
+    )
+    for value in values:
+        values_by_field.setdefault(value.campo, []).append(value)
+
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        field_values = [
+            value
+            for read_field in field_map[ui_field]
+            for value in values_by_field.get(read_field, [])
+        ]
+        if not any(value.stato == "confermato" and _read_value_has_payload(value) for value in field_values):
+            return False
     return True
 
 
