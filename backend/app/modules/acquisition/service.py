@@ -7023,7 +7023,6 @@ def confirm_document_side_fields(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
     if payload.side == "certificato" and current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
-    _raise_if_document_side_fields_missing(payload.fields)
 
     _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
     block = "ddt" if payload.side == "ddt" else "match"
@@ -7043,10 +7042,11 @@ def confirm_document_side_fields(
                 actor_id=actor_id,
             )
 
-    # Only single-document rows can safely drive the high-level row fields.
-    # Paired rows keep DDT and certificate fields independent for future split/rematch.
-    if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
-        _apply_document_side_fields_to_row(current_row, payload.fields)
+    db.flush()
+    _sync_row_core_from_document_side_values(db, current_row)
+    conflicts = _document_side_field_conflicts(db, row=current_row)
+    if conflicts:
+        _mark_match_conflicted(db=db, row=current_row, actor_id=actor_id, reason="; ".join(conflicts))
 
     _record_history_event(
         db=db,
@@ -7058,20 +7058,12 @@ def confirm_document_side_fields(
     db.flush()
     db.expire(current_row, ["values", "certificate_match"])
     refreshed_row = get_acquisition_row(db, current_row.id)
-    _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
+    if not conflicts:
+        _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, current_row.id))
-
-
-def _raise_if_document_side_fields_missing(fields: dict[str, str | None]) -> None:
-    missing = [field for field in DOCUMENT_SIDE_UI_FIELDS if not _string_or_none(fields.get(field))]
-    if not missing:
-        return
-    labels = [DOCUMENT_SIDE_FIELD_LABELS.get(field, field) for field in missing]
-    message = f"Manca {labels[0]}" if len(labels) == 1 else f"Mancano: {', '.join(labels)}"
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
 
 def create_manual_document_row(
@@ -7210,6 +7202,41 @@ def _apply_document_side_fields_to_row(row: AcquisitionRow, fields: dict[str, st
     row.ddt = _string_or_none(fields.get("ddt"))
     row.peso = _normalize_value_for_field("ddt", "peso", fields.get("peso"))
     row.ordine = _string_or_none(fields.get("ordine"))
+
+
+def _sync_row_core_from_document_side_values(db: Session, row: AcquisitionRow) -> None:
+    ddt_fields = tuple(field for fields in DDT_SIDE_FIELD_MAP.values() for field in fields)
+    certificate_fields = tuple(field for fields in CERTIFICATE_SIDE_FIELD_MAP.values() for field in fields)
+    values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            (
+                ((ReadValue.blocco == "ddt") & ReadValue.campo.in_(ddt_fields))
+                | ((ReadValue.blocco == "match") & ReadValue.campo.in_(certificate_fields))
+            ),
+        )
+        .all()
+    )
+    values_by_block_field: dict[tuple[str, str], list[ReadValue]] = {}
+    for value in values:
+        values_by_block_field.setdefault((value.blocco, value.campo), []).append(value)
+
+    fields: dict[str, str | None] = {}
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        fields[ui_field] = None
+        for block, field_map in (("ddt", DDT_SIDE_FIELD_MAP), ("match", CERTIFICATE_SIDE_FIELD_MAP)):
+            for read_field in field_map[ui_field]:
+                for value in values_by_block_field.get((block, read_field), []):
+                    if value.stato == "confermato" and _read_value_has_payload(value):
+                        fields[ui_field] = _final_value_for_row(value)
+                        break
+                if fields[ui_field] is not None:
+                    break
+            if fields[ui_field] is not None:
+                break
+
+    _apply_document_side_fields_to_row(row, fields)
 
 
 def detach_document_match(
@@ -7800,11 +7827,11 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
         certificate_row_id=None,
     ):
         return
-    if not _ddt_required_fields_are_confirmed(row):
+    conflicts = _document_side_field_conflicts(db, row=row)
+    if conflicts:
+        _mark_match_conflicted(db=db, row=row, actor_id=actor_id, reason="; ".join(conflicts))
         return
-    if not _document_side_required_fields_are_confirmed(db, row=row, side="ddt"):
-        return
-    if not _document_side_required_fields_are_confirmed(db, row=row, side="certificato"):
+    if not _combined_document_match_fields_are_confirmed(db, row=row):
         return
     match_values = (
         db.query(ReadValue)
@@ -7849,43 +7876,115 @@ def _confirm_match_if_document_sides_are_ready(*, db: Session, row: AcquisitionR
     )
 
 
-def _ddt_required_fields_are_confirmed(row: AcquisitionRow) -> bool:
-    supplier_key = _resolve_row_supplier_key(row)
-    summary = _compute_ddt_field_summary(row)
-    required_fields = set(_ddt_required_fields(supplier_key))
-    if any(field in required_fields for field in summary["missing"]):
-        return False
-    if any(field in required_fields for field in summary["pending"]):
-        return False
-    return True
+def _mark_match_conflicted(*, db: Session, row: AcquisitionRow, actor_id: int, reason: str) -> None:
+    if row.document_certificato_id is None:
+        return
+    match = (
+        db.query(CertificateMatch)
+        .filter(CertificateMatch.acquisition_row_id == row.id)
+        .one_or_none()
+    )
+    if match is None:
+        match = CertificateMatch(acquisition_row_id=row.id, document_certificato_id=row.document_certificato_id)
+        db.add(match)
+    match.document_certificato_id = row.document_certificato_id
+    match.stato = "proposto"
+    match.motivo_breve = reason[:255]
+    match.fonte_proposta = "utente"
+    match.utente_conferma_id = None
+    match.timestamp = datetime.now(UTC)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="match",
+        azione="match_conflitto_campi_documento",
+        user_id=actor_id,
+        nota_breve=match.motivo_breve,
+    )
 
 
-def _document_side_required_fields_are_confirmed(db: Session, *, row: AcquisitionRow, side: str) -> bool:
-    block = "ddt" if side == "ddt" else "match"
-    field_map = DDT_SIDE_FIELD_MAP if side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
-    values_by_field: dict[str, list[ReadValue]] = {}
-    read_fields = tuple(field for fields in field_map.values() for field in fields)
+def _combined_document_match_fields_are_confirmed(db: Session, *, row: AcquisitionRow) -> bool:
+    ddt_fields = tuple(field for fields in DDT_SIDE_FIELD_MAP.values() for field in fields)
+    certificate_fields = tuple(field for fields in CERTIFICATE_SIDE_FIELD_MAP.values() for field in fields)
     values = (
         db.query(ReadValue)
         .filter(
             ReadValue.acquisition_row_id == row.id,
-            ReadValue.blocco == block,
-            ReadValue.campo.in_(read_fields),
+            (
+                ((ReadValue.blocco == "ddt") & ReadValue.campo.in_(ddt_fields))
+                | ((ReadValue.blocco == "match") & ReadValue.campo.in_(certificate_fields))
+            ),
         )
         .all()
     )
+    values_by_block_field: dict[tuple[str, str], list[ReadValue]] = {}
     for value in values:
-        values_by_field.setdefault(value.campo, []).append(value)
+        values_by_block_field.setdefault((value.blocco, value.campo), []).append(value)
 
     for ui_field in DOCUMENT_SIDE_UI_FIELDS:
         field_values = [
             value
+            for block, field_map in (("ddt", DDT_SIDE_FIELD_MAP), ("match", CERTIFICATE_SIDE_FIELD_MAP))
             for read_field in field_map[ui_field]
-            for value in values_by_field.get(read_field, [])
+            for value in values_by_block_field.get((block, read_field), [])
         ]
         if not any(value.stato == "confermato" and _read_value_has_payload(value) for value in field_values):
             return False
     return True
+
+
+def _document_side_field_conflicts(db: Session, *, row: AcquisitionRow) -> list[str]:
+    if row.document_ddt_id is None or row.document_certificato_id is None:
+        return []
+    side_values = _document_side_confirmed_payloads(db, row=row)
+    conflicts: list[str] = []
+    for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+        ddt_value = side_values["ddt"].get(ui_field)
+        certificate_value = side_values["match"].get(ui_field)
+        if ddt_value is None or certificate_value is None:
+            continue
+        if _document_side_compare_token(ui_field, ddt_value) != _document_side_compare_token(ui_field, certificate_value):
+            label = DOCUMENT_SIDE_FIELD_LABELS.get(ui_field, ui_field)
+            conflicts.append(f"{label} diversa: DDT {ddt_value} / Certificato {certificate_value}")
+    return conflicts
+
+
+def _document_side_confirmed_payloads(db: Session, *, row: AcquisitionRow) -> dict[str, dict[str, str | None]]:
+    ddt_fields = tuple(field for fields in DDT_SIDE_FIELD_MAP.values() for field in fields)
+    certificate_fields = tuple(field for fields in CERTIFICATE_SIDE_FIELD_MAP.values() for field in fields)
+    values = (
+        db.query(ReadValue)
+        .filter(
+            ReadValue.acquisition_row_id == row.id,
+            ReadValue.stato == "confermato",
+            (
+                ((ReadValue.blocco == "ddt") & ReadValue.campo.in_(ddt_fields))
+                | ((ReadValue.blocco == "match") & ReadValue.campo.in_(certificate_fields))
+            ),
+        )
+        .all()
+    )
+    values_by_block_field: dict[tuple[str, str], list[ReadValue]] = {}
+    for value in values:
+        values_by_block_field.setdefault((value.blocco, value.campo), []).append(value)
+
+    payloads: dict[str, dict[str, str | None]] = {"ddt": {}, "match": {}}
+    for block, field_map in (("ddt", DDT_SIDE_FIELD_MAP), ("match", CERTIFICATE_SIDE_FIELD_MAP)):
+        for ui_field in DOCUMENT_SIDE_UI_FIELDS:
+            payloads[block][ui_field] = None
+            for read_field in field_map[ui_field]:
+                for value in values_by_block_field.get((block, read_field), []):
+                    if _read_value_has_payload(value):
+                        payloads[block][ui_field] = _normalize_document_side_field(ui_field, _final_value_for_row(value))
+                        break
+                if payloads[block][ui_field] is not None:
+                    break
+    return payloads
+
+
+def _document_side_compare_token(field_name: str, value: str) -> str:
+    normalized = _normalize_document_side_field(field_name, value) or value
+    return re.sub(r"\s+", " ", normalized).strip().upper()
 
 
 def refresh_certificate_first_row(

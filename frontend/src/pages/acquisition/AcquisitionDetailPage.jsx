@@ -127,6 +127,13 @@ function fieldKey(block, field) {
   return `${block}:${field}`;
 }
 
+function safeText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value);
+}
+
 function workflowStepState(row, step) {
   if (step === "validazione_finale") {
     if (row?.validata_finale) {
@@ -216,7 +223,7 @@ function sourceDisplayLabel(block, value) {
     return "db esterno";
   }
 
-  return source;
+  return safeText(source);
 }
 
 export default function AcquisitionDetailPage() {
@@ -471,13 +478,13 @@ export default function AcquisitionDetailPage() {
         {
           method: "PATCH",
           body: JSON.stringify({
-            lega_base: (certificateFirstDraft.lega_base || "").trim() || null,
-            diametro: (certificateFirstDraft.diametro || "").trim() || null,
-            cdq: (certificateFirstDraft.cdq || "").trim() || null,
-            colata: (certificateFirstDraft.colata || "").trim() || null,
-            ddt: (certificateFirstDraft.ddt || "").trim() || null,
-            peso: (certificateFirstDraft.peso || "").trim() || null,
-            ordine: (certificateFirstDraft.ordine || "").trim() || null,
+            lega_base: safeText(certificateFirstDraft.lega_base).trim() || null,
+            diametro: safeText(certificateFirstDraft.diametro).trim() || null,
+            cdq: safeText(certificateFirstDraft.cdq).trim() || null,
+            colata: safeText(certificateFirstDraft.colata).trim() || null,
+            ddt: safeText(certificateFirstDraft.ddt).trim() || null,
+            peso: safeText(certificateFirstDraft.peso).trim() || null,
+            ordine: safeText(certificateFirstDraft.ordine).trim() || null,
           }),
         },
         token,
@@ -594,7 +601,7 @@ export default function AcquisitionDetailPage() {
   async function handleSaveValue(block, field, value) {
     const key = fieldKey(block, field);
     const currentDisplay = valueDisplay(block, field, value);
-    const nextValue = (getDraft(block, field, currentDisplay) || "").trim();
+    const nextValue = safeText(getDraft(block, field, currentDisplay)).trim();
 
     if (!nextValue) {
       setError(`Inserisci un valore per ${field}.`);
@@ -653,7 +660,7 @@ export default function AcquisitionDetailPage() {
 
   async function handleCreateManualValue(block, field, nextValue) {
     const key = fieldKey(block, field);
-    const cleanedValue = (nextValue || "").trim();
+    const cleanedValue = safeText(nextValue).trim();
     if (!cleanedValue) {
       setError(`Inserisci un valore per ${field}.`);
       return;
@@ -1039,7 +1046,7 @@ function BlockPanel({
               {renderedValues.map((value) => {
           const key = fieldKey(block, value.campo);
           const currentDisplay = valueDisplay(block, value.campo, value);
-          const draftValue = Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay;
+          const draftValue = safeText(Object.prototype.hasOwnProperty.call(draftValues, key) ? draftValues[key] : currentDisplay);
           const isSaving = savingFieldKey === key;
           const isMissing = Boolean(value.__missing);
           const isExplicitNull = isExplicitNullValue(block, value.campo, value);
@@ -1183,7 +1190,7 @@ function MatchPanel({
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
                   id={`cf-${field.key}`}
                   onChange={(event) => onUpdateCertificateFirstDraft(field.key, event.target.value)}
-                  value={certificateFirstDraft[field.key] || ""}
+                  value={safeText(certificateFirstDraft[field.key])}
                 />
               </div>
             ))}
@@ -1209,25 +1216,25 @@ function MatchPanel({
 
             {ddtLinkPreview?.auto_match_row_id ? (
               <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
-                Candidato forte trovato sulla riga #{ddtLinkPreview.auto_match_row_id}.
+                Candidato forte trovato sulla riga #{safeText(ddtLinkPreview.auto_match_row_id)}.
               </div>
             ) : null}
 
             <div className="mt-4 space-y-3">
               {ddtLinkPreview?.items?.length ? (
                 ddtLinkPreview.items.map((item) => (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={item.row_id}>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={safeText(item.row_id)}>
                     <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">
-                          Riga #{item.row_id} · {item.ddt_file_name || `DDT #${item.document_ddt_id}`}
+                          Riga #{safeText(item.row_id)} · {safeText(item.ddt_file_name) || `DDT #${safeText(item.document_ddt_id)}`}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          Score {item.score} · {item.reasons.join(" · ") || "nessun dettaglio"}
+                          Score {safeText(item.score)} · {(Array.isArray(item.reasons) ? item.reasons : []).join(" · ") || "nessun dettaglio"}
                         </p>
                       </div>
                       <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                        DDT {item.ddt || "-"}
+                        DDT {safeText(item.ddt) || "-"}
                       </div>
                     </div>
                     <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
@@ -1280,19 +1287,19 @@ function MatchPanel({
         <div className="rounded-2xl border border-border bg-slate-50 p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Certificato attuale</p>
           <p className="mt-2 text-sm font-medium text-slate-800">
-            {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
+            {safeText(certificateDocument?.nome_file_originale) || "Nessun certificato collegato"}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(match?.stato === "confermato" ? "verde" : certificateDocument ? "giallo" : "rosso")}`}>
-              {match?.stato || (certificateDocument ? "proposto" : "nessun match")}
+              {safeText(match?.stato) || (certificateDocument ? "proposto" : "nessun match")}
             </span>
             {match?.fonte_proposta ? (
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                Fonte {match.fonte_proposta}
+                Fonte {safeText(match.fonte_proposta)}
               </span>
             ) : null}
           </div>
-          {match?.motivo_breve ? <p className="mt-3 text-xs text-slate-500">{match.motivo_breve}</p> : null}
+          {match?.motivo_breve ? <p className="mt-3 text-xs text-slate-500">{safeText(match.motivo_breve)}</p> : null}
         </div>
 
         <div className="space-y-3 rounded-2xl border border-border bg-white p-4">
@@ -1304,12 +1311,12 @@ function MatchPanel({
               className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
               id="match-document"
               onChange={(event) => onDraftChange((current) => ({ ...current, documentId: event.target.value }))}
-              value={matchDraft.documentId}
+              value={safeText(matchDraft.documentId)}
             >
               <option value="">Seleziona certificato</option>
               {certificateOptions.map((document) => (
                 <option key={document.id} value={document.id}>
-                  #{document.id} · {document.nome_file_originale}
+                  #{document.id} · {safeText(document.nome_file_originale)}
                 </option>
               ))}
             </select>
@@ -1323,7 +1330,7 @@ function MatchPanel({
               id="match-motivo"
               onChange={(event) => onDraftChange((current) => ({ ...current, motivo: event.target.value }))}
               placeholder="CDQ e colata coerenti"
-              value={matchDraft.motivo}
+              value={safeText(matchDraft.motivo)}
             />
           </div>
         </div>
@@ -1335,10 +1342,10 @@ function MatchPanel({
           {match.candidates.map((candidate) => (
             <div className="rounded-xl border border-border bg-slate-50 p-4" key={candidate.id}>
               <p className="text-sm font-medium text-slate-800">
-                Certificato #{candidate.document_certificato_id} · rank {candidate.rank}
+                Certificato #{safeText(candidate.document_certificato_id)} · rank {safeText(candidate.rank)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                {candidate.stato} · {candidate.fonte_proposta} {candidate.motivo_breve ? `· ${candidate.motivo_breve}` : ""}
+                {safeText(candidate.stato)} · {safeText(candidate.fonte_proposta)} {candidate.motivo_breve ? `· ${safeText(candidate.motivo_breve)}` : ""}
               </p>
             </div>
           ))}
@@ -1352,7 +1359,7 @@ function PreviewMini({ label, value }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-2 py-2">
       <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
-      <div className="mt-1 text-sm font-medium text-slate-800">{value || "-"}</div>
+      <div className="mt-1 text-sm font-medium text-slate-800">{safeText(value) || "-"}</div>
     </div>
   );
 }
@@ -1362,7 +1369,7 @@ function ChemistryAdder({ chemistryFieldOrder, onCreateValue }) {
   const [value, setValue] = useState("");
 
   async function handleAdd() {
-    if (!field || !value.trim()) {
+    if (!field || !safeText(value).trim()) {
       return;
     }
     await onCreateValue("chimica", field, value);
@@ -1388,7 +1395,7 @@ function ChemistryAdder({ chemistryFieldOrder, onCreateValue }) {
           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
           onChange={(event) => setValue(event.target.value)}
           placeholder="0.07"
-          value={value}
+          value={safeText(value)}
         />
         <button
           className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
@@ -1407,7 +1414,7 @@ function PropertyAdder({ onCreateValue, propertyFieldOrder }) {
   const [value, setValue] = useState("");
 
   async function handleAdd() {
-    if (!field || !value.trim()) {
+    if (!field || !safeText(value).trim()) {
       return;
     }
     await onCreateValue("proprieta", field, value);
@@ -1433,7 +1440,7 @@ function PropertyAdder({ onCreateValue, propertyFieldOrder }) {
           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-accent"
           onChange={(event) => setValue(event.target.value)}
           placeholder="528"
-          value={value}
+          value={safeText(value)}
         />
         <button
           className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700"
@@ -1454,7 +1461,7 @@ function DocumentPanel({ title, document, onOpenAsset, openingAsset }) {
         <div>
           <h3 className="text-base font-semibold text-slate-900">{title}</h3>
           <p className="mt-2 text-sm text-slate-500">
-            {document ? `${document.nome_file_originale} · ${document.numero_pagine || 0} pagine` : "Documento non collegato"}
+            {document ? `${safeText(document.nome_file_originale)} · ${safeText(document.numero_pagine || 0)} pagine` : "Documento non collegato"}
           </p>
         </div>
         {document?.file_url ? (
@@ -1484,7 +1491,7 @@ function DocumentPanel({ title, document, onOpenAsset, openingAsset }) {
               {document.pages.map((page) => (
                 <tr key={page.id}>
                   <td className="px-3 py-2 text-slate-800">{page.numero_pagina}</td>
-                  <td className="px-3 py-2 text-slate-600">{page.stato_estrazione}</td>
+                  <td className="px-3 py-2 text-slate-600">{safeText(page.stato_estrazione)}</td>
                   <td className="px-3 py-2 text-slate-600">{page.testo_estratto ? "testo disponibile" : "immagine disponibile"}</td>
                   <td className="px-3 py-2 text-right">
                     {page.image_url ? (

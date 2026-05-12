@@ -39,6 +39,13 @@ function readValuePayload(value) {
   return value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo || "";
 }
 
+function safeText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value);
+}
+
 function readRowFallbackValue(row, field) {
   if (field === "lega_base") {
     return formatRowFieldDisplay("lega", row?.lega_base || row?.lega_designazione || row?.variante_lega || "");
@@ -143,7 +150,7 @@ function buildDdtDraft(row) {
 }
 
 function draftsEqual(left, right) {
-  return HIGH_LEVEL_FIELDS.every(({ key }) => (left?.[key] || "").trim() === (right?.[key] || "").trim());
+  return HIGH_LEVEL_FIELDS.every(({ key }) => safeText(left?.[key]).trim() === safeText(right?.[key]).trim());
 }
 
 function renderStateTone(state) {
@@ -179,7 +186,7 @@ function PreviewMini({ label, value }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
       <p className="text-center text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-1 text-center text-sm font-medium text-slate-800">{value || "-"}</p>
+      <p className="mt-1 text-center text-sm font-medium text-slate-800">{safeText(value) || "-"}</p>
     </div>
   );
 }
@@ -521,11 +528,11 @@ function DocumentControls({
                       className="mt-0.5 w-full rounded-md border border-slate-200 bg-white px-1 py-0.5 text-center text-[13px] text-slate-800 outline-none transition focus:border-accent"
                       onChange={(event) => onChange(field.key, event.target.value)}
                       placeholder="Valore"
-                      value={fields[field.key] || ""}
+                      value={safeText(fields?.[field.key])}
                     />
                   ) : (
                     <div className="mt-0.5 min-h-[28px] rounded-md border border-slate-200 bg-white px-1 py-0.5 text-center text-[13px] text-slate-800">
-                      {fields[field.key] || "Valore"}
+                      {safeText(fields?.[field.key]) || "Valore"}
                     </div>
                   )}
                   <p
@@ -584,7 +591,7 @@ function CandidateBox({ label = "candidati", loadingPreview, preview }) {
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
         <p className="text-[11px] font-semibold text-emerald-700">Accoppiamento</p>
-        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Candidato forte: riga #{preview.auto_match_row_id}.</p>
+        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">Candidato forte: riga #{safeText(preview.auto_match_row_id)}.</p>
       </div>
     );
   }
@@ -593,7 +600,7 @@ function CandidateBox({ label = "candidati", loadingPreview, preview }) {
     return (
       <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
         <p className="text-[11px] font-semibold text-sky-700">Accoppiamento</p>
-        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">{preview.items.length} {label} trovati.</p>
+        <p className="mt-1.5 text-[11px] leading-tight text-slate-600">{safeText(preview.items.length)} {label} trovati.</p>
       </div>
     );
   }
@@ -672,15 +679,15 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
       </div>
       <div className="mt-4 space-y-3">
         {items.map((item) => {
-          const fileName = type === "ddt" ? item.ddt_file_name || `DDT #${item.document_ddt_id}` : item.certificate_file_name || `Certificato #${item.document_certificato_id}`;
+          const fileName = type === "ddt" ? safeText(item.ddt_file_name) || `DDT #${safeText(item.document_ddt_id)}` : safeText(item.certificate_file_name) || `Certificato #${safeText(item.document_certificato_id)}`;
           return (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={`${type}-${item.row_id}`}>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={`${type}-${safeText(item.row_id)}`}>
               <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-slate-900">
-                    Riga #{item.row_id} · {fileName}
+                    Riga #{safeText(item.row_id)} · {fileName}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">Score {item.score} · {(item.reasons || []).join(" · ") || "nessun dettaglio"}</p>
+                  <p className="mt-1 text-xs text-slate-500">Score {safeText(item.score)} · {(Array.isArray(item.reasons) ? item.reasons : []).join(" · ") || "nessun dettaglio"}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {item.manual_blocked ? (
@@ -690,7 +697,7 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
                   ) : null}
                   {item.already_linked ? (
                     <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
-                      Gia agganciata a riga #{item.linked_row_id}
+                      Gia agganciata a riga #{safeText(item.linked_row_id)}
                     </span>
                   ) : null}
                   <button
@@ -701,11 +708,11 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
                           ? "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"
                           : "border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50"
                     } disabled:opacity-60`}
-                    disabled={linkingKey === `${type}-${item.row_id}`}
+                    disabled={linkingKey === `${type}-${safeText(item.row_id)}`}
                     onClick={() => onLinkCandidate?.(type, item)}
                     type="button"
                   >
-                    {linkingKey === `${type}-${item.row_id}`
+                    {linkingKey === `${type}-${safeText(item.row_id)}`
                       ? "Collego..."
                       : item.recommended_action === "collega_anche_qui"
                         ? "Collega anche qui"
@@ -722,7 +729,7 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
               ) : null}
               {item.already_linked && item.linked_file_name ? (
                 <p className="mt-2 text-xs text-amber-800">
-                  Documento gia collegato: {item.linked_file_name}. Se confermi, non lo sposto: creo un aggancio aggiuntivo.
+                  Documento gia collegato: {safeText(item.linked_file_name)}. Se confermi, non lo sposto: creo un aggancio aggiuntivo.
                 </p>
               ) : null}
               <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
@@ -744,7 +751,7 @@ function LinkCandidateList({ emptyLabel, items, linkingKey, loading, onLinkCandi
 
 function DetachConfirmDialog({ certificateDraft, ddtDraft, detaching, onCancel, onConfirm }) {
   const equalFields = HIGH_LEVEL_FIELDS.filter(
-    ({ key }) => String(ddtDraft?.[key] || "").trim() && String(ddtDraft?.[key] || "").trim() === String(certificateDraft?.[key] || "").trim(),
+    ({ key }) => safeText(ddtDraft?.[key]).trim() && safeText(ddtDraft?.[key]).trim() === safeText(certificateDraft?.[key]).trim(),
   );
 
   return (
@@ -796,7 +803,7 @@ function DetachPreview({ title, values }) {
         {HIGH_LEVEL_FIELDS.map((field) => (
           <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5" key={field.key}>
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{field.label}</p>
-            <p className="mt-0.5 truncate text-sm font-medium text-slate-800">{values?.[field.key] || "-"}</p>
+            <p className="mt-0.5 truncate text-sm font-medium text-slate-800">{safeText(values?.[field.key]) || "-"}</p>
           </div>
         ))}
       </div>
@@ -812,8 +819,8 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
   const isManualBlocked = Boolean(candidate.item.manual_blocked);
   const fileName =
     candidate.type === "ddt"
-      ? candidate.item.ddt_file_name || `DDT #${candidate.item.document_ddt_id}`
-      : candidate.item.certificate_file_name || `Certificato #${candidate.item.document_certificato_id}`;
+      ? safeText(candidate.item.ddt_file_name) || `DDT #${safeText(candidate.item.document_ddt_id)}`
+      : safeText(candidate.item.certificate_file_name) || `Certificato #${safeText(candidate.item.document_certificato_id)}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
@@ -823,8 +830,8 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
         </p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           {isManualBlocked
-            ? `Il candidato ${typeLabel} sulla riga #${candidate.item.row_id} era stato separato manualmente. Confermando togliamo il blocco solo per questa coppia e la riagganciamo.`
-            : `Il candidato ${typeLabel} sulla riga #${candidate.item.row_id} è gia collegato. Confermando non lo spostiamo dalla riga attuale: creiamo un aggancio aggiuntivo o una riga gemella quando serve.`}
+            ? `Il candidato ${typeLabel} sulla riga #${safeText(candidate.item.row_id)} era stato separato manualmente. Confermando togliamo il blocco solo per questa coppia e la riagganciamo.`
+            : `Il candidato ${typeLabel} sulla riga #${safeText(candidate.item.row_id)} è gia collegato. Confermando non lo spostiamo dalla riga attuale: creiamo un aggancio aggiuntivo o una riga gemella quando serve.`}
         </p>
         <div className={`mt-4 rounded-xl border px-3 py-2 text-sm ${isManualBlocked ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
           {isManualBlocked
@@ -832,10 +839,10 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
             : "Controlla che i campi ponte siano davvero dello stesso materiale prima di proseguire."}
         </div>
         <div className="mt-4 grid gap-2 md:grid-cols-2">
-          <PreviewMini label="Riga" value={`#${candidate.item.row_id}`} />
+          <PreviewMini label="Riga" value={`#${safeText(candidate.item.row_id)}`} />
           <PreviewMini label="Documento" value={fileName} />
           <PreviewMini label="Score" value={candidate.item.score} />
-          <PreviewMini label={isManualBlocked ? "Stato" : "Gia collegato"} value={isManualBlocked ? "Bloccato da disaccoppio" : candidate.item.linked_file_name || "-"} />
+          <PreviewMini label={isManualBlocked ? "Stato" : "Gia collegato"} value={isManualBlocked ? "Bloccato da disaccoppio" : safeText(candidate.item.linked_file_name) || "-"} />
         </div>
         <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
@@ -918,16 +925,22 @@ export default function AcquisitionDocumentMatchingSectionPage({
     );
   }, [certificateDocument, certificateDraft, ddtDocument, ddtDraft, initialCertificateDraft, initialDdtDraft, onDirtyChange]);
 
+  const hasUnsavedChanges = useMemo(
+    () =>
+      (Boolean(certificateDocument) && !draftsEqual(certificateDraft, initialCertificateDraft)) ||
+      (Boolean(ddtDocument) && !draftsEqual(ddtDraft, initialDdtDraft)),
+    [certificateDocument, certificateDraft, ddtDocument, ddtDraft, initialCertificateDraft, initialDdtDraft],
+  );
+
   useBeforeUnload(
-    useMemo(
-      () =>
-        Boolean(certificateDocument) && !draftsEqual(certificateDraft, initialCertificateDraft)
-          ? "Hai modifiche certificato non confermate."
-          : Boolean(ddtDocument) && !draftsEqual(ddtDraft, initialDdtDraft)
-            ? "Hai modifiche DDT non confermate."
-            : undefined,
-      [certificateDocument, certificateDraft, ddtDocument, ddtDraft, initialCertificateDraft, initialDdtDraft],
-    ),
+    (event) => {
+      if (!hasUnsavedChanges) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    },
+    { capture: true },
   );
 
   useEffect(() => {
@@ -1195,7 +1208,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function executeLinkCandidate(type, item) {
-    const key = `${type}-${item.row_id}`;
+    const key = `${type}-${safeText(item.row_id)}`;
     setLinkingCandidateKey(key);
     setError("");
     try {
@@ -1266,7 +1279,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
     ? loadingDdtPreview
       ? "Cerco DDT candidati per il collegamento."
       : ddtLinkPreview?.auto_match_row_id
-        ? `Candidato forte trovato: riga #${ddtLinkPreview.auto_match_row_id}.`
+        ? `Candidato forte trovato: riga #${safeText(ddtLinkPreview.auto_match_row_id)}.`
         : "Controlla i campi alti del certificato e poi ricarica i candidati."
     : certificateDocument
       ? "Controlla e conferma il lato certificato. Il DDT resta separato."
@@ -1335,7 +1348,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
           <div className="space-y-2">
             <StatusBar
               actionLabel={loadingDdtPreview ? "Ricerca DDT candidati in corso." : "Qui appariranno candidati DDT e collegamento."}
-              actionState={ddtLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${ddtLinkPreview.auto_match_row_id}` : ""}
+              actionState={ddtLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${safeText(ddtLinkPreview.auto_match_row_id)}` : ""}
               error={error}
               onToggleOverlay={() => void handleToggleDdtOverlay()}
               overlayBusy={ddtOverlayBusy}
@@ -1425,7 +1438,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
           <div className="space-y-2">
             <StatusBar
               actionLabel={loadingCertificatePreview ? "Ricerca certificati candidati in corso." : "Qui appariranno candidati certificato e collegamento."}
-              actionState={certificateLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${certificateLinkPreview.auto_match_row_id}` : ""}
+              actionState={certificateLinkPreview?.auto_match_row_id ? `Candidato forte: riga #${safeText(certificateLinkPreview.auto_match_row_id)}` : ""}
               error={error}
               onToggleOverlay={() => setCertificateOverlayActive((current) => !current)}
               overlayBusy={false}
@@ -1459,7 +1472,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       {pendingLinkCandidate ? (
         <LinkCandidateConfirmDialog
           candidate={pendingLinkCandidate}
-          confirming={linkingCandidateKey === `${pendingLinkCandidate.type}-${pendingLinkCandidate.item.row_id}`}
+          confirming={linkingCandidateKey === `${pendingLinkCandidate.type}-${safeText(pendingLinkCandidate.item.row_id)}`}
           onCancel={() => setPendingLinkCandidate(null)}
           onConfirm={() => void executeLinkCandidate(pendingLinkCandidate.type, pendingLinkCandidate.item)}
         />
