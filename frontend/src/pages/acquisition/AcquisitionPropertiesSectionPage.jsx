@@ -728,7 +728,6 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
   }
 
   async function persistDraft() {
-    const overlayWasActive = overlayPreviewItems.length > 0;
     const draftOverlaySnapshot = draftOverlayItems.map((item) => ({ ...item }));
     const evidenceIdByField = {};
     const tableOverlay = draftOverlaySnapshot.find((item) => item.field === "__table__");
@@ -892,9 +891,6 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       onDirtyChange?.(false);
 
       await onRefreshRow();
-      if (overlayWasActive && !draftOverlaySnapshot.length) {
-        await fetchOverlayPreview();
-      }
       return true;
     } catch (requestError) {
       setError(requestError.message);

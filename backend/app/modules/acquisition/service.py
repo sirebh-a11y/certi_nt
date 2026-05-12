@@ -4120,6 +4120,9 @@ ARCONIC_CHEMISTRY_GEOMETRY_SLOTS: list[str | None] = [
     "Cr",
     "Zn",
     "Ti",
+    None,  # B is present in Arconic tables but is not captured as chemistry.
+    None,  # Ca is present in Arconic tables but is not captured as chemistry.
+    None,  # Na is present in Arconic tables but is not captured as chemistry.
     "Pb",
     "Zr",
     None,  # H2 is shown in Arconic tables but is not a captured chemistry field.
@@ -4400,7 +4403,20 @@ def _chemistry_overlay_token_candidates(value: str | None) -> set[str]:
         normalized_part = _normalize_chemistry_capture_value(raw_part)
         if normalized_part is not None:
             candidates.add(normalized_part)
+        corrected_part = _correct_chemistry_overlay_ocr_prefix(raw_part)
+        if corrected_part is not None:
+            candidates.add(corrected_part)
     return candidates
+
+
+def _correct_chemistry_overlay_ocr_prefix(value: str) -> str | None:
+    cleaned = value.strip()
+    # In compact Zalco tables, OCR can read the left cell border as a leading "1":
+    # e.g. "10,04" for the visible value "0,04".
+    match = re.fullmatch(r"1(0[.,]\d+)", cleaned)
+    if match is None:
+        return None
+    return _normalize_chemistry_capture_value(match.group(1))
 
 
 def _chemistry_overlay_match_keys(value: str | None) -> set[str]:
