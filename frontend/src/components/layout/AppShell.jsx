@@ -7,7 +7,11 @@ import Sidebar from "./Sidebar";
 export default function AppShell() {
   const location = useLocation();
   const isAcquisitionRoute = location.pathname.startsWith("/acquisition");
-  const isWideRoute = isAcquisitionRoute || location.pathname.startsWith("/quality-evaluation") || location.pathname.startsWith("/quarta-taglio");
+  const isWideRoute =
+    isAcquisitionRoute ||
+    location.pathname.startsWith("/quality-evaluation") ||
+    location.pathname.startsWith("/quarta-taglio") ||
+    location.pathname.startsWith("/notes");
 
   return (
     <div className="h-screen overflow-hidden bg-shell text-ink">

@@ -134,17 +134,17 @@ export default function NotesPage() {
     const draft = drafts[item.id] || { text: item.text, is_active: item.is_active };
     return (
       <form
-        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+        className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
         key={item.id}
         onSubmit={(event) => {
           event.preventDefault();
           handleSave(item.id);
         }}
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">{item.code}</p>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-0.5 text-xs text-slate-500">
               {item.note_key ? `${item.note_key}${item.note_value ? ` = ${item.note_value}` : ""}` : "Nota custom"}
             </p>
           </div>
@@ -157,10 +157,10 @@ export default function NotesPage() {
           </span>
         </div>
 
-        <label className="mt-4 block text-sm font-medium text-slate-700">Testo nota</label>
+        <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Testo nota</label>
         <textarea
-          className="mt-2 min-h-[112px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-ink"
-          rows={4}
+          className="mt-2 min-h-[72px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-5 text-ink"
+          rows={3}
           value={draft.text}
           onChange={(event) =>
             setDrafts((currentValue) => ({
@@ -170,7 +170,7 @@ export default function NotesPage() {
           }
         />
 
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
           <label className="flex items-center gap-3 text-sm text-slate-600">
             <input
               checked={draft.is_active}
@@ -187,7 +187,7 @@ export default function NotesPage() {
           </label>
 
           <button
-            className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+            className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
             disabled={savingId === item.id}
             type="submit"
           >
@@ -199,45 +199,37 @@ export default function NotesPage() {
   }
 
   return (
-    <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
+    <section className="rounded-3xl border border-border bg-panel p-4 shadow-lg shadow-slate-200/40 xl:p-6">
       <div>
-        <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Note</p>
-        <h2 className="mt-2 text-2xl font-semibold">Catalogo note</h2>
-        <p className="mt-2 text-sm text-slate-500">
-          Qui gestiamo le 4 note fisse di sistema e le note custom aggiuntive. Il flusso AI esistente non viene toccato.
-        </p>
+        <div>
+          <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Note</p>
+          <h2 className="mt-2 text-2xl font-semibold">Catalogo note</h2>
+        </div>
       </div>
 
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento...</p> : null}
       {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
       {statusMessage ? <p className="mt-6 text-sm text-slate-600">{statusMessage}</p> : null}
 
-      <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
-        <div className="mb-4 flex flex-col gap-1 border-b border-slate-200 pb-4">
-          <h3 className="text-lg font-semibold">Note fisse</h3>
-          <p className="text-sm text-slate-500">Le quattro note di sistema restano modificabili ma sempre riconoscibili come canoniche.</p>
-        </div>
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          {systemItems.map(renderCard)}
-        </div>
-      </div>
-
-      <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1.05fr),minmax(0,0.95fr)]">
-        <form className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={handleCreate}>
-          <div className="mb-4 border-b border-slate-100 pb-4">
-            <h3 className="text-lg font-semibold">Nuova nota custom</h3>
-            <p className="mt-1 text-sm text-slate-500">Crea una nota aggiuntiva da rendere disponibile nelle sezioni note delle righe acquisition.</p>
+      <form className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm" onSubmit={handleCreate}>
+        <div className="grid gap-4 xl:grid-cols-[260px,minmax(0,1fr),auto] xl:items-end">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Nuova nota custom</h3>
+            <p className="mt-1 text-sm text-sky-700">Inserimento note utente.</p>
           </div>
 
-          <label className="block text-sm font-medium text-slate-700">Testo nota</label>
-          <textarea
-            className="mt-2 min-h-[132px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-ink"
-            rows={5}
-            value={createForm.text}
-            onChange={(event) => setCreateForm((currentValue) => ({ ...currentValue, text: event.target.value }))}
-          />
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <label className="flex items-center gap-3 text-sm text-slate-600">
+          <div className="min-w-0">
+            <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">Testo nota</label>
+            <textarea
+              className="mt-2 min-h-[76px] w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm leading-5 text-ink"
+              rows={3}
+              value={createForm.text}
+              onChange={(event) => setCreateForm((currentValue) => ({ ...currentValue, text: event.target.value }))}
+            />
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row xl:flex-col">
+            <label className="flex items-center gap-3 whitespace-nowrap text-sm text-slate-600">
               <input
                 checked={createForm.is_active}
                 className={CHECKBOX_CLASSNAME}
@@ -247,25 +239,35 @@ export default function NotesPage() {
               <span>Attiva</span>
             </label>
             <button
-              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+              className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
               disabled={creating}
               type="submit"
             >
               {creating ? "Creazione..." : "Crea nota"}
             </button>
           </div>
-        </form>
-
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
-          <div className="mb-4 flex flex-col gap-1 border-b border-slate-200 pb-4">
-            <h3 className="text-lg font-semibold">Note custom esistenti</h3>
-            <p className="text-sm text-slate-500">Le note custom possono essere modificate e disattivate senza toccare il catalogo fisso.</p>
-          </div>
-          <div className="grid gap-4">
-            {customItems.map(renderCard)}
-          </div>
-          {!customItems.length && !loading ? <p className="mt-2 text-sm text-slate-500">Nessuna nota custom disponibile.</p> : null}
         </div>
+      </form>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="mb-3 flex flex-col gap-1 border-b border-slate-200 pb-3">
+          <h3 className="text-lg font-semibold">Note fisse</h3>
+          <p className="text-sm text-slate-500">Le quattro note di sistema restano modificabili ma sempre riconoscibili come canoniche.</p>
+        </div>
+        <div className="grid gap-3 xl:grid-cols-2">
+          {systemItems.map(renderCard)}
+        </div>
+      </div>
+
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="mb-3 flex flex-col gap-1 border-b border-slate-200 pb-3">
+          <h3 className="text-lg font-semibold">Note custom esistenti</h3>
+          <p className="text-sm text-slate-500">Le note custom possono essere modificate e disattivate senza toccare il catalogo fisso.</p>
+        </div>
+        <div className="grid gap-3 xl:grid-cols-2">
+          {customItems.map(renderCard)}
+        </div>
+        {!customItems.length && !loading ? <p className="mt-2 text-sm text-slate-500">Nessuna nota custom disponibile.</p> : null}
       </div>
     </section>
   );
