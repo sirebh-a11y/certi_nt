@@ -551,7 +551,7 @@ export default function QuartaTaglioDetailPage() {
 
       <Panel title="Materiali collegati">
         <Table
-          columns={["CDQ", "Colata", "Articolo", "Quantità", "Lotti", "Righe app"]}
+          columns={["CDQ", "Colata", "Articolo Quarta", "Quantità", "Lotti", "Righe app"]}
           rows={(data.materials || []).map((item) => [
             item.cdq,
             item.colata || "-",

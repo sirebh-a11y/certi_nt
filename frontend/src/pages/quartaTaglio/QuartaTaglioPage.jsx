@@ -189,6 +189,7 @@ function searchableFieldValues(item) {
     STATUS_LABELS[item.esolver_status],
     item.esolver_message,
     item.esolver_cliente,
+    item.esolver_cod_f3,
     item.esolver_ordine_cliente,
     item.esolver_conferma_ordine,
     item.esolver_ddt,
@@ -268,6 +269,8 @@ function taglioSortValue(item, field) {
       return STATUS_SORT_RANK[item.esolver_status] || 0;
     case "esolver_cliente":
       return item.esolver_cliente || "";
+    case "esolver_cod_f3":
+      return item.esolver_cod_f3 || "";
     case "esolver_ddt":
       return item.esolver_ddt || "";
     case "esolver_qta_totale":
@@ -684,7 +687,7 @@ export default function QuartaTaglioPage() {
                 <SortableHeader field="cod_odp" label="OL" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cdq" label="CDQ" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="cod_art" label="Articolo" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="esolver_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="qta_totale" label="Qta" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="lotti_count" label="Lotti" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="codice_registro" label="Registro" onSort={toggleSort} sortConfig={sortConfig} />
@@ -743,7 +746,8 @@ export default function QuartaTaglioPage() {
                     <div className="whitespace-normal break-words">{item.colata || "-"}</div>
                   </td>
                   <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
-                    <div className="whitespace-normal break-words">{item.cod_art || "-"}</div>
+                    <div className="whitespace-normal break-words font-medium">{item.esolver_cod_f3 || "-"}</div>
+                    {item.cod_art ? <div className="mt-1 text-xs text-slate-500">Quarta: {item.cod_art}</div> : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatNumber(item.qta_totale)}</td>
                   <td className="px-3 py-2.5 text-slate-700">

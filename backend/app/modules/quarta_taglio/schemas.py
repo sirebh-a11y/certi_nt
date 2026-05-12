@@ -55,6 +55,7 @@ class QuartaTaglioRowResponse(BaseModel):
     esolver_status: str = "not_checked"
     esolver_message: str | None = None
     esolver_cliente: str | None = None
+    esolver_cod_f3: str | None = None
     esolver_ordine_cliente: str | None = None
     esolver_conferma_ordine: str | None = None
     esolver_ddt: str | None = None
