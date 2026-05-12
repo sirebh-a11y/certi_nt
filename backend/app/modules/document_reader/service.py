@@ -1165,8 +1165,6 @@ def _normalize_leichtmetall_alloy(value: str | None) -> str | None:
     normalized = _normalize_text(value)
     if normalized is None:
         return None
-    if normalized == "7175":
-        return "7075"
     return normalized
 
 

@@ -260,8 +260,6 @@ def _normalize_leichtmetall_alloy(value: str | None) -> str | None:
     cleaned = _string_or_none(value)
     if cleaned is None:
         return None
-    if cleaned == "7175":
-        return "7075"
     return cleaned
 
 

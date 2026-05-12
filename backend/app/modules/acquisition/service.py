@@ -20887,8 +20887,7 @@ def _normalize_leichtmetall_alloy_from_text(value: str | None) -> str | None:
     match = re.search(r"\b([1-9][0-9]{3}[A-Z]?)\b", normalized)
     if match is None:
         return None
-    alloy = match.group(1)
-    return "7075" if alloy == "7175" else alloy
+    return match.group(1)
 
 
 def _normalize_leichtmetall_diameter_from_text(value: str | None) -> str | None:
