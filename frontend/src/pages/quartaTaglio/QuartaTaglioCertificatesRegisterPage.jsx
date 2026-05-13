@@ -27,9 +27,9 @@ function formatDate(value) {
 function searchableValues(item) {
   return [
     item.certificate_number,
+    item.cdq,
     item.cod_odp,
     item.lega_cod_f3,
-    item.cdo_lega,
     item.fornitore_cliente,
     item.status,
     STATUS_LABELS[item.status],
@@ -111,9 +111,15 @@ export default function QuartaTaglioCertificatesRegisterPage() {
           className="rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
           id="certificate-register-search"
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Numero, OL, Cod. F3, C.d.O., cliente..."
+          placeholder="Numero, CDQ, OL, Cod. F3, cliente..."
           value={query}
         />
+      </div>
+
+      <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+        Placeholder sviluppo: chiusura PDF finale, impaginazione Word ricaricato, archivio PDF ed esportazione eSolver sono descritti in
+        {" "}
+        <span className="font-semibold text-slate-700">docs/modules/quarta_taglio_final_certificate_flow_placeholder.md</span>.
       </div>
 
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento registro certificati...</p> : null}
@@ -126,10 +132,10 @@ export default function QuartaTaglioCertificatesRegisterPage() {
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                 <th className="px-4 py-3">Cert. Nr.</th>
                 <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3">CDQ</th>
                 <th className="px-4 py-3">OL</th>
-                <th className="px-4 py-3">Lega / Cod. F3</th>
-                <th className="px-4 py-3">C.d.O. Lega</th>
-                <th className="px-4 py-3">Fornitore / Cliente</th>
+                <th className="px-4 py-3">Cod. F3</th>
+                <th className="px-4 py-3">Cliente</th>
                 <th className="px-4 py-3">Stato</th>
                 <th className="px-4 py-3">File</th>
               </tr>
@@ -139,13 +145,13 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                 <tr className="border-b border-slate-100 align-middle hover:bg-slate-50/70 last:border-0" key={item.id}>
                   <td className="px-4 py-3 font-semibold text-slate-950">{item.certificate_number}</td>
                   <td className="px-4 py-3 text-slate-700">{formatDate(item.cert_date || item.created_at)}</td>
+                  <td className="px-4 py-3 font-semibold text-slate-800">{item.cdq || "-"}</td>
                   <td className="px-4 py-3">
                     <Link className="font-semibold text-accent hover:underline" to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}`}>
                       {item.cod_odp}
                     </Link>
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.lega_cod_f3 || "-"}</td>
-                  <td className="px-4 py-3 text-slate-700">{item.cdo_lega || "-"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.fornitore_cliente || "-"}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status)}`}>

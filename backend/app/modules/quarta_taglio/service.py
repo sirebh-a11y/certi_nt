@@ -673,7 +673,7 @@ def _cdq_values_from_detail(detail: QuartaTaglioDetailResponse) -> list[dict[str
 
 def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
     header = detail.header or {}
-    certificate.lega_cod_f3 = _clean_text(header.get("codice_f3")) or (detail.selected_standard.label if detail.selected_standard else None)
+    certificate.lega_cod_f3 = _clean_text(header.get("codice_f3")) or _join_unique(item.cod_art for item in detail.materials) or None
     certificate.cdo_lega = _clean_text(header.get("conferma_ordine")) or _clean_text(header.get("ordine_cliente"))
     certificate.fornitore_cliente = _clean_text(header.get("cliente"))
 
@@ -1604,8 +1604,9 @@ def _serialize_final_certificate_register_item(
         status=certificate.status,
         certificate_number=certificate.certificate_number or certificate.draft_number,
         draft_number=certificate.draft_number,
+        cdq=_certificate_cdq_display(certificate),
         cert_date=certificate.cert_date,
-        lega_cod_f3=certificate.lega_cod_f3,
+        lega_cod_f3=_certificate_cod_f3_display(certificate),
         cdo_lega=certificate.cdo_lega,
         fornitore_cliente=certificate.fornitore_cliente,
         has_word=bool(certificate.storage_key_docx),
@@ -1615,6 +1616,22 @@ def _serialize_final_certificate_register_item(
         updated_at=certificate.updated_at,
         closed_at=certificate.closed_at,
     )
+
+
+def _certificate_cdq_display(certificate: QuartaTaglioFinalCertificate) -> str | None:
+    values = certificate.cdq_values or []
+    cdq_values = [item.get("cdq") for item in values if isinstance(item, dict)]
+    return _join_unique(cdq_values) or _clean_text(certificate.cdq_key)
+
+
+def _certificate_cod_f3_display(certificate: QuartaTaglioFinalCertificate) -> str | None:
+    stored_value = _clean_text(certificate.lega_cod_f3)
+    if stored_value and "·" not in stored_value:
+        return stored_value
+    values = certificate.cdq_values or []
+    codice_f3_values = [item.get("codice_f3") for item in values if isinstance(item, dict)]
+    cod_art_values = [item.get("cod_art") for item in values if isinstance(item, dict)]
+    return _join_unique(codice_f3_values) or _join_unique(cod_art_values) or None
 
 
 def _serialize_row(row: QuartaTaglioRow) -> QuartaTaglioRowResponse:

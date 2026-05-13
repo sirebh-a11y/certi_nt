@@ -83,6 +83,7 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     status: str
     certificate_number: str
     draft_number: str
+    cdq: str | None = None
     cert_date: datetime | None = None
     lega_cod_f3: str | None = None
     cdo_lega: str | None = None
