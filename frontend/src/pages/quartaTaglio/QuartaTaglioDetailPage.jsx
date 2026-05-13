@@ -119,6 +119,8 @@ export default function QuartaTaglioDetailPage() {
   const [articleDraft, setArticleDraft] = useState({ descrizione: "", disegno: "" });
   const [articleStates, setArticleStates] = useState({});
   const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
+  const [wordUploadFile, setWordUploadFile] = useState(null);
+  const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -323,6 +325,38 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
+  async function uploadEditedWord() {
+    if (!wordUploadFile) {
+      setWordUploadState({ status: "error", message: "Seleziona un file Word .docx da ricaricare." });
+      return;
+    }
+    setWordUploadState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", wordUploadFile);
+      const response = await apiRequest(
+        `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        token,
+      );
+      setWordUploadFile(null);
+      const fileInput = document.getElementById("quarta-word-upload");
+      if (fileInput) {
+        fileInput.value = "";
+      }
+      setWordUploadState({ status: "saved", message: `Word ricaricato sul certificato ${response.draft_number}` });
+    } catch (requestError) {
+      setWordUploadState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore caricamento Word modificato"),
+      });
+    }
+  }
+
   const headerRows = useMemo(() => {
     const header = data?.header || {};
     return [
@@ -381,15 +415,44 @@ export default function QuartaTaglioDetailPage() {
               {wordDraftState.message}
             </p>
           ) : null}
+          {wordUploadState.message ? (
+            <p className={`mt-1 text-sm ${wordUploadState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+              {wordUploadState.message}
+            </p>
+          ) : null}
         </div>
-        <button
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-          disabled={wordDraftState.status === "saving" || !data.selected_standard_confirmed}
-          onClick={generateWordDraft}
-          type="button"
-        >
-          {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
-        </button>
+        <div className="flex flex-col gap-2 md:min-w-[360px]">
+          <button
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={wordDraftState.status === "saving" || !data.selected_standard_confirmed}
+            onClick={generateWordDraft}
+            type="button"
+          >
+            {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
+          </button>
+          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-word-upload">
+              Ricarica Word modificato
+            </label>
+            <div className="flex gap-2">
+              <input
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+                id="quarta-word-upload"
+                onChange={(event) => setWordUploadFile(event.target.files?.[0] || null)}
+                type="file"
+              />
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={wordUploadState.status === "saving" || !wordUploadFile}
+                onClick={uploadEditedWord}
+                type="button"
+              >
+                {wordUploadState.status === "saving" ? "Carico..." : "Carica"}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {!data.ready ? (

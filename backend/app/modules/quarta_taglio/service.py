@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -553,6 +553,60 @@ def create_quarta_taglio_word_draft(
     )
 
 
+def upload_quarta_taglio_word_file(
+    db: Session,
+    *,
+    cod_odp: str,
+    uploaded_file: UploadFile,
+    actor: User,
+) -> QuartaTaglioWordDraftResponse:
+    if uploaded_file.filename is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word deve avere un nome")
+
+    original_name = Path(uploaded_file.filename).name
+    if Path(original_name).suffix.lower() != ".docx":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Caricare un file Word .docx")
+
+    file_bytes = uploaded_file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word caricato è vuoto")
+
+    certificate = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+            QuartaTaglioFinalCertificate.status != "pdf_final",
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .first()
+    )
+    if certificate is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+
+    storage_key = _certificate_uploaded_docx_storage_key(cod_odp, original_name=original_name)
+    output_path = _certificate_storage_path(storage_key)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(file_bytes)
+
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.status = certificate.status or "draft"
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+
+    return QuartaTaglioWordDraftResponse(
+        id=certificate.id,
+        cod_odp=certificate.cod_odp,
+        draft_number=certificate.draft_number,
+        file_name=_certificate_file_name(certificate),
+        download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
+        created_at=certificate.created_at,
+    )
+
+
 def _get_or_create_open_certificate(
     db: Session,
     *,
@@ -703,6 +757,12 @@ def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> Non
 def _certificate_docx_storage_key(cod_odp: str) -> str:
     now = datetime.now(timezone.utc)
     filename = f"{uuid4().hex}_{_safe_file_part(cod_odp)}_bozza.docx"
+    return f"certificati_finali/{now:%Y/%m}/{filename}"
+
+
+def _certificate_uploaded_docx_storage_key(cod_odp: str, *, original_name: str) -> str:
+    now = datetime.now(timezone.utc)
+    filename = f"{uuid4().hex}_{_safe_file_part(cod_odp)}_{_safe_file_part(original_name)}"
     return f"certificati_finali/{now:%Y/%m}/{filename}"
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
@@ -18,6 +18,7 @@ from app.modules.quarta_taglio.service import (
     list_quarta_taglio_final_certificates,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
+    upload_quarta_taglio_word_file,
 )
 
 router = APIRouter()
@@ -103,6 +104,16 @@ def create_quarta_taglio_word_draft_route(
     db: DbSession,
 ) -> QuartaTaglioWordDraftResponse:
     return create_quarta_taglio_word_draft(db, cod_odp=cod_odp, actor=current_user)
+
+
+@router.post("/{cod_odp}/word-file", response_model=QuartaTaglioWordDraftResponse)
+def upload_quarta_taglio_word_file_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    file: UploadFile = File(...),
+) -> QuartaTaglioWordDraftResponse:
+    return upload_quarta_taglio_word_file(db, cod_odp=cod_odp, uploaded_file=file, actor=current_user)
 
 
 @router.get("/word-drafts/{draft_id}/file")
