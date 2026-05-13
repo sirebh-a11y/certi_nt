@@ -42,6 +42,7 @@ class QuartaTaglioRow(Base):
     lotti_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cod_lotti: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     saldo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    taglio_attivo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     status_color: Mapped[str] = mapped_column(String(16), default="red", nullable=False, index=True)
     status_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status_details: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

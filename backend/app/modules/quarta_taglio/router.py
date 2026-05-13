@@ -22,8 +22,36 @@ router = APIRouter()
 
 
 @router.get("", response_model=QuartaTaglioListResponse)
-def list_quarta_taglio_route(current_user: CurrentUser, db: DbSession) -> QuartaTaglioListResponse:
-    return sync_and_list_quarta_taglio(db, actor_id=current_user.id)
+def list_quarta_taglio_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    sync: bool = Query(default=True),
+    only_taglio_active: bool = Query(default=False),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    query_one: str | None = Query(default=None),
+    query_two: str | None = Query(default=None),
+    query_three: str | None = Query(default=None),
+    operator_one: str = Query(default="and"),
+    operator_two: str = Query(default="and"),
+    sort_field: str | None = Query(default=None),
+    sort_direction: str = Query(default="asc"),
+) -> QuartaTaglioListResponse:
+    return sync_and_list_quarta_taglio(
+        db,
+        actor_id=current_user.id,
+        sync_data=sync,
+        only_taglio_active=only_taglio_active,
+        limit=limit,
+        offset=offset,
+        query_one=query_one,
+        query_two=query_two,
+        query_three=query_three,
+        operator_one=operator_one,
+        operator_two=operator_two,
+        sort_field=sort_field,
+        sort_direction=sort_direction,
+    )
 
 
 @router.get("/{cod_odp}", response_model=QuartaTaglioDetailResponse)

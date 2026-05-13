@@ -45,6 +45,7 @@ const DEFAULT_LIST_STATE = {
   operatorOne: "and",
   operatorTwo: "and",
   rowLimit: "25",
+  onlyTaglioActive: false,
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
   scrollTop: 0,
@@ -74,7 +75,8 @@ function loadPersistedListState() {
       queryThree: typeof parsed?.queryThree === "string" ? parsed.queryThree : DEFAULT_LIST_STATE.queryThree,
       operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
-      rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      rowLimit: ["25", "50", "100"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      onlyTaglioActive: parsed?.onlyTaglioActive === true,
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
       scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
@@ -313,7 +315,10 @@ export default function QuartaTaglioPage() {
   const [operatorOne, setOperatorOne] = useState(initialListStateRef.current.operatorOne);
   const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
+  const [onlyTaglioActive, setOnlyTaglioActive] = useState(initialListStateRef.current.onlyTaglioActive);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
+  const [totalItems, setTotalItems] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const topScrollRef = useRef(null);
   const tableViewportRef = useRef(null);
@@ -321,33 +326,61 @@ export default function QuartaTaglioPage() {
   const syncingScrollRef = useRef(false);
   const restoredScrollRef = useRef(false);
   const sectionRef = useRef(null);
+  const initialSyncDoneRef = useRef(false);
+
+  async function fetchItems({ append = false, sync = false, offset = 0 } = {}) {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    const params = new URLSearchParams({
+      sync: sync ? "true" : "false",
+      only_taglio_active: onlyTaglioActive ? "true" : "false",
+      limit: rowLimit,
+      offset: String(offset),
+      query_one: queryOne,
+      query_two: queryTwo,
+      query_three: queryThree,
+      operator_one: operatorOne,
+      operator_two: operatorTwo,
+      sort_direction: sortConfig.direction,
+    });
+    if (sortConfig.field) {
+      params.set("sort_field", sortConfig.field);
+    }
+    try {
+      const data = await apiRequest(`/quarta-taglio?${params.toString()}`, {}, token);
+      setItems((current) => (append ? [...current, ...(data.items || [])] : data.items || []));
+      setSyncRun(data.sync_run || null);
+      setTotalItems(data.total_items || 0);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  }
 
   useEffect(() => {
     let ignore = false;
-    setLoading(true);
-    setError("");
-    apiRequest("/quarta-taglio", {}, token)
-      .then((data) => {
-        if (!ignore) {
-          setItems(data.items || []);
-          setSyncRun(data.sync_run || null);
-        }
-      })
-      .catch((requestError) => {
-        if (!ignore) {
-          setError(requestError.message);
-        }
-      })
-      .finally(() => {
-        if (!ignore) {
-          setLoading(false);
-        }
-      });
-
+    const shouldSync = !initialSyncDoneRef.current;
+    initialSyncDoneRef.current = true;
+    async function load() {
+      await fetchItems({ append: false, sync: shouldSync, offset: 0 });
+      if (ignore) {
+        return;
+      }
+    }
+    void load();
     return () => {
       ignore = true;
     };
-  }, [token]);
+  }, [operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
 
   useEffect(() => {
     const viewport = tableViewportRef.current;
@@ -359,12 +392,13 @@ export default function QuartaTaglioPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
+      onlyTaglioActive,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -381,44 +415,12 @@ export default function QuartaTaglioPage() {
   }, []);
 
   const visibleItems = useMemo(() => {
-    let nextItems = items;
-    if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
-      nextItems = nextItems.filter((item) => {
-        const baseValues = searchableFieldValues(item);
-        const firstResult = evaluateProgressiveFilter(baseValues, queryOne);
-        const secondResult = evaluateProgressiveFilter(firstResult.remainingValues, queryTwo);
-        const thirdResult = evaluateProgressiveFilter(secondResult.remainingValues, queryThree);
-        const firstMatch = firstResult.active ? firstResult.matched : null;
-        const secondMatch = secondResult.active ? secondResult.matched : null;
-        const thirdMatch = thirdResult.active ? thirdResult.matched : null;
-        const firstCombined = combineFilterResults(firstMatch, secondMatch, operatorOne);
-        const finalCombined = combineFilterResults(firstCombined, thirdMatch, operatorTwo);
-        return finalCombined ?? true;
-      });
-    }
-
-    return [...nextItems].sort((left, right) => {
-      if (!sortConfig.field) {
-        const byDate = compareValues(left.data_registro || "", right.data_registro || "", "desc");
-        return byDate || compareValues(left.cod_odp || "", right.cod_odp || "", "asc") || compareValues(left.cdq || "", right.cdq || "", "asc");
-      }
-      const sorted = compareValues(taglioSortValue(left, sortConfig.field), taglioSortValue(right, sortConfig.field), sortConfig.direction);
-      return sorted || compareValues(left.cod_odp || "", right.cod_odp || "", "asc") || compareValues(left.cdq || "", right.cdq || "", "asc");
-    });
-  }, [items, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, sortConfig]);
+    return items;
+  }, [items]);
 
   const displayedItems = useMemo(() => {
-    if (rowLimit === "all") {
-      return visibleItems;
-    }
-
-    const limit = Number(rowLimit);
-    if (!Number.isFinite(limit) || limit <= 0) {
-      return visibleItems;
-    }
-
-    return visibleItems.slice(0, limit);
-  }, [rowLimit, visibleItems]);
+    return visibleItems;
+  }, [visibleItems]);
 
   const summary = useMemo(() => {
     const ol = new Set(items.map((item) => item.cod_odp));
@@ -524,6 +526,7 @@ export default function QuartaTaglioPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
+      onlyTaglioActive,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
       scrollTop: viewport?.scrollTop || 0,
@@ -543,16 +546,16 @@ export default function QuartaTaglioPage() {
       <div className="flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Certificazione</p>
-          <h2 className="mt-1 text-2xl font-semibold text-slate-950">OL taglio saldati</h2>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">OL Quarta</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Aggiornamento automatico da Quarta all'apertura pagina. Le righe Incoming Quality restano in sola lettura.
+            Aggiornamento automatico da Quarta all'apertura pagina. eSolver viene controllato solo sulle righe caricate.
           </p>
         </div>
         <div className="flex flex-col gap-2 text-sm text-slate-500 xl:items-end">
           <div>{syncRun?.finished_at ? `Ultimo aggiornamento ${formatDateTime(syncRun.finished_at)}` : "Aggiornamento in corso"}</div>
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-            <span className="font-semibold text-ink">{displayedItems.length}</span> righe visibili
-            {displayedItems.length !== visibleItems.length ? <span className="ml-2 text-slate-500">su {visibleItems.length}</span> : null}
+            <span className="font-semibold text-ink">{displayedItems.length}</span> righe caricate
+            <span className="ml-2 text-slate-500">su {totalItems}</span>
           </div>
         </div>
       </div>
@@ -572,6 +575,17 @@ export default function QuartaTaglioPage() {
       </div>
 
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
+        <button
+          className={`min-w-[170px] rounded-xl border px-3 py-2 text-sm font-semibold ${
+            onlyTaglioActive
+              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+              : "border-border bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+          onClick={() => setOnlyTaglioActive((current) => !current)}
+          type="button"
+        >
+          Solo taglio attivo
+        </button>
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-taglio-search-1">
             Filtro 1
@@ -648,9 +662,7 @@ export default function QuartaTaglioPage() {
           >
             <option value="25">25</option>
             <option value="50">50</option>
-            <option value="75">75</option>
             <option value="100">100</option>
-            <option value="all">Tutte</option>
           </select>
         </div>
       </div>
@@ -684,6 +696,7 @@ export default function QuartaTaglioPage() {
             <thead className="bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="taglio_attivo" label="Taglio" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cod_odp" label="OL" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cdq" label="CDQ" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
@@ -711,6 +724,15 @@ export default function QuartaTaglioPage() {
                   <td className="px-3 py-2.5">
                     <span className={`inline-flex min-w-[74px] justify-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status_color)}`}>
                       {STATUS_LABELS[item.status_color] || "Rosso"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span
+                      className={`inline-flex min-w-[86px] justify-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${
+                        item.taglio_attivo ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      {item.taglio_attivo ? "Attivo" : "-"}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 font-semibold">
@@ -804,8 +826,20 @@ export default function QuartaTaglioPage() {
             </tbody>
           </table>
         </div>
-        {!loading && !visibleItems.length && !error ? <div className="px-4 py-6 text-sm text-slate-500">Nessun OL taglio saldato trovato.</div> : null}
+        {!loading && !visibleItems.length && !error ? <div className="px-4 py-6 text-sm text-slate-500">Nessun OL trovato.</div> : null}
       </div>
+      {displayedItems.length < totalItems ? (
+        <div className="flex justify-center">
+          <button
+            className="rounded-xl border border-border bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+            disabled={loadingMore}
+            onClick={() => fetchItems({ append: true, sync: false, offset: displayedItems.length })}
+            type="button"
+          >
+            {loadingMore ? "Caricamento..." : `Carica altri (${displayedItems.length} su ${totalItems})`}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

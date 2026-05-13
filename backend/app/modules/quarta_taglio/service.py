@@ -105,7 +105,7 @@ SYSTEM_NOTE_CODE_KEYS = {
 
 
 TAGLIO_QUERY = """
-with taglio_saldato as (
+with taglio_latest_source as (
     select
         iu.UID_INSTANCE as COD_ODP,
         ip.UID_INSTANCE as CODICE_REGISTRO,
@@ -124,18 +124,17 @@ with taglio_saldato as (
        and ph.COD_RIFERIMENTO = ip.KEY_PHASE
     where ph.DES_INSTANCE = 'TAGLIO'
       and ip.UID_PHASE_TYPE = 'ONGPHT0002'
-      and ip.CFG_CHK_SALDO = '1'
 ), latest as (
-    select top 500 COD_ODP, CODICE_REGISTRO, DATA_REGISTRO, SALDO
-    from taglio_saldato
+    select COD_ODP, CODICE_REGISTRO, DATA_REGISTRO, SALDO
+    from taglio_latest_source
     where rn = 1
-    order by DATA_REGISTRO desc, CODICE_REGISTRO desc
 )
 select
-    l.COD_ODP,
-    l.CODICE_REGISTRO,
+    tr.COD_ODP,
+    coalesce(l.CODICE_REGISTRO, '') as CODICE_REGISTRO,
     l.DATA_REGISTRO,
-    l.SALDO,
+    coalesce(l.SALDO, '0') as SALDO,
+    case when l.COD_ODP is not null and l.SALDO = '1' then 1 else 0 end as TAGLIO_ATTIVO,
     tr.COD_ART,
     max(cast(tr.DES_ART as nvarchar(max))) as DES_ART,
     tr.CERT_FORN as CDQ,
@@ -144,11 +143,17 @@ select
     count(distinct tr.COD_LOTTO) as LOTTI,
     sum(cast(tr.QTA as decimal(18,2))) as QTA_TOTALE,
     string_agg(cast(tr.COD_LOTTO as varchar(max)), ',') within group (order by tr.COD_LOTTO) as COD_LOTTI
-from latest l
-join dbo.CFG_Q3ESS_ONGIUDET_TRACMP tr
+from dbo.CFG_Q3ESS_ONGIUDET_TRACMP tr
+left join latest l
     on tr.COD_ODP = l.COD_ODP
-group by l.COD_ODP, l.CODICE_REGISTRO, l.DATA_REGISTRO, l.SALDO, tr.COD_ART, tr.CERT_FORN, tr.COLATA
-order by l.DATA_REGISTRO desc, l.COD_ODP desc, tr.CERT_FORN, tr.COLATA;
+where tr.COD_ODP is not null
+group by tr.COD_ODP, l.COD_ODP, l.CODICE_REGISTRO, l.DATA_REGISTRO, l.SALDO, tr.COD_ART, tr.CERT_FORN, tr.COLATA
+order by
+    case when l.DATA_REGISTRO is null then 1 else 0 end,
+    l.DATA_REGISTRO desc,
+    tr.COD_ODP desc,
+    tr.CERT_FORN,
+    tr.COLATA;
 """
 
 
@@ -184,7 +189,69 @@ order by ORP, DDT, IdDocumento, IdRigaDoc
 """
 
 
-def sync_and_list_quarta_taglio(db: Session, *, actor_id: int | None = None) -> QuartaTaglioListResponse:
+def sync_and_list_quarta_taglio(
+    db: Session,
+    *,
+    actor_id: int | None = None,
+    sync_data: bool = True,
+    only_taglio_active: bool = False,
+    limit: int = 25,
+    offset: int = 0,
+    query_one: str | None = None,
+    query_two: str | None = None,
+    query_three: str | None = None,
+    operator_one: str = "and",
+    operator_two: str = "and",
+    sort_field: str | None = None,
+    sort_direction: str = "asc",
+) -> QuartaTaglioListResponse:
+    run = _sync_quarta_rows(db, actor_id=actor_id) if sync_data else _latest_quarta_sync_run(db)
+    if run is None:
+        run = _sync_quarta_rows(db, actor_id=actor_id)
+
+    rows_query = db.query(QuartaTaglioRow).filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
+    if only_taglio_active:
+        rows_query = rows_query.filter(QuartaTaglioRow.taglio_attivo.is_(True))
+    rows = rows_query.order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc()).all()
+
+    grouped_rows = _group_quarta_rows(rows)
+    group_summaries = [
+        _serialize_ol_group(group_rows, esolver_link=None)
+        for group_rows in grouped_rows
+    ]
+    filtered_groups = _filter_quarta_groups(
+        list(zip(group_summaries, grouped_rows, strict=True)),
+        query_one=query_one,
+        query_two=query_two,
+        query_three=query_three,
+        operator_one=operator_one,
+        operator_two=operator_two,
+    )
+    filtered_groups.sort(
+        key=lambda item: _quarta_group_sort_key(item[0], sort_field=sort_field),
+        reverse=True if not sort_field else (sort_direction == "desc"),
+    )
+    total_items = len(filtered_groups)
+    safe_offset = max(offset, 0)
+    safe_limit = min(max(limit, 1), 100)
+    page_groups = filtered_groups[safe_offset : safe_offset + safe_limit]
+    page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
+    esolver_links = _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
+    page_items = [
+        _serialize_ol_group(group_rows, esolver_link=esolver_links.get(summary.cod_odp))
+        for summary, group_rows in page_groups
+    ]
+    return QuartaTaglioListResponse(
+        sync_run=_serialize_run(run),
+        items=page_items,
+        total_items=total_items,
+        offset=safe_offset,
+        limit=safe_limit,
+        only_taglio_active=only_taglio_active,
+    )
+
+
+def _sync_quarta_rows(db: Session, *, actor_id: int | None = None) -> QuartaTaglioSyncRun:
     run = QuartaTaglioSyncRun(status="running", triggered_by_user_id=actor_id)
     db.add(run)
     db.commit()
@@ -200,6 +267,7 @@ def sync_and_list_quarta_taglio(db: Session, *, actor_id: int | None = None) -> 
         run.finished_at = datetime.now(timezone.utc)
         db.add(run)
         db.commit()
+        return run
     except Exception as exc:
         run.status = "error"
         run.message = str(exc)
@@ -210,14 +278,9 @@ def sync_and_list_quarta_taglio(db: Session, *, actor_id: int | None = None) -> 
             raise
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Aggiornamento Quarta fallito: {exc}") from exc
 
-    rows = (
-        db.query(QuartaTaglioRow)
-        .filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
-        .order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc())
-        .all()
-    )
-    esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
-    return QuartaTaglioListResponse(sync_run=_serialize_run(run), items=_serialize_grouped_rows(rows, esolver_links=esolver_links))
+
+def _latest_quarta_sync_run(db: Session) -> QuartaTaglioSyncRun | None:
+    return db.query(QuartaTaglioSyncRun).order_by(QuartaTaglioSyncRun.started_at.desc(), QuartaTaglioSyncRun.id.desc()).first()
 
 
 def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetailResponse:
@@ -1231,12 +1294,12 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
 
     db.query(QuartaTaglioRow).update({QuartaTaglioRow.seen_in_last_sync: False})
     for external_row in external_rows:
-        cdq = _clean_text(external_row.get("CDQ"))
+        cdq = _clean_text(external_row.get("CDQ")) or "Non indicato"
         cod_odp = _clean_text(external_row.get("COD_ODP"))
         cod_art = _clean_text(external_row.get("COD_ART"))
         des_art = _clean_text(external_row.get("DES_ART"))
         colata = _clean_text(external_row.get("COLATA"))
-        if not cdq or not cod_odp:
+        if not cod_odp:
             continue
 
         status_color, status_message, status_details, matching_row_ids = _evaluate_cdq(
@@ -1264,6 +1327,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
         item.data_registro = _as_datetime(external_row.get("DATA_REGISTRO"))
         item.des_art = des_art
         item.saldo = str(external_row.get("SALDO") or "").strip() == "1"
+        item.taglio_attivo = _as_bool(external_row.get("TAGLIO_ATTIVO"))
         item.righe_materiale = int(external_row.get("RIGHE_MATERIALE") or 0)
         item.lotti_count = int(external_row.get("LOTTI") or 0)
         item.qta_totale = _as_float(external_row.get("QTA_TOTALE"))
@@ -1330,11 +1394,147 @@ def _serialize_grouped_rows(
     *,
     esolver_links: dict[str, QuartaTaglioEsolverLink] | None = None,
 ) -> list[QuartaTaglioRowResponse]:
+    return [_serialize_ol_group(group_rows, esolver_link=(esolver_links or {}).get(group_rows[0].cod_odp)) for group_rows in _group_quarta_rows(rows)]
+
+
+def _group_quarta_rows(rows: list[QuartaTaglioRow]) -> list[list[QuartaTaglioRow]]:
     rows_by_ol: dict[str, list[QuartaTaglioRow]] = defaultdict(list)
     for row in rows:
         rows_by_ol[row.cod_odp].append(row)
+    return list(rows_by_ol.values())
 
-    return [_serialize_ol_group(group_rows, esolver_link=(esolver_links or {}).get(group_rows[0].cod_odp)) for group_rows in rows_by_ol.values()]
+
+def _filter_quarta_groups(
+    groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
+    *,
+    query_one: str | None,
+    query_two: str | None,
+    query_three: str | None,
+    operator_one: str,
+    operator_two: str,
+) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
+    if not (query_one or query_two or query_three):
+        return groups
+
+    result: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]] = []
+    for item, group_rows in groups:
+        values = _quarta_searchable_values(item)
+        first = _evaluate_quarta_filter(values, query_one or "")
+        second = _evaluate_quarta_filter(first["remaining_values"], query_two or "")
+        third = _evaluate_quarta_filter(second["remaining_values"], query_three or "")
+        first_match = first["matched"] if first["active"] else None
+        second_match = second["matched"] if second["active"] else None
+        third_match = third["matched"] if third["active"] else None
+        combined = _combine_quarta_filter_results(first_match, second_match, operator_one)
+        final = _combine_quarta_filter_results(combined, third_match, operator_two)
+        if final is None or final:
+            result.append((item, group_rows))
+    return result
+
+
+def _quarta_searchable_values(item: QuartaTaglioRowResponse) -> list[str]:
+    values: list[Any] = [
+        item.cod_odp,
+        item.cdq,
+        item.colata,
+        item.cod_art,
+        item.codice_registro,
+        item.data_registro,
+        item.status_color,
+        item.status_message,
+        item.esolver_status,
+        item.esolver_message,
+        item.esolver_cliente,
+        item.esolver_cod_f3,
+        item.esolver_ordine_cliente,
+        item.esolver_conferma_ordine,
+        item.esolver_ddt,
+        item.esolver_qta_totale,
+        item.qta_totale,
+        item.lotti_count,
+        "taglio attivo" if item.taglio_attivo else "tutti",
+        "saldo" if item.saldo else "non saldo",
+    ]
+    values.extend(item.status_details or [])
+    values.extend(item.cod_lotti or [])
+    values.extend(item.matching_row_ids or [])
+    for certificate in item.certificates or []:
+        values.extend(
+            [
+                certificate.cdq,
+                certificate.colata,
+                certificate.cod_art,
+                certificate.status_color,
+                certificate.status_message,
+                *(certificate.status_details or []),
+            ]
+        )
+    return [str(value).lower() for value in values if value not in (None, "")]
+
+
+def _evaluate_quarta_filter(values: list[str], query: str) -> dict[str, Any]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return {"active": False, "matched": True, "remaining_values": values}
+    matched_indexes = [index for index, value in enumerate(values) if normalized_query in value]
+    return {
+        "active": True,
+        "matched": bool(matched_indexes),
+        "remaining_values": [value for index, value in enumerate(values) if index not in matched_indexes],
+    }
+
+
+def _combine_quarta_filter_results(left: bool | None, right: bool | None, operator: str) -> bool | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if operator == "or":
+        return left or right
+    return left and right
+
+
+def _quarta_group_sort_key(item: QuartaTaglioRowResponse, *, sort_field: str | None) -> Any:
+    if sort_field == "status":
+        return STATUS_SEVERITY.get(item.status_color, 0)
+    if sort_field == "taglio_attivo":
+        return 1 if item.taglio_attivo else 0
+    if sort_field == "cod_odp":
+        return item.cod_odp or ""
+    if sort_field == "cdq":
+        return item.cdq or ""
+    if sort_field == "colata":
+        return item.colata or ""
+    if sort_field == "cod_art":
+        return item.cod_art or ""
+    if sort_field == "qta_totale":
+        return item.qta_totale or 0
+    if sort_field == "lotti_count":
+        return item.lotti_count or 0
+    if sort_field == "codice_registro":
+        return item.codice_registro or ""
+    if sort_field == "data_registro":
+        return item.data_registro or datetime.min.replace(tzinfo=timezone.utc)
+    if sort_field == "status_message":
+        return item.status_message or ""
+    if sort_field == "matching_rows":
+        return len(item.matching_row_ids or [])
+    if sort_field == "esolver_status":
+        return item.esolver_status or ""
+    if sort_field == "esolver_cliente":
+        return item.esolver_cliente or ""
+    if sort_field == "esolver_cod_f3":
+        return item.esolver_cod_f3 or ""
+    if sort_field == "esolver_ddt":
+        return item.esolver_ddt or ""
+    if sort_field == "esolver_qta_totale":
+        return item.esolver_qta_totale or 0
+    return (
+        item.data_registro is not None,
+        item.data_registro or datetime.min.replace(tzinfo=timezone.utc),
+        item.cod_odp or "",
+        item.cdq or "",
+    )
 
 
 def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTaglioEsolverLink | None = None) -> QuartaTaglioRowResponse:
@@ -1355,6 +1555,7 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTagl
         lotti_count=len(_unique_clean(lotto for row in rows for lotto in row.cod_lotti)),
         cod_lotti=_unique_clean(lotto for row in rows for lotto in row.cod_lotti),
         saldo=all(row.saldo for row in rows),
+        taglio_attivo=all(row.taglio_attivo for row in rows),
         status_color=worst_color,
         status_message=_group_status_message(worst_color, rows),
         status_details=status_details,

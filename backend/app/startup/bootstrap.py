@@ -145,6 +145,8 @@ def ensure_quarta_taglio_columns() -> None:
 
     if "des_art" not in columns:
         statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN des_art TEXT")
+    if "taglio_attivo" not in columns:
+        statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN taglio_attivo BOOLEAN DEFAULT false NOT NULL")
 
     if statements:
         with engine.begin() as connection:

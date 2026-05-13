@@ -48,6 +48,7 @@ class QuartaTaglioRowResponse(BaseModel):
     lotti_count: int
     cod_lotti: list[str]
     saldo: bool
+    taglio_attivo: bool = False
     status_color: str
     status_message: str
     status_details: list[str]
@@ -70,6 +71,10 @@ class QuartaTaglioRowResponse(BaseModel):
 class QuartaTaglioListResponse(BaseModel):
     sync_run: QuartaTaglioSyncRunResponse
     items: list[QuartaTaglioRowResponse]
+    total_items: int = 0
+    offset: int = 0
+    limit: int = 25
+    only_taglio_active: bool = False
 
 
 class QuartaTaglioMissingItemResponse(BaseModel):
