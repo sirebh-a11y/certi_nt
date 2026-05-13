@@ -316,6 +316,8 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
+      const refreshed = await apiRequest(`/quarta-taglio/${encodeURIComponent(codOdp)}`, {}, token);
+      setData(refreshed);
       setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
       setWordDraftState({
@@ -348,6 +350,8 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
+      const refreshed = await apiRequest(`/quarta-taglio/${encodeURIComponent(codOdp)}`, {}, token);
+      setData(refreshed);
       setWordUploadState({ status: "saved", message: `Word ricaricato sul certificato ${response.draft_number}` });
     } catch (requestError) {
       setWordUploadState({

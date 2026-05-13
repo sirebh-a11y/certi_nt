@@ -75,7 +75,7 @@ function loadPersistedListState() {
       queryThree: typeof parsed?.queryThree === "string" ? parsed.queryThree : DEFAULT_LIST_STATE.queryThree,
       operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
-      rowLimit: ["25", "50", "100"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
       onlyTaglioActive: parsed?.onlyTaglioActive === true,
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
@@ -338,7 +338,7 @@ export default function QuartaTaglioPage() {
     const params = new URLSearchParams({
       sync: sync ? "true" : "false",
       only_taglio_active: onlyTaglioActive ? "true" : "false",
-      limit: rowLimit,
+      limit: rowLimit === "all" ? "1000" : rowLimit,
       offset: String(offset),
       query_one: queryOne,
       query_two: queryTwo,
@@ -662,7 +662,9 @@ export default function QuartaTaglioPage() {
           >
             <option value="25">25</option>
             <option value="50">50</option>
+            <option value="75">75</option>
             <option value="100">100</option>
+            <option value="all">Tutte</option>
           </select>
         </div>
       </div>

@@ -30,7 +30,7 @@ def list_quarta_taglio_route(
     db: DbSession,
     sync: bool = Query(default=True),
     only_taglio_active: bool = Query(default=False),
-    limit: int = Query(default=25, ge=1, le=100),
+    limit: int = Query(default=25, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     query_one: str | None = Query(default=None),
     query_two: str | None = Query(default=None),

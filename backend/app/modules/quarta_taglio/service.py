@@ -238,7 +238,7 @@ def sync_and_list_quarta_taglio(
     )
     total_items = len(filtered_groups)
     safe_offset = max(offset, 0)
-    safe_limit = min(max(limit, 1), 100)
+    safe_limit = min(max(limit, 1), 1000)
     page_groups = filtered_groups[safe_offset : safe_offset + safe_limit]
     page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
     esolver_links = _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
@@ -400,6 +400,20 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     esolver_header_rows = esolver_rows
     esolver_qta = _sum_optional(row.qta_um_mag for row in esolver_header_rows)
     esolver_cod_f3 = _join_unique(row.cod_f3 for row in esolver_header_rows) or None
+    open_certificate = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == group.cod_odp,
+            QuartaTaglioFinalCertificate.status != "pdf_final",
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .first()
+    )
+    open_certificate_number = (
+        open_certificate.certificate_number or open_certificate.draft_number
+        if open_certificate is not None and (open_certificate.certificate_number or open_certificate.draft_number)
+        else None
+    )
 
     return QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
@@ -407,7 +421,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         status_color=detail_status_color,
         status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
         header={
-            "numero_certificato": None,
+            "numero_certificato": open_certificate_number,
             "cliente": _join_unique(row.rag_soc for row in esolver_header_rows) or None,
             "ordine_cliente": _join_unique(row.odv_cli for row in esolver_header_rows) or None,
             "conferma_ordine": _join_unique(row.odv_f3 for row in esolver_header_rows) or None,

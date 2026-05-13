@@ -8,6 +8,7 @@ from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
     AutonomousRunStartRequest,
+    AcquisitionFinalValidationRequest,
     AcquisitionQualityRowListResponse,
     AcquisitionQualityRowResponse,
     AcquisitionQualityUpdateRequest,
@@ -715,8 +716,9 @@ def run_ai_intervention_route(
 @router.post("/rows/{row_id}/validate-final", response_model=AcquisitionRowDetailResponse)
 def validate_final_row_route(
     row_id: int,
+    payload: AcquisitionFinalValidationRequest,
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
-    return validate_final_row(db=db, row=row, actor_id=current_user.id)
+    return validate_final_row(db=db, row=row, payload=payload, actor_id=current_user.id)

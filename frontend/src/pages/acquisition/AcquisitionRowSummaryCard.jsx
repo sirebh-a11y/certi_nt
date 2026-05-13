@@ -26,6 +26,32 @@ function workflowLabel(value) {
   return value || "-";
 }
 
+function qualityEvaluationLabel(value) {
+  if (value === "accettato") {
+    return "Accettato";
+  }
+  if (value === "accettato_con_riserva") {
+    return "Accettato con riserva";
+  }
+  if (value === "respinto") {
+    return "Respinto";
+  }
+  return "Validata senza valutazione";
+}
+
+function qualityEvaluationState(value) {
+  if (value === "respinto") {
+    return "rosso";
+  }
+  if (value === "accettato_con_riserva") {
+    return "giallo";
+  }
+  if (value !== "accettato") {
+    return "giallo";
+  }
+  return "verde";
+}
+
 function displaySupplierName(row) {
   return row?.fornitore_nome || row?.fornitore_raw || "-";
 }
@@ -99,8 +125,8 @@ export default function AcquisitionRowSummaryCard({
                     <div className="flex flex-wrap gap-1.5">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateClasses(row.stato_tecnico)}`}>Tecnico {row.stato_tecnico}</span>
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow)}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.validata_finale ? stateClasses("verde") : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
-                        {row.validata_finale ? "Validata" : canValidateFinal ? "Pronta da validare" : "Non pronta"}
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.validata_finale ? stateClasses(qualityEvaluationState(row.qualita_valutazione)) : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
+                        {row.validata_finale ? qualityEvaluationLabel(row.qualita_valutazione) : canValidateFinal ? "Pronta da validare" : "Non pronta"}
                       </span>
                     </div>
                   </td>

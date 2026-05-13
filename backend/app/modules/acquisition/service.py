@@ -39,6 +39,7 @@ from app.modules.acquisition.models import (
     ReadValue,
 )
 from app.modules.acquisition.schemas import (
+    AcquisitionFinalValidationRequest,
     AcquisitionNotesSectionUpdateRequest,
     AcquisitionHistoryEventResponse,
     AcquisitionQualityRowListResponse,
@@ -379,6 +380,8 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         stato_workflow=row.stato_workflow,
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
+        qualita_valutazione=row.qualita_valutazione,
+        qualita_note=row.qualita_note,
         block_states=_compute_block_states(row),
         match_state=row.certificate_match.stato if row.certificate_match is not None else "mancante",
         certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
@@ -6807,7 +6810,7 @@ def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:
     quality_rows: list[AcquisitionQualityRowResponse] = []
     for row in rows:
         _ensure_row_supplier_link(db, row)
-        if _is_row_fully_confirmed_for_quality(db, row):
+        if row.validata_finale and _is_row_fully_confirmed_for_quality(db, row):
             quality_rows.append(serialize_quality_row(row))
     return AcquisitionQualityRowListResponse(items=quality_rows)
 
@@ -6819,8 +6822,8 @@ def update_quality_row(
     payload: AcquisitionQualityUpdateRequest,
     actor_id: int,
 ) -> AcquisitionQualityRowResponse:
-    if not _is_row_fully_confirmed_for_quality(db, row):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quality evaluation requires a fully confirmed row")
+    if not row.validata_finale or not _is_row_fully_confirmed_for_quality(db, row):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quality evaluation requires a final validated row")
 
     fields_set = payload.model_fields_set
     field_names = (
@@ -6828,8 +6831,6 @@ def update_quality_row(
         "qualita_data_accettazione",
         "qualita_data_richiesta",
         "qualita_numero_analisi",
-        "qualita_valutazione",
-        "qualita_note",
     )
     changed_fields: list[str] = []
     for field_name in field_names:
@@ -6842,12 +6843,6 @@ def update_quality_row(
 
     if "qualita_numero_analisi" in fields_set:
         row.qualita_numero_analisi_da_ricontrollare = False
-    if "qualita_note" in fields_set:
-        row.qualita_note_da_ricontrollare = False
-    if "qualita_valutazione" in fields_set and payload.qualita_valutazione is not None:
-        row.qualita_numero_analisi_da_ricontrollare = False
-        row.qualita_note_da_ricontrollare = False
-
     db.add(row)
     if changed_fields:
         _record_history_event(
@@ -8993,7 +8988,12 @@ def detect_properties(
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
-def validate_final_row(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+def validate_final_row(
+    db: Session,
+    row: AcquisitionRow,
+    payload: AcquisitionFinalValidationRequest,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
     block_states = _compute_block_states_from_db(db, row)
     required_blocks = ("ddt", "match", "chimica", "proprieta", "note")
     not_ready = [block for block in required_blocks if block_states.get(block) != "verde"]
@@ -9003,10 +9003,20 @@ def validate_final_row(db: Session, row: AcquisitionRow, actor_id: int) -> Acqui
             detail=f"Final validation requires all blocks green. Missing: {', '.join(not_ready)}",
         )
 
+    if payload.qualita_valutazione in {"accettato_con_riserva", "respinto"} and not payload.qualita_note:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nota valutazione è obbligatoria per accettato con riserva o respinto.",
+        )
+
+    row.qualita_valutazione = payload.qualita_valutazione
+    row.qualita_note = payload.qualita_note
     row.validata_finale = True
     row.stato_workflow = "validata_quality"
     row.stato_tecnico = "verde"
     row.priorita_operativa = "bassa"
+    row.qualita_numero_analisi_da_ricontrollare = False
+    row.qualita_note_da_ricontrollare = False
     db.add(row)
     _record_history_event(
         db=db,

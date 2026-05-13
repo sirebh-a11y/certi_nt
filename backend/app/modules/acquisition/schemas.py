@@ -652,6 +652,8 @@ class AcquisitionRowListItemResponse(BaseModel):
     stato_workflow: str
     priorita_operativa: str
     validata_finale: bool
+    qualita_valutazione: QualityEvaluationState | None
+    qualita_note: str | None
     block_states: dict[str, str]
     match_state: str
     certificate_file_name: str | None
@@ -728,12 +730,20 @@ class AcquisitionQualityUpdateRequest(BaseModel):
     qualita_data_accettazione: date | None = None
     qualita_data_richiesta: date | None = None
     qualita_numero_analisi: str | None = Field(default=None, max_length=128)
-    qualita_valutazione: QualityEvaluationState | None = None
-    qualita_note: str | None = None
 
-    @field_validator("qualita_numero_analisi", "qualita_note")
+    @field_validator("qualita_numero_analisi")
     @classmethod
     def normalize_optional_quality_fields(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
+
+
+class AcquisitionFinalValidationRequest(BaseModel):
+    qualita_valutazione: QualityEvaluationState
+    qualita_note: str | None = None
+
+    @field_validator("qualita_note")
+    @classmethod
+    def normalize_optional_quality_note(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)
 
 

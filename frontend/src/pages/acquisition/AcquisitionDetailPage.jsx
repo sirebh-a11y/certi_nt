@@ -83,6 +83,12 @@ const BLOCK_DEFAULT_SOURCE = {
 
 const FINAL_REQUIRED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
 const ORDERED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
+const QUALITY_EVALUATION_OPTIONS = [
+  { value: "accettato", label: "Accettato", state: "verde" },
+  { value: "accettato_con_riserva", label: "Accettato con riserva", state: "giallo" },
+  { value: "respinto", label: "Respinto", state: "rosso" },
+];
+const QUALITY_EVALUATION_LABELS = Object.fromEntries(QUALITY_EVALUATION_OPTIONS.map((option) => [option.value, option.label]));
 
 function stateClasses(state) {
   if (state === "verde") {
@@ -137,7 +143,13 @@ function safeText(value) {
 function workflowStepState(row, step) {
   if (step === "validazione_finale") {
     if (row?.validata_finale) {
-      return "verde";
+      if (row.qualita_valutazione === "respinto") {
+        return "rosso";
+      }
+      if (row.qualita_valutazione === "accettato_con_riserva") {
+        return "giallo";
+      }
+      return row.qualita_valutazione === "accettato" ? "verde" : "giallo";
     }
     return FINAL_REQUIRED_BLOCKS.every((block) => row?.block_states?.[block] === "verde") ? "giallo" : "rosso";
   }
@@ -155,7 +167,7 @@ function workflowStepAction(row, step) {
   const state = workflowStepState(row, step);
   if (step === "validazione_finale") {
     if (row?.validata_finale) {
-      return "Validata";
+      return qualityEvaluationLabel(row.qualita_valutazione);
     }
     return state === "giallo" ? "Pronta da validare" : "Non pronta";
   }
@@ -166,6 +178,10 @@ function workflowStepAction(row, step) {
     return "Da verificare";
   }
   return "Non pronto";
+}
+
+function qualityEvaluationLabel(value) {
+  return QUALITY_EVALUATION_LABELS[value] || "Da valutare";
 }
 
 function readValueStateLabel(block, field, value) {
@@ -252,6 +268,7 @@ export default function AcquisitionDetailPage() {
   const [savingCertificateFirst, setSavingCertificateFirst] = useState(false);
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
+  const [finalQualityNote, setFinalQualityNote] = useState("");
 
   useEffect(() => {
     let ignore = false;
@@ -327,6 +344,10 @@ export default function AcquisitionDetailPage() {
     () => Boolean(row?.certificate_document?.id && !row?.ddt_document?.id),
     [row],
   );
+
+  useEffect(() => {
+    setFinalQualityNote(row?.qualita_note || "");
+  }, [row?.id, row?.qualita_note]);
 
   async function refreshRow(includeDocuments = false) {
     const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
@@ -796,13 +817,25 @@ export default function AcquisitionDetailPage() {
     }
   }
 
-  async function handleValidateFinal() {
+  async function handleValidateFinal(qualityEvaluation) {
+    const cleanedNote = safeText(finalQualityNote).trim();
+    if ((qualityEvaluation === "accettato_con_riserva" || qualityEvaluation === "respinto") && !cleanedNote) {
+      window.alert("Per accettare con riserva o respingere la riga devi indicare una motivazione nella nota valutazione.");
+      return;
+    }
+
     setProcessingFinalValidation(true);
     setError("");
     try {
       await apiRequest(
         `/acquisition/rows/${rowId}/validate-final`,
-        { method: "POST" },
+        {
+          method: "POST",
+          body: JSON.stringify({
+            qualita_valutazione: qualityEvaluation,
+            qualita_note: cleanedNote || null,
+          }),
+        },
         token,
       );
       await refreshRow(false);
@@ -840,9 +873,6 @@ export default function AcquisitionDetailPage() {
             <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document} onClick={handleProcessMinimal} type="button">
               {processing ? "Processo..." : "Processo minimo"}
             </button>
-            <button className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={processingFinalValidation || !canValidateFinal} onClick={handleValidateFinal} type="button">
-              {processingFinalValidation ? "Validazione..." : row?.validata_finale ? "Riga validata" : "Valida riga"}
-            </button>
           </div>
         </div>
 
@@ -866,6 +896,59 @@ export default function AcquisitionDetailPage() {
                   );
                 })}
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="max-w-2xl">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Valutazione finale qualità</div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    I dati tecnici restano confermati. Qui scegli solo l'esito qualità finale che manda la riga nella vista Confermati.
+                  </p>
+                  {row.validata_finale ? (
+                    <span className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
+                      {qualityEvaluationLabel(row.qualita_valutazione)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="min-w-[320px] flex-1 xl:max-w-xl">
+                  <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="final-quality-note">
+                    Nota valutazione
+                  </label>
+                  <textarea
+                    className="min-h-20 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
+                    disabled={row.validata_finale || processingFinalValidation}
+                    id="final-quality-note"
+                    onChange={(event) => setFinalQualityNote(event.target.value)}
+                    placeholder="Obbligatoria per accettato con riserva o respinto."
+                    value={finalQualityNote}
+                  />
+                </div>
+              </div>
+              {!row.validata_finale ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {QUALITY_EVALUATION_OPTIONS.map((option) => (
+                    <button
+                      className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 ${
+                        option.state === "verde"
+                          ? "bg-emerald-700 hover:bg-emerald-800"
+                          : option.state === "giallo"
+                            ? "bg-amber-600 hover:bg-amber-700"
+                            : "bg-rose-700 hover:bg-rose-800"
+                      }`}
+                      disabled={processingFinalValidation || !canValidateFinal}
+                      key={option.value}
+                      onClick={() => handleValidateFinal(option.value)}
+                      type="button"
+                    >
+                      {processingFinalValidation ? "Validazione..." : option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {!canValidateFinal ? (
+                <p className="mt-3 text-sm text-rose-600">La valutazione finale si abilita solo quando DDT, match, chimica, proprietà e note sono verdi.</p>
+              ) : null}
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">

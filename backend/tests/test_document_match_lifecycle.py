@@ -566,6 +566,10 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     fonte_documentale="sistema",
                 )
             )
+        row.validata_finale = True
+        row.stato_workflow = "validata_quality"
+        row.qualita_valutazione = "accettato_con_riserva"
+        row.qualita_note = "Accettato con riserva"
         self.db.commit()
 
         quality_rows = list_quality_rows(self.db).items
@@ -580,8 +584,6 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                 qualita_data_accettazione=date(2026, 1, 20),
                 qualita_data_richiesta=date(2026, 1, 21),
                 qualita_numero_analisi="206",
-                qualita_valutazione="accettato_con_riserva",
-                qualita_note="Accettato con riserva",
             ),
             actor_id=1,
         )
@@ -589,7 +591,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(updated.qualita_numero_analisi, "206")
         self.assertEqual(updated.qualita_valutazione, "accettato_con_riserva")
         self.assertFalse(updated.qualita_numero_analisi_da_ricontrollare)
-        self.assertFalse(updated.qualita_note_da_ricontrollare)
+        self.assertTrue(updated.qualita_note_da_ricontrollare)
 
     def test_certificate_first_arconic_row_merges_when_matching_ddt_arrives_later(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")

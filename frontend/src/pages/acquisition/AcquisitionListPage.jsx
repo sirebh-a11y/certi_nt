@@ -11,6 +11,11 @@ const BLOCK_LABELS = {
   proprieta: "Prop.",
   note: "Note",
 };
+const QUALITY_EVALUATION_LABELS = {
+  accettato: "Accettato",
+  accettato_con_riserva: "Accettato con riserva",
+  respinto: "Respinto",
+};
 
 const LIST_STATE_STORAGE_KEY = "certi_nt.acquisition_list_state.v1";
 const DEFAULT_LIST_STATE = {
@@ -197,6 +202,23 @@ function stateSurfaceClasses(state) {
   return "border-rose-200 bg-rose-50 text-rose-800";
 }
 
+function qualityEvaluationLabel(value) {
+  return QUALITY_EVALUATION_LABELS[value] || "Validata senza valutazione";
+}
+
+function qualityEvaluationTone(value) {
+  if (value === "respinto") {
+    return "rosso";
+  }
+  if (value === "accettato_con_riserva") {
+    return "giallo";
+  }
+  if (value !== "accettato") {
+    return "giallo";
+  }
+  return "verde";
+}
+
 function compactNoteReference(row) {
   const noteValue = row.note_documento?.trim();
   if (noteValue) {
@@ -219,6 +241,9 @@ function searchableFieldValues(row) {
     row.ddt,
     row.peso,
     row.ordine,
+    row.qualita_valutazione,
+    qualityEvaluationLabel(row.qualita_valutazione),
+    row.qualita_note,
     matchCellLabel(row),
     compactMatchReference(row),
     row.certificate_file_name,
@@ -310,7 +335,7 @@ function ddtCoreState(row) {
 
 function rowActivityState(row) {
   if (row.validata_finale) {
-    return { tone: "accettato", label: "confermata" };
+    return { tone: qualityEvaluationTone(row.qualita_valutazione), label: qualityEvaluationLabel(row.qualita_valutazione) };
   }
 
   const ddtState = ddtCoreState(row);
@@ -328,16 +353,6 @@ function rowActivityState(row) {
   }
 
   return { tone: "verde", label: "pronto" };
-}
-
-function isRowFullyConfirmed(row) {
-  return (
-    ddtCoreState(row) === "verde" &&
-    row.block_states?.match === "verde" &&
-    row.block_states?.chimica === "verde" &&
-    row.block_states?.proprieta === "verde" &&
-    row.block_states?.note === "verde"
-  );
 }
 
 function documentMatchVisualState(row) {
@@ -364,7 +379,13 @@ function documentMatchingClosed(row) {
 }
 
 function activityRank(label) {
-  if (label === "confermata") {
+  if (label === "Accettato") {
+    return 5;
+  }
+  if (label === "Accettato con riserva") {
+    return 4;
+  }
+  if (label === "Respinto" || label === "Validata senza valutazione") {
     return 3;
   }
   if (label === "pronto") {
@@ -608,7 +629,7 @@ export default function AcquisitionListPage() {
 
   const visibleRows = useMemo(() => {
     let nextRows = rows;
-    nextRows = nextRows.filter((row) => (showConfirmedOnly ? isRowFullyConfirmed(row) : !isRowFullyConfirmed(row)));
+    nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale : !row.validata_finale));
 
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
@@ -665,7 +686,7 @@ export default function AcquisitionListPage() {
 
   const summary = useMemo(() => {
     const total = rows.length;
-    const open = rows.filter((row) => row.stato_workflow !== "validata_quality").length;
+    const open = rows.filter((row) => !row.validata_finale).length;
     return { total, open };
   }, [rows]);
 

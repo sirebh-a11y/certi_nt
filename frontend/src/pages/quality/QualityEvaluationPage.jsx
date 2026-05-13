@@ -23,8 +23,6 @@ const EDITABLE_FIELDS = [
   "qualita_data_accettazione",
   "qualita_data_richiesta",
   "qualita_numero_analisi",
-  "qualita_valutazione",
-  "qualita_note",
 ];
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -214,8 +212,8 @@ function searchableFieldValues(row, draft) {
     draft.qualita_data_accettazione,
     draft.qualita_data_richiesta,
     draft.qualita_numero_analisi,
-    draft.qualita_valutazione,
-    draft.qualita_note,
+    row.qualita_valutazione,
+    row.qualita_note,
   ]
     .filter((value) => value !== null && value !== undefined && value !== "")
     .map((value) => String(value).toLowerCase());
@@ -278,9 +276,9 @@ function qualitySortValue(row, draft, field) {
     case "numero_analisi":
       return draft.qualita_numero_analisi || "";
     case "valutazione":
-      return EVALUATION_SORT_RANK[draft.qualita_valutazione || ""] ?? 99;
+      return EVALUATION_SORT_RANK[row.qualita_valutazione || ""] ?? 99;
     case "note":
-      return draft.qualita_note || "";
+      return row.qualita_note || "";
     default:
       return null;
   }
@@ -700,7 +698,7 @@ export default function QualityEvaluationPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione qualità</p>
           <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione qualità</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Registro delle sole righe completamente confermate. I campi di match sono bloccati; date, numero analisi, valutazione e note sono gestiti qui.
+            Registro delle sole righe completamente confermate. I campi di match sono bloccati; date e numero analisi sono gestiti qui. Valutazione e nota arrivano dalla validazione finale Incoming.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -921,35 +919,10 @@ export default function QualityEvaluationPage() {
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <select
-                      className={`w-40 rounded-lg border px-2 py-1.5 ${fieldClass({
-                        changed: textValue(row.qualita_valutazione) !== textValue(draft.qualita_valutazione),
-                        status: cellStates[cellKey(row.id, "qualita_valutazione")]?.status,
-                      })}`}
-                      onBlur={() => flushQualityCell(row.id, "qualita_valutazione")}
-                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_valutazione", event.target.value, 0)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_valutazione")])}
-                      value={draft.qualita_valutazione || ""}
-                    >
-                      {EVALUATION_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <textarea
-                      className={`min-h-8 w-40 rounded-lg border px-2 py-1.5 ${fieldClass({
-                        changed: textValue(row.qualita_note) !== textValue(draft.qualita_note),
-                        review: row.qualita_note_da_ricontrollare,
-                        status: cellStates[cellKey(row.id, "qualita_note")]?.status,
-                      })}`}
-                      onBlur={() => flushQualityCell(row.id, "qualita_note")}
-                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_note", event.target.value, 1000)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_note")])}
-                      value={draft.qualita_note || ""}
-                    />
+                    <LockedCell wide>{row.qualita_note}</LockedCell>
                   </td>
                 </tr>
               );
