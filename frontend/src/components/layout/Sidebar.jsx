@@ -8,6 +8,7 @@ const navItems = [
   { label: "Incoming Quality", to: "/acquisition", roles: ["user", "manager", "admin"] },
   { label: "Valutazione Qualità", to: "/quality-evaluation", roles: ["user", "manager", "admin"] },
   { label: "Certificazione", to: "/quarta-taglio", roles: ["user", "manager", "admin"] },
+  { label: "Registro Certificati", to: "/quarta-taglio/certificati", roles: ["user", "manager", "admin"] },
   { type: "divider" },
   { label: "Anagrafica Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"] },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"] },
@@ -27,6 +28,9 @@ export default function Sidebar() {
   function isNavItemActive(item, isActive) {
     if (item.to === "/acquisition") {
       return location.pathname === "/acquisition" || /^\/acquisition\/\d+/.test(location.pathname);
+    }
+    if (item.to === "/quarta-taglio") {
+      return location.pathname === "/quarta-taglio" || /^\/quarta-taglio\/(?!certificati(?:\/|$))/.test(location.pathname);
     }
     return isActive;
   }

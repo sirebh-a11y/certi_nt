@@ -33,6 +33,8 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioCertificateResponse,
     QuartaTaglioDetailResponse,
     QuartaTaglioEsolverDdtRowResponse,
+    QuartaTaglioFinalCertificateRegisterItem,
+    QuartaTaglioFinalCertificateRegisterResponse,
     QuartaTaglioListResponse,
     QuartaTaglioMaterialResponse,
     QuartaTaglioMissingItemResponse,
@@ -284,6 +286,19 @@ def _sync_quarta_rows(db: Session, *, actor_id: int | None = None) -> QuartaTagl
 
 def _latest_quarta_sync_run(db: Session) -> QuartaTaglioSyncRun | None:
     return db.query(QuartaTaglioSyncRun).order_by(QuartaTaglioSyncRun.started_at.desc(), QuartaTaglioSyncRun.id.desc()).first()
+
+
+def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCertificateRegisterResponse:
+    certificates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+        .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .all()
+    )
+    return QuartaTaglioFinalCertificateRegisterResponse(
+        items=[_serialize_final_certificate_register_item(certificate) for certificate in certificates],
+        total_items=len(certificates),
+    )
 
 
 def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetailResponse:
@@ -1515,6 +1530,31 @@ def _evaluate_cdq(
 
 def _serialize_run(run: QuartaTaglioSyncRun) -> QuartaTaglioSyncRunResponse:
     return QuartaTaglioSyncRunResponse.model_validate(run)
+
+
+def _serialize_final_certificate_register_item(
+    certificate: QuartaTaglioFinalCertificate,
+) -> QuartaTaglioFinalCertificateRegisterItem:
+    word_download_url = None
+    if certificate.storage_key_docx and certificate.download_token:
+        word_download_url = f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}"
+    return QuartaTaglioFinalCertificateRegisterItem(
+        id=certificate.id,
+        cod_odp=certificate.cod_odp,
+        status=certificate.status,
+        certificate_number=certificate.certificate_number or certificate.draft_number,
+        draft_number=certificate.draft_number,
+        cert_date=certificate.cert_date,
+        lega_cod_f3=certificate.lega_cod_f3,
+        cdo_lega=certificate.cdo_lega,
+        fornitore_cliente=certificate.fornitore_cliente,
+        has_word=bool(certificate.storage_key_docx),
+        has_pdf=bool(certificate.storage_key_pdf),
+        word_download_url=word_download_url,
+        created_at=certificate.created_at,
+        updated_at=certificate.updated_at,
+        closed_at=certificate.closed_at,
+    )
 
 
 def _serialize_row(row: QuartaTaglioRow) -> QuartaTaglioRowResponse:

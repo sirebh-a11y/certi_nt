@@ -77,6 +77,29 @@ class QuartaTaglioListResponse(BaseModel):
     only_taglio_active: bool = False
 
 
+class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
+    id: int
+    cod_odp: str
+    status: str
+    certificate_number: str
+    draft_number: str
+    cert_date: datetime | None = None
+    lega_cod_f3: str | None = None
+    cdo_lega: str | None = None
+    fornitore_cliente: str | None = None
+    has_word: bool = False
+    has_pdf: bool = False
+    word_download_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+
+class QuartaTaglioFinalCertificateRegisterResponse(BaseModel):
+    items: list[QuartaTaglioFinalCertificateRegisterItem]
+    total_items: int = 0
+
+
 class QuartaTaglioMissingItemResponse(BaseModel):
     cdq: str
     colata: str | None = None

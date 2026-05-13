@@ -5,6 +5,7 @@ from app.core.deps import CurrentUser, DbSession
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioArticleDataRequest,
     QuartaTaglioDetailResponse,
+    QuartaTaglioFinalCertificateRegisterResponse,
     QuartaTaglioListResponse,
     QuartaTaglioStandardSelectionRequest,
     QuartaTaglioWordDraftResponse,
@@ -14,6 +15,7 @@ from app.modules.quarta_taglio.service import (
     create_quarta_taglio_word_draft,
     get_quarta_taglio_detail,
     get_quarta_taglio_word_draft_file,
+    list_quarta_taglio_final_certificates,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
 )
@@ -52,6 +54,14 @@ def list_quarta_taglio_route(
         sort_field=sort_field,
         sort_direction=sort_direction,
     )
+
+
+@router.get("/certificates/register", response_model=QuartaTaglioFinalCertificateRegisterResponse)
+def list_quarta_taglio_final_certificates_route(
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioFinalCertificateRegisterResponse:
+    return list_quarta_taglio_final_certificates(db)
 
 
 @router.get("/{cod_odp}", response_model=QuartaTaglioDetailResponse)

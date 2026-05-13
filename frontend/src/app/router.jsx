@@ -21,6 +21,7 @@ import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
+import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTaglioCertificatesRegisterPage";
 import QuartaTaglioDetailPage from "../pages/quartaTaglio/QuartaTaglioDetailPage";
 import QuartaTaglioPage from "../pages/quartaTaglio/QuartaTaglioPage";
 import StandardsPage from "../pages/standards/StandardsPage";
@@ -153,6 +154,7 @@ export function AppRouter() {
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />
+          <Route path="/quarta-taglio/certificati" element={<QuartaTaglioCertificatesRegisterPage />} />
           <Route path="/quarta-taglio/:codOdp" element={<QuartaTaglioDetailPage />} />
           <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
