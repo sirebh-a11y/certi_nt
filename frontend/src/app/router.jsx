@@ -16,6 +16,7 @@ import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionS
 import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import AIConfigPage from "../pages/ai/AIConfigPage";
 import DashboardPage from "../pages/core/DashboardPage";
+import PlaceholderPage from "../pages/core/PlaceholderPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
@@ -123,6 +124,26 @@ function NotesRoute() {
   return <NotesPage />;
 }
 
+function KpiRoute() {
+  return (
+    <PlaceholderPage
+      eyebrow="Valutazione fornitori"
+      title="KPI"
+      description="Area dedicata agli indicatori di valutazione fornitori: andamento conformita, riserve, respinti e indicatori operativi."
+    />
+  );
+}
+
+function ClientsRoute() {
+  return (
+    <PlaceholderPage
+      eyebrow="Anagrafica"
+      title="Clienti"
+      description="Area futura per gestire l'anagrafica clienti e i dati collegati ai flussi di certificazione."
+    />
+  );
+}
+
 export function AppRouter() {
   return (
     <Routes>
@@ -148,11 +169,13 @@ export function AppRouter() {
           <Route path="/suppliers" element={<SuppliersListPage />} />
           <Route path="/suppliers/new" element={<NewSupplierPage />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
+          <Route path="/clients" element={<ClientsRoute />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/ai" element={<AIConfigRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
+          <Route path="/supplier-kpi" element={<KpiRoute />} />
           <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />
           <Route path="/quarta-taglio/certificati" element={<QuartaTaglioCertificatesRegisterPage />} />
           <Route path="/quarta-taglio/:codOdp" element={<QuartaTaglioDetailPage />} />

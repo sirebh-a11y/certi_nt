@@ -223,7 +223,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Registro certificati</p>
+          <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Registro certificazione</p>
           <h2 className="mt-2 text-2xl font-semibold">Certificati numerati</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
             Elenco dei certificati che hanno già ricevuto il numero. Se il certificato è ancora aperto, la riga rimanda alla pagina OL; quando sarà chiuso,

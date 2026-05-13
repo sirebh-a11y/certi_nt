@@ -225,7 +225,7 @@ function AcquisitionManualDocumentPage({ config }) {
       <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
+            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">{config.title}</h2>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-500">
               {config.intro}

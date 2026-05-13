@@ -365,7 +365,7 @@ export default function AcquisitionUploadPage() {
       <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
+            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">Caricamento documenti</h2>
             <p className="mt-2 text-sm text-slate-500">
               Flusso: carichi DDT e certificati nel batch corrente, il sistema li riconosce e poi premi l'assistente AI per processarli.

@@ -695,8 +695,8 @@ export default function QualityEvaluationPage() {
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8" ref={sectionRef}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione qualità</p>
-          <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione qualità</h2>
+          <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione</p>
+          <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione fornitori</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
             Registro delle sole righe completamente confermate. I campi di match sono bloccati; date e numero analisi sono gestiti qui. Valutazione e nota arrivano dalla validazione finale Incoming.
           </p>

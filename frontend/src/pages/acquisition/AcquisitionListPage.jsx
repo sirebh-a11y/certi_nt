@@ -894,7 +894,7 @@ export default function AcquisitionListPage() {
     <section className="space-y-2" ref={sectionRef}>
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming Quality</p>
+            <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
           </div>
         <div className="flex flex-wrap gap-2">
           <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition/upload">
