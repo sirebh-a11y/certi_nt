@@ -158,6 +158,18 @@ def ensure_quarta_taglio_columns() -> None:
         certificate_statements: list[str] = []
         if "download_token" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN download_token VARCHAR(128)")
+        if "cdq_key" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cdq_key TEXT")
+            certificate_statements.append("CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_cdq_key ON quarta_taglio_final_certificates (cdq_key)")
+        if "cert_date" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cert_date TIMESTAMP WITH TIME ZONE")
+            certificate_statements.append("CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_cert_date ON quarta_taglio_final_certificates (cert_date)")
+        if "lega_cod_f3" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN lega_cod_f3 TEXT")
+        if "cdo_lega" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cdo_lega TEXT")
+        if "fornitore_cliente" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN fornitore_cliente TEXT")
         if certificate_statements:
             with engine.begin() as connection:
                 for statement in certificate_statements:

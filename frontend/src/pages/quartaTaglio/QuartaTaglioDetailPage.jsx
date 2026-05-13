@@ -314,7 +314,7 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      setWordDraftState({ status: "saved", message: `Bozza Word creata: ${response.draft_number}` });
+      setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
       setWordDraftState({
         status: "error",
@@ -370,11 +370,11 @@ export default function QuartaTaglioDetailPage() {
 
       <div className="flex flex-col gap-2 rounded-xl border border-border bg-white p-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Bozza Word</h3>
+          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
           <p className="mt-1 text-sm text-slate-600">
-            {data.ready && data.selected_standard_confirmed
-              ? "Dati pronti per creare la bozza DOCX."
-              : "Serve riga pronta e standard confermato prima di creare il Word."}
+            {data.selected_standard_confirmed
+              ? "Standard confermato: puoi creare il Word numerato anche se alcuni dati sono ancora mancanti."
+              : "Serve standard confermato prima di creare il Word."}
           </p>
           {wordDraftState.message ? (
             <p className={`mt-1 text-sm ${wordDraftState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
@@ -384,11 +384,11 @@ export default function QuartaTaglioDetailPage() {
         </div>
         <button
           className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-          disabled={wordDraftState.status === "saving" || !data.ready || !data.selected_standard_confirmed}
+          disabled={wordDraftState.status === "saving" || !data.selected_standard_confirmed}
           onClick={generateWordDraft}
           type="button"
         >
-          {wordDraftState.status === "saving" ? "Creazione..." : "Genera bozza Word"}
+          {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
         </button>
       </div>
 

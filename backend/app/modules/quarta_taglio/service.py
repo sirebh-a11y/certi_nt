@@ -76,6 +76,8 @@ CHEMISTRY_FIELDS = [
 
 PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 
+CERTIFICATE_NUMBER_START = 7000
+
 NOTE_FIELDS = [
     ("nota_rohs", "RoHS"),
     ("nota_radioactive_free", "Radioactive free"),
@@ -215,8 +217,9 @@ def sync_and_list_quarta_taglio(
     rows = rows_query.order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc()).all()
 
     grouped_rows = _group_quarta_rows(rows)
+    cached_esolver_links = _load_esolver_links_for_rows(db, rows=rows)
     group_summaries = [
-        _serialize_ol_group(group_rows, esolver_link=None)
+        _serialize_ol_group(group_rows, esolver_link=cached_esolver_links.get(group_rows[0].cod_odp))
         for group_rows in grouped_rows
     ]
     filtered_groups = _filter_quarta_groups(
@@ -495,41 +498,32 @@ def create_quarta_taglio_word_draft(
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
     _ensure_word_draft_can_be_created(detail)
 
-    draft_number = f"BOZZA-{_safe_file_part(cod_odp)}"
+    certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    certificate_number = certificate.certificate_number or _assign_certificate_number(db, cdq_key=certificate.cdq_key, now=certificate.cert_date)
+    certificate.certificate_number = certificate_number
+    certificate.draft_number = certificate_number
+    certificate.status = certificate.status or "draft"
+    certificate.cert_date = certificate.cert_date or datetime.now(timezone.utc)
+    certificate.cdq_key = certificate.cdq_key or _cdq_key_from_detail(detail)
+    certificate.cdq_signature = _cdq_signature_from_detail(detail)
+    certificate.cdq_values = _cdq_values_from_detail(detail)
+    _apply_certificate_register_fields(certificate, detail)
+
     storage_key = _certificate_docx_storage_key(cod_odp)
     output_path = _certificate_storage_path(storage_key)
     quality_manager = _select_quality_manager(db)
     build_forgialluminio_draft_docx(
         detail=detail,
         output_path=output_path,
-        draft_number=draft_number,
+        draft_number=certificate_number,
         certified_by=actor,
         quality_manager=quality_manager,
     )
 
-    certificate = QuartaTaglioFinalCertificate(
-        cod_odp=cod_odp,
-        status="draft",
-        certificate_number=None,
-        draft_number=draft_number,
-        cdq_signature=_cdq_signature_from_detail(detail),
-        cdq_values=[
-            {
-                "cdq": item.cdq,
-                "colata": item.colata,
-                "codice_f3": detail.header.get("codice_f3") if detail.header else None,
-                "cod_art": item.cod_art,
-                "qta_totale": item.qta_totale,
-                "lotti": item.cod_lotti,
-            }
-            for item in detail.materials
-        ],
-        storage_key_docx=storage_key,
-        download_token=secrets.token_urlsafe(32),
-        created_by_user_id=actor.id,
-        certified_by_user_id=actor.id,
-        quality_manager_user_id=quality_manager.id if quality_manager else None,
-    )
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -542,6 +536,136 @@ def create_quarta_taglio_word_draft(
         download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
         created_at=certificate.created_at,
     )
+
+
+def _get_or_create_open_certificate(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    actor: User,
+) -> QuartaTaglioFinalCertificate:
+    certificate = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp,
+            QuartaTaglioFinalCertificate.status != "pdf_final",
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .first()
+    )
+    if certificate is None:
+        certificate = QuartaTaglioFinalCertificate(
+            cod_odp=detail.cod_odp,
+            status="draft",
+            certificate_number=None,
+            draft_number="",
+            cdq_key=_cdq_key_from_detail(detail),
+            cdq_signature=_cdq_signature_from_detail(detail),
+            cdq_values=_cdq_values_from_detail(detail),
+            cert_date=datetime.now(timezone.utc),
+            download_token=secrets.token_urlsafe(32),
+            created_by_user_id=actor.id,
+        )
+        _apply_certificate_register_fields(certificate, detail)
+        db.add(certificate)
+        db.flush()
+    else:
+        if not certificate.cdq_key:
+            certificate.cdq_key = _cdq_key_from_detail(detail)
+        if not certificate.cert_date:
+            certificate.cert_date = datetime.now(timezone.utc)
+    return certificate
+
+
+def _cdq_key_from_detail(detail: QuartaTaglioDetailResponse) -> str:
+    values = sorted(
+        {
+            re.sub(r"\s+", "", _clean_text(item.cdq) or "").upper()
+            for item in detail.materials
+            if _clean_text(item.cdq)
+        }
+    )
+    return "|".join(values)
+
+
+def _cdq_values_from_detail(detail: QuartaTaglioDetailResponse) -> list[dict[str, Any]]:
+    return [
+        {
+            "cdq": item.cdq,
+            "colata": item.colata,
+            "codice_f3": detail.header.get("codice_f3") if detail.header else None,
+            "cod_art": item.cod_art,
+            "qta_totale": item.qta_totale,
+            "lotti": item.cod_lotti,
+        }
+        for item in detail.materials
+    ]
+
+
+def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
+    header = detail.header or {}
+    certificate.lega_cod_f3 = _clean_text(header.get("codice_f3")) or (detail.selected_standard.label if detail.selected_standard else None)
+    certificate.cdo_lega = _clean_text(header.get("conferma_ordine")) or _clean_text(header.get("ordine_cliente"))
+    certificate.fornitore_cliente = _clean_text(header.get("cliente"))
+
+
+def _assign_certificate_number(db: Session, *, cdq_key: str | None, now: datetime | None = None) -> str:
+    issued_at = now or datetime.now(timezone.utc)
+    year_suffix = f"{issued_at.year % 100:02d}"
+    key = _clean_text(cdq_key)
+    if key:
+        existing_for_key = (
+            db.query(QuartaTaglioFinalCertificate)
+            .filter(
+                QuartaTaglioFinalCertificate.cdq_key == key,
+                QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            )
+            .order_by(QuartaTaglioFinalCertificate.created_at.asc(), QuartaTaglioFinalCertificate.id.asc())
+            .all()
+        )
+        if existing_for_key:
+            base_number = _certificate_main_number(existing_for_key[0].certificate_number)
+            if base_number is not None:
+                suffix = _next_certificate_suffix(existing_for_key, base_number=base_number, year_suffix=year_suffix)
+                return f"{base_number}_{suffix}/{year_suffix}"
+
+    max_main = CERTIFICATE_NUMBER_START - 1
+    for certificate in db.query(QuartaTaglioFinalCertificate).filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None)).all():
+        main_number = _certificate_main_number(certificate.certificate_number)
+        if main_number is not None:
+            max_main = max(max_main, main_number)
+    return f"{max_main + 1}/{year_suffix}"
+
+
+def _certificate_main_number(value: str | None) -> int | None:
+    match = re.match(r"^\s*(\d+)(?:_\d+)?/\d{2}\s*$", value or "")
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _certificate_suffix_parts(value: str | None) -> tuple[int, int | None, str] | None:
+    match = re.match(r"^\s*(\d+)(?:_(\d+))?/(\d{2})\s*$", value or "")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)) if match.group(2) else None, match.group(3)
+
+
+def _next_certificate_suffix(
+    certificates: list[QuartaTaglioFinalCertificate],
+    *,
+    base_number: int,
+    year_suffix: str,
+) -> int:
+    max_suffix = 0
+    for certificate in certificates:
+        parts = _certificate_suffix_parts(certificate.certificate_number)
+        if parts is None:
+            continue
+        main_number, suffix, suffix_year = parts
+        if main_number == base_number and suffix_year == year_suffix and suffix is not None:
+            max_suffix = max(max_suffix, suffix)
+    return max_suffix + 1
 
 
 def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:
@@ -557,8 +681,6 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
 
 
 def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> None:
-    if not detail.ready:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dati ancora mancanti per creare il certificato")
     if not detail.selected_standard_confirmed:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confermare lo standard prima di creare il certificato")
 
@@ -1236,6 +1358,16 @@ def _refresh_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow])
         db.add(link)
     db.commit()
     return existing_links
+
+
+def _load_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow]) -> dict[str, QuartaTaglioEsolverLink]:
+    cod_odps = sorted({row.cod_odp for row in rows if row.cod_odp})
+    if not cod_odps:
+        return {}
+    return {
+        link.cod_odp: link
+        for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps)).all()
+    }
 
 
 def _apply_esolver_link_values(
