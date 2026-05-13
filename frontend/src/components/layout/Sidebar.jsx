@@ -207,7 +207,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="border-r border-border bg-[#fbfbf7] px-4 py-5">
+    <aside className="min-h-full border-r border-border bg-[#fbfbf7] px-4 py-5">
       <nav className="sticky top-0 flex flex-col gap-0.5">
         {visibleNavItems.map((item) => {
           if (item.type === "section") {
