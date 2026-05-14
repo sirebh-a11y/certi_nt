@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
+import { documentTone } from "./documentTone";
 import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
 const SYSTEM_NOTE_ORDER = [
@@ -51,6 +52,7 @@ function renderOverlayBox({ item, imageHeight, imageWidth, key, title }) {
 }
 
 function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems, token }) {
+  const tone = documentTone("certificato");
   const [pageImages, setPageImages] = useState([]);
   const [pageImageSizes, setPageImageSizes] = useState({});
   const [zoom, setZoom] = useState(100);
@@ -143,25 +145,25 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
   }, [overlayPreviewItems, pageImages, pageImageSizes, viewportWidth, zoom]);
 
   return (
-    <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
+    <div className={`rounded-2xl border p-4 ${tone.panel}`}>
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Certificato</p>
-          <p className="mt-1 text-sm text-white">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Certificato</p>
+          <p className="mt-1 text-sm text-slate-900">
             {certificateDocument?.nome_file_originale || "Nessun certificato collegato"}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`}
             onClick={() => setZoom((current) => Math.max(50, current - 10))}
             type="button"
           >
             -
           </button>
-          <span className="min-w-[64px] text-center text-sm font-semibold text-white">{zoom}%</span>
+          <span className="min-w-[64px] text-center text-sm font-semibold text-slate-700">{zoom}%</span>
           <button
-            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`}
             onClick={() => setZoom((current) => Math.min(250, current + 10))}
             type="button"
           >
@@ -170,7 +172,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
         </div>
       </div>
 
-      <div className="h-[43vh] overflow-auto rounded-2xl border border-slate-600 bg-slate-700 p-3" ref={viewportRef}>
+      <div className={`h-[43vh] overflow-auto rounded-2xl border p-3 ${tone.viewport}`} ref={viewportRef}>
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
@@ -185,7 +187,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
                   }
                 }}
               >
-                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">
+                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                   Pagina {page.numero_pagina}
                 </p>
                 <div
@@ -233,7 +235,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-200">
+          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-600">
             {error || "Immagini pagina non disponibili."}
           </div>
         )}

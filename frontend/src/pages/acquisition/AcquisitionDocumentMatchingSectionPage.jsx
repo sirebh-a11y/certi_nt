@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBeforeUnload } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
+import { documentTone } from "./documentTone";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
@@ -276,7 +277,8 @@ function OverlayLegend({ visible }) {
   );
 }
 
-function DocumentPdfPanel({ document, title, footerContent, token, overlayPreviewItems }) {
+function DocumentPdfPanel({ document, title, footerContent, token, overlayPreviewItems, kind }) {
+  const tone = documentTone(kind);
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
@@ -371,23 +373,23 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
   }, []);
 
   return (
-    <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
+    <div className={`rounded-2xl border p-4 ${tone.panel}`}>
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</p>
-          <p className="mt-1 text-sm text-white">{document?.nome_file_originale || "Documento non collegato"}</p>
+          <p className="text-lg font-bold text-slate-950">{title}</p>
+          <p className="mt-1 text-sm text-slate-900">{document?.nome_file_originale || "Documento non collegato"}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`}
             onClick={() => setZoom((current) => Math.max(50, current - 10))}
             type="button"
           >
             -
           </button>
-          <span className="min-w-[64px] text-center text-sm font-semibold text-white">{zoom}%</span>
+          <span className="min-w-[64px] text-center text-sm font-semibold text-slate-700">{zoom}%</span>
           <button
-            className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`}
             onClick={() => setZoom((current) => Math.min(250, current + 10))}
             type="button"
           >
@@ -396,7 +398,7 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
         </div>
       </div>
 
-      <div className="h-[38vh] overflow-auto rounded-2xl border border-slate-600 bg-slate-700 p-3" ref={viewportRef}>
+      <div className={`h-[38vh] overflow-auto rounded-2xl border p-3 ${tone.viewport}`} ref={viewportRef}>
         {pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
@@ -407,7 +409,7 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
                   pageElementRefs.current[page.id] = node;
                 }}
               >
-                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">
+                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                   Pagina {page.numero_pagina}
                 </p>
                 <div className="relative" style={{ width: viewportWidth > 0 ? `${(viewportWidth * zoom) / 100}px` : "100%" }}>
@@ -445,7 +447,7 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-200">
+          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-600">
             {error || "Immagini pagina non disponibili."}
           </div>
         )}
@@ -456,14 +458,15 @@ function DocumentPdfPanel({ document, title, footerContent, token, overlayPrevie
   );
 }
 
-function MissingDocumentPanel({ title, subtitle, previewContent, children }) {
+function MissingDocumentPanel({ title, subtitle, previewContent, children, kind }) {
+  const tone = documentTone(kind);
   return (
-    <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
-      <div className="h-[38vh] overflow-auto rounded-2xl border border-dashed border-slate-500 bg-slate-700 p-4">
+    <div className={`rounded-2xl border p-4 ${tone.panel}`}>
+      <div className={`h-[38vh] overflow-auto rounded-2xl border border-dashed p-4 ${tone.dashedViewport}`}>
         <div className="text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{title}</p>
-          <p className="mt-3 text-lg font-semibold text-white">Documento mancante</p>
-          <p className="mt-2 text-sm leading-6 text-slate-300">{subtitle}</p>
+          <p className="text-lg font-bold text-slate-950">{title}</p>
+          <p className="mt-3 text-lg font-semibold text-slate-900">Documento mancante</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{subtitle}</p>
         </div>
         {previewContent ? <div className="mt-4 text-left">{previewContent}</div> : null}
       </div>
@@ -616,7 +619,7 @@ function CandidateBox({ label = "candidati", loadingPreview, preview }) {
 function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateFirstRow, loadingDdtPreview, onDetach, row }) {
   const state = row?.block_states?.match || "rosso";
   return (
-    <div className="rounded-2xl border border-slate-300/80 bg-slate-100/95 p-3">
+    <div className="rounded-2xl border border-slate-300/80 bg-slate-200/90 p-3 shadow-inner shadow-slate-300/40">
       <div className="flex flex-col items-center gap-3 text-center">
         <button
           className={`flex h-16 w-16 items-center justify-center rounded-full border text-3xl font-semibold transition ${
@@ -1294,6 +1297,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       {ddtDocument ? (
         <DocumentPdfPanel
           document={ddtDocument}
+          kind="ddt"
           overlayPreviewItems={ddtOverlayItems}
           footerContent={
             <div className="space-y-2">
@@ -1325,6 +1329,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
         />
       ) : (
         <MissingDocumentPanel
+          kind="ddt"
           previewContent={
             isCertificateFirstRow ? (
               <LinkCandidateList
@@ -1384,6 +1389,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       {certificateDocument ? (
         <DocumentPdfPanel
           document={certificateDocument}
+          kind="certificato"
           overlayPreviewItems={certificateOverlayItems}
           footerContent={
             <div className="space-y-2">
@@ -1415,6 +1421,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
         />
       ) : (
         <MissingDocumentPanel
+          kind="certificato"
           previewContent={
             isDdtOnlyRow ? (
               <LinkCandidateList

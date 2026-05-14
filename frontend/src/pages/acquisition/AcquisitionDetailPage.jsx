@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
+import { documentTone } from "./documentTone";
 import { formatFieldDisplay, formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
@@ -959,12 +960,14 @@ export default function AcquisitionDetailPage() {
                 <div className="grid gap-4 xl:grid-cols-2">
                   <DocumentPanel
                     document={ddtDocument}
+                    kind="ddt"
                     onOpenAsset={handleOpenAsset}
                     openingAsset={openingAsset}
                     title="DDT sorgente"
                   />
                   <DocumentPanel
                     document={certificateDocument}
+                    kind="certificato"
                     onOpenAsset={handleOpenAsset}
                     openingAsset={openingAsset}
                     title="Certificato sorgente"
@@ -1544,9 +1547,10 @@ function PropertyAdder({ onCreateValue, propertyFieldOrder }) {
   );
 }
 
-function DocumentPanel({ title, document, onOpenAsset, openingAsset }) {
+function DocumentPanel({ title, document, onOpenAsset, openingAsset, kind }) {
+  const tone = documentTone(kind);
   return (
-    <div className="rounded-2xl border border-border bg-white p-4">
+    <div className={`rounded-2xl border p-4 ${tone.panel}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="text-base font-semibold text-slate-900">{title}</h3>

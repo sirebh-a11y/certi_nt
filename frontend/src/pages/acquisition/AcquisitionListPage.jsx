@@ -366,10 +366,10 @@ function documentMatchVisualState(row) {
     return "verde";
   }
   if (hasDdt) {
-    return "giallo";
+    return "ddt";
   }
   if (hasCertificate) {
-    return "rosso";
+    return "certificato";
   }
   return "rosso";
 }
@@ -481,6 +481,12 @@ function documentPlateClasses(state) {
   if (state === "accettato" || state === "documento_chiuso") {
     return "border-transparent bg-transparent";
   }
+  if (state === "certificato") {
+    return "border-sky-300 bg-sky-100/80";
+  }
+  if (state === "ddt") {
+    return "border-stone-300 bg-stone-100/90";
+  }
   if (state === "verde") {
     return "border-emerald-300 bg-emerald-100/90";
   }
@@ -508,12 +514,16 @@ function RowStateCell({ row, onClick, onKeyDown }) {
   );
 }
 
+function transparentDocumentCellClasses() {
+  return "border-slate-300/70 bg-transparent text-slate-950";
+}
+
 function DataCell({ value, state, secondary, onClick, onKeyDown, wide = false, boxRef = null }) {
   return (
     <div className={`relative ${wide ? "min-w-[220px]" : "min-w-[92px]"} py-1`}>
       <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
         <div
-          className={`relative z-10 mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start overflow-hidden rounded-lg border px-2.5 pb-1.5 pt-2 ${stateSurfaceClasses(state)}`}
+          className={`relative z-10 mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start overflow-hidden rounded-lg border px-2.5 pb-1.5 pt-2 ${transparentDocumentCellClasses()}`}
           ref={boxRef}
         >
           <span className="block truncate text-sm font-semibold leading-none">{value || "-"}</span>

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { documentTone } from "./documentTone";
 
 const FIELD_DEFS = [
   { key: "lega_base", label: "lega" },
@@ -19,6 +20,7 @@ const EMPTY_FIELDS = Object.fromEntries(FIELD_DEFS.map((field) => [field.key, ""
 const PAGE_CONFIGS = {
   ddt: {
     side: "ddt",
+    documentKind: "ddt",
     documentLabel: "DDT",
     documentLabelPlural: "DDT",
     sourceLabel: "ddt",
@@ -42,6 +44,7 @@ const PAGE_CONFIGS = {
   },
   certificato: {
     side: "certificato",
+    documentKind: "certificato",
     documentLabel: "certificato",
     documentLabelPlural: "certificati",
     sourceLabel: "certificato",
@@ -436,6 +439,7 @@ function LinkedRowsGuide({ config, rows }) {
 }
 
 function ManualPdfPanel({ config, document, loading, token }) {
+  const tone = documentTone(config.documentKind);
   const [pageImages, setPageImages] = useState([]);
   const [zoom, setZoom] = useState(100);
   const [error, setError] = useState("");
@@ -495,31 +499,31 @@ function ManualPdfPanel({ config, document, loading, token }) {
   }, []);
 
   return (
-    <div className="rounded-2xl border border-slate-600 bg-slate-700 p-4">
+    <div className={`rounded-2xl border p-4 ${tone.panel}`}>
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">PDF {config.documentLabel}</p>
-          <p className="mt-1 text-sm text-white">{document?.nome_file_originale || "Seleziona o carica un documento"}</p>
+          <p className="text-lg font-bold text-slate-950">PDF {config.documentLabel}</p>
+          <p className="mt-1 text-sm text-slate-900">{document?.nome_file_originale || "Seleziona o carica un documento"}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600" onClick={() => setZoom((current) => Math.max(50, current - 10))} type="button">
+          <button className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`} onClick={() => setZoom((current) => Math.max(50, current - 10))} type="button">
             -
           </button>
-          <span className="min-w-[64px] text-center text-sm font-semibold text-white">{zoom}%</span>
-          <button className="rounded-lg border border-slate-500 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-600" onClick={() => setZoom((current) => Math.min(250, current + 10))} type="button">
+          <span className="min-w-[64px] text-center text-sm font-semibold text-slate-700">{zoom}%</span>
+          <button className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tone.button}`} onClick={() => setZoom((current) => Math.min(250, current + 10))} type="button">
             +
           </button>
         </div>
       </div>
 
-      <div className="h-[46vh] overflow-auto rounded-2xl border border-slate-600 bg-slate-700 p-3" ref={viewportRef}>
+      <div className={`h-[46vh] overflow-auto rounded-2xl border p-3 ${tone.viewport}`} ref={viewportRef}>
         {loading ? (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-200">Caricamento PDF...</div>
+          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-600">Caricamento PDF...</div>
         ) : pageImages.length ? (
           <div className="space-y-4">
             {pageImages.map((page) => (
               <div className="w-full" key={page.id}>
-                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Pagina {page.numero_pagina}</p>
+                <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Pagina {page.numero_pagina}</p>
                 <div className="relative" style={{ width: viewportWidth > 0 ? `${(viewportWidth * zoom) / 100}px` : "100%" }}>
                   <img alt={`${config.documentLabel} pagina ${page.numero_pagina}`} className="block w-full rounded-xl border border-slate-200 bg-white shadow-sm" draggable={false} src={page.src} />
                 </div>
@@ -527,7 +531,7 @@ function ManualPdfPanel({ config, document, loading, token }) {
             ))}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-200">
+          <div className="flex h-full items-center justify-center px-6 text-sm text-slate-600">
             {error || "Nessun PDF selezionato o immagini pagina non disponibili."}
           </div>
         )}
