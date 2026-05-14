@@ -1473,6 +1473,14 @@ def build_document_core_overlay_preview(
         live_field_items = [item for item in live_field_items if item.field != "material_block"]
         live_field_items.extend(anchored_material_items)
 
+    live_field_items = _filter_document_core_single_value_overlay_items(
+        items=live_field_items,
+        row=row,
+        document=document,
+        source_key=source_key,
+        value_map=value_map,
+    )
+
     value_window_items = _build_document_core_overlay_items_from_value_ocr_window(
         row=row,
         document=document,
@@ -1552,6 +1560,96 @@ def build_document_core_overlay_preview(
 
     items = _collapse_document_core_material_items(items)
     return DocumentCoreOverlayPreviewResponse(items=items)
+
+
+def _filter_document_core_single_value_overlay_items(
+    *,
+    items: list[DocumentCoreOverlayPreviewItemResponse],
+    row: AcquisitionRow,
+    document: Document,
+    source_key: str,
+    value_map: dict[str, ReadValue],
+) -> list[DocumentCoreOverlayPreviewItemResponse]:
+    expected_values = _document_core_single_field_expected_values(
+        row=row,
+        source_key=source_key,
+        value_map=value_map,
+    )
+    filtered: list[DocumentCoreOverlayPreviewItemResponse] = []
+    for item in items:
+        expected_value = expected_values.get(item.field)
+        if expected_value is not None and not _document_core_overlay_item_contains_value(
+            document=document,
+            item=item,
+            expected_value=expected_value,
+        ):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _document_core_single_field_expected_values(
+    *,
+    row: AcquisitionRow,
+    source_key: str,
+    value_map: dict[str, ReadValue],
+) -> dict[str, str | None]:
+    if source_key == "certificato":
+        return {
+            "cdq": _read_value_display_text(value_map.get("numero_certificato_certificato")) or row.cdq,
+            "ddt": _read_value_display_text(value_map.get("ddt_certificato")) or row.ddt,
+            "ordine": _read_value_display_text(value_map.get("ordine_cliente_certificato")) or row.ordine,
+        }
+    return {
+        "cdq": row.cdq,
+        "ddt": row.ddt,
+        "ordine": row.ordine,
+    }
+
+
+def _document_core_overlay_item_contains_value(
+    *,
+    document: Document,
+    item: DocumentCoreOverlayPreviewItemResponse,
+    expected_value: str,
+) -> bool:
+    token = _normalize_row_signature_token(expected_value)
+    if not token or len(token) < 3:
+        return True
+    item_text = _document_core_overlay_item_text(document=document, item=item)
+    if item_text is None:
+        return True
+    return token in _normalize_row_signature_token(item_text)
+
+
+def _document_core_overlay_item_text(
+    *,
+    document: Document,
+    item: DocumentCoreOverlayPreviewItemResponse,
+) -> str | None:
+    bbox = _parse_document_core_bbox(item.bbox)
+    if bbox is None:
+        return None
+    page = next((candidate for candidate in document.pages if candidate.id == item.page_id), None)
+    if page is None or not page.immagine_pagina_storage_key:
+        return None
+    line_boxes, _, _ = _extract_ocr_line_boxes(page, psms=(4, 6))
+    left, top, right, bottom = bbox
+    matched_lines: list[str] = []
+    for line_box in line_boxes:
+        line_left = int(line_box.get("x0") or 0)
+        line_top = int(line_box.get("y0") or 0)
+        line_right = int(line_box.get("x1") or 0)
+        line_bottom = int(line_box.get("y1") or 0)
+        line_center_y = (line_top + line_bottom) / 2
+        if line_center_y < top - 20 or line_center_y > bottom + 20:
+            continue
+        if line_right < left - 30 or line_left > right + 30:
+            continue
+        line_text = _document_core_line_box_text(line_box)
+        if line_text:
+            matched_lines.append(line_text)
+    return "\n".join(matched_lines) if matched_lines else None
 
 
 def _merge_document_core_overlay_items_prefer_existing(
