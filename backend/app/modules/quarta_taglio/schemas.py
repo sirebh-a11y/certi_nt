@@ -91,6 +91,8 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     has_word: bool = False
     has_pdf: bool = False
     word_download_url: str | None = None
+    conformity_status: str = "da_verificare"
+    conformity_issues: list["QuartaTaglioConformityIssueResponse"] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None = None
@@ -140,6 +142,15 @@ class QuartaTaglioAggregateValueResponse(BaseModel):
     message: str | None = None
 
 
+class QuartaTaglioConformityIssueResponse(BaseModel):
+    block: str
+    field: str
+    value: float | None = None
+    standard_min: float | None = None
+    standard_max: float | None = None
+    message: str | None = None
+
+
 class QuartaTaglioNoteResponse(BaseModel):
     code: str
     label: str
@@ -174,6 +185,8 @@ class QuartaTaglioDetailResponse(BaseModel):
     chemistry: list[QuartaTaglioAggregateValueResponse]
     properties: list[QuartaTaglioAggregateValueResponse]
     notes: list[QuartaTaglioNoteResponse]
+    conformity_status: str = "da_verificare"
+    conformity_issues: list[QuartaTaglioConformityIssueResponse] = Field(default_factory=list)
     esolver_status: str = "not_checked"
     esolver_message: str | None = None
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] = Field(default_factory=list)
@@ -196,3 +209,7 @@ class QuartaTaglioWordDraftResponse(BaseModel):
     file_name: str
     download_url: str
     created_at: datetime
+
+
+class QuartaTaglioWordDraftRequest(BaseModel):
+    force_non_conforming: bool = False

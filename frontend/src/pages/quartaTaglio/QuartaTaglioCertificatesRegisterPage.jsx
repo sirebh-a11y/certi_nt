@@ -9,6 +9,12 @@ const STATUS_LABELS = {
   pdf_final: "PDF chiuso",
 };
 
+const CONFORMITY_LABELS = {
+  conforme: "Conforme",
+  non_conforme: "Non conforme",
+  da_verificare: "Da verificare",
+};
+
 function formatDate(value) {
   if (!value) {
     return "-";
@@ -33,6 +39,9 @@ function searchableValues(item) {
     item.fornitore_cliente,
     item.status,
     STATUS_LABELS[item.status],
+    item.conformity_status,
+    CONFORMITY_LABELS[item.conformity_status],
+    ...(item.conformity_issues || []).map((issue) => `${issue.block} ${issue.field} ${issue.message || ""}`),
   ]
     .filter(Boolean)
     .map((value) => String(value).toLowerCase());
@@ -98,6 +107,8 @@ function certificateSortValue(item, field) {
       return item.fornitore_cliente || "";
     case "status":
       return item.status || "";
+    case "conformity":
+      return normalizedConformityStatus(item.conformity_status);
     case "file":
       return `${item.has_word ? "1" : "0"}-${item.has_pdf ? "1" : "0"}`;
     default:
@@ -129,6 +140,29 @@ function statusClass(status) {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
   return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function conformityClass(status) {
+  const normalizedStatus = normalizedConformityStatus(status);
+  if (normalizedStatus === "conforme") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (normalizedStatus === "non_conforme") {
+    return "border-rose-300 bg-rose-50 text-rose-800";
+  }
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function normalizedConformityStatus(status) {
+  return status === "conforme" || status === "non_conforme" ? status : "da_verificare";
+}
+
+function conformityTitle(item) {
+  const issues = item.conformity_issues || [];
+  if (!issues.length) {
+    return CONFORMITY_LABELS[normalizedConformityStatus(item.conformity_status)];
+  }
+  return issues.map((issue) => `${issue.block}: ${issue.field} ${issue.message || ""}`).join(" | ");
 }
 
 export default function QuartaTaglioCertificatesRegisterPage() {
@@ -333,7 +367,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
 
       <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-[980px] w-full border-collapse text-sm">
+          <table className="min-w-[1120px] w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="certificate_number" label="Cert. Nr." onSort={toggleSort} sortConfig={sortConfig} />
@@ -342,6 +376,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                 <SortableHeader field="cod_odp" label="OL" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="lega_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="fornitore_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="conformity" label="Conformità" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="file" label="File" onSort={toggleSort} sortConfig={sortConfig} />
               </tr>
@@ -359,6 +394,15 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.lega_cod_f3 || "-"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.fornitore_cliente || "-"}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${conformityClass(item.conformity_status)}`}
+                      title={conformityTitle(item)}
+                    >
+                      {normalizedConformityStatus(item.conformity_status) === "non_conforme" ? "! " : ""}
+                      {CONFORMITY_LABELS[normalizedConformityStatus(item.conformity_status)]}
+                    </span>
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status)}`}>
                       {STATUS_LABELS[item.status] || item.status}

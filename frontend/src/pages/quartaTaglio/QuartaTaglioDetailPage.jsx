@@ -41,6 +41,18 @@ const METHOD_LABELS = {
   missing: "-",
 };
 
+const CONFORMITY_LABELS = {
+  conforme: "Conforme",
+  non_conforme: "Non conforme",
+  da_verificare: "Da verificare",
+};
+
+const CONFORMITY_CLASSES = {
+  conforme: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  non_conforme: "border-rose-300 bg-rose-50 text-rose-800",
+  da_verificare: "border-amber-200 bg-amber-50 text-amber-800",
+};
+
 const ARTICLE_AUTOSAVE_DELAY_MS = 800;
 const ARTICLE_SAVED_FEEDBACK_MS = 1200;
 
@@ -55,17 +67,37 @@ function formatNumber(value, digits = 4) {
   return Number(value).toLocaleString("it-IT", { maximumFractionDigits: digits });
 }
 
-function formatLimit(min, max) {
+function formatLimit(min, max, digits = 4) {
   if (min === null && max === null) {
     return "-";
   }
   if (min !== null && max !== null) {
-    return `${formatNumber(min)} - ${formatNumber(max)}`;
+    return `${formatNumber(min, digits)} - ${formatNumber(max, digits)}`;
   }
   if (min !== null) {
-    return `>= ${formatNumber(min)}`;
+    return `>= ${formatNumber(min, digits)}`;
   }
-  return `<= ${formatNumber(max)}`;
+  return `<= ${formatNumber(max, digits)}`;
+}
+
+function conformityClass(status) {
+  return CONFORMITY_CLASSES[normalizedConformityStatus(status)];
+}
+
+function conformityLabel(status) {
+  return CONFORMITY_LABELS[normalizedConformityStatus(status)];
+}
+
+function normalizedConformityStatus(status) {
+  return status === "conforme" || status === "non_conforme" ? status : "da_verificare";
+}
+
+function formatConformityIssue(issue) {
+  const blockLabel = issue.block === "chimica" ? "Chimica" : "Proprietà";
+  const digits = issue.block === "chimica" ? 3 : 4;
+  const value = formatNumber(issue.value, digits);
+  const limit = formatLimit(issue.standard_min ?? null, issue.standard_max ?? null, digits);
+  return `${blockLabel}: ${issue.field} ${value} fuori limite ${limit}${issue.message ? ` (${issue.message})` : ""}`;
 }
 
 function articleFieldClass(status) {
@@ -121,6 +153,8 @@ export default function QuartaTaglioDetailPage() {
   const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
   const [wordUploadFile, setWordUploadFile] = useState(null);
   const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
+  const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
+  const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -214,6 +248,9 @@ export default function QuartaTaglioDetailPage() {
     )
       .then((response) => {
         setData(response);
+        if ((response.conformity_issues || []).length > 0) {
+          setStandardConformityDialogOpen(true);
+        }
       })
       .catch((requestError) => {
         setStandardError(handleRequestError(requestError, "Errore conferma standard"));
@@ -301,13 +338,24 @@ export default function QuartaTaglioDetailPage() {
     queueArticleSave(field, value, 0);
   }
 
-  async function generateWordDraft() {
+  function generateWordDraft() {
+    if ((data?.conformity_issues || []).length > 0) {
+      setWordConformityDialogOpen(true);
+      return;
+    }
+    void performGenerateWordDraft(false);
+  }
+
+  async function performGenerateWordDraft(forceNonConforming = false) {
     setWordDraftState({ status: "saving", message: "" });
     setError("");
     try {
       const response = await apiRequest(
         `/quarta-taglio/${encodeURIComponent(codOdp)}/word-draft`,
-        { method: "POST" },
+        {
+          method: "POST",
+          body: JSON.stringify({ force_non_conforming: forceNonConforming }),
+        },
         token,
       );
       const link = document.createElement("a");
@@ -374,6 +422,8 @@ export default function QuartaTaglioDetailPage() {
       ["Quantità", header.quantita ? formatNumber(header.quantita, 2) : "-"],
     ];
   }, [data]);
+  const conformityIssues = data?.conformity_issues || [];
+  const hasConformityIssues = conformityIssues.length > 0;
 
   if (loading) {
     return <p className="text-sm text-slate-500">Caricamento certificato...</p>;
@@ -424,6 +474,9 @@ export default function QuartaTaglioDetailPage() {
               {wordUploadState.message}
             </p>
           ) : null}
+          <span className={`mt-3 inline-flex w-fit rounded-lg border px-3 py-1 text-xs font-semibold ${conformityClass(data.conformity_status)}`}>
+            Conformità standard: {conformityLabel(data.conformity_status)}
+          </span>
         </div>
         <div className="flex flex-col gap-2 md:min-w-[360px]">
           <button
@@ -458,6 +511,27 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </div>
       </div>
+
+      {hasConformityIssues ? (
+        <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 px-5 py-4 text-rose-900 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xl font-black text-rose-700">
+              !
+            </div>
+            <div>
+              <h3 className="text-base font-bold">Non conformità standard</h3>
+              <p className="mt-1 text-sm text-rose-800">
+                Uno o più valori di chimica o proprietà non rispettano lo standard confermato.
+              </p>
+              <ul className="mt-3 space-y-1 text-sm font-semibold">
+                {conformityIssues.map((issue) => (
+                  <li key={`${issue.block}-${issue.field}`}>{formatConformityIssue(issue)}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {!data.ready ? (
         <Panel title="Dati ancora mancanti">
@@ -641,7 +715,7 @@ export default function QuartaTaglioDetailPage() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Chimica">
-          <ValueTable values={data.chemistry || []} />
+          <ValueTable numberDigits={3} values={data.chemistry || []} />
         </Panel>
         <Panel title="Proprietà">
           <ValueTable values={data.properties || []} />
@@ -661,6 +735,80 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </Panel>
       </div>
+
+      {wordConformityDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-xl rounded-2xl border-2 border-rose-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-2xl font-black text-rose-700">
+                !
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">Creare il Word con non conformità?</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Il numero certificato verrà assegnato ora. Sono presenti valori fuori standard:
+                </p>
+                <ul className="mt-3 max-h-44 space-y-1 overflow-y-auto text-sm font-semibold text-rose-800">
+                  {conformityIssues.map((issue) => (
+                    <li key={`${issue.block}-${issue.field}-dialog`}>{formatConformityIssue(issue)}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+                onClick={() => setWordConformityDialogOpen(false)}
+                type="button"
+              >
+                Torna a controllare
+              </button>
+              <button
+                className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-800"
+                onClick={() => {
+                  setWordConformityDialogOpen(false);
+                  void performGenerateWordDraft(true);
+                }}
+                type="button"
+              >
+                Crea comunque Word numerato
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {standardConformityDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-xl rounded-2xl border-2 border-rose-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-2xl font-black text-rose-700">
+                !
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-950">Standard non conforme</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Lo standard confermato porta questi valori fuori limite:
+                </p>
+                <ul className="mt-3 max-h-44 space-y-1 overflow-y-auto text-sm font-semibold text-rose-800">
+                  {conformityIssues.map((issue) => (
+                    <li key={`${issue.block}-${issue.field}-standard-dialog`}>{formatConformityIssue(issue)}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <button
+                className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-800"
+                onClick={() => setStandardConformityDialogOpen(false)}
+                type="button"
+              >
+                Ho capito
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -733,15 +881,15 @@ function Table({ columns, rows, emptyText = "Nessun dato." }) {
   );
 }
 
-function ValueTable({ values }) {
+function ValueTable({ numberDigits = 4, values }) {
   return (
     <Table
       columns={["Campo", "Valore", "Metodo", "Standard", "Stato", "Messaggio"]}
       rows={values.map((item) => [
         item.field,
-        formatNumber(item.value),
+        formatNumber(item.value, numberDigits),
         METHOD_LABELS[item.method] || item.method,
-        formatLimit(item.standard_min, item.standard_max),
+        formatLimit(item.standard_min, item.standard_max, numberDigits),
         <StatusPill key="status" status={item.status} />,
         item.message || "-",
       ])}

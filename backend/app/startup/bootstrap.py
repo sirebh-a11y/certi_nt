@@ -170,6 +170,16 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cdo_lega TEXT")
         if "fornitore_cliente" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN fornitore_cliente TEXT")
+        if "conformity_status" not in certificate_columns:
+            certificate_statements.append(
+                "ALTER TABLE quarta_taglio_final_certificates ADD COLUMN conformity_status VARCHAR(32) DEFAULT 'da_verificare' NOT NULL"
+            )
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_conformity_status "
+                "ON quarta_taglio_final_certificates (conformity_status)"
+            )
+        if "conformity_issues" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN conformity_issues JSON DEFAULT '[]' NOT NULL")
         if certificate_statements:
             with engine.begin() as connection:
                 for statement in certificate_statements:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, Body, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
@@ -8,6 +8,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioFinalCertificateRegisterResponse,
     QuartaTaglioListResponse,
     QuartaTaglioStandardSelectionRequest,
+    QuartaTaglioWordDraftRequest,
     QuartaTaglioWordDraftResponse,
 )
 from app.modules.quarta_taglio.service import (
@@ -102,8 +103,9 @@ def create_quarta_taglio_word_draft_route(
     cod_odp: str,
     current_user: CurrentUser,
     db: DbSession,
+    payload: QuartaTaglioWordDraftRequest = Body(default_factory=QuartaTaglioWordDraftRequest),
 ) -> QuartaTaglioWordDraftResponse:
-    return create_quarta_taglio_word_draft(db, cod_odp=cod_odp, actor=current_user)
+    return create_quarta_taglio_word_draft(db, cod_odp=cod_odp, actor=current_user, force_non_conforming=payload.force_non_conforming)
 
 
 @router.post("/{cod_odp}/word-file", response_model=QuartaTaglioWordDraftResponse)

@@ -39,6 +39,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioMaterialResponse,
     QuartaTaglioMissingItemResponse,
     QuartaTaglioNoteResponse,
+    QuartaTaglioConformityIssueResponse,
     QuartaTaglioRowResponse,
     QuartaTaglioStandardCandidateResponse,
     QuartaTaglioSyncRunResponse,
@@ -296,7 +297,7 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         .all()
     )
     return QuartaTaglioFinalCertificateRegisterResponse(
-        items=[_serialize_final_certificate_register_item(certificate) for certificate in certificates],
+        items=[_serialize_final_certificate_register_item(certificate, db=db) for certificate in certificates],
         total_items=len(certificates),
     )
 
@@ -375,6 +376,11 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         material_weights=material_weights,
         standard=selected_standard_model,
     )
+    conformity_status, conformity_issues = _build_standard_conformity(
+        chemistry=chemistry,
+        properties=properties,
+        selected_standard_confirmed=selected_standard_confirmed,
+    )
     esolver_rows = _esolver_rows_from_link(esolver_link)
     esolver_status = esolver_link.status if esolver_link else "not_checked"
     esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
@@ -452,6 +458,8 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         chemistry=chemistry,
         properties=properties,
         notes=notes,
+        conformity_status=conformity_status,
+        conformity_issues=conformity_issues,
         esolver_status=esolver_status,
         esolver_message=esolver_message,
         esolver_rows=esolver_rows,
@@ -488,7 +496,9 @@ def confirm_quarta_taglio_standard(
     selection.selected_by_user_id = actor_id
     db.add(selection)
     db.commit()
-    return get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    _sync_open_certificate_conformity(db, detail=detail)
+    return detail
 
 
 def update_quarta_taglio_article_data(
@@ -523,9 +533,19 @@ def create_quarta_taglio_word_draft(
     *,
     cod_odp: str,
     actor: User,
+    force_non_conforming: bool = False,
 ) -> QuartaTaglioWordDraftResponse:
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
     _ensure_word_draft_can_be_created(detail)
+    if detail.conformity_issues and not force_non_conforming:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Non conformità standard presenti: confermare esplicitamente per creare il Word numerato",
+                "conformity_status": detail.conformity_status,
+                "conformity_issues": [issue.model_dump() for issue in detail.conformity_issues],
+            },
+        )
 
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
     certificate_number = certificate.certificate_number or _assign_certificate_number(db, cdq_key=certificate.cdq_key, now=certificate.cert_date)
@@ -537,6 +557,7 @@ def create_quarta_taglio_word_draft(
     certificate.cdq_signature = _cdq_signature_from_detail(detail)
     certificate.cdq_values = _cdq_values_from_detail(detail)
     _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
 
     storage_key = _certificate_docx_storage_key(cod_odp)
     output_path = _certificate_storage_path(storage_key)
@@ -597,6 +618,7 @@ def upload_quarta_taglio_word_file(
     )
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
 
     storage_key = _certificate_uploaded_docx_storage_key(cod_odp, original_name=original_name)
     output_path = _certificate_storage_path(storage_key)
@@ -607,6 +629,7 @@ def upload_quarta_taglio_word_file(
     certificate.download_token = secrets.token_urlsafe(32)
     certificate.certified_by_user_id = actor.id
     certificate.status = certificate.status or "draft"
+    _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -690,6 +713,29 @@ def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate
     certificate.lega_cod_f3 = _clean_text(header.get("codice_f3")) or _join_unique(item.cod_art for item in detail.materials) or None
     certificate.cdo_lega = _clean_text(header.get("conferma_ordine")) or _clean_text(header.get("ordine_cliente"))
     certificate.fornitore_cliente = _clean_text(header.get("cliente"))
+
+
+def _apply_certificate_conformity(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
+    certificate.conformity_status = detail.conformity_status
+    certificate.conformity_issues = [issue.model_dump() for issue in detail.conformity_issues]
+
+
+def _sync_open_certificate_conformity(db: Session, *, detail: QuartaTaglioDetailResponse) -> None:
+    certificate = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp,
+            QuartaTaglioFinalCertificate.status != "pdf_final",
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .first()
+    )
+    if certificate is None:
+        return
+    _apply_certificate_conformity(certificate, detail)
+    db.add(certificate)
+    db.commit()
 
 
 def _assign_certificate_number(db: Session, *, cdq_key: str | None, now: datetime | None = None) -> str:
@@ -903,7 +949,7 @@ def _aggregate_block_values(
                 result.append(
                     QuartaTaglioAggregateValueResponse(
                         field=field,
-                        value=round(sum(value for value, _ in values) / len(values), 4),
+                        value=_round_aggregate_value(block, sum(value for value, _ in values) / len(values)),
                         method="average" if len(values) > 1 else "single",
                         status="not_in_standard",
                         message="Elemento trovato nei certificati fornitore ma non previsto dallo standard: non riportare nel certificato finale",
@@ -954,7 +1000,7 @@ def _aggregate_block_values(
         result.append(
             QuartaTaglioAggregateValueResponse(
                 field=field,
-                value=round(aggregated, 4),
+                value=_round_aggregate_value(block, aggregated),
                 method=method,
                 standard_min=limit_min,
                 standard_max=limit_max,
@@ -963,6 +1009,39 @@ def _aggregate_block_values(
             )
         )
     return result
+
+
+def _round_aggregate_value(block: str, value: float) -> float:
+    return round(value, 3 if block == "chimica" else 4)
+
+
+def _build_standard_conformity(
+    *,
+    chemistry: list[QuartaTaglioAggregateValueResponse],
+    properties: list[QuartaTaglioAggregateValueResponse],
+    selected_standard_confirmed: bool,
+) -> tuple[str, list[QuartaTaglioConformityIssueResponse]]:
+    if not selected_standard_confirmed:
+        return "da_verificare", []
+
+    issues: list[QuartaTaglioConformityIssueResponse] = []
+    for block, items in (("chimica", chemistry), ("proprieta", properties)):
+        for item in items:
+            if item.status == "out_of_range":
+                issues.append(
+                    QuartaTaglioConformityIssueResponse(
+                        block=block,
+                        field=item.field,
+                        value=item.value,
+                        standard_min=item.standard_min,
+                        standard_max=item.standard_max,
+                        message=item.message,
+                    )
+                )
+    if issues:
+        return "non_conforme", issues
+
+    return "conforme", []
 
 
 def _standard_limits_for_field(
@@ -1608,7 +1687,13 @@ def _serialize_run(run: QuartaTaglioSyncRun) -> QuartaTaglioSyncRunResponse:
 
 def _serialize_final_certificate_register_item(
     certificate: QuartaTaglioFinalCertificate,
+    *,
+    db: Session | None = None,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
+    conformity_status = _certificate_conformity_status(certificate)
+    conformity_issues = certificate.conformity_issues or []
+    if db is not None:
+        conformity_status, conformity_issues = _live_certificate_conformity_for_register(db, certificate=certificate)
     word_download_url = None
     if certificate.storage_key_docx and certificate.download_token:
         word_download_url = f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}"
@@ -1626,6 +1711,8 @@ def _serialize_final_certificate_register_item(
         has_word=bool(certificate.storage_key_docx),
         has_pdf=bool(certificate.storage_key_pdf),
         word_download_url=word_download_url,
+        conformity_status=conformity_status,
+        conformity_issues=conformity_issues,
         created_at=certificate.created_at,
         updated_at=certificate.updated_at,
         closed_at=certificate.closed_at,
@@ -1636,6 +1723,32 @@ def _certificate_cdq_display(certificate: QuartaTaglioFinalCertificate) -> str |
     values = certificate.cdq_values or []
     cdq_values = [item.get("cdq") for item in values if isinstance(item, dict)]
     return _join_unique(cdq_values) or _clean_text(certificate.cdq_key)
+
+
+def _live_certificate_conformity_for_register(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+) -> tuple[str, list[dict[str, Any]]]:
+    try:
+        detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp)
+    except HTTPException:
+        return _certificate_conformity_status(certificate), certificate.conformity_issues or []
+
+    issues = [issue.model_dump() for issue in detail.conformity_issues]
+    if certificate.conformity_status != detail.conformity_status or (certificate.conformity_issues or []) != issues:
+        certificate.conformity_status = detail.conformity_status
+        certificate.conformity_issues = issues
+        db.add(certificate)
+        db.flush()
+    return detail.conformity_status, issues
+
+
+def _certificate_conformity_status(certificate: QuartaTaglioFinalCertificate) -> str:
+    status_value = _clean_text(certificate.conformity_status)
+    if status_value in {"conforme", "non_conforme"}:
+        return status_value
+    return "da_verificare"
 
 
 def _certificate_cod_f3_display(certificate: QuartaTaglioFinalCertificate) -> str | None:

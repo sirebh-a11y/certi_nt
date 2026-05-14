@@ -167,9 +167,9 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
     max_row[0].text = "%\u00a0max"
     value_row[0].text = "%\u00a0val"
     for index, item in enumerate(chemistry, start=1):
-        min_row[index].text = _format_value(item.standard_min)
-        max_row[index].text = _format_value(item.standard_max)
-        value_row[index].text = _format_value(item.value)
+        min_row[index].text = _format_chemistry_value(item.standard_min)
+        max_row[index].text = _format_chemistry_value(item.standard_max)
+        value_row[index].text = _format_chemistry_value(item.value)
     _set_table_font(table, size=10)
     _set_table_cell_margins(table, left=35, right=35)
     for row in table.rows:
@@ -509,4 +509,12 @@ def _format_value(value: float | str | None) -> str:
         return "-"
     if isinstance(value, float):
         return f"{value:.4f}".rstrip("0").rstrip(".").replace(".", ",")
+    return str(value)
+
+
+def _format_chemistry_value(value: float | str | None) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.3f}".rstrip("0").rstrip(".").replace(".", ",")
     return str(value)

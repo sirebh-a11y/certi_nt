@@ -110,6 +110,8 @@ class QuartaTaglioFinalCertificate(Base):
     lega_cod_f3: Mapped[str | None] = mapped_column(Text, nullable=True)
     cdo_lega: Mapped[str | None] = mapped_column(Text, nullable=True)
     fornitore_cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conformity_status: Mapped[str] = mapped_column(String(32), default="da_verificare", nullable=False, index=True)
+    conformity_issues: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     storage_key_docx: Mapped[str | None] = mapped_column(String(512), nullable=True)
     storage_key_pdf: Mapped[str | None] = mapped_column(String(512), nullable=True)
     download_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
