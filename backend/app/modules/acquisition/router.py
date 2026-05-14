@@ -94,6 +94,7 @@ from app.modules.acquisition.service import (
     process_row_minimal,
     prepare_document_for_reader,
     refresh_certificate_first_row,
+    reopen_final_validation,
     run_ai_intervention,
     save_notes_section,
     confirm_document_side_fields,
@@ -722,3 +723,13 @@ def validate_final_row_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return validate_final_row(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/reopen-final-validation", response_model=AcquisitionRowDetailResponse)
+def reopen_final_validation_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return reopen_final_validation(db=db, row=row, actor_id=current_user.id)

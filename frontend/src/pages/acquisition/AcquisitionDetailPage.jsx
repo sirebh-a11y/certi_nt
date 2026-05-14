@@ -272,6 +272,8 @@ export default function AcquisitionDetailPage() {
   const [finalQualityNote, setFinalQualityNote] = useState("");
   const [finalValidationDialog, setFinalValidationDialog] = useState(null);
   const [finalValidationWarning, setFinalValidationWarning] = useState(null);
+  const [reopenFinalDialogOpen, setReopenFinalDialogOpen] = useState(false);
+  const [processingFinalReopen, setProcessingFinalReopen] = useState(false);
   const canSeeTechnicalDetail = user?.role === "admin";
 
   useEffect(() => {
@@ -864,6 +866,25 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  async function handleReopenFinalValidation() {
+    setProcessingFinalReopen(true);
+    setError("");
+    try {
+      const rowData = await apiRequest(
+        `/acquisition/rows/${rowId}/reopen-final-validation`,
+        { method: "POST" },
+        token,
+      );
+      setRow(rowData);
+      setFinalQualityNote(rowData.qualita_note || "");
+      setReopenFinalDialogOpen(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingFinalReopen(false);
+    }
+  }
+
   return (
     <section className="space-y-4">
       {finalValidationWarning ? (
@@ -893,6 +914,39 @@ export default function AcquisitionDetailPage() {
               Stato finale: <span className="font-semibold text-ink">{qualityEvaluationLabel(finalValidationDialog.qualityEvaluation)}</span>.
             </p>
             <p className="mt-2 text-sm text-slate-500">Tra pochi secondi torni a Incoming materiale.</p>
+          </div>
+        </div>
+      ) : null}
+      {reopenFinalDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-xl rounded-3xl border border-amber-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Forza riapertura</p>
+            <h3 className="mt-3 text-xl font-semibold text-ink">Riaprire la valutazione finale?</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Stai riaprendo una decisione gia presa. La riga tornera modificabile e uscira dalla vista Confermati finche non
+              verra rivalutata.
+            </p>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Controlla la casella note per definire se l'Issue e stato risolto prima di confermare di nuovo la valutazione.
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                disabled={processingFinalReopen}
+                onClick={() => setReopenFinalDialogOpen(false)}
+                type="button"
+              >
+                Annulla
+              </button>
+              <button
+                className="rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                disabled={processingFinalReopen}
+                onClick={handleReopenFinalValidation}
+                type="button"
+              >
+                {processingFinalReopen ? "Riapertura..." : "Conferma riapertura"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -956,9 +1010,19 @@ export default function AcquisitionDetailPage() {
                     I dati tecnici restano confermati. Inserisci prima un giudizio nella nota valutazione: non è necessario se tutto è conforme, ma è obbligatorio per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
                   </p>
                   {row.validata_finale ? (
-                    <span className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
-                      {qualityEvaluationLabel(row.qualita_valutazione)}
-                    </span>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
+                        {qualityEvaluationLabel(row.qualita_valutazione)}
+                      </span>
+                      <button
+                        className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                        disabled={processingFinalReopen}
+                        onClick={() => setReopenFinalDialogOpen(true)}
+                        type="button"
+                      >
+                        Forza riapertura
+                      </button>
+                    </div>
                   ) : null}
                 </div>
                 <div className="min-w-[320px] flex-1 xl:max-w-xl">

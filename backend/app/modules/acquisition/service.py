@@ -9127,6 +9127,32 @@ def validate_final_row(
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+def reopen_final_validation(
+    db: Session,
+    row: AcquisitionRow,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
+    if not row.validata_finale:
+        return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+    row.validata_finale = False
+    row.qualita_valutazione = None
+    row.stato_workflow = "riaperta"
+    row.stato_tecnico = "verde" if _is_row_fully_confirmed_for_quality(db, row) else row.stato_tecnico
+    row.priorita_operativa = "bassa" if row.stato_tecnico == "verde" else row.priorita_operativa
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="workflow",
+        azione="validazione_finale_riaperta_forzata",
+        user_id=actor_id,
+        nota_breve="Valutazione finale riaperta manualmente",
+    )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="campi_core")
     extracted_count = 0
