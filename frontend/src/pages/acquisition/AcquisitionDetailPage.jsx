@@ -270,6 +270,8 @@ export default function AcquisitionDetailPage() {
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
   const [finalQualityNote, setFinalQualityNote] = useState("");
+  const [finalValidationDialog, setFinalValidationDialog] = useState(null);
+  const [finalValidationWarning, setFinalValidationWarning] = useState(null);
   const canSeeTechnicalDetail = user?.role === "admin";
 
   useEffect(() => {
@@ -350,6 +352,16 @@ export default function AcquisitionDetailPage() {
   useEffect(() => {
     setFinalQualityNote(row?.qualita_note || "");
   }, [row?.id, row?.qualita_note]);
+
+  useEffect(() => {
+    if (!finalValidationDialog) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      navigate("/acquisition");
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [finalValidationDialog, navigate]);
 
   async function refreshRow(includeDocuments = false) {
     const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
@@ -822,7 +834,10 @@ export default function AcquisitionDetailPage() {
   async function handleValidateFinal(qualityEvaluation) {
     const cleanedNote = safeText(finalQualityNote).trim();
     if ((qualityEvaluation === "accettato_con_riserva" || qualityEvaluation === "respinto") && !cleanedNote) {
-      window.alert("Per accettare con riserva o respingere la riga devi indicare una motivazione nella nota valutazione.");
+      setFinalValidationWarning({
+        title: "Nota valutazione richiesta",
+        message: "Per accettare con riserva o respingere la riga devi indicare una motivazione nella nota valutazione.",
+      });
       return;
     }
 
@@ -841,6 +856,7 @@ export default function AcquisitionDetailPage() {
         token,
       );
       await refreshRow(false);
+      setFinalValidationDialog({ qualityEvaluation });
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -850,6 +866,36 @@ export default function AcquisitionDetailPage() {
 
   return (
     <section className="space-y-4">
+      {finalValidationWarning ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-3xl border border-amber-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Validazione finale</p>
+            <h3 className="mt-3 text-xl font-semibold text-ink">{finalValidationWarning.title}</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-600">{finalValidationWarning.message}</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700"
+                onClick={() => setFinalValidationWarning(null)}
+                type="button"
+              >
+                Ho capito
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {finalValidationDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-3xl border border-emerald-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Validazione finale</p>
+            <h3 className="mt-3 text-xl font-semibold text-ink">Riga validata</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Stato finale: <span className="font-semibold text-ink">{qualityEvaluationLabel(finalValidationDialog.qualityEvaluation)}</span>.
+            </p>
+            <p className="mt-2 text-sm text-slate-500">Tra pochi secondi torni a Incoming materiale.</p>
+          </div>
+        </div>
+      ) : null}
       <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
