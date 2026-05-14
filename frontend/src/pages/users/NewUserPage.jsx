@@ -8,7 +8,7 @@ import { EMAIL_ERROR_MESSAGE, isValidEmail } from "../../app/validation";
 const initialForm = {
   name: "",
   email: "",
-  department: "administration",
+  department: "Amministrazione",
   role: "user",
 };
 

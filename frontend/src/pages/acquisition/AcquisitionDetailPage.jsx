@@ -243,7 +243,7 @@ function sourceDisplayLabel(block, value) {
 }
 
 export default function AcquisitionDetailPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { rowId } = useParams();
   const navigate = useNavigate();
   const [row, setRow] = useState(null);
@@ -269,6 +269,7 @@ export default function AcquisitionDetailPage() {
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
   const [finalQualityNote, setFinalQualityNote] = useState("");
+  const canSeeTechnicalDetail = user?.role === "admin";
 
   useEffect(() => {
     let ignore = false;
@@ -857,23 +858,25 @@ export default function AcquisitionDetailPage() {
             <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Dettaglio acquisition</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">Riga #{rowId}</h2>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
-              {processingVision ? "Vision..." : "Vision DDT"}
-            </button>
-            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document} onClick={handleDetectChemistry} type="button">
-              {processingChemistry ? "Chimica..." : "Rileva chimica"}
-            </button>
-            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document} onClick={handleDetectProperties} type="button">
-              {processingProperties ? "Proprietà..." : "Rileva proprietà"}
-            </button>
-            <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document} onClick={handleDetectNotes} type="button">
-              {processingNotes ? "Note..." : "Rileva note"}
-            </button>
-            <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document} onClick={handleProcessMinimal} type="button">
-              {processing ? "Processo..." : "Processo minimo"}
-            </button>
-          </div>
+          {canSeeTechnicalDetail ? (
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
+                {processingVision ? "Vision..." : "Vision DDT"}
+              </button>
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document} onClick={handleDetectChemistry} type="button">
+                {processingChemistry ? "Chimica..." : "Rileva chimica"}
+              </button>
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document} onClick={handleDetectProperties} type="button">
+                {processingProperties ? "Proprietà..." : "Rileva proprietà"}
+              </button>
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document} onClick={handleDetectNotes} type="button">
+                {processingNotes ? "Note..." : "Rileva note"}
+              </button>
+              <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document} onClick={handleProcessMinimal} type="button">
+                {processing ? "Processo..." : "Processo minimo"}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {loading ? <p className="mt-4 text-sm text-slate-500">Caricamento riga...</p> : null}
@@ -903,7 +906,7 @@ export default function AcquisitionDetailPage() {
                 <div className="max-w-2xl">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Valutazione finale qualità</div>
                   <p className="mt-2 text-sm text-slate-600">
-                    I dati tecnici restano confermati. Qui scegli solo l'esito qualità finale che manda la riga nella vista Confermati.
+                    I dati tecnici restano confermati. Inserisci prima un giudizio nella nota valutazione: non è necessario se tutto è conforme, ma è obbligatorio per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
                   </p>
                   {row.validata_finale ? (
                     <span className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
@@ -951,103 +954,107 @@ export default function AcquisitionDetailPage() {
               ) : null}
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              <DocumentPanel
-                document={ddtDocument}
-                onOpenAsset={handleOpenAsset}
-                openingAsset={openingAsset}
-                title="DDT sorgente"
-              />
-              <DocumentPanel
-                document={certificateDocument}
-                onOpenAsset={handleOpenAsset}
-                openingAsset={openingAsset}
-                title="Certificato sorgente"
-              />
-            </div>
+            {canSeeTechnicalDetail ? (
+              <>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <DocumentPanel
+                    document={ddtDocument}
+                    onOpenAsset={handleOpenAsset}
+                    openingAsset={openingAsset}
+                    title="DDT sorgente"
+                  />
+                  <DocumentPanel
+                    document={certificateDocument}
+                    onOpenAsset={handleOpenAsset}
+                    openingAsset={openingAsset}
+                    title="Certificato sorgente"
+                  />
+                </div>
 
-            <MatchPanel
-              certificateFirstDraft={certificateFirstDraft}
-              availableCertificates={availableCertificates}
-              certificateDocument={certificateDocument}
-              ddtLinkPreview={ddtLinkPreview}
-              isCertificateFirstRow={isCertificateFirstRow}
-              loadingDdtPreview={loadingDdtPreview}
-              match={row.certificate_match}
-              matchDraft={matchDraft}
-              onConfirmMatch={() => handleUpsertMatch("confermato")}
-              onRefreshCertificateFirst={handleRefreshCertificateFirst}
-              onReloadDdtPreview={handleReloadDdtPreview}
-              onDraftChange={setMatchDraft}
-              onSaveCertificateFirstFields={handleSaveCertificateFirstFields}
-              onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
-              onUpdateCertificateFirstDraft={updateCertificateFirstDraft}
-              processingMatch={processingMatch}
-              refreshingCertificateFirst={refreshingCertificateFirst}
-              savingCertificateFirst={savingCertificateFirst}
-            />
-
-            <div className="space-y-4">
-              {ORDERED_BLOCKS.map((block) => (
-                <BlockPanel
-                  key={block}
-                  block={block}
-                  label={BLOCK_LABELS[block] || block}
-                  values={valuesByBlock[block] || []}
-                  expectedFields={
-                    block === "ddt"
-                      ? DDT_CORE_FIELDS
-                      : block === "note"
-                        ? NOTE_CORE_FIELDS
-                        : block === "chimica"
-                          ? CHEMISTRY_FIELD_ORDER
-                          : []
-                  }
-                  chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
-                  propertyFieldOrder={PROPERTY_FIELD_ORDER}
-                  draftValues={draftValues}
-                  onCreateManualValue={handleCreateManualValue}
-                  onDraftChange={updateDraft}
-                  onSaveValue={handleSaveValue}
-                  onSetNullValue={handleSetNullValue}
-                  onConfirmValue={handleConfirmValue}
-                  savingFieldKey={savingFieldKey}
+                <MatchPanel
+                  certificateFirstDraft={certificateFirstDraft}
+                  availableCertificates={availableCertificates}
+                  certificateDocument={certificateDocument}
+                  ddtLinkPreview={ddtLinkPreview}
+                  isCertificateFirstRow={isCertificateFirstRow}
+                  loadingDdtPreview={loadingDdtPreview}
+                  match={row.certificate_match}
+                  matchDraft={matchDraft}
+                  onConfirmMatch={() => handleUpsertMatch("confermato")}
+                  onRefreshCertificateFirst={handleRefreshCertificateFirst}
+                  onReloadDdtPreview={handleReloadDdtPreview}
+                  onDraftChange={setMatchDraft}
+                  onSaveCertificateFirstFields={handleSaveCertificateFirstFields}
+                  onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
+                  onUpdateCertificateFirstDraft={updateCertificateFirstDraft}
+                  processingMatch={processingMatch}
+                  refreshingCertificateFirst={refreshingCertificateFirst}
+                  savingCertificateFirst={savingCertificateFirst}
                 />
-              ))}
-            </div>
 
-            <div className="rounded-2xl border border-border bg-white p-4">
-              <div className="mb-3 text-base font-semibold text-slate-900">Storico recente</div>
-              <div className="overflow-hidden rounded-2xl border border-border">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      <th className="px-3 py-2">Blocco</th>
-                      <th className="px-3 py-2">Azione</th>
-                      <th className="px-3 py-2">Quando</th>
-                      <th className="px-3 py-2">Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {(row.history_events || []).slice(0, 8).map((event) => (
-                      <tr key={event.id}>
-                        <td className="px-3 py-2 text-slate-800">{event.blocco}</td>
-                        <td className="px-3 py-2 text-slate-800">{event.azione}</td>
-                        <td className="px-3 py-2 text-slate-600">{new Date(event.timestamp).toLocaleString()}</td>
-                        <td className="px-3 py-2 text-slate-600">{event.nota_breve || "-"}</td>
-                      </tr>
-                    ))}
-                    {!row.history_events?.length ? (
-                      <tr>
-                        <td className="px-3 py-4 text-sm text-slate-500" colSpan={4}>
-                          Nessun evento disponibile.
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                <div className="space-y-4">
+                  {ORDERED_BLOCKS.map((block) => (
+                    <BlockPanel
+                      key={block}
+                      block={block}
+                      label={BLOCK_LABELS[block] || block}
+                      values={valuesByBlock[block] || []}
+                      expectedFields={
+                        block === "ddt"
+                          ? DDT_CORE_FIELDS
+                          : block === "note"
+                            ? NOTE_CORE_FIELDS
+                            : block === "chimica"
+                              ? CHEMISTRY_FIELD_ORDER
+                              : []
+                      }
+                      chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
+                      propertyFieldOrder={PROPERTY_FIELD_ORDER}
+                      draftValues={draftValues}
+                      onCreateManualValue={handleCreateManualValue}
+                      onDraftChange={updateDraft}
+                      onSaveValue={handleSaveValue}
+                      onSetNullValue={handleSetNullValue}
+                      onConfirmValue={handleConfirmValue}
+                      savingFieldKey={savingFieldKey}
+                    />
+                  ))}
+                </div>
+
+                <div className="rounded-2xl border border-border bg-white p-4">
+                  <div className="mb-3 text-base font-semibold text-slate-900">Storico recente</div>
+                  <div className="overflow-hidden rounded-2xl border border-border">
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                      <thead className="bg-slate-50">
+                        <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          <th className="px-3 py-2">Blocco</th>
+                          <th className="px-3 py-2">Azione</th>
+                          <th className="px-3 py-2">Quando</th>
+                          <th className="px-3 py-2">Nota</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {(row.history_events || []).slice(0, 8).map((event) => (
+                          <tr key={event.id}>
+                            <td className="px-3 py-2 text-slate-800">{event.blocco}</td>
+                            <td className="px-3 py-2 text-slate-800">{event.azione}</td>
+                            <td className="px-3 py-2 text-slate-600">{new Date(event.timestamp).toLocaleString()}</td>
+                            <td className="px-3 py-2 text-slate-600">{event.nota_breve || "-"}</td>
+                          </tr>
+                        ))}
+                        {!row.history_events?.length ? (
+                          <tr>
+                            <td className="px-3 py-4 text-sm text-slate-500" colSpan={4}>
+                              Nessun evento disponibile.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>

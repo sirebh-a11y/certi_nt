@@ -177,17 +177,25 @@ def ensure_quarta_taglio_columns() -> None:
 
 
 def bootstrap_admin_user(db: Session) -> None:
+    it_department = db.query(Department).filter(Department.name == "IT").one()
+    system_admin = db.query(User).filter(User.email == "admin@certi.local").one_or_none()
+    if system_admin is not None:
+        if system_admin.department_id != it_department.id:
+            system_admin.department_id = it_department.id
+            db.commit()
+            log_service.record("system", "System Admin department moved to IT", "admin@certi.local")
+        return
+
     admin_user = db.query(User).filter(User.role == ROLE_ADMIN).first()
     if admin_user is not None:
         return
 
-    department = db.query(Department).filter(Department.name == "administration").one()
     db.add(
         User(
             name="System Admin",
             email="admin@certi.local",
             password_hash=hash_password("admin123"),
-            department_id=department.id,
+            department_id=it_department.id,
             role=ROLE_ADMIN,
             active=True,
             force_password_change=True,
