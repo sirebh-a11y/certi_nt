@@ -132,6 +132,10 @@ export default function SupplierKpiPage() {
     () => maxMetric(supplierRows, (item) => Math.abs(item.metrics.ritardo_medio_giorni || 0)),
     [supplierRows],
   );
+  const maxControlTime = useMemo(
+    () => maxMetric(supplierRows, (item) => Math.abs(item.metrics.tempo_medio_controllo_giorni || 0)),
+    [supplierRows],
+  );
 
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
@@ -270,6 +274,22 @@ export default function SupplierKpiPage() {
                     <span className="font-semibold text-slate-500">{formatNumber(item.metrics.ritardo_medio_giorni, 2)} gg</span>
                   </div>
                   <Bar className="bg-slate-400" max={maxDelay} value={Math.abs(item.metrics.ritardo_medio_giorni || 0)} />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-border bg-white p-5 shadow-sm">
+            <h3 className="font-semibold text-slate-950">Tempo medio controllo per fornitore</h3>
+            <p className="text-sm text-slate-500">Giorni lavorativi medi tra ricezione e accettazione qualità.</p>
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {supplierRows.slice(0, 12).map((item) => (
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3" key={`${item.fornitore}-control-time`}>
+                  <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                    <span className="truncate font-semibold text-slate-700">{item.fornitore}</span>
+                    <span className="font-semibold text-slate-500">{formatNumber(item.metrics.tempo_medio_controllo_giorni, 2)} gg</span>
+                  </div>
+                  <Bar className="bg-teal-400" max={maxControlTime} value={Math.abs(item.metrics.tempo_medio_controllo_giorni || 0)} />
                 </div>
               ))}
             </div>
