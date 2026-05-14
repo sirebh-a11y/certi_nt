@@ -20,6 +20,7 @@ import PlaceholderPage from "../pages/core/PlaceholderPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
+import SupplierKpiPage from "../pages/kpi/SupplierKpiPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
 import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTaglioCertificatesRegisterPage";
@@ -125,13 +126,7 @@ function NotesRoute() {
 }
 
 function KpiRoute() {
-  return (
-    <PlaceholderPage
-      eyebrow="Valutazione fornitori"
-      title="KPI"
-      description="Area dedicata agli indicatori di valutazione fornitori: andamento conformita, riserve, respinti e indicatori operativi."
-    />
-  );
+  return <SupplierKpiPage />;
 }
 
 function ClientsRoute() {
