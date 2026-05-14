@@ -137,6 +137,7 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
     score = 0
     arconic_pair = _is_arconic_bridge_pair(ddt_bridge, certificate_bridge)
     grupa_kety_pair = _is_grupa_kety_bridge_pair(ddt_bridge, certificate_bridge)
+    leichtmetall_pair = _is_leichtmetall_bridge_pair(ddt_bridge, certificate_bridge)
     weights = {
         "cdq": 150,
         "colata": 100,
@@ -181,6 +182,16 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
         # Grupa Kety can have one DDT with many certificate rows. Heat/colata
         # is the row anchor; common DDT/order data must not link all rows.
         strong_patterns = [{"colata", "ddt"}, {"colata", "ordine"}, {"colata", "lega"}]
+    if leichtmetall_pair:
+        # Leichtmetall can repeat the same batch/cdq and diameter across
+        # different deliveries. The row discriminator is weight and/or purchase
+        # number, so cdq alone must never auto-link a certificate.
+        strong_patterns = [
+            {"cdq", "diametro", "peso"},
+            {"colata", "diametro", "peso"},
+            {"cdq", "diametro", "ordine"},
+            {"colata", "diametro", "ordine"},
+        ]
     has_strong_pattern = any(pattern.issubset(matched) for pattern in strong_patterns)
 
     if grupa_kety_pair and "colata" not in matched:
@@ -197,6 +208,14 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
     if arconic_pair:
         material_fields.update({"article_code", "customer_code", "line_no", "supplier_order_no", "lot_batch_no"})
     material_support_count = len(matched & material_fields)
+    if leichtmetall_pair and not (matched & {"peso", "ordine"}):
+        return RematchScore(
+            decision=RematchDecision.NONE,
+            score=score,
+            matched_fields=tuple(matched_fields),
+            blockers=(),
+            reasons=tuple(reasons),
+        )
     if not has_strong_pattern and material_support_count < 3:
         return RematchScore(
             decision=RematchDecision.NONE,
@@ -283,11 +302,22 @@ def _is_grupa_kety_bridge_pair(left: RematchBridge, right: RematchBridge) -> boo
     return any("GRUPAKETY" in name or name == "KETY" for name in names)
 
 
+def _is_leichtmetall_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
+    left_name = _compact_text(left.value("fornitore") or left.supplier_name)
+    right_name = _compact_text(right.value("fornitore") or right.supplier_name)
+    names = [name for name in (left_name, right_name) if name]
+    return any("LEICHTMETALL" in name for name in names)
+
+
 def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]:
     blockers: list[str] = []
-    # Weight is supporting evidence only: one certificate can cover multiple DDT
-    # rows or a certificate-wide total, so a mismatch must not block a strong bridge.
-    for field_name in ("colata", "diametro"):
+    hard_fields = ["colata", "diametro"]
+    if _is_leichtmetall_bridge_pair(left, right):
+        # Leichtmetall DDTs may contain multiple rows and duplicated cdq/diameter
+        # across deliveries. If present on both sides, these fields identify the
+        # exact row and conflicting values must prevent auto-rematch.
+        hard_fields.extend(["cdq", "peso", "ordine"])
+    for field_name in hard_fields:
         left_value = left.value(field_name)
         right_value = right.value(field_name)
         if left_value is None or right_value is None:

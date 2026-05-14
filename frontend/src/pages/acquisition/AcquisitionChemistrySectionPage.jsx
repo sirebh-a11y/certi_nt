@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBeforeUnload } from "react-router-dom";
+import { useBeforeUnload, useNavigate } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { documentTone } from "./documentTone";
@@ -648,6 +648,7 @@ function ChemistryPdfPanel({
 }
 
 export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
+  const navigate = useNavigate();
   const chemistryValues = useMemo(() => (row?.values || []).filter((value) => value.blocco === "chimica"), [row]);
   const fieldList = useMemo(() => buildFieldList(chemistryValues), [chemistryValues]);
   const persistedInitialDraft = useMemo(() => buildInitialDraft(chemistryValues), [chemistryValues]);
@@ -1009,7 +1010,10 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
     const saved = await persistDraft();
     if (!saved) {
       setConfirmDialogOpen(true);
+      return;
     }
+    onDirtyChange?.(false);
+    navigate("/acquisition");
   }
 
   function handleToggleCapture(field) {

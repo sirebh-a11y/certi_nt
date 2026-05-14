@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBeforeUnload } from "react-router-dom";
+import { useBeforeUnload, useNavigate } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { documentTone } from "./documentTone";
@@ -116,6 +116,25 @@ function buildSourceMap(row, side, overrides = {}) {
 
 function buildStateMap(row, side, overrides = {}) {
   return Object.fromEntries(HIGH_LEVEL_FIELDS.map(({ key }) => [key, stateForSide(row, side, key, overrides[key])]));
+}
+
+function documentSideConfirmed(row, side) {
+  const values = Array.isArray(row?.values) ? row.values : [];
+  const block = side === "ddt" ? "ddt" : "match";
+  const fieldMap = side === "ddt" ? DDT_VALUE_FIELDS : CERTIFICATE_VALUE_FIELDS;
+  const fields = new Set(Object.values(fieldMap).flat());
+  const sideValues = values.filter((value) => value.blocco === block && fields.has(value.campo) && readValuePayload(value));
+  return sideValues.length > 0 && sideValues.every((value) => value.stato === "confermato");
+}
+
+function documentPairConfirmed(row) {
+  return Boolean(
+    row?.document_ddt_id &&
+      row?.document_certificato_id &&
+      row?.certificate_match?.stato === "confermato" &&
+      documentSideConfirmed(row, "ddt") &&
+      documentSideConfirmed(row, "certificato"),
+  );
 }
 
 function readDdtValue(row, field) {
@@ -870,6 +889,47 @@ function LinkCandidateConfirmDialog({ candidate, confirming, onCancel, onConfirm
   );
 }
 
+function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
+  if (!dialog) {
+    return null;
+  }
+  const isFinal = dialog.kind === "final";
+  const title =
+    dialog.kind === "final"
+      ? "DDT e certificato confermati"
+      : dialog.kind === "conflict"
+        ? "Campi confermati, match da controllare"
+        : dialog.nextSide === "certificato"
+          ? "Ora conferma anche il certificato"
+          : "Ora conferma anche il DDT";
+  const detail =
+    dialog.kind === "final"
+      ? "La coppia documentale è confermata. Torno a Incoming materiale."
+      : dialog.kind === "conflict"
+        ? "I due lati sono salvati, ma il match non risulta confermato. Controlla i campi oppure disaccoppia o matcha secondo finalità."
+        : "Oppure disaccoppia o matcha secondo finalità.";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <p className="text-lg font-semibold text-slate-950">{title}</p>
+        <p className="mt-3 text-sm leading-6 text-slate-600">{detail}</p>
+        {!isFinal ? (
+          <div className="mt-6 flex justify-end">
+            <button
+              className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700"
+              onClick={onClose}
+              type="button"
+            >
+              Ho capito
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function AcquisitionDocumentMatchingSectionPage({
   certificateDocument,
   ddtDocument,
@@ -880,6 +940,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
   token,
   onRefreshRow,
 }) {
+  const navigate = useNavigate();
   const isCertificateFirstRow = useMemo(() => Boolean(row?.document_certificato_id) && !row?.document_ddt_id, [row]);
   const isDdtOnlyRow = useMemo(() => Boolean(row?.document_ddt_id) && !row?.document_certificato_id, [row]);
   const [ddtDraft, setDdtDraft] = useState(() => buildDdtDraft(row));
@@ -906,6 +967,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [detachingMatch, setDetachingMatch] = useState(false);
   const [linkingCandidateKey, setLinkingCandidateKey] = useState("");
   const [pendingLinkCandidate, setPendingLinkCandidate] = useState(null);
+  const [confirmGuidanceDialog, setConfirmGuidanceDialog] = useState(null);
 
   useEffect(() => {
     const nextDraft = buildDdtDraft(row);
@@ -1012,6 +1074,37 @@ export default function AcquisitionDocumentMatchingSectionPage({
     };
   }, [isDdtOnlyRow, rowId, token]);
 
+  useEffect(() => {
+    if (confirmGuidanceDialog?.kind !== "final") {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      onDirtyChange?.(false);
+      navigate("/acquisition");
+    }, 3500);
+    return () => window.clearTimeout(timer);
+  }, [confirmGuidanceDialog, navigate, onDirtyChange]);
+
+  function showPostDocumentConfirmDialog(refreshedRow, savedSide) {
+    if (documentPairConfirmed(refreshedRow)) {
+      setConfirmGuidanceDialog({ kind: "final" });
+      return;
+    }
+    const ddtConfirmed = documentSideConfirmed(refreshedRow, "ddt");
+    const certificateConfirmed = documentSideConfirmed(refreshedRow, "certificato");
+    if (ddtConfirmed && certificateConfirmed) {
+      setConfirmGuidanceDialog({ kind: "conflict" });
+      return;
+    }
+    if (savedSide === "ddt" && !certificateConfirmed) {
+      setConfirmGuidanceDialog({ kind: "next", nextSide: "certificato" });
+      return;
+    }
+    if (savedSide === "certificato" && !ddtConfirmed) {
+      setConfirmGuidanceDialog({ kind: "next", nextSide: "ddt" });
+    }
+  }
+
   const ddtFields = useMemo(() => ddtDraft, [ddtDraft]);
   const ddtFieldSources = useMemo(() => buildSourceMap(row, "ddt", ddtSourceOverrides), [ddtSourceOverrides, row]);
   const certificateFieldSources = useMemo(() => buildSourceMap(row, "certificato", certificateSourceOverrides), [certificateSourceOverrides, row]);
@@ -1105,7 +1198,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
     setSavingDdtFields(true);
     setError("");
     try {
-      await apiRequest(
+      const refreshedRow = await apiRequest(
         `/acquisition/rows/${rowId}/document-side-fields`,
         {
           method: "PUT",
@@ -1117,7 +1210,9 @@ export default function AcquisitionDocumentMatchingSectionPage({
         token,
       );
       setDdtSourceOverrides({});
+      onDirtyChange?.(false);
       await onRefreshRow?.();
+      showPostDocumentConfirmDialog(refreshedRow, "ddt");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -1142,7 +1237,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
     setSavingCertificateFirst(true);
     setError("");
     try {
-      await apiRequest(
+      const refreshedRow = await apiRequest(
         `/acquisition/rows/${rowId}/document-side-fields`,
         {
           method: "PUT",
@@ -1154,7 +1249,9 @@ export default function AcquisitionDocumentMatchingSectionPage({
         token,
       );
       setCertificateSourceOverrides({});
+      onDirtyChange?.(false);
       await onRefreshRow?.();
+      showPostDocumentConfirmDialog(refreshedRow, "certificato");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -1484,6 +1581,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
           onConfirm={() => void executeLinkCandidate(pendingLinkCandidate.type, pendingLinkCandidate.item)}
         />
       ) : null}
+      <DocumentConfirmGuidanceDialog dialog={confirmGuidanceDialog} onClose={() => setConfirmGuidanceDialog(null)} />
     </section>
   );
 }

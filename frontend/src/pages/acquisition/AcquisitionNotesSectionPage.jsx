@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBeforeUnload } from "react-router-dom";
+import { useBeforeUnload, useNavigate } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { documentTone } from "./documentTone";
@@ -279,6 +279,7 @@ function draftsEqual(left, right) {
 }
 
 export default function AcquisitionNotesSectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
+  const navigate = useNavigate();
   const [catalog, setCatalog] = useState([]);
   const [sessionInitialDraft, setSessionInitialDraft] = useState(() => buildInitialDraft(row));
   const [draft, setDraft] = useState(() => buildInitialDraft(row));
@@ -459,7 +460,10 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
     const saved = await persistDraft();
     if (!saved) {
       setConfirmDialogOpen(true);
+      return;
     }
+    onDirtyChange?.(false);
+    navigate("/acquisition");
   }
 
   const workspaceStatusBar = (

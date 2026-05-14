@@ -159,6 +159,87 @@ class RematchBridgeTest(unittest.TestCase):
         )
         self.assert_strong(left, right)
 
+    def test_leichtmetall_duplicate_cdq_matches_right_delivery_row(self):
+        ddt_80008254 = ddt(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228.00",
+                "colata": "94668",
+                "ddt": "80008254",
+                "peso": "8554",
+                "ordine": "333.1",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        cert_94668_8554 = cert(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228",
+                "colata": "94668",
+                "peso": "8554",
+                "ordine": "333.1",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        ddt_80008535_94668 = ddt(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228.00",
+                "colata": "94668",
+                "ddt": "80008535",
+                "peso": "5014",
+                "ordine": "19.2 + 4 + 5",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        cert_94668_5014 = cert(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228",
+                "colata": "94668",
+                "peso": "5014",
+                "ordine": "19.2 + 4 + 5",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        ddt_80008535_94752 = ddt(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94752",
+                "lega_base": "6082",
+                "diametro": "228.00",
+                "colata": "94752",
+                "ddt": "80008535",
+                "peso": "12211",
+                "ordine": "19.2 + 4 + 5",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        cert_94752_12211 = cert(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94752",
+                "lega_base": "6082",
+                "diametro": "228",
+                "colata": "94752",
+                "peso": "12211",
+                "ordine": "19.2 + 4 + 5",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+
+        self.assert_strong(ddt_80008254, cert_94668_8554)
+        self.assert_strong(ddt_80008535_94668, cert_94668_5014)
+        self.assert_strong(ddt_80008535_94752, cert_94752_12211)
+
     def test_leichtmetall_already_coupled_certificate_can_be_reused_from_match_values(self):
         left = ddt(
             {
@@ -191,7 +272,7 @@ class RematchBridgeTest(unittest.TestCase):
         self.assertIn("diametro", result.matched_fields)
         self.assertIn("peso", result.matched_fields)
 
-    def test_leichtmetall_certificate_total_weight_does_not_block_same_identity(self):
+    def test_leichtmetall_duplicate_cdq_wrong_weight_and_order_blocks(self):
         left = ddt(
             {
                 "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
@@ -217,11 +298,37 @@ class RematchBridgeTest(unittest.TestCase):
             },
             supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
         )
-        result = self.assert_strong(left, right)
+        result = self.assert_no_match(left, right)
+        self.assertIn("peso diverso", result.blockers)
+        self.assertIn("ordine diverso", result.blockers)
+        self.assertNotIn("peso", result.matched_fields)
+
+    def test_leichtmetall_cdq_and_diameter_without_row_discriminator_are_not_enough(self):
+        left = ddt(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228.00",
+                "colata": "94668",
+                "ddt": "80008535",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        right = cert(
+            {
+                "fornitore": "Leichtmetall Aluminium Giesserei Hannover GmbH",
+                "cdq": "94668",
+                "lega_base": "6082",
+                "diametro": "228",
+                "colata": "94668",
+            },
+            supplier_name="Leichtmetall Aluminium Giesserei Hannover GmbH",
+        )
+        result = self.assert_no_match(left, right)
         self.assertIn("cdq", result.matched_fields)
         self.assertIn("colata", result.matched_fields)
         self.assertIn("diametro", result.matched_fields)
-        self.assertNotIn("peso", result.matched_fields)
 
     def test_metalba_existing_match_with_ddt_readvalue_gaps(self):
         left = ddt(

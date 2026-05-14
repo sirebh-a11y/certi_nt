@@ -376,7 +376,7 @@ export default function AcquisitionUploadPage() {
               Fallback manuale DDT
             </Link>
             <Link className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100" to="/acquisition/manual/certificato">
-              Fallback certificato
+              Fallback manuale certificato
             </Link>
             <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition">
               Torna alla griglia
