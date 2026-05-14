@@ -16447,10 +16447,12 @@ def _compute_ddt_block_state(
     if not row.document_ddt_id:
         return "rosso"
     summary = _compute_ddt_field_summary_from_values(values, row=row, supplier_key=supplier_key)
-    required_missing = [field for field in summary["missing"] if field in _ddt_required_fields(supplier_key)]
+    required_fields = set(_ddt_required_fields(supplier_key))
+    required_missing = [field for field in summary["missing"] if field in required_fields]
     if required_missing:
         return "rosso"
-    if not summary["pending"]:
+    required_pending = [field for field in summary["pending"] if field in required_fields]
+    if not required_pending:
         return "verde"
     return "giallo"
 

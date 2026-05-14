@@ -127,13 +127,20 @@ function documentSideConfirmed(row, side) {
   return sideValues.length > 0 && sideValues.every((value) => value.stato === "confermato");
 }
 
+function ddtBlockConfirmed(row) {
+  return row?.block_states?.ddt === "verde" || documentSideConfirmed(row, "ddt");
+}
+
+function matchBlockConfirmed(row) {
+  return row?.block_states?.match === "verde" || row?.certificate_match?.stato === "confermato";
+}
+
 function documentPairConfirmed(row) {
   return Boolean(
     row?.document_ddt_id &&
       row?.document_certificato_id &&
-      row?.certificate_match?.stato === "confermato" &&
-      documentSideConfirmed(row, "ddt") &&
-      documentSideConfirmed(row, "certificato"),
+      ddtBlockConfirmed(row) &&
+      matchBlockConfirmed(row),
   );
 }
 
@@ -1090,13 +1097,14 @@ export default function AcquisitionDocumentMatchingSectionPage({
       setConfirmGuidanceDialog({ kind: "final" });
       return;
     }
-    const ddtConfirmed = documentSideConfirmed(refreshedRow, "ddt");
-    const certificateConfirmed = documentSideConfirmed(refreshedRow, "certificato");
-    if (ddtConfirmed && certificateConfirmed) {
+    const ddtConfirmed = ddtBlockConfirmed(refreshedRow);
+    const certificateFieldsConfirmed = documentSideConfirmed(refreshedRow, "certificato");
+    const matchConfirmed = matchBlockConfirmed(refreshedRow);
+    if (ddtConfirmed && certificateFieldsConfirmed && !matchConfirmed) {
       setConfirmGuidanceDialog({ kind: "conflict" });
       return;
     }
-    if (savedSide === "ddt" && !certificateConfirmed) {
+    if (savedSide === "ddt" && !certificateFieldsConfirmed && !matchConfirmed) {
       setConfirmGuidanceDialog({ kind: "next", nextSide: "certificato" });
       return;
     }
