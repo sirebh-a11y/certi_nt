@@ -411,13 +411,24 @@ export default function QuartaTaglioDetailPage() {
 
   const headerRows = useMemo(() => {
     const header = data?.header || {};
+    const codiceF3Value = header.codice_f3 ? (
+      <div>
+        <div>{header.codice_f3}</div>
+        {header.codice_f3_origine === "quarta_fallback" ? (
+          <div className="mt-1 text-[11px] font-semibold text-amber-700">Fallback Quarta</div>
+        ) : null}
+        {header.codice_f3_warning ? <div className="mt-1 text-[11px] font-semibold text-amber-700">{header.codice_f3_warning}</div> : null}
+      </div>
+    ) : (
+      "-"
+    );
     return [
       ["Certificato", header.numero_certificato || "Da assegnare"],
       ["Cliente", header.cliente || "Da eSolver"],
       ["Ordine cliente", header.ordine_cliente || "Da eSolver"],
       ["C.d.O.", header.conferma_ordine || "Da eSolver"],
       ["DDT", header.ddt || "Da eSolver"],
-      ["Codice F3", header.codice_f3 || "-"],
+      ["Codice F3", codiceF3Value],
       ["Colata", header.colata || "-"],
       ["Quantità", header.quantita ? formatNumber(header.quantita, 2) : "-"],
     ];

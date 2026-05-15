@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from app.core.departments.models import Department  # noqa: F401
 from app.modules.quarta_taglio.models import QuartaTaglioEsolverLink, QuartaTaglioRow
 from app.modules.quarta_taglio.schemas import QuartaTaglioEsolverDdtRowResponse
-from app.modules.quarta_taglio.service import _esolver_status_for_rows, _serialize_ol_group
+from app.modules.quarta_taglio.service import _codice_f3_from_esolver_or_quarta, _esolver_status_for_rows, _serialize_ol_group
 
 
 class QuartaTaglioEsolverTest(unittest.TestCase):
@@ -61,6 +61,74 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
 
         self.assertEqual(response.esolver_cod_f3, "ESOLVER-F3")
         self.assertEqual(response.cod_art, "QUARTA-LESS-PRECISE")
+
+    def test_list_group_keeps_esolver_cod_f3_empty_when_esolver_cod_f3_is_missing(self):
+        now = datetime.now(timezone.utc)
+        row = QuartaTaglioRow(
+            id=1,
+            codice_registro="REG1",
+            data_registro=now,
+            cod_odp="OL2026000001",
+            cod_art="QUARTA-F3",
+            des_art="Descrizione Quarta",
+            cdq="CDQ1",
+            colata="COL1",
+            qta_totale=10,
+            righe_materiale=1,
+            lotti_count=1,
+            cod_lotti=["LOT1"],
+            saldo=True,
+            status_color="green",
+            status_message="OK",
+            status_details=[],
+            matching_row_ids=[7],
+            seen_in_last_sync=True,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        link = QuartaTaglioEsolverLink(
+            cod_odp="OL2026000001",
+            status="ok",
+            message="Dati eSolver/DDT collegati",
+            cod_f3=None,
+            rows=[],
+            last_checked_at=now,
+        )
+
+        response = _serialize_ol_group([row], esolver_link=link)
+
+        self.assertIsNone(response.esolver_cod_f3)
+        self.assertEqual(response.cod_art, "QUARTA-F3")
+
+    def test_detail_codice_f3_falls_back_to_quarta_cod_art_when_esolver_cod_f3_is_missing(self):
+        now = datetime.now(timezone.utc)
+        row = QuartaTaglioRow(
+            id=1,
+            codice_registro="REG1",
+            data_registro=now,
+            cod_odp="OL2026000001",
+            cod_art="QUARTA-F3",
+            des_art="Descrizione Quarta",
+            cdq="CDQ1",
+            colata="COL1",
+            qta_totale=10,
+            righe_materiale=1,
+            lotti_count=1,
+            cod_lotti=["LOT1"],
+            saldo=True,
+            status_color="green",
+            status_message="OK",
+            status_details=[],
+            matching_row_ids=[7],
+            seen_in_last_sync=True,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+
+        result = _codice_f3_from_esolver_or_quarta(esolver_header_rows=[], quarta_rows=[row])
+
+        self.assertEqual(result["value"], "QUARTA-F3")
+        self.assertEqual(result["origin"], "quarta_fallback")
 
 
 if __name__ == "__main__":

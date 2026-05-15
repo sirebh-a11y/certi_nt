@@ -414,7 +414,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     disegno = disegno_override or disegno_proposta
     esolver_header_rows = esolver_rows
     esolver_qta = _sum_optional(row.qta_um_mag for row in esolver_header_rows)
-    esolver_cod_f3 = _join_unique(row.cod_f3 for row in esolver_header_rows) or None
+    codice_f3 = _codice_f3_from_esolver_or_quarta(esolver_header_rows=esolver_header_rows, quarta_rows=rows)
     open_certificate = (
         db.query(QuartaTaglioFinalCertificate)
         .filter(
@@ -441,7 +441,11 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
             "ordine_cliente": _join_unique(row.odv_cli for row in esolver_header_rows) or None,
             "conferma_ordine": _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
             "ddt": _join_unique(row.ddt for row in esolver_header_rows) or None,
-            "codice_f3": esolver_cod_f3,
+            "codice_f3": codice_f3["value"],
+            "codice_f3_origine": codice_f3["origin"],
+            "codice_f3_esolver": codice_f3["esolver"],
+            "codice_f3_quarta": codice_f3["quarta"],
+            "codice_f3_warning": codice_f3["warning"],
             "descrizione_articolo_quarta": des_art,
             "descrizione": descrizione,
             "descrizione_proposta": descrizione_proposta,
@@ -1959,6 +1963,42 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTagl
         first_seen_at=min(row.first_seen_at for row in rows),
         last_seen_at=max(row.last_seen_at for row in rows),
     )
+
+
+def _codice_f3_from_esolver_or_quarta(
+    *,
+    esolver_header_rows: list[QuartaTaglioEsolverDdtRowResponse],
+    quarta_rows: list[QuartaTaglioRow],
+    esolver_value_fallback: str | None = None,
+) -> dict[str, str | None]:
+    esolver_value = _join_unique(row.cod_f3 for row in esolver_header_rows) or esolver_value_fallback or None
+    quarta_value = _join_unique(row.cod_art for row in quarta_rows) or None
+    if esolver_value:
+        warning = None
+        if quarta_value and _norm(esolver_value) != _norm(quarta_value):
+            warning = f"Cod. F3 eSolver diverso da Quarta: Quarta {quarta_value}"
+        return {
+            "value": esolver_value,
+            "origin": "esolver",
+            "esolver": esolver_value,
+            "quarta": quarta_value,
+            "warning": warning,
+        }
+    if quarta_value:
+        return {
+            "value": quarta_value,
+            "origin": "quarta_fallback",
+            "esolver": None,
+            "quarta": quarta_value,
+            "warning": "Cod. F3 eSolver mancante: usato codice articolo Quarta",
+        }
+    return {
+        "value": None,
+        "origin": "missing",
+        "esolver": None,
+        "quarta": None,
+        "warning": None,
+    }
 
 
 def _serialize_certificate(row: QuartaTaglioRow) -> QuartaTaglioCertificateResponse:
