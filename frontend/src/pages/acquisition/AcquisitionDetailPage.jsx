@@ -275,6 +275,7 @@ export default function AcquisitionDetailPage() {
   const [reopenFinalDialogOpen, setReopenFinalDialogOpen] = useState(false);
   const [processingFinalReopen, setProcessingFinalReopen] = useState(false);
   const canSeeTechnicalDetail = user?.role === "admin";
+  const canReopenFinalValidation = user?.role === "admin" || user?.role === "manager";
 
   useEffect(() => {
     let ignore = false;
@@ -1014,14 +1015,16 @@ export default function AcquisitionDetailPage() {
                       <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
                         {qualityEvaluationLabel(row.qualita_valutazione)}
                       </span>
-                      <button
-                        className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-                        disabled={processingFinalReopen}
-                        onClick={() => setReopenFinalDialogOpen(true)}
-                        type="button"
-                      >
-                        Forza riapertura
-                      </button>
+                      {canReopenFinalValidation ? (
+                        <button
+                          className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                          disabled={processingFinalReopen}
+                          onClick={() => setReopenFinalDialogOpen(true)}
+                          type="button"
+                        >
+                          Forza riapertura
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

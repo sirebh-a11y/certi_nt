@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
+from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
@@ -731,5 +732,7 @@ def reopen_final_validation_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
+    if current_user.role not in {ROLE_ADMIN, ROLE_MANAGER}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     row = get_acquisition_row(db, row_id)
     return reopen_final_validation(db=db, row=row, actor_id=current_user.id)
