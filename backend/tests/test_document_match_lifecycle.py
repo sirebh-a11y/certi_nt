@@ -18,9 +18,11 @@ from app.modules.acquisition.models import (
     ReadValue,
 )
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
+from app.modules.acquisition.schemas import AcquisitionRowUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
+from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
     _plan_cross_run_auto_rematch,
@@ -30,7 +32,10 @@ from app.modules.acquisition.service import (
     detach_document_match,
     get_acquisition_row,
     list_quality_rows,
+    reopen_final_validation,
     update_quality_row,
+    update_acquisition_row,
+    upsert_read_value,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.suppliers.models import Supplier
@@ -244,7 +249,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(synced_row.lega_base, "7150 T76")
         self.assertEqual(synced_row.diametro, "35")
 
-    def test_validated_row_document_field_edit_does_not_reopen_or_degrade_match(self):
+    def test_validated_row_blocks_technical_edits_until_forced_reopen(self):
         supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
         ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-validated.pdf")
         certificate_document = Document(
@@ -303,6 +308,57 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
 
         changed_ddt_fields = dict(original_fields)
         changed_ddt_fields.update({"cdq": "999999/25", "colata": "99E-9999", "peso": "1999"})
+
+        with self.assertRaises(HTTPException) as document_side_error:
+            confirm_document_side_fields(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=changed_ddt_fields),
+                actor_id=1,
+            )
+        self.assertEqual(document_side_error.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as value_error:
+            upsert_read_value(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=ReadValueUpsertRequest(
+                    blocco="chimica",
+                    campo="Si",
+                    valore_grezzo="0,91",
+                    valore_standardizzato="0,91",
+                    valore_finale="0,91",
+                    stato="confermato",
+                    metodo_lettura="utente",
+                    fonte_documentale="utente",
+                ),
+                actor_id=1,
+            )
+        self.assertEqual(value_error.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as row_update_error:
+            update_acquisition_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionRowUpdateRequest(cdq="999999/25"),
+                actor_id=1,
+                actor_email="admin@certi.local",
+            )
+        self.assertEqual(row_update_error.exception.status_code, 409)
+
+        still_locked = get_acquisition_row(self.db, row.id)
+        self.assertTrue(still_locked.validata_finale)
+        self.assertEqual(still_locked.qualita_valutazione, "accettato")
+        self.assertEqual(still_locked.stato_workflow, "validata_quality")
+        self.assertEqual(still_locked.cdq, "10033539/25")
+        self.assertEqual(still_locked.colata, "25E-7870")
+        self.assertEqual(still_locked.peso, "1331")
+        self.assertIsNotNone(still_locked.certificate_match)
+        self.assertEqual(still_locked.certificate_match.stato, "confermato")
+        ddt_cdq_value = next(value for value in still_locked.values if value.blocco == "ddt" and value.campo == "cdq")
+        self.assertEqual(ddt_cdq_value.valore_finale, "10033539/25")
+
+        reopen_final_validation(self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
         confirm_document_side_fields(
             self.db,
             row=get_acquisition_row(self.db, row.id),
@@ -310,17 +366,13 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             actor_id=1,
         )
 
-        updated = get_acquisition_row(self.db, row.id)
-        self.assertTrue(updated.validata_finale)
-        self.assertEqual(updated.qualita_valutazione, "accettato")
-        self.assertEqual(updated.stato_workflow, "validata_quality")
-        self.assertEqual(updated.cdq, "10033539/25")
-        self.assertEqual(updated.colata, "25E-7870")
-        self.assertEqual(updated.peso, "1331")
-        self.assertIsNotNone(updated.certificate_match)
-        self.assertEqual(updated.certificate_match.stato, "confermato")
-        ddt_cdq_value = next(value for value in updated.values if value.blocco == "ddt" and value.campo == "cdq")
-        self.assertEqual(ddt_cdq_value.valore_finale, "999999/25")
+        reopened_and_changed = get_acquisition_row(self.db, row.id)
+        self.assertFalse(reopened_and_changed.validata_finale)
+        self.assertIsNone(reopened_and_changed.qualita_valutazione)
+        self.assertEqual(reopened_and_changed.stato_workflow, "riaperta")
+        self.assertEqual(reopened_and_changed.cdq, "999999/25")
+        self.assertEqual(reopened_and_changed.colata, "99E-9999")
+        self.assertEqual(reopened_and_changed.peso, "1999")
 
     def test_validated_row_blocks_detach_and_match_change_until_reopened(self):
         supplier = Supplier(ragione_sociale="Grupa Kety S.A.")

@@ -277,6 +277,19 @@ export default function AcquisitionDetailPage() {
   const canSeeTechnicalDetail = user?.role === "admin";
   const canReopenFinalValidation = user?.role === "admin" || user?.role === "manager";
 
+  function guardFinalValidatedEdit() {
+    if (!row?.validata_finale) {
+      return false;
+    }
+    setFinalValidationWarning({
+      title: "Riga gia valutata",
+      message: canReopenFinalValidation
+        ? "Per modificare questa riga devi prima usare Forza riapertura."
+        : "Per modificare questa riga devi richiedere Forza riapertura a manager o admin.",
+    });
+    return true;
+  }
+
   useEffect(() => {
     let ignore = false;
 
@@ -439,6 +452,9 @@ export default function AcquisitionDetailPage() {
   }, [isCertificateFirstRow, rowId, token]);
 
   async function handleUpsertMatch(targetState) {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     const selectedDocumentId = Number(matchDraft.documentId);
     if (!selectedDocumentId) {
       setError("Seleziona un certificato per il match.");
@@ -478,6 +494,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleRefreshCertificateFirst() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setRefreshingCertificateFirst(true);
     setError("");
     try {
@@ -508,6 +527,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleSaveCertificateFirstFields() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setSavingCertificateFirst(true);
     setError("");
     try {
@@ -552,6 +574,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleProcessMinimal() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setProcessing(true);
     setError("");
     try {
@@ -569,6 +594,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleProcessDdtVision() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setProcessingVision(true);
     setError("");
     try {
@@ -586,6 +614,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectNotes() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setProcessingNotes(true);
     setError("");
     try {
@@ -603,6 +634,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectChemistry() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setProcessingChemistry(true);
     setError("");
     try {
@@ -620,6 +654,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectProperties() {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     setProcessingProperties(true);
     setError("");
     try {
@@ -637,6 +674,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleSaveValue(block, field, value) {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     const key = fieldKey(block, field);
     const currentDisplay = valueDisplay(block, field, value);
     const nextValue = safeText(getDraft(block, field, currentDisplay)).trim();
@@ -697,6 +737,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleCreateManualValue(block, field, nextValue) {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     const key = fieldKey(block, field);
     const cleanedValue = safeText(nextValue).trim();
     if (!cleanedValue) {
@@ -735,6 +778,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleConfirmValue(value) {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     const block = value.blocco;
     const field = value.campo;
     const key = fieldKey(block, field);
@@ -776,6 +822,9 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleSetNullValue(block, field, value) {
+    if (guardFinalValidatedEdit()) {
+      return;
+    }
     const key = fieldKey(block, field);
 
     setSavingFieldKey(key);

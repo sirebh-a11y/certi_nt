@@ -7045,6 +7045,8 @@ def update_acquisition_row(
     actor_id: int,
     actor_email: str,
 ) -> AcquisitionRowDetailResponse:
+    if row.validata_finale:
+        _raise_final_validation_locked()
     updates = payload.model_dump(exclude_unset=True)
     touched_row_core_fields = {
         field_name
@@ -7091,6 +7093,10 @@ def update_acquisition_row(
 
 
 DOCUMENT_SIDE_UI_FIELDS: tuple[str, ...] = ("lega_base", "diametro", "cdq", "colata", "ddt", "peso", "ordine")
+FINAL_VALIDATION_LOCK_MESSAGE = (
+    "Riga gia valutata: per modificare devi prima usare Forza riapertura. "
+    "Se non hai i permessi, richiedere a manager o admin."
+)
 DOCUMENT_SIDE_FIELD_LABELS: dict[str, str] = {
     "lega_base": "Lega",
     "diametro": "Diametro",
@@ -7134,8 +7140,9 @@ def confirm_document_side_fields(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
 
     was_final_validated = current_row.validata_finale
-    if not was_final_validated:
-        _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
+    if was_final_validated:
+        _raise_final_validation_locked()
+    _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
     block = "ddt" if payload.side == "ddt" else "match"
     field_map = DDT_SIDE_FIELD_MAP if payload.side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
     source = "ddt" if payload.side == "ddt" else "certificato"
@@ -7154,25 +7161,18 @@ def confirm_document_side_fields(
             )
 
     db.flush()
-    if not was_final_validated:
-        _sync_row_core_from_document_side_values(db, current_row)
+    _sync_row_core_from_document_side_values(db, current_row)
     _record_history_event(
         db=db,
         acquisition_row_id=current_row.id,
         blocco=block,
-        azione=f"{payload.side}_campi_corretti_post_valutazione" if was_final_validated else f"{payload.side}_campi_confermati",
+        azione=f"{payload.side}_campi_confermati",
         user_id=actor_id,
-        nota_breve=(
-            "Riga già valutata: campi documento aggiornati senza modificare match o dati guida"
-            if was_final_validated
-            else None
-        ),
     )
     db.flush()
     db.expire(current_row, ["values", "certificate_match"])
     refreshed_row = get_acquisition_row(db, current_row.id)
-    if not was_final_validated:
-        _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
+    _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
     db.commit()
@@ -7363,10 +7363,7 @@ def detach_document_match(
     if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Row must have both DDT and certificate documents")
     if current_row.validata_finale:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Riga già valutata: per disaccoppiare DDT e certificato richiedere Forza riapertura a manager o admin.",
-        )
+        _raise_final_validation_locked()
 
     ddt_document_id = current_row.document_ddt_id
     certificate_document_id = current_row.document_certificato_id
@@ -8613,6 +8610,8 @@ def create_evidence(
     payload: DocumentEvidenceCreateRequest,
     actor_id: int,
 ) -> DocumentEvidenceResponse:
+    if row.validata_finale:
+        _raise_final_validation_locked()
     document = get_document(db, payload.document_id)
     if payload.document_page_id is not None:
         page = (
@@ -8697,10 +8696,7 @@ def upsert_match(
     actor_id: int,
 ) -> MatchResponse:
     if row.validata_finale:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Riga già valutata: per cambiare il match richiedere Forza riapertura a manager o admin.",
-        )
+        _raise_final_validation_locked()
     certificate_document = _get_document_of_type(db, payload.document_certificato_id, "certificato")
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None:
         if row.fornitore_id != certificate_document.fornitore_id:
@@ -16278,6 +16274,10 @@ def _record_history_event(
     )
 
 
+def _raise_final_validation_locked() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=FINAL_VALIDATION_LOCK_MESSAGE)
+
+
 def _reopen_row_if_validated(
     db: Session,
     row: AcquisitionRow,
@@ -16287,17 +16287,7 @@ def _reopen_row_if_validated(
 ) -> None:
     if not row.validata_finale:
         return
-    row.validata_finale = False
-    row.stato_workflow = "riaperta"
-    db.add(row)
-    _record_history_event(
-        db=db,
-        acquisition_row_id=row.id,
-        blocco="workflow",
-        azione="riga_riaperta",
-        user_id=actor_id,
-        nota_breve=reason,
-    )
+    _raise_final_validation_locked()
 
 
 def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
@@ -22404,6 +22394,8 @@ def _apply_supplier_certificate_ai_payload(
     payload: dict[str, object],
     actor_id: int,
 ) -> None:
+    if row.validata_finale:
+        _raise_final_validation_locked()
     _apply_aluminium_bozen_certificate_ai_payload(
         db=db,
         row=row,

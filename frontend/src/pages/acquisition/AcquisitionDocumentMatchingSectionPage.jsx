@@ -912,6 +912,8 @@ function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
   const title =
     dialog.kind === "final"
       ? "DDT e certificato confermati"
+      : dialog.kind === "locked"
+        ? "Riga gia valutata"
       : isValidatedEdit
         ? "Correzione salvata, match mantenuto"
       : dialog.kind === "conflict"
@@ -922,6 +924,8 @@ function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
   const detail =
     dialog.kind === "final"
       ? "La coppia documentale è confermata. Torno a Incoming materiale."
+      : dialog.kind === "locked"
+        ? "Per modificare DDT o certificato devi prima usare Forza riapertura. Se non hai i permessi, richiedere a manager o admin."
       : isValidatedEdit
         ? dialog.fields?.length
           ? `La riga è già valutata: il match resta confermato. Controlla però questi campi non allineati tra DDT e certificato: ${dialog.fields.join(", ")}.`
@@ -1217,6 +1221,10 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function handleSaveDdtFields() {
+    if (row?.validata_finale) {
+      setConfirmGuidanceDialog({ kind: "locked" });
+      return;
+    }
     const wasFinalValidated = Boolean(row?.validata_finale);
     const mismatchLabels = differingDraftFieldLabels(ddtDraft, certificateDraft);
     setSavingDdtFields(true);
@@ -1262,6 +1270,10 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function handleSaveCertificateFirstFields() {
+    if (row?.validata_finale) {
+      setConfirmGuidanceDialog({ kind: "locked" });
+      return;
+    }
     const wasFinalValidated = Boolean(row?.validata_finale);
     const mismatchLabels = differingDraftFieldLabels(ddtDraft, certificateDraft);
     setSavingCertificateFirst(true);
