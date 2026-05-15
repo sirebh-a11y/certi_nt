@@ -6,6 +6,13 @@ import { useAuth } from "../../app/auth";
 const CHECKBOX_CLASSNAME =
   "h-4 w-4 shrink-0 rounded border-slate-300 p-0 text-accent focus:ring-2 focus:ring-accent/20";
 
+const SYSTEM_NOTE_LABELS = {
+  us_control_class_a: "U.S. Control Class A",
+  us_control_class_b: "U.S. Control Class B",
+  rohs: "RoHS",
+  radioactive_free: "Materiale esente da radioattività",
+};
+
 function emptyCreateForm() {
   return {
     text: "",
@@ -132,6 +139,7 @@ export default function NotesPage() {
 
   function renderCard(item) {
     const draft = drafts[item.id] || { text: item.text, is_active: item.is_active };
+    const title = item.is_system ? SYSTEM_NOTE_LABELS[item.code] || item.code : item.code;
     return (
       <form
         className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
@@ -143,10 +151,8 @@ export default function NotesPage() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">{item.code}</p>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {item.note_key ? `${item.note_key}${item.note_value ? ` = ${item.note_value}` : ""}` : "Nota custom"}
-            </p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">{title}</p>
+            {!item.is_system ? <p className="mt-0.5 text-xs text-slate-500">Nota custom</p> : null}
           </div>
           <span
             className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${
