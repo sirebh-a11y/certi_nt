@@ -773,6 +773,7 @@ def detect_certificate_core_matches(
     supplier_detector = {
         "aluminium_bozen": _detect_aluminium_bozen_certificate_core_matches,
         "aww": _detect_aww_certificate_core_matches,
+        "impol": _detect_impol_certificate_core_matches,
         "leichtmetall": _detect_leichtmetall_certificate_core_matches,
         "metalba": _detect_metalba_certificate_core_matches,
         "neuman": _detect_neuman_certificate_core_matches,
@@ -795,6 +796,35 @@ def detect_certificate_core_matches(
             if weight_payload is not None:
                 matches["peso_certificato"] = weight_payload
     return matches
+
+
+def _detect_impol_certificate_core_matches(
+    pages: list[DocumentPage],
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for page in pages:
+        for line in _page_lines(page):
+            certificate_number = _extract_impol_certificate_number(line)
+            if certificate_number is not None:
+                matches["numero_certificato_certificato"] = _build_match(page.id, line, certificate_number)
+                return matches
+    return matches
+
+
+def _extract_impol_certificate_number(line: str) -> str | None:
+    normalized_line = _normalize_mojibake_numeric_text(line).upper()
+    patterns = (
+        r"^\s*NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
+        r"\bCERTIFICATE\s+NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
+        r"\bCERT\.?\s+NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized_line)
+        if match is not None:
+            token = re.sub(r"\s+", "", match.group(1).upper())
+            if token not in {"10204", "0000"}:
+                return token
+    return None
 
 
 def _detect_leichtmetall_certificate_core_matches(

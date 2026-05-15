@@ -19614,12 +19614,7 @@ def _sanitize_impol_vision_certificate_fields(
 
     return {
         "numero_certificato_certificato": _payload(
-            _extract_token_from_value_or_evidence(
-                certificate_raw,
-                certificate_raw,
-                r"\b\d{1,6}\s*[/-]?\s*[A-Z0-9]{0,2}\b",
-                disallow={"10204"},
-            )
+            _normalize_impol_certificate_number(certificate_raw, certificate_raw)
         ),
         "articolo_certificato": _payload(_normalize_impol_product_code(article_raw)),
         "codice_cliente_certificato": _payload(None),
@@ -19633,6 +19628,18 @@ def _sanitize_impol_vision_certificate_fields(
         ),
         "peso_certificato": _payload(_normalize_weight_value(weight_raw)),
     }
+
+
+def _normalize_impol_certificate_number(value: str | None, evidence: str | None = None) -> str | None:
+    token = _extract_token_from_value_or_evidence(
+        value,
+        evidence,
+        r"\b\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?\b",
+        disallow={"10204"},
+    )
+    if token is None:
+        return None
+    return re.sub(r"\s+", "", token.upper())
 
 
 def _normalize_impol_product_code(value: str | None) -> str | None:
