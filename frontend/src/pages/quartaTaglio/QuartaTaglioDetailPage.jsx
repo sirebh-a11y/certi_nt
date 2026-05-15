@@ -67,6 +67,17 @@ function formatNumber(value, digits = 4) {
   return Number(value).toLocaleString("it-IT", { maximumFractionDigits: digits });
 }
 
+function formatQuantity(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return String(value).replace(".", ",");
+  }
+  return Math.round(numericValue).toLocaleString("it-IT", { maximumFractionDigits: 0 });
+}
+
 function formatLimit(min, max, digits = 4) {
   if (min === null && max === null) {
     return "-";
@@ -430,7 +441,7 @@ export default function QuartaTaglioDetailPage() {
       ["DDT", header.ddt || "Da eSolver"],
       ["Codice F3", codiceF3Value],
       ["Colata", header.colata || "-"],
-      ["Quantità", header.quantita ? formatNumber(header.quantita, 2) : "-"],
+      ["Quantità", formatQuantity(header.quantita)],
     ];
   }, [data]);
   const conformityIssues = data?.conformity_issues || [];
@@ -695,7 +706,7 @@ export default function QuartaTaglioDetailPage() {
             item.odv_cli || "-",
             item.odv_f3 || "-",
             item.ddt || "-",
-            formatNumber(item.qta_um_mag, 2),
+            formatQuantity(item.qta_um_mag),
           ])}
           emptyText="Nessuna riga DDT eSolver collegata a questo OL."
         />
@@ -711,7 +722,7 @@ export default function QuartaTaglioDetailPage() {
               <div className="font-medium">{item.cod_art || "-"}</div>
               {item.des_art ? <div className="mt-1 text-xs text-slate-500">{item.des_art}</div> : null}
             </div>,
-            formatNumber(item.qta_totale, 2),
+            formatQuantity(item.qta_totale),
             (item.cod_lotti || []).join(", ") || "-",
             item.matching_row_ids?.length
               ? item.matching_row_ids.map((rowId) => (

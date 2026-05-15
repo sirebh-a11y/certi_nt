@@ -126,11 +126,15 @@ function formatDateTime(value) {
   });
 }
 
-function formatNumber(value) {
+function formatQuantity(value) {
   if (value === null || value === undefined || value === "") {
     return "-";
   }
-  return Number(value).toLocaleString("it-IT", { maximumFractionDigits: 2 });
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return String(value).replace(".", ",");
+  }
+  return Math.round(numericValue).toLocaleString("it-IT", { maximumFractionDigits: 0 });
 }
 
 function statusClass(color) {
@@ -805,7 +809,7 @@ export default function QuartaTaglioPage() {
                     <div className="whitespace-normal break-words font-medium">{item.esolver_cod_f3 || "-"}</div>
                     {item.cod_art ? <div className="mt-1 text-xs text-slate-500">Quarta: {item.cod_art}</div> : null}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatNumber(item.qta_totale)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
                   <td className="px-3 py-2.5 text-slate-700">
                     <div className="font-medium">{item.lotti_count}</div>
                     <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500" title={(item.cod_lotti || []).join(", ")}>
@@ -827,7 +831,7 @@ export default function QuartaTaglioPage() {
                     <div className="whitespace-normal break-words">{item.esolver_ddt || "-"}</div>
                     {item.esolver_ordine_cliente ? <div className="mt-1 text-xs text-slate-500">Ord. {item.esolver_ordine_cliente}</div> : null}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatNumber(item.esolver_qta_totale)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.esolver_qta_totale)}</td>
                   <td className="min-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="font-medium">{item.status_message}</div>
                     {item.status_details?.length ? (

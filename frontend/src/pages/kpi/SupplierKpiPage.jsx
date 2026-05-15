@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "../../app/api";
+import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
 const MONTHS = [
@@ -17,6 +17,13 @@ const MONTHS = [
   { value: "10", label: "Ottobre" },
   { value: "11", label: "Novembre" },
   { value: "12", label: "Dicembre" },
+];
+
+const QUARTERS = [
+  { value: "1", label: "Q1", hint: "Gen-Mar" },
+  { value: "2", label: "Q2", hint: "Apr-Giu" },
+  { value: "3", label: "Q3", hint: "Lug-Set" },
+  { value: "4", label: "Q4", hint: "Ott-Dic" },
 ];
 
 function formatNumber(value, digits = 2) {
@@ -37,6 +44,19 @@ function maxMetric(items, selector) {
   return Math.max(1, ...items.map((item) => Number(selector(item)) || 0));
 }
 
+function buildKpiParams({ year, month, quarter, supplierId }) {
+  const params = new URLSearchParams({ year });
+  if (month) {
+    params.set("month", month);
+  } else if (quarter) {
+    params.set("quarter", quarter);
+  }
+  if (supplierId) {
+    params.set("supplier_id", supplierId);
+  }
+  return params;
+}
+
 function MetricCard({ label, value, hint, tone = "slate" }) {
   const toneClasses = {
     emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
@@ -46,10 +66,10 @@ function MetricCard({ label, value, hint, tone = "slate" }) {
     slate: "border-slate-200 bg-white text-slate-950",
   };
   return (
-    <div className={`rounded-2xl border px-4 py-4 shadow-sm ${toneClasses[tone] || toneClasses.slate}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">{label}</p>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-      {hint ? <p className="mt-1 text-xs opacity-70">{hint}</p> : null}
+    <div className={`rounded-2xl border px-4 py-2 shadow-sm ${toneClasses[tone] || toneClasses.slate}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">{label}</p>
+      <p className="mt-1 text-xl font-semibold leading-tight">{value}</p>
+      {hint ? <p className="mt-0.5 text-[11px] opacity-70">{hint}</p> : null}
     </div>
   );
 }
@@ -69,8 +89,10 @@ export default function SupplierKpiPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [year, setYear] = useState("2026");
   const [month, setMonth] = useState("");
+  const [quarter, setQuarter] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -95,13 +117,7 @@ export default function SupplierKpiPage() {
     let ignore = false;
     setLoading(true);
     setError("");
-    const params = new URLSearchParams({ year });
-    if (month) {
-      params.set("month", month);
-    }
-    if (supplierId) {
-      params.set("supplier_id", supplierId);
-    }
+    const params = buildKpiParams({ year, month, quarter, supplierId });
     apiRequest(`/supplier-kpi/summary?${params.toString()}`, {}, token)
       .then((data) => {
         if (!ignore) {
@@ -121,7 +137,7 @@ export default function SupplierKpiPage() {
     return () => {
       ignore = true;
     };
-  }, [month, supplierId, token, year]);
+  }, [month, quarter, supplierId, token, year]);
 
   const totals = summary?.totals;
   const supplierRows = summary?.by_supplier || [];
@@ -136,6 +152,51 @@ export default function SupplierKpiPage() {
     () => maxMetric(supplierRows, (item) => Math.abs(item.metrics.tempo_medio_controllo_giorni || 0)),
     [supplierRows],
   );
+  const selectedMonth = MONTHS.find((item) => item.value === month);
+  const selectedQuarter = QUARTERS.find((item) => item.value === quarter);
+  const quarterSelectValue = selectedQuarter ? `quarter:${selectedQuarter.value}` : "";
+  const monthSelectValue = selectedQuarter && !month ? quarterSelectValue : month;
+  const activePeriodLabel = month
+    ? `${selectedMonth?.label || "Mese"} ${year}`
+    : quarter
+      ? `${selectedQuarter?.label || "Trimestre"} ${year}`
+      : `Tutto anno ${year}`;
+
+  const handleMonthChange = (value) => {
+    if (value.startsWith("quarter:")) {
+      setQuarter(value.replace("quarter:", ""));
+      setMonth("");
+      return;
+    }
+    setMonth(value);
+    setQuarter("");
+  };
+
+  const handleQuarterClick = (value) => {
+    setQuarter((current) => (current === value ? "" : value));
+    setMonth("");
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setError("");
+    try {
+      const params = buildKpiParams({ year, month, quarter, supplierId });
+      const blob = await fetchApiBlob(`/api/supplier-kpi/export?${params.toString()}`, token);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `kpi_fornitori_${year}_${month ? `mese_${month}` : quarter ? `q${quarter}` : "anno"}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
@@ -147,7 +208,7 @@ export default function SupplierKpiPage() {
             Indicatori ricavati dalle righe valutate: lotti, tonnellate, esiti qualità, ritardi e tempi di controllo.
           </p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 lg:grid-cols-[120px_auto_minmax(190px,1fr)_minmax(260px,1.5fr)]">
           <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
             Anno
             <input
@@ -159,13 +220,41 @@ export default function SupplierKpiPage() {
               value={year}
             />
           </label>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Trimestre
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {QUARTERS.map((item) => {
+                const active = quarter === item.value && !month;
+                return (
+                  <button
+                    className={`rounded-lg border px-2.5 py-2 text-xs font-bold tracking-normal transition ${
+                      active
+                        ? "border-teal-500 bg-teal-50 text-teal-800 shadow-sm"
+                        : "border-border bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700"
+                    }`}
+                    key={item.value}
+                    onClick={() => handleQuarterClick(item.value)}
+                    title={item.hint}
+                    type="button"
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
             Mese
             <select
               className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-ink"
-              onChange={(event) => setMonth(event.target.value)}
-              value={month}
+              onChange={(event) => handleMonthChange(event.target.value)}
+              value={monthSelectValue}
             >
+              {selectedQuarter && !month ? (
+                <option value={quarterSelectValue}>
+                  {selectedQuarter.label} {selectedQuarter.hint}
+                </option>
+              ) : null}
               {MONTHS.map((item) => (
                 <option key={item.value || "all"} value={item.value}>
                   {item.label}
@@ -188,6 +277,9 @@ export default function SupplierKpiPage() {
               ))}
             </select>
           </label>
+          <p className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 lg:col-span-4">
+            Periodo attivo: {activePeriodLabel}
+          </p>
         </div>
       </div>
 
@@ -196,7 +288,7 @@ export default function SupplierKpiPage() {
 
       {totals ? (
         <>
-          <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+          <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-[repeat(7,minmax(120px,1fr))_220px]">
             <MetricCard label="Tonnellate" value={formatNumber(totals.tonnellate, 3)} tone="sky" />
             <MetricCard label="Lotti" value={formatInteger(totals.lotti_totali)} />
             <MetricCard label="Accettati" value={formatInteger(totals.lotti_accettati)} tone="emerald" />
@@ -204,6 +296,15 @@ export default function SupplierKpiPage() {
             <MetricCard label="Respinti" value={formatInteger(totals.lotti_scarti)} tone="rose" />
             <MetricCard label="Ritardo medio" value={formatNumber(totals.ritardo_medio_giorni, 2)} hint="giorni" />
             <MetricCard label="Tempo controllo" value={formatNumber(totals.tempo_medio_controllo_giorni, 2)} hint="giorni lav." />
+            <button
+              className="rounded-2xl border border-teal-200 bg-white px-4 py-2 text-left text-sm font-semibold leading-tight text-teal-800 shadow-sm transition hover:border-teal-400 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={exporting || loading}
+              onClick={handleExport}
+              type="button"
+            >
+              <span className="block text-[10px] uppercase tracking-[0.16em] text-teal-600">Export</span>
+              {exporting ? "Preparazione..." : "Scarica dati periodo"}
+            </button>
           </div>
 
           <div className="mt-8 grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
@@ -211,7 +312,7 @@ export default function SupplierKpiPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="font-semibold text-slate-950">Andamento mensile valutazioni</h3>
-                  <p className="text-sm text-slate-500">Accettati, riserve e respinti nel {year}.</p>
+                  <p className="text-sm text-slate-500">Accettati, riserve e respinti: {activePeriodLabel.toLowerCase()}.</p>
                 </div>
               </div>
               <div className="mt-5 space-y-3">

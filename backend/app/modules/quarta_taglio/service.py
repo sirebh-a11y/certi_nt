@@ -459,7 +459,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
             "disegno_diverso_da_quarta": "true" if disegno_override and _norm(disegno_override) != _norm(disegno_proposta) else None,
             "disegno_confidenza": disegno_confidenza,
             "colata": group.colata,
-            "quantita": str(esolver_qta if esolver_qta is not None else group.qta_totale)
+            "quantita": _format_quantity(esolver_qta if esolver_qta is not None else group.qta_totale)
             if (esolver_qta is not None or group.qta_totale is not None)
             else None,
         },
@@ -2073,6 +2073,13 @@ def _sum_optional(values: Any) -> float | None:
         total += float(value)
         found = True
     return total if found else None
+
+
+def _format_quantity(value: Any) -> str | None:
+    numeric_value = _as_float(value)
+    if numeric_value is None:
+        return _clean_text(value)
+    return str(int(round(numeric_value)))
 
 
 def _join_unique(values: Any, separator: str = ", ") -> str:

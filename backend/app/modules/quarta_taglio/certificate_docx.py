@@ -114,7 +114,7 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
         (("Purchaser:", "Cliente:", header.get("cliente")), ("Cod. F3:", "Cod. F3:", header.get("codice_f3"))),
         (("Description:", "Descrizione:", header.get("descrizione")), ("Drawing:", "Disegno:", header.get("disegno"))),
         (("Order.:", "Ordine:", header.get("ordine_cliente")), ("Confirm of order:", "C.d.O.:", header.get("conferma_ordine"))),
-        (("D.d.T.:", "D.d.T.:", header.get("ddt")), ("Amount:", "Quantità:", header.get("quantita"))),
+        (("D.d.T.:", "D.d.T.:", header.get("ddt")), ("Amount:", "Quantità:", _format_quantity(header.get("quantita")))),
         (("", "", ""), ("", "", "")),
     ]
     _add_header_data_table(document, data_rows)
@@ -149,7 +149,7 @@ def _add_materials_table(document: Document, *, detail: QuartaTaglioDetailRespon
         row[0].text = item.cdq or "-"
         row[1].text = item.colata or "-"
         row[2].text = item.cod_art or "-"
-        row[3].text = _format_value(item.qta_totale)
+        row[3].text = _format_quantity(item.qta_totale)
         row[4].text = ", ".join(item.cod_lotti or []) or "-"
 
 
@@ -509,6 +509,20 @@ def _format_value(value: float | str | None) -> str:
         return "-"
     if isinstance(value, float):
         return f"{value:.4f}".rstrip("0").rstrip(".").replace(".", ",")
+    return str(value)
+
+
+def _format_quantity(value: float | str | None) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, str):
+        normalized = value.strip().replace(",", ".")
+        try:
+            value = float(normalized)
+        except ValueError:
+            return value.replace(".", ",")
+    if isinstance(value, (int, float)):
+        return str(int(round(value)))
     return str(value)
 
 
