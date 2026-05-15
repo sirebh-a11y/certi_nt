@@ -75,6 +75,7 @@ class QuartaTaglioListResponse(BaseModel):
     offset: int = 0
     limit: int = 25
     only_taglio_active: bool = False
+    hide_certified: bool = False
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):

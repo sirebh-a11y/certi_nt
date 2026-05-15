@@ -200,6 +200,7 @@ def sync_and_list_quarta_taglio(
     actor_id: int | None = None,
     sync_data: bool = True,
     only_taglio_active: bool = False,
+    hide_certified: bool = False,
     limit: int = 25,
     offset: int = 0,
     query_one: str | None = None,
@@ -217,6 +218,13 @@ def sync_and_list_quarta_taglio(
     rows_query = db.query(QuartaTaglioRow).filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
     if only_taglio_active:
         rows_query = rows_query.filter(QuartaTaglioRow.taglio_attivo.is_(True))
+    if hide_certified:
+        certified_cod_odps = (
+            db.query(QuartaTaglioFinalCertificate.cod_odp)
+            .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+            .distinct()
+        )
+        rows_query = rows_query.filter(QuartaTaglioRow.cod_odp.not_in(certified_cod_odps))
     rows = rows_query.order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc()).all()
 
     grouped_rows = _group_quarta_rows(rows)
@@ -254,6 +262,7 @@ def sync_and_list_quarta_taglio(
         offset=safe_offset,
         limit=safe_limit,
         only_taglio_active=only_taglio_active,
+        hide_certified=hide_certified,
     )
 
 

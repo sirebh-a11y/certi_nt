@@ -46,6 +46,7 @@ const DEFAULT_LIST_STATE = {
   operatorTwo: "and",
   rowLimit: "25",
   onlyTaglioActive: false,
+  hideCertified: false,
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
   scrollTop: 0,
@@ -77,6 +78,7 @@ function loadPersistedListState() {
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
       rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
       onlyTaglioActive: parsed?.onlyTaglioActive === true,
+      hideCertified: parsed?.hideCertified === true,
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
       scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
@@ -316,6 +318,7 @@ export default function QuartaTaglioPage() {
   const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
   const [onlyTaglioActive, setOnlyTaglioActive] = useState(initialListStateRef.current.onlyTaglioActive);
+  const [hideCertified, setHideCertified] = useState(initialListStateRef.current.hideCertified);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [totalItems, setTotalItems] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -327,8 +330,11 @@ export default function QuartaTaglioPage() {
   const restoredScrollRef = useRef(false);
   const sectionRef = useRef(null);
   const initialSyncDoneRef = useRef(false);
+  const latestRequestRef = useRef(0);
 
   async function fetchItems({ append = false, sync = false, offset = 0 } = {}) {
+    const requestId = latestRequestRef.current + 1;
+    latestRequestRef.current = requestId;
     if (append) {
       setLoadingMore(true);
     } else {
@@ -338,6 +344,7 @@ export default function QuartaTaglioPage() {
     const params = new URLSearchParams({
       sync: sync ? "true" : "false",
       only_taglio_active: onlyTaglioActive ? "true" : "false",
+      hide_certified: hideCertified ? "true" : "false",
       limit: rowLimit === "all" ? "1000" : rowLimit,
       offset: String(offset),
       query_one: queryOne,
@@ -352,12 +359,21 @@ export default function QuartaTaglioPage() {
     }
     try {
       const data = await apiRequest(`/quarta-taglio?${params.toString()}`, {}, token);
+      if (requestId !== latestRequestRef.current) {
+        return;
+      }
       setItems((current) => (append ? [...current, ...(data.items || [])] : data.items || []));
       setSyncRun(data.sync_run || null);
       setTotalItems(data.total_items || 0);
     } catch (requestError) {
+      if (requestId !== latestRequestRef.current) {
+        return;
+      }
       setError(requestError.message);
     } finally {
+      if (requestId !== latestRequestRef.current) {
+        return;
+      }
       if (append) {
         setLoadingMore(false);
       } else {
@@ -380,7 +396,7 @@ export default function QuartaTaglioPage() {
     return () => {
       ignore = true;
     };
-  }, [operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
+  }, [hideCertified, operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
 
   useEffect(() => {
     const viewport = tableViewportRef.current;
@@ -393,12 +409,13 @@ export default function QuartaTaglioPage() {
       operatorTwo,
       rowLimit,
       onlyTaglioActive,
+      hideCertified,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [hideCertified, operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -415,8 +432,11 @@ export default function QuartaTaglioPage() {
   }, []);
 
   const visibleItems = useMemo(() => {
-    return items;
-  }, [items]);
+    if (!onlyTaglioActive) {
+      return items;
+    }
+    return items.filter((item) => item.taglio_attivo);
+  }, [items, onlyTaglioActive]);
 
   const displayedItems = useMemo(() => {
     return visibleItems;
@@ -527,6 +547,7 @@ export default function QuartaTaglioPage() {
       operatorTwo,
       rowLimit,
       onlyTaglioActive,
+      hideCertified,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
       scrollTop: viewport?.scrollTop || 0,
@@ -585,6 +606,17 @@ export default function QuartaTaglioPage() {
           type="button"
         >
           Solo taglio attivo
+        </button>
+        <button
+          className={`min-w-[190px] rounded-xl border px-3 py-2 text-sm font-semibold ${
+            hideCertified
+              ? "border-sky-300 bg-sky-50 text-sky-800"
+              : "border-border bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+          onClick={() => setHideCertified((current) => !current)}
+          type="button"
+        >
+          Nascondi certificati
         </button>
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-taglio-search-1">
