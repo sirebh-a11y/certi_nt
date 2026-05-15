@@ -7133,7 +7133,9 @@ def confirm_document_side_fields(
     if payload.side == "certificato" and current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
 
-    _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
+    was_final_validated = current_row.validata_finale
+    if not was_final_validated:
+        _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason=f"{payload.side}_confermato")
     block = "ddt" if payload.side == "ddt" else "match"
     field_map = DDT_SIDE_FIELD_MAP if payload.side == "ddt" else CERTIFICATE_SIDE_FIELD_MAP
     source = "ddt" if payload.side == "ddt" else "certificato"
@@ -7152,18 +7154,25 @@ def confirm_document_side_fields(
             )
 
     db.flush()
-    _sync_row_core_from_document_side_values(db, current_row)
+    if not was_final_validated:
+        _sync_row_core_from_document_side_values(db, current_row)
     _record_history_event(
         db=db,
         acquisition_row_id=current_row.id,
         blocco=block,
-        azione=f"{payload.side}_campi_confermati",
+        azione=f"{payload.side}_campi_corretti_post_valutazione" if was_final_validated else f"{payload.side}_campi_confermati",
         user_id=actor_id,
+        nota_breve=(
+            "Riga già valutata: campi documento aggiornati senza modificare match o dati guida"
+            if was_final_validated
+            else None
+        ),
     )
     db.flush()
     db.expire(current_row, ["values", "certificate_match"])
     refreshed_row = get_acquisition_row(db, current_row.id)
-    _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
+    if not was_final_validated:
+        _confirm_match_if_document_sides_are_ready(db=db, row=refreshed_row, actor_id=actor_id)
     _sync_row_statuses(db, refreshed_row)
     db.add(refreshed_row)
     db.commit()
@@ -7353,6 +7362,11 @@ def detach_document_match(
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Row must have both DDT and certificate documents")
+    if current_row.validata_finale:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Riga già valutata: per disaccoppiare DDT e certificato richiedere Forza riapertura a manager o admin.",
+        )
 
     ddt_document_id = current_row.document_ddt_id
     certificate_document_id = current_row.document_certificato_id
@@ -8682,6 +8696,11 @@ def upsert_match(
     payload: MatchUpsertRequest,
     actor_id: int,
 ) -> MatchResponse:
+    if row.validata_finale:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Riga già valutata: per cambiare il match richiedere Forza riapertura a manager o admin.",
+        )
     certificate_document = _get_document_of_type(db, payload.document_certificato_id, "certificato")
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None:
         if row.fornitore_id != certificate_document.fornitore_id:

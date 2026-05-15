@@ -1,6 +1,7 @@
 import unittest
 from datetime import date
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -19,6 +20,7 @@ from app.modules.acquisition.models import (
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
+from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
     _plan_cross_run_auto_rematch,
@@ -241,6 +243,147 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         synced_row = get_acquisition_row(self.db, row.id)
         self.assertEqual(synced_row.lega_base, "7150 T76")
         self.assertEqual(synced_row.diametro, "35")
+
+    def test_validated_row_document_field_edit_does_not_reopen_or_degrade_match(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-validated.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            fornitore_id=None,
+            nome_file_originale="cert.pdf",
+            storage_key="cert-validated.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="10033539/25",
+            lega_base="7150 F",
+            diametro="44",
+            colata="25E-7870",
+            ddt="12594",
+            peso="1331",
+            ordine="154",
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        original_fields = {
+            "lega_base": "7150 F",
+            "diametro": "44",
+            "cdq": "10033539/25",
+            "colata": "25E-7870",
+            "ddt": "12594",
+            "peso": "1331",
+            "ordine": "154",
+        }
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=original_fields),
+            actor_id=1,
+        )
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="certificato", fields=original_fields),
+            actor_id=1,
+        )
+        validated = get_acquisition_row(self.db, row.id)
+        validated.validata_finale = True
+        validated.qualita_valutazione = "accettato"
+        validated.stato_workflow = "validata_quality"
+        self.db.add(validated)
+        self.db.commit()
+
+        changed_ddt_fields = dict(original_fields)
+        changed_ddt_fields.update({"cdq": "999999/25", "colata": "99E-9999", "peso": "1999"})
+        confirm_document_side_fields(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=DocumentSideFieldsConfirmRequest(side="ddt", fields=changed_ddt_fields),
+            actor_id=1,
+        )
+
+        updated = get_acquisition_row(self.db, row.id)
+        self.assertTrue(updated.validata_finale)
+        self.assertEqual(updated.qualita_valutazione, "accettato")
+        self.assertEqual(updated.stato_workflow, "validata_quality")
+        self.assertEqual(updated.cdq, "10033539/25")
+        self.assertEqual(updated.colata, "25E-7870")
+        self.assertEqual(updated.peso, "1331")
+        self.assertIsNotNone(updated.certificate_match)
+        self.assertEqual(updated.certificate_match.stato, "confermato")
+        ddt_cdq_value = next(value for value in updated.values if value.blocco == "ddt" and value.campo == "cdq")
+        self.assertEqual(ddt_cdq_value.valore_finale, "999999/25")
+
+    def test_validated_row_blocks_detach_and_match_change_until_reopened(self):
+        supplier = Supplier(ragione_sociale="Grupa Kety S.A.")
+        ddt_document = Document(tipo_documento="ddt", fornitore_id=None, nome_file_originale="ddt.pdf", storage_key="ddt-locked.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            fornitore_id=None,
+            nome_file_originale="cert.pdf",
+            storage_key="cert-locked.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="10033539/25",
+            colata="25E-7870",
+            validata_finale=True,
+            qualita_valutazione="accettato",
+            stato_workflow="validata_quality",
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                motivo_breve="test",
+                fonte_proposta="utente",
+            )
+        )
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as detach_error:
+            detach_document_match(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=DocumentMatchDetachRequest(motivo_breve="test detach"),
+                actor_id=1,
+            )
+        self.assertEqual(detach_error.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as match_error:
+            from app.modules.acquisition.service import upsert_match
+
+            upsert_match(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=MatchUpsertRequest(
+                    document_certificato_id=certificate_document.id,
+                    stato="confermato",
+                    motivo_breve="test cambio",
+                    fonte_proposta="utente",
+                    candidates=[],
+                ),
+                actor_id=1,
+            )
+        self.assertEqual(match_error.exception.status_code, 409)
 
     def test_grupa_kety_match_confirmation_accepts_cdq_year_suffix_when_bridge_is_strong(self):
         supplier = Supplier(ragione_sociale="Grupa Kety S.A.")

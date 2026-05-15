@@ -180,6 +180,10 @@ function draftsEqual(left, right) {
   return HIGH_LEVEL_FIELDS.every(({ key }) => safeText(left?.[key]).trim() === safeText(right?.[key]).trim());
 }
 
+function differingDraftFieldLabels(left, right) {
+  return HIGH_LEVEL_FIELDS.filter(({ key }) => safeText(left?.[key]).trim() !== safeText(right?.[key]).trim()).map(({ label }) => label);
+}
+
 function renderStateTone(state) {
   if (state === "verde") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
@@ -644,6 +648,7 @@ function CandidateBox({ label = "candidati", loadingPreview, preview }) {
 
 function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateFirstRow, loadingDdtPreview, onDetach, row }) {
   const state = row?.block_states?.match || "rosso";
+  const detachLocked = Boolean(row?.validata_finale);
   return (
     <div className="rounded-2xl border border-slate-300/80 bg-slate-200/90 p-3 shadow-inner shadow-slate-300/40">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -655,7 +660,7 @@ function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateF
           } disabled:cursor-not-allowed disabled:opacity-60`}
           disabled={!canDetach || detaching}
           onClick={canDetach ? onDetach : undefined}
-          title={canDetach ? "Disaccoppia DDT e certificato" : "Collegamento documenti"}
+          title={detachLocked ? "Disaccoppio bloccato dopo valutazione finale" : canDetach ? "Disaccoppia DDT e certificato" : "Collegamento documenti"}
           type="button"
         >
           ⇄
@@ -672,7 +677,9 @@ function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateF
         ) : null}
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${renderStateTone(state)}`}>{matchStateLabel(row)}</span>
         <p className="max-w-[260px] text-sm leading-6 text-slate-600">
-          Qui vivranno collegamento, conferma match e disaccoppio forte tra i due documenti.
+          {detachLocked
+            ? "Riga già valutata: il disaccoppio è bloccato. Serve Forza riapertura da manager o admin."
+            : "Qui vivranno collegamento, conferma match e disaccoppio forte tra i due documenti."}
         </p>
         {isCertificateFirstRow ? <CandidateBox label="candidati DDT" loadingPreview={loadingDdtPreview} preview={ddtLinkPreview} /> : null}
       </div>
@@ -901,9 +908,12 @@ function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
     return null;
   }
   const isFinal = dialog.kind === "final";
+  const isValidatedEdit = dialog.kind === "validated_edit";
   const title =
     dialog.kind === "final"
       ? "DDT e certificato confermati"
+      : isValidatedEdit
+        ? "Correzione salvata, match mantenuto"
       : dialog.kind === "conflict"
         ? "Campi confermati, match da controllare"
         : dialog.nextSide === "certificato"
@@ -912,6 +922,10 @@ function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
   const detail =
     dialog.kind === "final"
       ? "La coppia documentale è confermata. Torno a Incoming materiale."
+      : isValidatedEdit
+        ? dialog.fields?.length
+          ? `La riga è già valutata: il match resta confermato. Controlla però questi campi non allineati tra DDT e certificato: ${dialog.fields.join(", ")}.`
+          : "La riga è già valutata: il match resta confermato e i dati guida della riga non vengono modificati."
       : dialog.kind === "conflict"
         ? "I due lati sono salvati, ma il match non risulta confermato. Controlla i campi oppure disaccoppia o matcha secondo finalità."
         : "Oppure disaccoppia o matcha secondo finalità.";
@@ -1203,6 +1217,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function handleSaveDdtFields() {
+    const wasFinalValidated = Boolean(row?.validata_finale);
+    const mismatchLabels = differingDraftFieldLabels(ddtDraft, certificateDraft);
     setSavingDdtFields(true);
     setError("");
     try {
@@ -1220,6 +1236,10 @@ export default function AcquisitionDocumentMatchingSectionPage({
       setDdtSourceOverrides({});
       onDirtyChange?.(false);
       await onRefreshRow?.();
+      if (wasFinalValidated) {
+        setConfirmGuidanceDialog({ kind: "validated_edit", fields: mismatchLabels });
+        return;
+      }
       showPostDocumentConfirmDialog(refreshedRow, "ddt");
     } catch (requestError) {
       setError(requestError.message);
@@ -1242,6 +1262,8 @@ export default function AcquisitionDocumentMatchingSectionPage({
   }
 
   async function handleSaveCertificateFirstFields() {
+    const wasFinalValidated = Boolean(row?.validata_finale);
+    const mismatchLabels = differingDraftFieldLabels(ddtDraft, certificateDraft);
     setSavingCertificateFirst(true);
     setError("");
     try {
@@ -1259,6 +1281,10 @@ export default function AcquisitionDocumentMatchingSectionPage({
       setCertificateSourceOverrides({});
       onDirtyChange?.(false);
       await onRefreshRow?.();
+      if (wasFinalValidated) {
+        setConfirmGuidanceDialog({ kind: "validated_edit", fields: mismatchLabels });
+        return;
+      }
       showPostDocumentConfirmDialog(refreshedRow, "certificato");
     } catch (requestError) {
       setError(requestError.message);
@@ -1482,7 +1508,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       )}
 
       <MatchBridgePanel
-        canDetach={Boolean(ddtDocument && certificateDocument)}
+        canDetach={Boolean(ddtDocument && certificateDocument && !row?.validata_finale)}
         detaching={detachingMatch}
         ddtLinkPreview={ddtLinkPreview}
         isCertificateFirstRow={isCertificateFirstRow}
