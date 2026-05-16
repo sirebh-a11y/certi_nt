@@ -158,6 +158,19 @@ def ensure_quarta_taglio_columns() -> None:
         certificate_statements: list[str] = []
         if "download_token" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN download_token VARCHAR(128)")
+        if "unit_key" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN unit_key VARCHAR(512)")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_unit_key ON quarta_taglio_final_certificates (unit_key)"
+            )
+        if "cod_f3" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cod_f3 TEXT")
+        if "ddt" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN ddt TEXT")
+        if "ordine_cliente" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN ordine_cliente TEXT")
+        if "quantita" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN quantita FLOAT")
         if "cdq_key" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cdq_key TEXT")
             certificate_statements.append("CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_cdq_key ON quarta_taglio_final_certificates (cdq_key)")

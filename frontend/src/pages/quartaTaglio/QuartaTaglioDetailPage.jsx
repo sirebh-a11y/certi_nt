@@ -712,6 +712,32 @@ export default function QuartaTaglioDetailPage() {
         />
       </Panel>
 
+      <Panel title="Unità certificabili">
+        <p className="mb-3 text-sm text-slate-600">
+          Ogni unità nasce da OL, Cod. F3 e DDT. Per ora il pulsante Genera Word usa la riga principale.
+        </p>
+        <Table
+          columns={["Uso", "Cod F3", "DDT", "Cliente", "Ordine cliente", "C.d.O.", "Quantità", "Stato"]}
+          rows={(data.certifiable_units || []).map((item) => [
+            item.is_primary ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700" key="primary">
+                Principale
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500" key="candidate">Candidata</span>
+            ),
+            item.cod_f3 || "-",
+            item.ddt || "-",
+            item.cliente || "-",
+            item.ordine_cliente || "-",
+            item.conferma_ordine || "-",
+            formatQuantity(item.quantita),
+            item.status === "ready" ? "Pronta" : item.message || "Incompleta",
+          ])}
+          emptyText="Nessuna unità certificabile calcolata."
+        />
+      </Panel>
+
       <Panel title="Materiali collegati">
         <Table
           columns={["CDQ", "Colata", "Articolo Quarta", "Quantità", "Lotti", "Righe app"]}

@@ -84,6 +84,11 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     status: str
     certificate_number: str
     draft_number: str
+    unit_key: str | None = None
+    cod_f3: str | None = None
+    ddt: str | None = None
+    ordine_cliente: str | None = None
+    quantita: float | None = None
     cdq: str | None = None
     cert_date: datetime | None = None
     lega_cod_f3: str | None = None
@@ -172,6 +177,23 @@ class QuartaTaglioEsolverDdtRowResponse(BaseModel):
     cod_f3_matches_quarta: bool = False
 
 
+class QuartaTaglioCertifiableUnitResponse(BaseModel):
+    unit_key: str
+    cod_odp: str
+    cod_f3: str | None = None
+    ddt: str | None = None
+    cliente: str | None = None
+    ordine_cliente: str | None = None
+    conferma_ordine: str | None = None
+    quantita: float | None = None
+    certificato_presente: bool | None = None
+    source: str = "esolver"
+    status: str = "ready"
+    message: str | None = None
+    rows_count: int = 0
+    is_primary: bool = False
+
+
 class QuartaTaglioDetailResponse(BaseModel):
     cod_odp: str
     ready: bool
@@ -191,6 +213,7 @@ class QuartaTaglioDetailResponse(BaseModel):
     esolver_status: str = "not_checked"
     esolver_message: str | None = None
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] = Field(default_factory=list)
+    certifiable_units: list[QuartaTaglioCertifiableUnitResponse] = Field(default_factory=list)
     second_page_placeholder: bool = True
 
 

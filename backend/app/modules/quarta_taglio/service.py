@@ -31,6 +31,7 @@ from app.modules.quarta_taglio.models import (
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioAggregateValueResponse,
     QuartaTaglioCertificateResponse,
+    QuartaTaglioCertifiableUnitResponse,
     QuartaTaglioDetailResponse,
     QuartaTaglioEsolverDdtRowResponse,
     QuartaTaglioFinalCertificateRegisterItem,
@@ -306,9 +307,19 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
+    ol_with_unit_specific_certificates = {
+        certificate.cod_odp
+        for certificate in certificates
+        if _clean_text(certificate.unit_key)
+    }
+    visible_certificates = [
+        certificate
+        for certificate in certificates
+        if _clean_text(certificate.unit_key) or certificate.cod_odp not in ol_with_unit_specific_certificates
+    ]
     return QuartaTaglioFinalCertificateRegisterResponse(
-        items=[_serialize_final_certificate_register_item(certificate, db=db) for certificate in certificates],
-        total_items=len(certificates),
+        items=[_serialize_final_certificate_register_item(certificate, db=db) for certificate in visible_certificates],
+        total_items=len(visible_certificates),
     )
 
 
@@ -414,17 +425,11 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     descrizione = descrizione_override or descrizione_proposta
     disegno = disegno_override or disegno_proposta
     esolver_header_rows = esolver_rows
-    esolver_qta = _sum_optional(row.qta_um_mag for row in esolver_header_rows)
-    codice_f3 = _codice_f3_from_esolver_or_quarta(esolver_header_rows=esolver_header_rows, quarta_rows=rows)
-    open_certificate = (
-        db.query(QuartaTaglioFinalCertificate)
-        .filter(
-            QuartaTaglioFinalCertificate.cod_odp == group.cod_odp,
-            QuartaTaglioFinalCertificate.status != "pdf_final",
-        )
-        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
-        .first()
-    )
+    certifiable_units = _build_certifiable_units(cod_odp=group.cod_odp, esolver_rows=esolver_rows, quarta_rows=rows)
+    primary_unit = _primary_certifiable_unit(certifiable_units)
+    esolver_qta = primary_unit.quantita if primary_unit else _sum_optional(row.qta_um_mag for row in esolver_header_rows)
+    codice_f3 = _codice_f3_from_unit_or_quarta(unit=primary_unit, quarta_rows=rows)
+    open_certificate = _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
     open_certificate_number = (
         open_certificate.certificate_number or open_certificate.draft_number
         if open_certificate is not None and (open_certificate.certificate_number or open_certificate.draft_number)
@@ -438,10 +443,11 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
         header={
             "numero_certificato": open_certificate_number,
-            "cliente": _join_unique(row.rag_soc for row in esolver_header_rows) or None,
-            "ordine_cliente": _join_unique(row.odv_cli for row in esolver_header_rows) or None,
-            "conferma_ordine": _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
-            "ddt": _join_unique(row.ddt for row in esolver_header_rows) or None,
+            "unit_key": primary_unit.unit_key if primary_unit else None,
+            "cliente": primary_unit.cliente if primary_unit else _join_unique(row.rag_soc for row in esolver_header_rows) or None,
+            "ordine_cliente": primary_unit.ordine_cliente if primary_unit else _join_unique(row.odv_cli for row in esolver_header_rows) or None,
+            "conferma_ordine": primary_unit.conferma_ordine if primary_unit else _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
+            "ddt": primary_unit.ddt if primary_unit else _join_unique(row.ddt for row in esolver_header_rows) or None,
             "codice_f3": codice_f3["value"],
             "codice_f3_origine": codice_f3["origin"],
             "codice_f3_esolver": codice_f3["esolver"],
@@ -477,6 +483,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         esolver_status=esolver_status,
         esolver_message=esolver_message,
         esolver_rows=esolver_rows,
+        certifiable_units=certifiable_units,
     )
 
 
@@ -562,7 +569,13 @@ def create_quarta_taglio_word_draft(
         )
 
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
-    certificate_number = certificate.certificate_number or _assign_certificate_number(db, cdq_key=certificate.cdq_key, now=certificate.cert_date)
+    certificate_number = certificate.certificate_number or _assign_certificate_number(
+        db,
+        cdq_key=certificate.cdq_key,
+        cod_odp=certificate.cod_odp,
+        cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
+        now=certificate.cert_date,
+    )
     certificate.certificate_number = certificate_number
     certificate.draft_number = certificate_number
     certificate.status = certificate.status or "draft"
@@ -620,19 +633,15 @@ def upload_quarta_taglio_word_file(
     if not file_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word caricato è vuoto")
 
-    certificate = (
-        db.query(QuartaTaglioFinalCertificate)
-        .filter(
-            QuartaTaglioFinalCertificate.cod_odp == cod_odp,
-            QuartaTaglioFinalCertificate.status != "pdf_final",
-            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
-        )
-        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
-        .first()
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    certificate = _find_open_certificate_for_detail(
+        db,
+        cod_odp=cod_odp,
+        unit_key=(detail.header or {}).get("unit_key"),
+        require_number=True,
     )
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
-    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
 
     storage_key = _certificate_uploaded_docx_storage_key(cod_odp, original_name=original_name)
     output_path = _certificate_storage_path(storage_key)
@@ -643,6 +652,7 @@ def upload_quarta_taglio_word_file(
     certificate.download_token = secrets.token_urlsafe(32)
     certificate.certified_by_user_id = actor.id
     certificate.status = certificate.status or "draft"
+    _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
     db.commit()
@@ -664,21 +674,14 @@ def _get_or_create_open_certificate(
     detail: QuartaTaglioDetailResponse,
     actor: User,
 ) -> QuartaTaglioFinalCertificate:
-    certificate = (
-        db.query(QuartaTaglioFinalCertificate)
-        .filter(
-            QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp,
-            QuartaTaglioFinalCertificate.status != "pdf_final",
-        )
-        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
-        .first()
-    )
+    certificate = _find_open_certificate_for_detail(db, cod_odp=detail.cod_odp, unit_key=(detail.header or {}).get("unit_key"))
     if certificate is None:
         certificate = QuartaTaglioFinalCertificate(
             cod_odp=detail.cod_odp,
             status="draft",
             certificate_number=None,
             draft_number="",
+            unit_key=(detail.header or {}).get("unit_key"),
             cdq_key=_cdq_key_from_detail(detail),
             cdq_signature=_cdq_signature_from_detail(detail),
             cdq_values=_cdq_values_from_detail(detail),
@@ -690,11 +693,45 @@ def _get_or_create_open_certificate(
         db.add(certificate)
         db.flush()
     else:
+        _apply_certificate_register_fields(certificate, detail)
         if not certificate.cdq_key:
             certificate.cdq_key = _cdq_key_from_detail(detail)
         if not certificate.cert_date:
             certificate.cert_date = datetime.now(timezone.utc)
     return certificate
+
+
+def _find_open_certificate_for_detail(
+    db: Session,
+    *,
+    cod_odp: str,
+    unit_key: str | None,
+    require_number: bool = False,
+) -> QuartaTaglioFinalCertificate | None:
+    query = db.query(QuartaTaglioFinalCertificate).filter(
+        QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+        QuartaTaglioFinalCertificate.status != "pdf_final",
+    )
+    if require_number:
+        query = query.filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+
+    if unit_key:
+        certificate = (
+            query.filter(QuartaTaglioFinalCertificate.unit_key == unit_key)
+            .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+            .first()
+        )
+        if certificate is not None:
+            return certificate
+        has_unit_specific_certificate = query.filter(QuartaTaglioFinalCertificate.unit_key.isnot(None)).first() is not None
+        if has_unit_specific_certificate:
+            return None
+
+    return (
+        query.filter(QuartaTaglioFinalCertificate.unit_key.is_(None))
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .first()
+    )
 
 
 def _cdq_key_from_detail(detail: QuartaTaglioDetailResponse) -> str:
@@ -724,8 +761,13 @@ def _cdq_values_from_detail(detail: QuartaTaglioDetailResponse) -> list[dict[str
 
 def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
     header = detail.header or {}
-    certificate.lega_cod_f3 = _clean_text(header.get("codice_f3")) or _join_unique(item.cod_art for item in detail.materials) or None
-    certificate.cdo_lega = _clean_text(header.get("conferma_ordine")) or _clean_text(header.get("ordine_cliente"))
+    certificate.unit_key = _clean_text(header.get("unit_key")) or certificate.unit_key
+    certificate.cod_f3 = _clean_text(header.get("codice_f3")) or _join_unique(item.cod_art for item in detail.materials) or None
+    certificate.ddt = _clean_text(header.get("ddt"))
+    certificate.ordine_cliente = _clean_text(header.get("ordine_cliente"))
+    certificate.quantita = _as_float(header.get("quantita"))
+    certificate.lega_cod_f3 = certificate.cod_f3
+    certificate.cdo_lega = _clean_text(header.get("conferma_ordine")) or certificate.ordine_cliente
     certificate.fornitore_cliente = _clean_text(header.get("cliente"))
 
 
@@ -735,15 +777,11 @@ def _apply_certificate_conformity(certificate: QuartaTaglioFinalCertificate, det
 
 
 def _sync_open_certificate_conformity(db: Session, *, detail: QuartaTaglioDetailResponse) -> None:
-    certificate = (
-        db.query(QuartaTaglioFinalCertificate)
-        .filter(
-            QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp,
-            QuartaTaglioFinalCertificate.status != "pdf_final",
-            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
-        )
-        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
-        .first()
+    certificate = _find_open_certificate_for_detail(
+        db,
+        cod_odp=detail.cod_odp,
+        unit_key=(detail.header or {}).get("unit_key"),
+        require_number=True,
     )
     if certificate is None:
         return
@@ -752,10 +790,18 @@ def _sync_open_certificate_conformity(db: Session, *, detail: QuartaTaglioDetail
     db.commit()
 
 
-def _assign_certificate_number(db: Session, *, cdq_key: str | None, now: datetime | None = None) -> str:
+def _assign_certificate_number(
+    db: Session,
+    *,
+    cdq_key: str | None,
+    cod_odp: str | None = None,
+    cod_f3: str | None = None,
+    now: datetime | None = None,
+) -> str:
     issued_at = now or datetime.now(timezone.utc)
     year_suffix = f"{issued_at.year % 100:02d}"
     key = _clean_text(cdq_key)
+    cod_f3_suffix = _cod_f3_certificate_suffix(cod_f3)
     if key:
         existing_for_key = (
             db.query(QuartaTaglioFinalCertificate)
@@ -769,26 +815,31 @@ def _assign_certificate_number(db: Session, *, cdq_key: str | None, now: datetim
         if existing_for_key:
             base_number = _certificate_main_number(existing_for_key[0].certificate_number)
             if base_number is not None:
-                suffix = _next_certificate_suffix(existing_for_key, base_number=base_number, year_suffix=year_suffix)
-                return f"{base_number}_{_format_certificate_suffix(suffix)}/{year_suffix}"
+                suffix = _certificate_suffix_for_ol_or_next(
+                    existing_for_key,
+                    base_number=base_number,
+                    year_suffix=year_suffix,
+                    cod_odp=cod_odp,
+                )
+                return f"{base_number}_{_format_certificate_suffix(suffix)}_{cod_f3_suffix}/{year_suffix}"
 
     max_main = CERTIFICATE_NUMBER_START - 1
     for certificate in db.query(QuartaTaglioFinalCertificate).filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None)).all():
         main_number = _certificate_main_number(certificate.certificate_number)
         if main_number is not None:
             max_main = max(max_main, main_number)
-    return f"{max_main + 1}/{year_suffix}"
+    return f"{max_main + 1}_00_{cod_f3_suffix}/{year_suffix}"
 
 
 def _certificate_main_number(value: str | None) -> int | None:
-    match = re.match(r"^\s*(\d+)(?:_\d+)?/\d{2}\s*$", value or "")
+    match = re.match(r"^\s*(\d+)(?:_\d+)?(?:_\d+)?/\d{2}\s*$", value or "")
     if not match:
         return None
     return int(match.group(1))
 
 
 def _certificate_suffix_parts(value: str | None) -> tuple[int, int | None, str] | None:
-    match = re.match(r"^\s*(\d+)(?:_(\d+))?/(\d{2})\s*$", value or "")
+    match = re.match(r"^\s*(\d+)(?:_(\d+))?(?:_\d+)?/(\d{2})\s*$", value or "")
     if not match:
         return None
     return int(match.group(1)), int(match.group(2)) if match.group(2) else None, match.group(3)
@@ -800,7 +851,7 @@ def _next_certificate_suffix(
     base_number: int,
     year_suffix: str,
 ) -> int:
-    max_suffix = 0
+    max_suffix = -1
     for certificate in certificates:
         parts = _certificate_suffix_parts(certificate.certificate_number)
         if parts is None:
@@ -811,8 +862,36 @@ def _next_certificate_suffix(
     return max_suffix + 1
 
 
+def _certificate_suffix_for_ol_or_next(
+    certificates: list[QuartaTaglioFinalCertificate],
+    *,
+    base_number: int,
+    year_suffix: str,
+    cod_odp: str | None,
+) -> int:
+    current_ol = _norm(cod_odp)
+    if current_ol:
+        for certificate in certificates:
+            if _norm(getattr(certificate, "cod_odp", None)) != current_ol:
+                continue
+            parts = _certificate_suffix_parts(certificate.certificate_number)
+            if parts is None:
+                continue
+            main_number, suffix, suffix_year = parts
+            if main_number == base_number and suffix_year == year_suffix:
+                return suffix or 0
+    return _next_certificate_suffix(certificates, base_number=base_number, year_suffix=year_suffix)
+
+
 def _format_certificate_suffix(suffix: int) -> str:
     return f"{suffix:02d}"
+
+
+def _cod_f3_certificate_suffix(cod_f3: str | None) -> str:
+    digits = re.sub(r"\D", "", _clean_text(cod_f3) or "")
+    if len(digits) >= 2:
+        return digits[-2:]
+    return "00"
 
 
 def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:
@@ -1727,6 +1806,11 @@ def _serialize_final_certificate_register_item(
         status=certificate.status,
         certificate_number=certificate.certificate_number or certificate.draft_number,
         draft_number=certificate.draft_number,
+        unit_key=certificate.unit_key,
+        cod_f3=certificate.cod_f3,
+        ddt=certificate.ddt,
+        ordine_cliente=certificate.ordine_cliente,
+        quantita=certificate.quantita,
         cdq=_certificate_cdq_display(certificate),
         cert_date=certificate.cert_date,
         lega_cod_f3=_certificate_cod_f3_display(certificate),
@@ -1776,6 +1860,8 @@ def _certificate_conformity_status(certificate: QuartaTaglioFinalCertificate) ->
 
 
 def _certificate_cod_f3_display(certificate: QuartaTaglioFinalCertificate) -> str | None:
+    if _clean_text(certificate.cod_f3):
+        return _clean_text(certificate.cod_f3)
     stored_value = _clean_text(certificate.lega_cod_f3)
     if stored_value and "·" not in stored_value:
         return stored_value
@@ -1974,6 +2060,130 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTagl
         first_seen_at=min(row.first_seen_at for row in rows),
         last_seen_at=max(row.last_seen_at for row in rows),
     )
+
+
+def _build_certifiable_units(
+    *,
+    cod_odp: str,
+    esolver_rows: list[QuartaTaglioEsolverDdtRowResponse],
+    quarta_rows: list[QuartaTaglioRow],
+) -> list[QuartaTaglioCertifiableUnitResponse]:
+    units: list[QuartaTaglioCertifiableUnitResponse] = []
+    if esolver_rows:
+        grouped: dict[tuple[str, str, str, str], list[QuartaTaglioEsolverDdtRowResponse]] = defaultdict(list)
+        for row in esolver_rows:
+            grouped[
+                (
+                    _clean_text(row.cod_f3) or "",
+                    _clean_text(row.ddt) or "",
+                    _clean_text(row.odv_cli) or "",
+                    _clean_text(row.odv_f3) or "",
+                )
+            ].append(row)
+        quarta_keys = {_norm(row.cod_art) for row in quarta_rows if _norm(row.cod_art)}
+        for (cod_f3, ddt, ordine_cliente, conferma_ordine), group_rows in sorted(
+            grouped.items(),
+            key=lambda item: (_norm(item[0][0]) not in quarta_keys, item[0][0], item[0][1], item[0][2], item[0][3]),
+        ):
+            status_value = "ready" if cod_f3 and ddt else "incomplete"
+            units.append(
+                QuartaTaglioCertifiableUnitResponse(
+                    unit_key=_certifiable_unit_key(
+                        cod_odp=cod_odp,
+                        cod_f3=cod_f3,
+                        ddt=ddt,
+                        ordine_cliente=ordine_cliente,
+                        conferma_ordine=conferma_ordine,
+                    ),
+                    cod_odp=cod_odp,
+                    cod_f3=cod_f3 or None,
+                    ddt=ddt or None,
+                    cliente=_join_unique(row.rag_soc for row in group_rows) or None,
+                    ordine_cliente=ordine_cliente or None,
+                    conferma_ordine=conferma_ordine or None,
+                    quantita=_sum_optional(row.qta_um_mag for row in group_rows),
+                    certificato_presente=_all_same_bool(row.certificato_presente for row in group_rows),
+                    source="esolver",
+                    status=status_value,
+                    message=None if status_value == "ready" else "Cod. F3 o DDT mancante dalla riga eSolver",
+                    rows_count=len(group_rows),
+                )
+            )
+    if not units:
+        quarta_cod_f3 = _join_unique(row.cod_art for row in quarta_rows) or None
+        units.append(
+            QuartaTaglioCertifiableUnitResponse(
+                unit_key=_certifiable_unit_key(cod_odp=cod_odp, cod_f3=quarta_cod_f3, ddt=None),
+                cod_odp=cod_odp,
+                cod_f3=quarta_cod_f3,
+                ddt=None,
+                quantita=_sum_optional(row.qta_totale for row in quarta_rows),
+                source="quarta",
+                status="incomplete",
+                message="DDT eSolver non ancora disponibile",
+                rows_count=len(quarta_rows),
+            )
+        )
+    primary = _select_primary_unit(units=units, quarta_rows=quarta_rows)
+    return [unit.model_copy(update={"is_primary": unit.unit_key == primary.unit_key}) for unit in units]
+
+
+def _certifiable_unit_key(
+    *,
+    cod_odp: str,
+    cod_f3: str | None,
+    ddt: str | None,
+    ordine_cliente: str | None = None,
+    conferma_ordine: str | None = None,
+) -> str:
+    return "|".join(
+        [
+            _clean_text(cod_odp) or "-",
+            _clean_text(cod_f3) or "-",
+            _clean_text(ddt) or "-",
+            _clean_text(ordine_cliente) or "-",
+            _clean_text(conferma_ordine) or "-",
+        ]
+    )
+
+
+def _primary_certifiable_unit(units: list[QuartaTaglioCertifiableUnitResponse]) -> QuartaTaglioCertifiableUnitResponse | None:
+    return next((unit for unit in units if unit.is_primary), units[0] if units else None)
+
+
+def _select_primary_unit(
+    *,
+    units: list[QuartaTaglioCertifiableUnitResponse],
+    quarta_rows: list[QuartaTaglioRow],
+) -> QuartaTaglioCertifiableUnitResponse:
+    quarta_keys = {_norm(row.cod_art) for row in quarta_rows if _norm(row.cod_art)}
+    if quarta_keys:
+        matching_unit = next((unit for unit in units if _norm(unit.cod_f3) in quarta_keys), None)
+        if matching_unit:
+            return matching_unit
+    ready_unit = next((unit for unit in units if unit.status == "ready"), None)
+    return ready_unit or units[0]
+
+
+def _all_same_bool(values: Any) -> bool | None:
+    cleaned = [value for value in values if value is not None]
+    if not cleaned:
+        return None
+    return all(cleaned)
+
+
+def _codice_f3_from_unit_or_quarta(
+    *,
+    unit: QuartaTaglioCertifiableUnitResponse | None,
+    quarta_rows: list[QuartaTaglioRow],
+) -> dict[str, str | None]:
+    if unit and unit.cod_f3:
+        return _codice_f3_from_esolver_or_quarta(
+            esolver_header_rows=[],
+            quarta_rows=quarta_rows,
+            esolver_value_fallback=unit.cod_f3,
+        )
+    return _codice_f3_from_esolver_or_quarta(esolver_header_rows=[], quarta_rows=quarta_rows)
 
 
 def _codice_f3_from_esolver_or_quarta(

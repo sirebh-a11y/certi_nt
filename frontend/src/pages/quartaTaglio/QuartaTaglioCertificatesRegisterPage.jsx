@@ -36,6 +36,10 @@ function searchableValues(item) {
     item.cdq,
     item.cod_odp,
     item.lega_cod_f3,
+    item.cod_f3,
+    item.ddt,
+    item.ordine_cliente,
+    item.cdo_lega,
     item.fornitore_cliente,
     item.status,
     STATUS_LABELS[item.status],
@@ -103,6 +107,14 @@ function certificateSortValue(item, field) {
       return item.cod_odp || "";
     case "lega_cod_f3":
       return item.lega_cod_f3 || "";
+    case "ddt":
+      return item.ddt || "";
+    case "ordine_cliente":
+      return item.ordine_cliente || "";
+    case "cdo_lega":
+      return item.cdo_lega || "";
+    case "quantita":
+      return item.quantita || "";
     case "fornitore_cliente":
       return item.fornitore_cliente || "";
     case "status":
@@ -367,7 +379,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
 
       <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-[1120px] w-full border-collapse text-sm">
+          <table className="min-w-[1420px] w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="certificate_number" label="Cert. Nr." onSort={toggleSort} sortConfig={sortConfig} />
@@ -375,6 +387,10 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                 <SortableHeader field="cdq" label="CDQ" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cod_odp" label="OL" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="lega_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="ddt" label="DDT" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="ordine_cliente" label="Ordine" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="cdo_lega" label="C.d.O." onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="quantita" label="Quantità" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="fornitore_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="conformity" label="Conformità" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
@@ -393,6 +409,10 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                     </Link>
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.lega_cod_f3 || "-"}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{item.ddt || "-"}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{item.ordine_cliente || "-"}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{item.cdo_lega || "-"}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{item.quantita ? Number(item.quantita).toLocaleString("it-IT") : "-"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.fornitore_cliente || "-"}</td>
                   <td className="px-4 py-3">
                     <span
