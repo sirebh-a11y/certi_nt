@@ -14,6 +14,7 @@ const navItems = [
   { label: "KPI", to: "/supplier-kpi", roles: ["user", "manager", "admin"], icon: "chart" },
   { type: "section", label: "Strumenti qualità", key: "quality-tools" },
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"], icon: "standards" },
+  { label: "Requisiti Cliente", to: "/customer-requirements", roles: ["user", "manager", "admin"], icon: "requirements" },
   { label: "Note", to: "/notes", roles: ["user", "manager", "admin"], icon: "note" },
   { type: "section", label: "Anagrafica", key: "master-data" },
   { label: "Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"], icon: "factory" },
@@ -94,6 +95,14 @@ function SidebarIcon({ name }) {
         <path d="M8 8h8" />
         <path d="M8 12h8" />
         <path d="M8 16h5" />
+      </>
+    ),
+    requirements: (
+      <>
+        <path d="M6 4h12v16H6z" />
+        <path d="M9 8h6" />
+        <path d="M9 12h4" />
+        <path d="m9 16 1.5 1.5L15 13" />
       </>
     ),
     note: (

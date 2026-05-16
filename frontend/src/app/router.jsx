@@ -139,6 +139,16 @@ function ClientsRoute() {
   );
 }
 
+function CustomerRequirementsRoute() {
+  return (
+    <PlaceholderPage
+      eyebrow="Strumenti qualità"
+      title="Requisiti Cliente"
+      description="Area futura per raccogliere, consultare e collegare i requisiti cliente ai controlli qualità e alla certificazione."
+    />
+  );
+}
+
 export function AppRouter() {
   return (
     <Routes>
@@ -169,6 +179,7 @@ export function AppRouter() {
           <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/ai" element={<AIConfigRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
+          <Route path="/customer-requirements" element={<CustomerRequirementsRoute />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/supplier-kpi" element={<KpiRoute />} />
           <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />

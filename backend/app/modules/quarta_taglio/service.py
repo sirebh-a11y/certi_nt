@@ -769,7 +769,7 @@ def _assign_certificate_number(db: Session, *, cdq_key: str | None, now: datetim
             base_number = _certificate_main_number(existing_for_key[0].certificate_number)
             if base_number is not None:
                 suffix = _next_certificate_suffix(existing_for_key, base_number=base_number, year_suffix=year_suffix)
-                return f"{base_number}_{suffix}/{year_suffix}"
+                return f"{base_number}_{_format_certificate_suffix(suffix)}/{year_suffix}"
 
     max_main = CERTIFICATE_NUMBER_START - 1
     for certificate in db.query(QuartaTaglioFinalCertificate).filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None)).all():
@@ -808,6 +808,10 @@ def _next_certificate_suffix(
         if main_number == base_number and suffix_year == year_suffix and suffix is not None:
             max_suffix = max(max_suffix, suffix)
     return max_suffix + 1
+
+
+def _format_certificate_suffix(suffix: int) -> str:
+    return f"{suffix:02d}"
 
 
 def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:
