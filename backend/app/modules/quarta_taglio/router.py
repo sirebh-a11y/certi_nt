@@ -69,8 +69,13 @@ def list_quarta_taglio_final_certificates_route(
 
 
 @router.get("/{cod_odp}", response_model=QuartaTaglioDetailResponse)
-def get_quarta_taglio_detail_route(cod_odp: str, current_user: CurrentUser, db: DbSession) -> QuartaTaglioDetailResponse:
-    return get_quarta_taglio_detail(db, cod_odp=cod_odp)
+def get_quarta_taglio_detail_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_id: int | None = Query(default=None),
+) -> QuartaTaglioDetailResponse:
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
 
 
 @router.post("/{cod_odp}/standard", response_model=QuartaTaglioDetailResponse)
@@ -107,7 +112,13 @@ def create_quarta_taglio_word_draft_route(
     db: DbSession,
     payload: QuartaTaglioWordDraftRequest = Body(default_factory=QuartaTaglioWordDraftRequest),
 ) -> QuartaTaglioWordDraftResponse:
-    return create_quarta_taglio_word_draft(db, cod_odp=cod_odp, actor=current_user, force_non_conforming=payload.force_non_conforming)
+    return create_quarta_taglio_word_draft(
+        db,
+        cod_odp=cod_odp,
+        actor=current_user,
+        force_non_conforming=payload.force_non_conforming,
+        certificate_id=payload.certificate_id,
+    )
 
 
 @router.post("/{cod_odp}/word-file", response_model=QuartaTaglioWordDraftResponse)
@@ -115,9 +126,10 @@ def upload_quarta_taglio_word_file_route(
     cod_odp: str,
     current_user: CurrentUser,
     db: DbSession,
+    certificate_id: int | None = Query(default=None),
     file: UploadFile = File(...),
 ) -> QuartaTaglioWordDraftResponse:
-    return upload_quarta_taglio_word_file(db, cod_odp=cod_odp, uploaded_file=file, actor=current_user)
+    return upload_quarta_taglio_word_file(db, cod_odp=cod_odp, uploaded_file=file, actor=current_user, certificate_id=certificate_id)
 
 
 @router.get("/word-drafts/{draft_id}/file")

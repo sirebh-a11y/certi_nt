@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { apiRequest, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -149,8 +149,15 @@ function standardLabel(standard) {
     .join(" · ");
 }
 
+function quartaDetailApiPath(codOdp, certificateId) {
+  const basePath = `/quarta-taglio/${encodeURIComponent(codOdp)}`;
+  return certificateId ? `${basePath}?certificate_id=${encodeURIComponent(certificateId)}` : basePath;
+}
+
 export default function QuartaTaglioDetailPage() {
   const { codOdp } = useParams();
+  const [searchParams] = useSearchParams();
+  const certificateId = searchParams.get("certificateId");
   const { clearAuth, token } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -184,7 +191,7 @@ export default function QuartaTaglioDetailPage() {
     let ignore = false;
     setLoading(true);
     setError("");
-    apiRequest(`/quarta-taglio/${encodeURIComponent(codOdp)}`, {}, token)
+    apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token)
       .then((response) => {
         if (!ignore) {
           setData(response);
@@ -204,7 +211,7 @@ export default function QuartaTaglioDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [codOdp, token]);
+  }, [codOdp, certificateId, token]);
 
   useEffect(() => {
     let ignore = false;
@@ -257,8 +264,9 @@ export default function QuartaTaglioDetailPage() {
       },
       token,
     )
-      .then((response) => {
-        setData(response);
+      .then(async (response) => {
+        const nextResponse = certificateId ? await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token) : response;
+        setData(nextResponse);
         if ((response.conformity_issues || []).length > 0) {
           setStandardConformityDialogOpen(true);
         }
@@ -326,10 +334,11 @@ export default function QuartaTaglioDetailPage() {
       if (articleVersionsRef.current[field] !== version) {
         return;
       }
-      setData(response);
+      const nextResponse = certificateId ? await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token) : response;
+      setData(nextResponse);
       const nextDraft = {
-        descrizione: response.header?.descrizione || "",
-        disegno: response.header?.disegno || "",
+        descrizione: nextResponse.header?.descrizione || "",
+        disegno: nextResponse.header?.disegno || "",
       };
       latestArticleDraftRef.current = nextDraft;
       setArticleDraft(nextDraft);
@@ -365,7 +374,10 @@ export default function QuartaTaglioDetailPage() {
         `/quarta-taglio/${encodeURIComponent(codOdp)}/word-draft`,
         {
           method: "POST",
-          body: JSON.stringify({ force_non_conforming: forceNonConforming }),
+          body: JSON.stringify({
+            force_non_conforming: forceNonConforming,
+            certificate_id: certificateId ? Number(certificateId) : null,
+          }),
         },
         token,
       );
@@ -375,7 +387,7 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      const refreshed = await apiRequest(`/quarta-taglio/${encodeURIComponent(codOdp)}`, {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
       setData(refreshed);
       setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
@@ -397,7 +409,9 @@ export default function QuartaTaglioDetailPage() {
       const formData = new FormData();
       formData.append("file", wordUploadFile);
       const response = await apiRequest(
-        `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file`,
+        certificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file?certificate_id=${encodeURIComponent(certificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file`,
         {
           method: "POST",
           body: formData,
@@ -409,7 +423,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      const refreshed = await apiRequest(`/quarta-taglio/${encodeURIComponent(codOdp)}`, {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
       setData(refreshed);
       setWordUploadState({ status: "saved", message: `Word ricaricato sul certificato ${response.draft_number}` });
     } catch (requestError) {

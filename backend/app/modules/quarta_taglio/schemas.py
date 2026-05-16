@@ -237,3 +237,4 @@ class QuartaTaglioWordDraftResponse(BaseModel):
 
 class QuartaTaglioWordDraftRequest(BaseModel):
     force_non_conforming: bool = False
+    certificate_id: int | None = None

@@ -323,7 +323,7 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
     )
 
 
-def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetailResponse:
+def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int | None = None) -> QuartaTaglioDetailResponse:
     rows = (
         db.query(QuartaTaglioRow)
         .filter(QuartaTaglioRow.cod_odp == cod_odp)
@@ -426,29 +426,37 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
     disegno = disegno_override or disegno_proposta
     esolver_header_rows = esolver_rows
     certifiable_units = _build_certifiable_units(cod_odp=group.cod_odp, esolver_rows=esolver_rows, quarta_rows=rows)
-    primary_unit = _primary_certifiable_unit(certifiable_units)
-    esolver_qta = primary_unit.quantita if primary_unit else _sum_optional(row.qta_um_mag for row in esolver_header_rows)
+    selected_certificate = _get_certificate_context(db, cod_odp=group.cod_odp, certificate_id=certificate_id)
+    primary_unit = _select_unit_for_certificate(certifiable_units, selected_certificate) or _primary_certifiable_unit(certifiable_units)
+    esolver_qta = (
+        selected_certificate.quantita
+        if selected_certificate is not None and selected_certificate.quantita is not None
+        else primary_unit.quantita
+        if primary_unit
+        else _sum_optional(row.qta_um_mag for row in esolver_header_rows)
+    )
     codice_f3 = _codice_f3_from_unit_or_quarta(unit=primary_unit, quarta_rows=rows)
-    open_certificate = _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
+    open_certificate = selected_certificate or _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
     open_certificate_number = (
         open_certificate.certificate_number or open_certificate.draft_number
         if open_certificate is not None and (open_certificate.certificate_number or open_certificate.draft_number)
         else None
     )
 
-    return QuartaTaglioDetailResponse(
+    detail = QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
         ready=ready,
         status_color=detail_status_color,
         status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
         header={
             "numero_certificato": open_certificate_number,
-            "unit_key": primary_unit.unit_key if primary_unit else None,
-            "cliente": primary_unit.cliente if primary_unit else _join_unique(row.rag_soc for row in esolver_header_rows) or None,
-            "ordine_cliente": primary_unit.ordine_cliente if primary_unit else _join_unique(row.odv_cli for row in esolver_header_rows) or None,
-            "conferma_ordine": primary_unit.conferma_ordine if primary_unit else _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
-            "ddt": primary_unit.ddt if primary_unit else _join_unique(row.ddt for row in esolver_header_rows) or None,
-            "codice_f3": codice_f3["value"],
+            "certificate_id": str(open_certificate.id) if open_certificate else None,
+            "unit_key": _clean_text(open_certificate.unit_key) if open_certificate else primary_unit.unit_key if primary_unit else None,
+            "cliente": _clean_text(open_certificate.fornitore_cliente) if open_certificate else primary_unit.cliente if primary_unit else _join_unique(row.rag_soc for row in esolver_header_rows) or None,
+            "ordine_cliente": _clean_text(open_certificate.ordine_cliente) if open_certificate else primary_unit.ordine_cliente if primary_unit else _join_unique(row.odv_cli for row in esolver_header_rows) or None,
+            "conferma_ordine": _clean_text(open_certificate.cdo_lega) if open_certificate else primary_unit.conferma_ordine if primary_unit else _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
+            "ddt": _clean_text(open_certificate.ddt) if open_certificate else primary_unit.ddt if primary_unit else _join_unique(row.ddt for row in esolver_header_rows) or None,
+            "codice_f3": _clean_text(open_certificate.cod_f3) if open_certificate else codice_f3["value"],
             "codice_f3_origine": codice_f3["origin"],
             "codice_f3_esolver": codice_f3["esolver"],
             "codice_f3_quarta": codice_f3["quarta"],
@@ -485,6 +493,10 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str) -> QuartaTaglioDetail
         esolver_rows=esolver_rows,
         certifiable_units=certifiable_units,
     )
+    if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
+        _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
+        db.commit()
+    return detail
 
 
 def confirm_quarta_taglio_standard(
@@ -555,8 +567,9 @@ def create_quarta_taglio_word_draft(
     cod_odp: str,
     actor: User,
     force_non_conforming: bool = False,
+    certificate_id: int | None = None,
 ) -> QuartaTaglioWordDraftResponse:
-    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     _ensure_word_draft_can_be_created(detail)
     if detail.conformity_issues and not force_non_conforming:
         raise HTTPException(
@@ -568,6 +581,7 @@ def create_quarta_taglio_word_draft(
             },
         )
 
+    _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
     certificate_number = certificate.certificate_number or _assign_certificate_number(
         db,
@@ -621,6 +635,7 @@ def upload_quarta_taglio_word_file(
     cod_odp: str,
     uploaded_file: UploadFile,
     actor: User,
+    certificate_id: int | None = None,
 ) -> QuartaTaglioWordDraftResponse:
     if uploaded_file.filename is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word deve avere un nome")
@@ -633,7 +648,7 @@ def upload_quarta_taglio_word_file(
     if not file_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word caricato è vuoto")
 
-    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     certificate = _find_open_certificate_for_detail(
         db,
         cod_odp=cod_odp,
@@ -771,9 +786,151 @@ def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate
     certificate.fornitore_cliente = _clean_text(header.get("cliente"))
 
 
+def _apply_certificate_register_unit_fields(
+    certificate: QuartaTaglioFinalCertificate,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    unit: QuartaTaglioCertifiableUnitResponse,
+) -> None:
+    certificate.unit_key = unit.unit_key
+    certificate.cod_f3 = _clean_text(unit.cod_f3)
+    certificate.ddt = _clean_text(unit.ddt)
+    certificate.ordine_cliente = _clean_text(unit.ordine_cliente)
+    certificate.quantita = unit.quantita
+    certificate.lega_cod_f3 = certificate.cod_f3
+    certificate.cdo_lega = _clean_text(unit.conferma_ordine) or certificate.ordine_cliente
+    certificate.fornitore_cliente = _clean_text(unit.cliente)
+    certificate.cdq_key = certificate.cdq_key or _cdq_key_from_detail(detail)
+    certificate.cdq_signature = _cdq_signature_from_detail(detail)
+    certificate.cdq_values = _cdq_values_from_detail(detail)
+
+
+def _has_numbered_certificate_for_ol(db: Session, *, cod_odp: str) -> bool:
+    return (
+        db.query(QuartaTaglioFinalCertificate.id)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+        )
+        .first()
+        is not None
+    )
+
+
+def _sync_certifiable_unit_register(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    actor: User | None,
+    create_missing: bool,
+) -> list[QuartaTaglioFinalCertificate]:
+    units = [unit for unit in detail.certifiable_units if unit.status == "ready"]
+    if not units:
+        return []
+
+    existing_certificates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp)
+        .order_by(QuartaTaglioFinalCertificate.created_at.asc(), QuartaTaglioFinalCertificate.id.asc())
+        .all()
+    )
+    existing_by_unit_key = {
+        _clean_text(certificate.unit_key): certificate
+        for certificate in existing_certificates
+        if _clean_text(certificate.unit_key)
+    }
+    synced: list[QuartaTaglioFinalCertificate] = []
+    cert_date = datetime.now(timezone.utc)
+    cdq_key = _cdq_key_from_detail(detail)
+    for unit in units:
+        certificate = existing_by_unit_key.get(unit.unit_key)
+        if certificate is None:
+            if not create_missing:
+                continue
+            certificate = QuartaTaglioFinalCertificate(
+                cod_odp=detail.cod_odp,
+                status="draft",
+                certificate_number=None,
+                draft_number="",
+                unit_key=unit.unit_key,
+                cdq_key=cdq_key,
+                cdq_signature=_cdq_signature_from_detail(detail),
+                cdq_values=_cdq_values_from_detail(detail),
+                cert_date=cert_date,
+                download_token=secrets.token_urlsafe(32),
+                created_by_user_id=actor.id if actor else None,
+            )
+            db.add(certificate)
+            db.flush()
+            existing_by_unit_key[unit.unit_key] = certificate
+
+        if certificate.status == "pdf_final":
+            synced.append(certificate)
+            continue
+        _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
+        if not certificate.cert_date:
+            certificate.cert_date = cert_date
+        if not certificate.certificate_number:
+            certificate.certificate_number = _assign_certificate_number(
+                db,
+                cdq_key=certificate.cdq_key,
+                cod_odp=certificate.cod_odp,
+                cod_f3=certificate.cod_f3,
+                now=certificate.cert_date,
+            )
+        certificate.draft_number = certificate.certificate_number or certificate.draft_number
+        _apply_certificate_conformity(certificate, detail)
+        db.add(certificate)
+        synced.append(certificate)
+    db.flush()
+    return synced
+
+
 def _apply_certificate_conformity(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
     certificate.conformity_status = detail.conformity_status
     certificate.conformity_issues = [issue.model_dump() for issue in detail.conformity_issues]
+
+
+def _get_certificate_context(
+    db: Session,
+    *,
+    cod_odp: str,
+    certificate_id: int | None,
+) -> QuartaTaglioFinalCertificate | None:
+    if certificate_id is None:
+        return None
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None or certificate.cod_odp != cod_odp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Riga certificato non trovata per questo OL")
+    return certificate
+
+
+def _select_unit_for_certificate(
+    units: list[QuartaTaglioCertifiableUnitResponse],
+    certificate: QuartaTaglioFinalCertificate | None,
+) -> QuartaTaglioCertifiableUnitResponse | None:
+    if certificate is None:
+        return None
+    certificate_unit_key = _clean_text(certificate.unit_key)
+    if certificate_unit_key:
+        unit = next((item for item in units if item.unit_key == certificate_unit_key), None)
+        if unit is not None:
+            return unit
+    certificate_cod_f3 = _norm(certificate.cod_f3)
+    certificate_ddt = _norm(certificate.ddt)
+    certificate_order = _norm(certificate.ordine_cliente)
+    certificate_cdo = _norm(certificate.cdo_lega)
+    return next(
+        (
+            item
+            for item in units
+            if _norm(item.cod_f3) == certificate_cod_f3
+            and _norm(item.ddt) == certificate_ddt
+            and _norm(item.ordine_cliente) == certificate_order
+            and _norm(item.conferma_ordine) == certificate_cdo
+        ),
+        None,
+    )
 
 
 def _sync_open_certificate_conformity(db: Session, *, detail: QuartaTaglioDetailResponse) -> None:

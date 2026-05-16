@@ -404,7 +404,10 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                   <td className="px-4 py-3 text-slate-700">{formatDate(item.cert_date || item.created_at)}</td>
                   <td className="px-4 py-3 font-semibold text-slate-800">{item.cdq || "-"}</td>
                   <td className="px-4 py-3">
-                    <Link className="font-semibold text-accent hover:underline" to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}`}>
+                    <Link
+                      className="font-semibold text-accent hover:underline"
+                      to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}?certificateId=${encodeURIComponent(item.id)}`}
+                    >
                       {item.cod_odp}
                     </Link>
                   </td>
