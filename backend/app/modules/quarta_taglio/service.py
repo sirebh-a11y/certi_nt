@@ -80,6 +80,7 @@ CHEMISTRY_FIELDS = [
 PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 
 CERTIFICATE_NUMBER_START = 7000
+ESOLVER_DDT_BATCH_SIZE = 500
 
 NOTE_FIELDS = [
     ("nota_rohs", "RoHS"),
@@ -135,7 +136,7 @@ with taglio_latest_source as (
     where rn = 1
 )
 select
-    tr.COD_ODP,
+    coalesce(tr.COD_ODP, l.COD_ODP) as COD_ODP,
     coalesce(l.CODICE_REGISTRO, '') as CODICE_REGISTRO,
     l.DATA_REGISTRO,
     coalesce(l.SALDO, '0') as SALDO,
@@ -144,19 +145,19 @@ select
     max(cast(tr.DES_ART as nvarchar(max))) as DES_ART,
     tr.CERT_FORN as CDQ,
     tr.COLATA,
-    count(*) as RIGHE_MATERIALE,
+    count(tr.COD_ODP) as RIGHE_MATERIALE,
     count(distinct tr.COD_LOTTO) as LOTTI,
     sum(cast(tr.QTA as decimal(18,2))) as QTA_TOTALE,
     string_agg(cast(tr.COD_LOTTO as varchar(max)), ',') within group (order by tr.COD_LOTTO) as COD_LOTTI
-from dbo.CFG_Q3ESS_ONGIUDET_TRACMP tr
-left join latest l
+from latest l
+full outer join dbo.CFG_Q3ESS_ONGIUDET_TRACMP tr
     on tr.COD_ODP = l.COD_ODP
-where tr.COD_ODP is not null
-group by tr.COD_ODP, l.COD_ODP, l.CODICE_REGISTRO, l.DATA_REGISTRO, l.SALDO, tr.COD_ART, tr.CERT_FORN, tr.COLATA
+where coalesce(tr.COD_ODP, l.COD_ODP) is not null
+group by coalesce(tr.COD_ODP, l.COD_ODP), l.COD_ODP, l.CODICE_REGISTRO, l.DATA_REGISTRO, l.SALDO, tr.COD_ART, tr.CERT_FORN, tr.COLATA
 order by
     case when l.DATA_REGISTRO is null then 1 else 0 end,
     l.DATA_REGISTRO desc,
-    tr.COD_ODP desc,
+    coalesce(tr.COD_ODP, l.COD_ODP) desc,
     tr.CERT_FORN,
     tr.COLATA;
 """
@@ -1449,6 +1450,12 @@ def _fetch_esolver_ddt_rows_batch(
 ) -> dict[str, tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]]:
     if not groups:
         return {}
+    group_items = list(groups.items())
+    if len(group_items) > ESOLVER_DDT_BATCH_SIZE:
+        chunked_result: dict[str, tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]] = {}
+        for index in range(0, len(group_items), ESOLVER_DDT_BATCH_SIZE):
+            chunked_result.update(_fetch_esolver_ddt_rows_batch(db, dict(group_items[index : index + ESOLVER_DDT_BATCH_SIZE])))
+        return chunked_result
 
     connection = db.query(ExternalConnection).filter(ExternalConnection.code == "esolver").one_or_none()
     if connection is None or not connection.enabled:
