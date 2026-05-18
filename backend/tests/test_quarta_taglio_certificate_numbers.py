@@ -32,25 +32,25 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
     def test_suffix_parser_keeps_compatibility_with_old_numbers(self):
         self.assertEqual(_certificate_suffix_parts("7001_1/26"), (7001, 1, "26"))
         self.assertEqual(_certificate_suffix_parts("7001_01/26"), (7001, 1, "26"))
-        self.assertEqual(_certificate_suffix_parts("7001_00_83/26"), (7001, 0, "26"))
+        self.assertEqual(_certificate_suffix_parts("7001_00_083/26"), (7001, 0, "26"))
 
     def test_main_number_does_not_change_with_cod_f3_suffix(self):
-        self.assertEqual(_certificate_main_number("7001_00_83/26"), 7001)
-        self.assertEqual(_certificate_main_number("7001_01_60/26"), 7001)
+        self.assertEqual(_certificate_main_number("7001_00_083/26"), 7001)
+        self.assertEqual(_certificate_main_number("7001_01_060/26"), 7001)
 
     def test_next_suffix_progresses_without_changing_main_number(self):
         certificates = [
-            SimpleNamespace(certificate_number="7001_00_83/26"),
-            SimpleNamespace(certificate_number="7001_01_60/26"),
-            SimpleNamespace(certificate_number="7002_00_83/26"),
+            SimpleNamespace(certificate_number="7001_00_083/26"),
+            SimpleNamespace(certificate_number="7001_01_060/26"),
+            SimpleNamespace(certificate_number="7002_00_083/26"),
         ]
 
         self.assertEqual(_next_certificate_suffix(certificates, base_number=7001, year_suffix="26"), 2)
 
     def test_same_ol_reuses_first_suffix(self):
         certificates = [
-            SimpleNamespace(certificate_number="7001_00_83/26", cod_odp="OL2026000428"),
-            SimpleNamespace(certificate_number="7001_01_60/26", cod_odp="OL2026000429"),
+            SimpleNamespace(certificate_number="7001_00_083/26", cod_odp="OL2026000428"),
+            SimpleNamespace(certificate_number="7001_01_060/26", cod_odp="OL2026000429"),
         ]
 
         self.assertEqual(
@@ -65,8 +65,8 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
 
     def test_different_ol_with_same_cdq_gets_next_first_suffix(self):
         certificates = [
-            SimpleNamespace(certificate_number="7001_00_83/26", cod_odp="OL2026000428"),
-            SimpleNamespace(certificate_number="7001_01_60/26", cod_odp="OL2026000429"),
+            SimpleNamespace(certificate_number="7001_00_083/26", cod_odp="OL2026000428"),
+            SimpleNamespace(certificate_number="7001_01_060/26", cod_odp="OL2026000429"),
         ]
 
         self.assertEqual(
@@ -79,9 +79,11 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
             2,
         )
 
-    def test_cod_f3_suffix_uses_last_two_digits(self):
-        self.assertEqual(_cod_f3_certificate_suffix("047012883"), "83")
-        self.assertEqual(_cod_f3_certificate_suffix("605000900"), "00")
+    def test_cod_f3_suffix_uses_last_three_digits(self):
+        self.assertEqual(_cod_f3_certificate_suffix("047012883"), "883")
+        self.assertEqual(_cod_f3_certificate_suffix("605000900"), "900")
+        self.assertEqual(_cod_f3_certificate_suffix("7"), "007")
+        self.assertEqual(_cod_f3_certificate_suffix(None), "000")
 
 
 if __name__ == "__main__":
