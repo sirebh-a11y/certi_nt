@@ -199,6 +199,9 @@ class QuartaTaglioAdditionalPagesResponse(BaseModel):
     original_filename: str | None = None
     uploaded_at: datetime | None = None
     uploaded_by: str | None = None
+    is_inherited: bool = False
+    inherited_from_certificate_number: str | None = None
+    inherited_from_cod_f3: str | None = None
 
 
 class QuartaTaglioDetailResponse(BaseModel):

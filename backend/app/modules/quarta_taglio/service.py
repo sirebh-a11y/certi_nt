@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import secrets
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -48,8 +49,18 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioSyncRunResponse,
     QuartaTaglioWordDraftResponse,
 )
+
+
 from app.modules.standards.models import NormativeStandard
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
+
+
+@dataclass(frozen=True)
+class _AdditionalPagesResolution:
+    extra_pages: QuartaTaglioCertificateExtraPages
+    is_inherited: bool = False
+    inherited_from_certificate_number: str | None = None
+    inherited_from_cod_f3: str | None = None
 
 STATUS_SEVERITY = {
     "green": 1,
@@ -439,6 +450,11 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     )
     codice_f3 = _codice_f3_from_unit_or_quarta(unit=primary_unit, quarta_rows=rows)
     open_certificate = selected_certificate or _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
+    detail_certificate_date = (
+        _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
+        or _certificate_datetime_from_ddt(primary_unit.ddt if primary_unit else None)
+        or (open_certificate.cert_date if open_certificate and open_certificate.cert_date else None)
+    )
     open_certificate_number = (
         open_certificate.certificate_number or open_certificate.draft_number
         if open_certificate is not None and (open_certificate.certificate_number or open_certificate.draft_number)
@@ -458,6 +474,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             "ordine_cliente": _clean_text(open_certificate.ordine_cliente) if open_certificate else primary_unit.ordine_cliente if primary_unit else _join_unique(row.odv_cli for row in esolver_header_rows) or None,
             "conferma_ordine": _clean_text(open_certificate.cdo_lega) if open_certificate else primary_unit.conferma_ordine if primary_unit else _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
             "ddt": _clean_text(open_certificate.ddt) if open_certificate else primary_unit.ddt if primary_unit else _join_unique(row.ddt for row in esolver_header_rows) or None,
+            "data_certificato": _format_certificate_date(detail_certificate_date),
             "codice_f3": _clean_text(open_certificate.cod_f3) if open_certificate else codice_f3["value"],
             "codice_f3_origine": codice_f3["origin"],
             "codice_f3_esolver": codice_f3["esolver"],
@@ -497,6 +514,8 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         additional_pages=_serialize_additional_pages(
             db,
             certificate_number=open_certificate_number,
+            cod_odp=group.cod_odp,
+            cod_f3=_clean_text(open_certificate.cod_f3) if open_certificate else primary_unit.cod_f3 if primary_unit else None,
         ),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
@@ -589,17 +608,19 @@ def create_quarta_taglio_word_draft(
 
     _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    certificate_date = _certificate_datetime_from_detail(detail) or certificate.cert_date or datetime.now(timezone.utc)
+    certificate.cert_date = certificate_date
     certificate_number = certificate.certificate_number or _assign_certificate_number(
         db,
         cdq_key=certificate.cdq_key,
         cod_odp=certificate.cod_odp,
         cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
-        now=certificate.cert_date,
+        now=certificate_date,
     )
     certificate.certificate_number = certificate_number
     certificate.draft_number = certificate_number
     certificate.status = certificate.status or "draft"
-    certificate.cert_date = certificate.cert_date or datetime.now(timezone.utc)
+    certificate.cert_date = certificate_date
     certificate.cdq_key = certificate.cdq_key or _cdq_key_from_detail(detail)
     certificate.cdq_signature = _cdq_signature_from_detail(detail)
     certificate.cdq_values = _cdq_values_from_detail(detail)
@@ -609,7 +630,12 @@ def create_quarta_taglio_word_draft(
     storage_key = _certificate_docx_storage_key(cod_odp)
     output_path = _certificate_storage_path(storage_key)
     quality_manager = _select_quality_manager(db)
-    additional_pages_path = _additional_pages_path_for_certificate(db, certificate_number=certificate_number)
+    additional_pages_path = _additional_pages_path_for_certificate(
+        db,
+        certificate_number=certificate_number,
+        cod_odp=certificate.cod_odp,
+        cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
+    )
     build_forgialluminio_draft_docx(
         detail=detail,
         output_path=output_path,
@@ -804,7 +830,7 @@ def _get_or_create_open_certificate(
             cdq_key=_cdq_key_from_detail(detail),
             cdq_signature=_cdq_signature_from_detail(detail),
             cdq_values=_cdq_values_from_detail(detail),
-            cert_date=datetime.now(timezone.utc),
+            cert_date=_certificate_datetime_from_detail(detail) or datetime.now(timezone.utc),
             download_token=secrets.token_urlsafe(32),
             created_by_user_id=actor.id,
         )
@@ -815,7 +841,10 @@ def _get_or_create_open_certificate(
         _apply_certificate_register_fields(certificate, detail)
         if not certificate.cdq_key:
             certificate.cdq_key = _cdq_key_from_detail(detail)
-        if not certificate.cert_date:
+        detail_certificate_date = _certificate_datetime_from_detail(detail)
+        if detail_certificate_date:
+            certificate.cert_date = detail_certificate_date
+        elif not certificate.cert_date:
             certificate.cert_date = datetime.now(timezone.utc)
     return certificate
 
@@ -883,6 +912,9 @@ def _apply_certificate_register_fields(certificate: QuartaTaglioFinalCertificate
     certificate.unit_key = _clean_text(header.get("unit_key")) or certificate.unit_key
     certificate.cod_f3 = _clean_text(header.get("codice_f3")) or _join_unique(item.cod_art for item in detail.materials) or None
     certificate.ddt = _clean_text(header.get("ddt"))
+    certificate_date = _certificate_datetime_from_detail(detail)
+    if certificate_date:
+        certificate.cert_date = certificate_date
     certificate.ordine_cliente = _clean_text(header.get("ordine_cliente"))
     certificate.quantita = _as_float(header.get("quantita"))
     certificate.lega_cod_f3 = certificate.cod_f3
@@ -899,6 +931,9 @@ def _apply_certificate_register_unit_fields(
     certificate.unit_key = unit.unit_key
     certificate.cod_f3 = _clean_text(unit.cod_f3)
     certificate.ddt = _clean_text(unit.ddt)
+    certificate_date = _certificate_datetime_from_ddt(unit.ddt)
+    if certificate_date:
+        certificate.cert_date = certificate_date
     certificate.ordine_cliente = _clean_text(unit.ordine_cliente)
     certificate.quantita = unit.quantita
     certificate.lega_cod_f3 = certificate.cod_f3
@@ -960,7 +995,7 @@ def _sync_certifiable_unit_register(
                 cdq_key=cdq_key,
                 cdq_signature=_cdq_signature_from_detail(detail),
                 cdq_values=_cdq_values_from_detail(detail),
-                cert_date=cert_date,
+                cert_date=_certificate_datetime_from_ddt(unit.ddt) or cert_date,
                 download_token=secrets.token_urlsafe(32),
                 created_by_user_id=actor.id if actor else None,
             )
@@ -972,7 +1007,10 @@ def _sync_certifiable_unit_register(
             synced.append(certificate)
             continue
         _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
-        if not certificate.cert_date:
+        unit_certificate_date = _certificate_datetime_from_ddt(unit.ddt)
+        if unit_certificate_date:
+            certificate.cert_date = unit_certificate_date
+        elif not certificate.cert_date:
             certificate.cert_date = cert_date
         if not certificate.certificate_number:
             certificate.certificate_number = _assign_certificate_number(
@@ -1204,11 +1242,22 @@ def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
     return f"{_safe_file_part(certificate.draft_number)}_{_safe_file_part(certificate.cod_odp)}.docx"
 
 
-def _additional_pages_path_for_certificate(db: Session, *, certificate_number: str | None) -> Path | None:
-    extra_pages = _additional_pages_for_certificate(db, certificate_number=certificate_number)
-    if extra_pages is None:
+def _additional_pages_path_for_certificate(
+    db: Session,
+    *,
+    certificate_number: str | None,
+    cod_odp: str | None = None,
+    cod_f3: str | None = None,
+) -> Path | None:
+    resolution = _resolve_additional_pages_for_certificate(
+        db,
+        certificate_number=certificate_number,
+        cod_odp=cod_odp,
+        cod_f3=cod_f3,
+    )
+    if resolution is None:
         return None
-    path = _certificate_storage_path(extra_pages.storage_key_docx)
+    path = _certificate_storage_path(resolution.extra_pages.storage_key_docx)
     return path if path.exists() else None
 
 
@@ -1227,20 +1276,115 @@ def _additional_pages_for_certificate(
     )
 
 
+def _resolve_additional_pages_for_certificate(
+    db: Session,
+    *,
+    certificate_number: str | None,
+    cod_odp: str | None = None,
+    cod_f3: str | None = None,
+) -> _AdditionalPagesResolution | None:
+    cleaned_number = _clean_text(certificate_number)
+    exact_pages = _additional_pages_for_certificate(db, certificate_number=cleaned_number)
+    if exact_pages is not None:
+        return _AdditionalPagesResolution(extra_pages=exact_pages)
+
+    current_cod_f3 = _cod_f3_sort_value(cod_f3)
+    current_ol = _norm(cod_odp)
+    if current_cod_f3 is None or not current_ol:
+        return None
+
+    certificates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            QuartaTaglioFinalCertificate.cod_f3.isnot(None),
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .all()
+    )
+    visited_numbers = {cleaned_number} if cleaned_number else set()
+    for _ in range(len(certificates) + 1):
+        previous = _previous_cod_f3_certificate(
+            certificates,
+            cod_odp=cod_odp,
+            current_cod_f3=current_cod_f3,
+            visited_numbers=visited_numbers,
+        )
+        if previous is None or not previous.certificate_number:
+            return None
+        previous_number = _clean_text(previous.certificate_number)
+        visited_numbers.add(previous_number)
+        previous_pages = _additional_pages_for_certificate(db, certificate_number=previous_number)
+        if previous_pages is not None:
+            return _AdditionalPagesResolution(
+                extra_pages=previous_pages,
+                is_inherited=True,
+                inherited_from_certificate_number=previous_number,
+                inherited_from_cod_f3=_clean_text(previous.cod_f3),
+            )
+        previous_cod_f3 = _cod_f3_sort_value(previous.cod_f3)
+        if previous_cod_f3 is None or previous_cod_f3 >= current_cod_f3:
+            return None
+        current_cod_f3 = previous_cod_f3
+    return None
+
+
+def _previous_cod_f3_certificate(
+    certificates: list[QuartaTaglioFinalCertificate],
+    *,
+    cod_odp: str | None,
+    current_cod_f3: int,
+    visited_numbers: set[str],
+) -> QuartaTaglioFinalCertificate | None:
+    current_ol = _norm(cod_odp)
+    best: QuartaTaglioFinalCertificate | None = None
+    best_cod_f3: int | None = None
+    for certificate in certificates:
+        certificate_number = _clean_text(certificate.certificate_number)
+        if not certificate_number or certificate_number in visited_numbers:
+            continue
+        if _norm(certificate.cod_odp) != current_ol:
+            continue
+        candidate_cod_f3 = _cod_f3_sort_value(certificate.cod_f3)
+        if candidate_cod_f3 is None or candidate_cod_f3 >= current_cod_f3:
+            continue
+        if best_cod_f3 is None or candidate_cod_f3 > best_cod_f3:
+            best = certificate
+            best_cod_f3 = candidate_cod_f3
+    return best
+
+
+def _cod_f3_sort_value(value: str | None) -> int | None:
+    digits = re.sub(r"\D", "", _clean_text(value) or "")
+    return int(digits) if digits else None
+
+
 def _serialize_additional_pages(
     db: Session,
     *,
     certificate_number: str | None,
+    cod_odp: str | None = None,
+    cod_f3: str | None = None,
 ) -> QuartaTaglioAdditionalPagesResponse | None:
-    extra_pages = _additional_pages_for_certificate(db, certificate_number=certificate_number)
-    if extra_pages is None:
+    resolution = _resolve_additional_pages_for_certificate(
+        db,
+        certificate_number=certificate_number,
+        cod_odp=cod_odp,
+        cod_f3=cod_f3,
+    )
+    if resolution is None:
         return None
+    extra_pages = resolution.extra_pages
     uploader = db.get(User, extra_pages.uploaded_by_user_id) if extra_pages.uploaded_by_user_id else None
     return QuartaTaglioAdditionalPagesResponse(
         certificate_number=extra_pages.certificate_number,
         original_filename=extra_pages.original_filename,
         uploaded_at=extra_pages.updated_at,
         uploaded_by=uploader.name if uploader else None,
+        is_inherited=resolution.is_inherited,
+        inherited_from_certificate_number=resolution.inherited_from_certificate_number,
+        inherited_from_cod_f3=resolution.inherited_from_cod_f3,
     )
 
 
@@ -2610,6 +2754,35 @@ def _format_quantity(value: Any) -> str | None:
     if numeric_value is None:
         return _clean_text(value)
     return str(int(round(numeric_value)))
+
+
+def _certificate_datetime_from_detail(detail: QuartaTaglioDetailResponse) -> datetime | None:
+    header = detail.header or {}
+    return _certificate_datetime_from_ddt(header.get("ddt"))
+
+
+def _certificate_datetime_from_ddt(ddt: Any) -> datetime | None:
+    text = _clean_text(ddt)
+    if not text:
+        return None
+    match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", text)
+    if not match:
+        return None
+    day = int(match.group(1))
+    month = int(match.group(2))
+    year = int(match.group(3))
+    if year < 100:
+        year += 2000
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _format_certificate_date(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.strftime("%d/%m/%Y")
 
 
 def _join_unique(values: Any, separator: str = ", ") -> str:

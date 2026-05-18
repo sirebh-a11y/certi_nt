@@ -495,6 +495,7 @@ export default function QuartaTaglioDetailPage() {
       ["Ordine cliente", header.ordine_cliente || "Da eSolver"],
       ["C.d.O.", header.conferma_ordine || "Da eSolver"],
       ["DDT", header.ddt || "Da eSolver"],
+      ["Data certificato", header.data_certificato || "-"],
       ["Codice F3", codiceF3Value],
       ["Colata", header.colata || "-"],
       ["Quantità", formatQuantity(header.quantita)],
@@ -566,7 +567,11 @@ export default function QuartaTaglioDetailPage() {
             <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Pagine aggiuntive</div>
             {data.additional_pages ? (
               <p className="mt-1">
-                Presenti per certificato <span className="font-semibold text-slate-800">{data.additional_pages.certificate_number}</span>
+                {data.additional_pages.is_inherited ? "Ereditate" : "Specifiche"} da certificato{" "}
+                <span className="font-semibold text-slate-800">{data.additional_pages.certificate_number}</span>
+                {data.additional_pages.is_inherited && data.additional_pages.inherited_from_cod_f3
+                  ? `, CodF3 ${data.additional_pages.inherited_from_cod_f3}`
+                  : ""}
                 {data.additional_pages.original_filename ? `: ${data.additional_pages.original_filename}` : ""}.
               </p>
             ) : (
@@ -612,7 +617,7 @@ export default function QuartaTaglioDetailPage() {
               Carica pagine aggiuntive
             </label>
             <p className="text-xs text-slate-500">
-              Valgono per tutte le righe con lo stesso numero certificato; l'intestazione viene rigenerata per la riga selezionata.
+              Il file caricato diventa specifico per questo numero certificato. Se manca, viene ereditato dal CodF3 precedente dello stesso OL.
             </p>
             <div className="flex gap-2">
               <input
@@ -795,96 +800,23 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       </div>
 
-      <Panel title="Dati eSolver">
-        <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div className="text-sm text-slate-600">{data.esolver_message || "Collegamento eSolver non verificato."}</div>
-          <StatusPill status={data.esolver_status || "not_checked"} />
-        </div>
-        <Table
-          columns={["Cod F3", "OL", "Cliente", "Ordine cliente", "C.d.O.", "DDT", "Quantità"]}
-          rows={(data.esolver_rows || []).map((item) => [
-            item.cod_f3 || "-",
-            item.orp || "-",
-            item.rag_soc || "-",
-            item.odv_cli || "-",
-            item.odv_f3 || "-",
-            item.ddt || "-",
-            formatQuantity(item.qta_um_mag),
-          ])}
-          emptyText="Nessuna riga DDT eSolver collegata a questo OL."
-        />
-      </Panel>
-
-      <Panel title="Unità certificabili">
-        <p className="mb-3 text-sm text-slate-600">
-          Ogni unità nasce da OL, Cod. F3 e DDT. Per ora il pulsante Genera Word usa la riga principale.
-        </p>
-        <Table
-          columns={["Uso", "Cod F3", "DDT", "Cliente", "Ordine cliente", "C.d.O.", "Quantità", "Stato"]}
-          rows={(data.certifiable_units || []).map((item) => [
-            item.is_primary ? (
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700" key="primary">
-                Principale
-              </span>
-            ) : (
-              <span className="text-xs text-slate-500" key="candidate">Candidata</span>
-            ),
-            item.cod_f3 || "-",
-            item.ddt || "-",
-            item.cliente || "-",
-            item.ordine_cliente || "-",
-            item.conferma_ordine || "-",
-            formatQuantity(item.quantita),
-            item.status === "ready" ? "Pronta" : item.message || "Incompleta",
-          ])}
-          emptyText="Nessuna unità certificabile calcolata."
-        />
-      </Panel>
-
-      <Panel title="Materiali collegati">
-        <Table
-          columns={["CDQ", "Colata", "Articolo Quarta", "Quantità", "Lotti", "Righe app"]}
-          rows={(data.materials || []).map((item) => [
-            item.cdq,
-            item.colata || "-",
-            <div key="article">
-              <div className="font-medium">{item.cod_art || "-"}</div>
-              {item.des_art ? <div className="mt-1 text-xs text-slate-500">{item.des_art}</div> : null}
-            </div>,
-            formatQuantity(item.qta_totale),
-            (item.cod_lotti || []).join(", ") || "-",
-            item.matching_row_ids?.length
-              ? item.matching_row_ids.map((rowId) => (
-                  <Link className="mr-2 font-semibold text-accent hover:underline" key={rowId} to={`/acquisition/${rowId}`}>
-                    #{rowId}
-                  </Link>
-                ))
-              : "-",
-          ])}
-        />
-      </Panel>
-
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Chimica">
           <ValueTable numberDigits={3} values={data.chemistry || []} />
         </Panel>
-        <Panel title="Proprietà">
-          <ValueTable values={data.properties || []} />
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Note">
-          <Table
-            columns={["Nota", "Valore", "Stato", "Messaggio"]}
-            rows={(data.notes || []).map((item) => [item.label, item.value || "-", <StatusPill key="status" status={item.status} />, item.message])}
-          />
-        </Panel>
-        <Panel title="Seconda pagina">
-          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            Placeholder per la seconda pagina del certificato. La compileremo quando saranno definite le regole finali.
-          </div>
-        </Panel>
+        <div className="space-y-4">
+          <Panel title="Proprietà">
+            <div className="max-h-[280px] overflow-y-auto pr-1">
+              <ValueTable values={data.properties || []} />
+            </div>
+          </Panel>
+          <Panel title="Note">
+            <Table
+              columns={["Nota", "Valore", "Stato", "Messaggio"]}
+              rows={(data.notes || []).map((item) => [item.label, item.value || "-", <StatusPill key="status" status={item.status} />, item.message])}
+            />
+          </Panel>
+        </div>
       </div>
 
       {wordConformityDialogOpen ? (

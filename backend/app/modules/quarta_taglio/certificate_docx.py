@@ -48,31 +48,65 @@ def build_forgialluminio_draft_docx(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     document = Document()
-    section = document.sections[0]
-    section.top_margin = Inches(0.45)
-    section.bottom_margin = Inches(0.45)
-    section.left_margin = Inches(0.55)
-    section.right_margin = Inches(0.55)
+    _set_document_sections_layout(document)
 
     normal_style = document.styles["Normal"]
     normal_style.font.name = "Arial"
     normal_style.font.size = Pt(9)
 
-    _add_header(document, detail=detail, draft_number=draft_number)
+    _apply_document_shell(document, detail=detail, draft_number=draft_number, certified_by=certified_by, quality_manager=quality_manager)
     _add_chemistry_table(document, detail=detail)
     _add_notes(document, detail=detail)
     _add_properties_table(document, detail=detail)
-    _add_footer_signatures(document, certified_by=certified_by, quality_manager=quality_manager)
 
     document.save(output_path)
     if additional_pages_path is not None and additional_pages_path.exists():
-        _append_docx_body(output_path, additional_pages_path, detail=detail, draft_number=draft_number)
+        _append_docx_body(
+            output_path,
+            additional_pages_path,
+            detail=detail,
+            draft_number=draft_number,
+            certified_by=certified_by,
+            quality_manager=quality_manager,
+        )
 
 
-def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft_number: str) -> None:
-    header = detail.header or {}
+def _set_document_sections_layout(document: Document) -> None:
+    for section in document.sections:
+        section.top_margin = Inches(2.75)
+        section.bottom_margin = Inches(0.75)
+        section.left_margin = Inches(0.55)
+        section.right_margin = Inches(0.55)
+        section.header_distance = Inches(0.48)
+        section.footer_distance = Inches(0.12)
+        section.different_first_page_header_footer = False
+        _remove_page_number_restart(section)
 
-    table = document.add_table(rows=1, cols=3)
+
+def _apply_document_shell(
+    document: Document,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    draft_number: str,
+    certified_by: User,
+    quality_manager: User | None,
+) -> None:
+    _set_document_sections_layout(document)
+    for index, section in enumerate(document.sections):
+        if index == 0:
+            section.header.is_linked_to_previous = False
+            section.footer.is_linked_to_previous = False
+            _fill_document_header(section.header, detail=detail, draft_number=draft_number)
+            _fill_signature_footer(section.footer, certified_by=certified_by, quality_manager=quality_manager, include_operator=True)
+        else:
+            section.header.is_linked_to_previous = True
+            section.footer.is_linked_to_previous = True
+
+
+def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_number: str) -> None:
+    certificate_header = detail.header or {}
+    _clear_header_footer(header)
+    table = header.add_table(rows=1, cols=3, width=Inches(7.1))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_table_borders(table)
     _set_column_widths(table, [Inches(1.2), Inches(4.4), Inches(1.5)])
@@ -80,7 +114,7 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     if LOGO_PATH.exists():
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.45))
+        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.16))
     else:
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -92,10 +126,15 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     run.font.size = Pt(6)
     p = right.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = p.add_run("Pag. 1 / 1")
+    p.paragraph_format.space_before = Pt(2)
+    run = p.add_run("Pag. ")
     run.font.size = Pt(11)
+    _add_field(p, "PAGE")
+    run = p.add_run(" / ")
+    run.font.size = Pt(11)
+    _add_field(p, "NUMPAGES")
 
-    title_table = document.add_table(rows=1, cols=2)
+    title_table = header.add_table(rows=1, cols=2, width=Inches(7.1))
     _clear_table_borders(title_table)
     title_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _set_table_width(title_table, Inches(7.1))
@@ -110,17 +149,18 @@ def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft
     right_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     right_paragraph.paragraph_format.space_before = Pt(6)
     right_paragraph.paragraph_format.space_after = Pt(8)
-    right_run = right_paragraph.add_run(f"Certificate n°{draft_number} dated -")
+    certificate_date = certificate_header.get("data_certificato") or "-"
+    right_run = right_paragraph.add_run(f"Certificate n°{draft_number} dated {certificate_date}")
     right_run.font.size = Pt(12)
 
     data_rows = [
-        (("Purchaser:", "Cliente:", header.get("cliente")), ("Cod. F3:", "Cod. F3:", header.get("codice_f3"))),
-        (("Description:", "Descrizione:", header.get("descrizione")), ("Drawing:", "Disegno:", header.get("disegno"))),
-        (("Order.:", "Ordine:", header.get("ordine_cliente")), ("Confirm of order:", "C.d.O.:", header.get("conferma_ordine"))),
-        (("D.d.T.:", "D.d.T.:", header.get("ddt")), ("Amount:", "Quantità:", _format_quantity(header.get("quantita")))),
+        (("Purchaser:", "Cliente:", certificate_header.get("cliente")), ("Cod. F3:", "Cod. F3:", certificate_header.get("codice_f3"))),
+        (("Description:", "Descrizione:", certificate_header.get("descrizione")), ("Drawing:", "Disegno:", certificate_header.get("disegno"))),
+        (("Order.:", "Ordine:", certificate_header.get("ordine_cliente")), ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"))),
+        (("D.d.T.:", "D.d.T.:", certificate_header.get("ddt")), ("Amount:", "Quantità:", _format_quantity(certificate_header.get("quantita")))),
         (("", "", ""), ("", "", "")),
     ]
-    _add_header_data_table(document, data_rows)
+    _add_header_data_table(header, data_rows)
 
 
 def _add_chemistry_intro(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
@@ -246,9 +286,7 @@ def _add_footer_signatures(document: Document, *, certified_by: User, quality_ma
 
 def _fill_signature_footer(footer, *, certified_by: User, quality_manager: User | None, include_operator: bool) -> None:
     footer.is_linked_to_previous = False
-    if footer.paragraphs:
-        footer.paragraphs[0].text = ""
-        footer.paragraphs[0].paragraph_format.space_after = Pt(0)
+    _clear_header_footer(footer)
 
     table = footer.add_table(rows=1, cols=3, width=Inches(6.7))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -282,6 +320,8 @@ def _append_docx_body(
     *,
     detail: QuartaTaglioDetailResponse,
     draft_number: str,
+    certified_by: User,
+    quality_manager: User | None,
 ) -> None:
     """Append the uploaded extra-pages DOCX as real Word body content.
 
@@ -292,10 +332,49 @@ def _append_docx_body(
     master = Document(str(base_docx_path))
     extra_document = Document(str(extra_docx_path))
     master.add_page_break()
-    _add_header(master, detail=detail, draft_number=draft_number)
     composer = Composer(master)
     composer.append(extra_document)
     composer.save(str(base_docx_path))
+    merged = Document(str(base_docx_path))
+    _apply_document_shell(
+        merged,
+        detail=detail,
+        draft_number=draft_number,
+        certified_by=certified_by,
+        quality_manager=quality_manager,
+    )
+    merged.save(str(base_docx_path))
+
+
+def _clear_header_footer(container) -> None:
+    for child in list(container._element):
+        container._element.remove(child)
+
+
+def _add_field(paragraph, instruction: str) -> None:
+    field = OxmlElement("w:fldSimple")
+    field.set(qn("w:instr"), instruction)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "1"
+    run.append(text)
+    field.append(run)
+    paragraph._p.append(field)
+
+
+def _force_word_field_update(document: Document) -> None:
+    settings = document.settings.element
+    update_fields = settings.find(qn("w:updateFields"))
+    if update_fields is None:
+        update_fields = OxmlElement("w:updateFields")
+        settings.append(update_fields)
+    update_fields.set(qn("w:val"), "true")
+
+
+def _remove_page_number_restart(section) -> None:
+    sect_pr = section._sectPr
+    for page_num_type in list(sect_pr.findall(qn("w:pgNumType"))):
+        sect_pr.remove(page_num_type)
 
 
 def _add_section_title(document: Document, text: str) -> None:
@@ -338,8 +417,11 @@ def _add_box_table(document: Document, rows: list[tuple[tuple[str, object], tupl
     _set_table_font(table, size=8)
 
 
-def _add_header_data_table(document: Document, rows: list[tuple[tuple[str, str, object], tuple[str, str, object]]]) -> None:
-    table = document.add_table(rows=0, cols=2)
+def _add_header_data_table(container, rows: list[tuple[tuple[str, str, object], tuple[str, str, object]]]) -> None:
+    try:
+        table = container.add_table(rows=0, cols=2, width=Inches(7.1))
+    except TypeError:
+        table = container.add_table(rows=0, cols=2)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for left, right in rows:
