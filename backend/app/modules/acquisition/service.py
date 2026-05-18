@@ -857,6 +857,23 @@ def capture_chemistry_table_from_page(*, page: DocumentPage, payload: ChemistryT
                 items=_build_chemistry_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
+    if template is not None and template.supplier_key == "arconic_hannover":
+        arconic_matches, arconic_items, arconic_raw_lines = _parse_arconic_chemistry_from_page(
+            page=page,
+            selection_bbox=(left, top, right, bottom),
+        )
+        if arconic_matches:
+            values = _serialize_chemistry_capture_values(arconic_matches)
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=arconic_raw_lines or lines,
+                values=values,
+                items=arconic_items,
+            )
+
     horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
     vertical_matches = _parse_vertical_chemistry_from_lines(lines, page.id)
     horizontal_count = len(horizontal_matches)
@@ -1102,6 +1119,20 @@ def build_chemistry_overlay_preview(
 
     template = resolve_supplier_template(_row_supplier_name(row))
     supplier_key = template.supplier_key if template is not None else None
+    if supplier_key == "arconic_hannover":
+        best_arconic_items: list[ChemistryOverlayPreviewItemResponse] = []
+        for page in certificate_document.pages:
+            if not page.immagine_pagina_storage_key:
+                continue
+            arconic_items = _build_arconic_chemistry_overlay_items_from_word_slots(
+                page=page,
+                field_values=field_values,
+            )
+            if _count_chemistry_overlay_fields(arconic_items) > _count_chemistry_overlay_fields(best_arconic_items):
+                best_arconic_items = arconic_items
+        if _count_chemistry_overlay_fields(best_arconic_items) >= min(len(field_values), 6):
+            return ChemistryOverlayPreviewResponse(items=best_arconic_items)
+
     if supplier_key == "zalco":
         best_zalco_items: list[ChemistryOverlayPreviewItemResponse] = []
         for page in certificate_document.pages:
@@ -1176,6 +1207,14 @@ def _build_chemistry_overlay_preview_items_for_page(
 ) -> list[ChemistryOverlayPreviewItemResponse]:
     if not field_values or not page.immagine_pagina_storage_key:
         return []
+    if supplier_key == "arconic_hannover":
+        arconic_items = _build_arconic_chemistry_overlay_items_from_word_slots(
+            page=page,
+            field_values=field_values,
+        )
+        if _count_chemistry_overlay_fields(arconic_items) >= min(len(field_values), 6):
+            return arconic_items
+
     staged_match = _find_best_chemistry_overlay_match(
         page=page,
         field_values=field_values,
@@ -4228,6 +4267,455 @@ ARCONIC_CHEMISTRY_GEOMETRY_SLOTS: list[str | None] = [
     "Zr",
     None,  # H2 is shown in Arconic tables but is not a captured chemistry field.
 ]
+
+ARCONIC_CHEMISTRY_CAPTURE_FIELDS = ("Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Pb", "Zr")
+ARCONIC_CHEMISTRY_HEADER_ALIASES = {
+    "SI": "Si",
+    "FE": "Fe",
+    "CU": "Cu",
+    "MN": "Mn",
+    "MG": "Mg",
+    "CR": "Cr",
+    "ZN": "Zn",
+    "TI": "Ti",
+    "PB": "Pb",
+    "ZR": "Zr",
+    "H2": None,
+}
+
+
+def _parse_arconic_chemistry_from_page(
+    *,
+    page: DocumentPage,
+    selection_bbox: tuple[int, int, int, int] | None = None,
+) -> tuple[
+    dict[str, dict[str, str | int]],
+    list[ChemistryOverlayPreviewItemResponse],
+    list[str],
+]:
+    extracted = _extract_arconic_chemistry_cells(page)
+    if extracted is None:
+        return {}, [], []
+    cells, image_width, image_height, table_bbox, raw_lines = extracted
+    if selection_bbox is not None and not _bbox_intersects(selection_bbox, table_bbox):
+        return {}, [], raw_lines
+
+    matches: dict[str, dict[str, str | int]] = {}
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+    for field_name in ARCONIC_CHEMISTRY_CAPTURE_FIELDS:
+        cell = cells.get(field_name)
+        if cell is None:
+            continue
+        normalized_value = _normalize_chemistry_capture_value(cast(str | None, cell.get("value")))
+        if normalized_value is None:
+            continue
+        bbox = cast(str | None, cell.get("bbox"))
+        snippet = cast(str | None, cell.get("snippet")) or "Arconic Composition Results"
+        matches[field_name] = {
+            "page_id": page.id,
+            "snippet": snippet,
+            "raw": normalized_value,
+            "standardized": normalized_value.replace(",", "."),
+            "final": normalized_value,
+        }
+        if bbox:
+            items.append(
+                ChemistryOverlayPreviewItemResponse(
+                    page_id=page.id,
+                    page_number=page.numero_pagina,
+                    field=field_name,
+                    bbox=bbox,
+                    image_width=image_width,
+                    image_height=image_height,
+                )
+            )
+    return matches, items, raw_lines
+
+
+def _build_arconic_chemistry_overlay_items_from_word_slots(
+    *,
+    page: DocumentPage,
+    field_values: dict[str, str],
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    extracted = _extract_arconic_chemistry_cells(page)
+    if extracted is None:
+        return []
+    cells, image_width, image_height, _table_bbox, _raw_lines = extracted
+    items: list[ChemistryOverlayPreviewItemResponse] = []
+    for field_name in CHEMISTRY_CAPTURE_FIELD_ORDER:
+        target_value = field_values.get(field_name)
+        if target_value is None or field_name not in ARCONIC_CHEMISTRY_CAPTURE_FIELDS:
+            continue
+        cell = cells.get(field_name)
+        if cell is None:
+            continue
+        cell_value = _normalize_chemistry_capture_value(cast(str | None, cell.get("value")))
+        if cell_value is not None and not (_chemistry_overlay_match_keys(target_value) & _chemistry_overlay_match_keys(cell_value)):
+            continue
+        bbox = cast(str | None, cell.get("bbox"))
+        if not bbox:
+            continue
+        items.append(
+            ChemistryOverlayPreviewItemResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                field=field_name,
+                bbox=bbox,
+                image_width=image_width,
+                image_height=image_height,
+            )
+        )
+    return items
+
+
+def _extract_arconic_chemistry_cells(
+    page: DocumentPage,
+) -> tuple[dict[str, dict[str, object]], int, int, tuple[int, int, int, int], list[str]] | None:
+    line_boxes, image_width, image_height = _extract_ocr_line_boxes(page, psms=(4, 6, 11, 12))
+    title_line = _find_arconic_chemistry_title_line(line_boxes)
+    if title_line is None:
+        return None
+
+    title_y1 = int(title_line.get("y1") or 0)
+    mechanical_y = _find_arconic_chemistry_stop_y(line_boxes=line_boxes, title_y1=title_y1)
+    words = _dedupe_arconic_words(line_boxes)
+    header_entries = _find_arconic_chemistry_header_entries(
+        words=words,
+        title_y1=title_y1,
+        stop_y=mechanical_y or image_height,
+    )
+    real_headers = [entry for entry in header_entries if entry[0] in ARCONIC_CHEMISTRY_CAPTURE_FIELDS]
+    if len(real_headers) < 6:
+        return None
+
+    value_words = _find_arconic_chemistry_value_row_words(
+        words=words,
+        header_entries=header_entries,
+        title_y1=title_y1,
+        stop_y=mechanical_y or image_height,
+    )
+    if len(value_words) < 3:
+        return None
+
+    raw_lines = _arconic_chemistry_raw_lines(title_line=title_line, header_entries=header_entries, value_words=value_words)
+    cells: dict[str, dict[str, object]] = {}
+    sorted_headers = sorted(header_entries, key=lambda entry: _chemistry_overlay_word_center(entry[1]))
+    value_top = max(0, min(int(word.get("top") or 0) for word in value_words) - 8)
+    value_bottom = min(
+        image_height,
+        max(int(word.get("top") or 0) + int(word.get("height") or 0) for word in value_words) + 10,
+    )
+    table_x0 = min(int(word.get("left") or 0) for _field, word in sorted_headers)
+    table_x1 = max(int(word.get("left") or 0) + int(word.get("width") or 0) for _field, word in sorted_headers)
+    table_bbox = (
+        max(0, table_x0 - 120),
+        max(0, int(title_line.get("y0") or 0) - 20),
+        min(image_width, table_x1 + 120),
+        min(image_height, value_bottom + 30),
+    )
+
+    for index, (field_name, header_word) in enumerate(sorted_headers):
+        if field_name not in ARCONIC_CHEMISTRY_CAPTURE_FIELDS:
+            continue
+        center = _chemistry_overlay_word_center(header_word)
+        left_boundary = _arconic_cell_boundary_left(sorted_headers, index, image_width)
+        right_boundary = _arconic_cell_boundary_right(sorted_headers, index, image_width)
+        cell_bbox = (
+            max(0, int(left_boundary)),
+            value_top,
+            min(image_width, int(right_boundary)),
+            value_bottom,
+        )
+        ocr_cell_bbox = _expand_bbox(cell_bbox, image_width=image_width, image_height=image_height, margin_x=14, margin_y=20)
+        chosen_word = _choose_arconic_value_word_for_cell(
+            value_words=value_words,
+            cell_bbox=cell_bbox,
+            header_center=center,
+        )
+        normalized_value: str | None = None
+        bbox = _bbox_to_string(cell_bbox)
+        if chosen_word is not None:
+            normalized_value = _normalize_chemistry_capture_value(cast(str | None, chosen_word.get("text")))
+            bbox = _word_bbox_to_string(chosen_word)
+        if normalized_value is None:
+            normalized_value = _ocr_arconic_chemistry_cell(page=page, cell_bbox=ocr_cell_bbox, field_name=field_name)
+            bbox = _bbox_to_string(cell_bbox)
+        if normalized_value is None:
+            continue
+        cells[field_name] = {
+            "value": normalized_value,
+            "bbox": bbox,
+            "snippet": " | ".join(raw_lines),
+        }
+
+    if len(cells) < 5:
+        return None
+    return cells, image_width, image_height, table_bbox, raw_lines
+
+
+def _find_arconic_chemistry_stop_y(
+    *,
+    line_boxes: list[dict[str, object]],
+    title_y1: int,
+) -> int | None:
+    candidates: list[int] = []
+    for line_box in line_boxes:
+        y0 = int(line_box.get("y0") or 0)
+        if y0 <= title_y1:
+            continue
+        text = " ".join(str(word.get("text") or "") for word in cast(list[dict[str, object]], line_box.get("words") or [])).lower()
+        if "mechanical" in text or "property" in text or "test limits" in text:
+            candidates.append(y0)
+    return min(candidates) if candidates else None
+
+
+def _dedupe_arconic_words(line_boxes: list[dict[str, object]]) -> list[dict[str, object]]:
+    words: list[dict[str, object]] = []
+    seen: set[tuple[str, int, int, int, int]] = set()
+    for line_box in line_boxes:
+        for word in cast(list[dict[str, object]], line_box.get("words") or []):
+            text = str(word.get("text") or "").strip()
+            left = int(word.get("left") or 0)
+            top = int(word.get("top") or 0)
+            width = int(word.get("width") or 0)
+            height = int(word.get("height") or 0)
+            key = (text.lower(), left, top, width, height)
+            if not text or width <= 0 or height <= 0 or key in seen:
+                continue
+            seen.add(key)
+            words.append(word)
+    return words
+
+
+def _find_arconic_chemistry_header_entries(
+    *,
+    words: list[dict[str, object]],
+    title_y1: int,
+    stop_y: int,
+) -> list[tuple[str | None, dict[str, object]]]:
+    entries_by_field: dict[str, tuple[str | None, dict[str, object]]] = {}
+    h2_entry: tuple[str | None, dict[str, object]] | None = None
+    for word in words:
+        top = int(word.get("top") or 0)
+        if top <= title_y1 or top >= min(stop_y, title_y1 + 260):
+            continue
+        label = re.sub(r"[^A-Z0-9]+", "", str(word.get("text") or "").upper())
+        if label not in ARCONIC_CHEMISTRY_HEADER_ALIASES:
+            continue
+        field_name = ARCONIC_CHEMISTRY_HEADER_ALIASES[label]
+        entry = (field_name, word)
+        if field_name is None:
+            if label == "H2" and h2_entry is None:
+                h2_entry = entry
+            continue
+        current = entries_by_field.get(field_name)
+        if current is None or int(word.get("top") or 0) < int(current[1].get("top") or 0):
+            entries_by_field[field_name] = entry
+    entries = [entries_by_field[field_name] for field_name in ARCONIC_CHEMISTRY_CAPTURE_FIELDS if field_name in entries_by_field]
+    if h2_entry is not None:
+        entries.append(h2_entry)
+    return entries
+
+
+def _find_arconic_chemistry_value_row_words(
+    *,
+    words: list[dict[str, object]],
+    header_entries: list[tuple[str | None, dict[str, object]]],
+    title_y1: int,
+    stop_y: int,
+) -> list[dict[str, object]]:
+    header_bottom = max(int(word.get("top") or 0) + int(word.get("height") or 0) for _field, word in header_entries)
+    header_min_x = min(int(word.get("left") or 0) for _field, word in header_entries)
+    header_max_x = max(int(word.get("left") or 0) + int(word.get("width") or 0) for _field, word in header_entries)
+    candidates: list[dict[str, object]] = []
+    for word in words:
+        top = int(word.get("top") or 0)
+        if top <= max(title_y1, header_bottom - 8) or top >= stop_y:
+            continue
+        text = str(word.get("text") or "")
+        normalized = _normalize_chemistry_capture_value(text)
+        is_cast = re.search(r"[A-Z]\d{5,}", text.upper()) is not None
+        if normalized is None and not is_cast:
+            continue
+        center_x = _chemistry_overlay_word_center(word)
+        if center_x < header_min_x - 260 or center_x > header_max_x + 260:
+            continue
+        candidates.append(word)
+
+    best_group: list[dict[str, object]] = []
+    best_score: tuple[int, int, int] | None = None
+    for seed in candidates:
+        seed_center_y = int(seed.get("top") or 0) + int(seed.get("height") or 0) / 2
+        group = [
+            word
+            for word in candidates
+            if abs((int(word.get("top") or 0) + int(word.get("height") or 0) / 2) - seed_center_y) <= 28
+        ]
+        numeric_near_headers = 0
+        cast_count = 0
+        for word in group:
+            text = str(word.get("text") or "")
+            if re.search(r"[A-Z]\d{5,}", text.upper()):
+                cast_count += 1
+                continue
+            if _normalize_chemistry_capture_value(text) is None:
+                continue
+            center_x = _chemistry_overlay_word_center(word)
+            if header_min_x - 80 <= center_x <= header_max_x + 80:
+                numeric_near_headers += 1
+        score = (numeric_near_headers, cast_count, -int(abs(seed_center_y - header_bottom)))
+        if best_score is None or score > best_score:
+            best_score = score
+            best_group = group
+    return sorted(best_group, key=lambda word: int(word.get("left") or 0))
+
+
+def _arconic_cell_boundary_left(
+    headers: list[tuple[str | None, dict[str, object]]],
+    index: int,
+    image_width: int,
+) -> float:
+    current_center = _chemistry_overlay_word_center(headers[index][1])
+    if index == 0:
+        next_center = _chemistry_overlay_word_center(headers[index + 1][1]) if len(headers) > 1 else current_center + 120
+        return max(0.0, current_center - (next_center - current_center) / 2)
+    previous_center = _chemistry_overlay_word_center(headers[index - 1][1])
+    return max(0.0, (previous_center + current_center) / 2)
+
+
+def _arconic_cell_boundary_right(
+    headers: list[tuple[str | None, dict[str, object]]],
+    index: int,
+    image_width: int,
+) -> float:
+    current_center = _chemistry_overlay_word_center(headers[index][1])
+    if index >= len(headers) - 1:
+        previous_center = _chemistry_overlay_word_center(headers[index - 1][1]) if index > 0 else current_center - 120
+        return min(float(image_width), current_center + (current_center - previous_center) / 2)
+    next_center = _chemistry_overlay_word_center(headers[index + 1][1])
+    return min(float(image_width), (current_center + next_center) / 2)
+
+
+def _choose_arconic_value_word_for_cell(
+    *,
+    value_words: list[dict[str, object]],
+    cell_bbox: tuple[int, int, int, int],
+    header_center: float,
+) -> dict[str, object] | None:
+    left, top, right, bottom = cell_bbox
+    candidates = []
+    for word in value_words:
+        if _normalize_chemistry_capture_value(cast(str | None, word.get("text"))) is None:
+            continue
+        center_x = _chemistry_overlay_word_center(word)
+        center_y = int(word.get("top") or 0) + int(word.get("height") or 0) / 2
+        if left <= center_x <= right and top <= center_y <= bottom:
+            candidates.append(word)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda word: abs(_chemistry_overlay_word_center(word) - header_center))
+
+
+def _ocr_arconic_chemistry_cell(
+    *,
+    page: DocumentPage,
+    cell_bbox: tuple[int, int, int, int],
+    field_name: str,
+) -> str | None:
+    image_path = get_document_page_image_path(page)
+    try:
+        with Image.open(image_path) as image:
+            left, top, right, bottom = cell_bbox
+            crop = image.crop((left, top, right, bottom))
+            grayscale = ImageOps.grayscale(crop)
+            prepared = ImageOps.autocontrast(grayscale)
+            prepared = prepared.resize(
+                (max(1, prepared.width * 5), max(1, prepared.height * 5)),
+                Image.Resampling.LANCZOS,
+            )
+    except OSError:
+        return None
+
+    variants = (
+        prepared,
+        prepared.filter(ImageFilter.SHARPEN),
+        prepared.point(lambda value: 255 if value > 190 else 0),
+    )
+    field_ceiling = {
+        "Si": 2.0,
+        "Fe": 1.0,
+        "Cu": 0.3,
+        "Mn": 1.5,
+        "Mg": 1.5,
+        "Cr": 0.5,
+        "Zn": 0.5,
+        "Ti": 0.25,
+        "Pb": 0.1,
+        "Zr": 0.3,
+    }.get(field_name, 5.0)
+    for image_variant in variants:
+        for config in ("--psm 7", "--psm 11", "--psm 13", "--psm 6"):
+            try:
+                text = pytesseract.image_to_string(image_variant, lang="eng+ita+deu", config=config)
+            except (OSError, pytesseract.TesseractNotFoundError):
+                continue
+            for token in re.findall(r"(?:<=|<|≤)?\s*\d+(?:[.,]\d+)?", text):
+                normalized = _normalize_chemistry_capture_value(token)
+                numeric = _safe_chemistry_float(normalized)
+                if normalized is not None and numeric is not None and 0 <= numeric <= field_ceiling:
+                    return normalized
+    return None
+
+
+def _arconic_chemistry_raw_lines(
+    *,
+    title_line: dict[str, object],
+    header_entries: list[tuple[str | None, dict[str, object]]],
+    value_words: list[dict[str, object]],
+) -> list[str]:
+    title = " ".join(str(word.get("text") or "") for word in cast(list[dict[str, object]], title_line.get("words") or []))
+    headers = " ".join(str(word.get("text") or "") for _field, word in header_entries)
+    values = " ".join(str(word.get("text") or "") for word in value_words)
+    return [line for line in (title.strip(), headers.strip(), values.strip()) if line]
+
+
+def _bbox_intersects(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> bool:
+    left = max(first[0], second[0])
+    top = max(first[1], second[1])
+    right = min(first[2], second[2])
+    bottom = min(first[3], second[3])
+    return right > left and bottom > top
+
+
+def _bbox_to_string(bbox: tuple[int, int, int, int]) -> str:
+    return f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+
+
+def _expand_bbox(
+    bbox: tuple[int, int, int, int],
+    *,
+    image_width: int,
+    image_height: int,
+    margin_x: int,
+    margin_y: int,
+) -> tuple[int, int, int, int]:
+    return (
+        max(0, bbox[0] - margin_x),
+        max(0, bbox[1] - margin_y),
+        min(image_width, bbox[2] + margin_x),
+        min(image_height, bbox[3] + margin_y),
+    )
+
+
+def _word_bbox_to_string(word: dict[str, object]) -> str:
+    left = int(word.get("left") or 0)
+    top = int(word.get("top") or 0)
+    width = int(word.get("width") or 0)
+    height = int(word.get("height") or 0)
+    return f"{left},{top},{left + width},{top + height}"
 
 
 def _build_arconic_chemistry_overlay_items_from_table_geometry(
