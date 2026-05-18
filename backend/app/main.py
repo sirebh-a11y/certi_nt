@@ -12,6 +12,7 @@ from app.core.integrations.router import router as integrations_router
 from app.core.logs.router import router as logs_router
 from app.core.users.router import router as users_router
 from app.modules.acquisition.router import router as acquisition_router
+from app.modules.customer_requirements.router import router as customer_requirements_router
 from app.modules.notes.router import router as notes_router
 from app.modules.quarta_taglio.router import router as quarta_taglio_router
 from app.modules.quarta_taglio.scheduler import quarta_taglio_periodic_sync_loop
@@ -52,6 +53,7 @@ app.include_router(departments_router, prefix="/api/departments", tags=["departm
 app.include_router(integrations_router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(notes_router, prefix="/api/notes", tags=["notes"])
 app.include_router(standards_router, prefix="/api/standards", tags=["standards"])
+app.include_router(customer_requirements_router, prefix="/api/customer-requirements", tags=["customer-requirements"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(suppliers_router, prefix="/api/suppliers", tags=["suppliers"])
 app.include_router(supplier_kpi_router, prefix="/api/supplier-kpi", tags=["supplier-kpi"])

@@ -17,6 +17,7 @@ import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import AIConfigPage from "../pages/ai/AIConfigPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import PlaceholderPage from "../pages/core/PlaceholderPage";
+import CustomerRequirementsPage from "../pages/customerRequirements/CustomerRequirementsPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
@@ -140,13 +141,7 @@ function ClientsRoute() {
 }
 
 function CustomerRequirementsRoute() {
-  return (
-    <PlaceholderPage
-      eyebrow="Strumenti qualità"
-      title="Requisiti Cliente"
-      description="Area futura per raccogliere, consultare e collegare i requisiti cliente ai controlli qualità e alla certificazione."
-    />
-  );
+  return <CustomerRequirementsPage />;
 }
 
 export function AppRouter() {

@@ -53,6 +53,19 @@ const CONFORMITY_CLASSES = {
   da_verificare: "border-amber-200 bg-amber-50 text-amber-800",
 };
 
+const CUSTOMER_REQUIREMENT_FIELDS = [
+  { field: "requires_chemical_analysis", label: "Analisi Chimica" },
+  { field: "requires_mechanical_mp", label: "Caratt. Mecc. MP" },
+  { field: "requires_mechanical_forged", label: "Caratt. Mecc. Forgiato" },
+  { field: "requires_hardness_hb", label: "Durezza HB" },
+  { field: "requires_lot_traceability_text", label: "Tracciabilita Lotto (datario) Indicazione" },
+  { field: "requires_lot_traceability_photo", label: "Tracciabilita Lotto (datario) Foto" },
+  { field: "requires_dimensional", label: "Dimensionale (Dimensioni concordate con cliente)" },
+  { field: "requires_marking", label: "Marcature (Tracciabilita aggiuntive)" },
+  { field: "requires_macro_micro", label: "Macrografie e/o Micrografie" },
+  { field: "requires_ndt", label: "Tracciabilita Controllo NDT" },
+];
+
 const ARTICLE_AUTOSAVE_DELAY_MS = 800;
 const ARTICLE_SAVED_FEEDBACK_MS = 1200;
 
@@ -154,6 +167,27 @@ function quartaDetailApiPath(codOdp, certificateId) {
   return certificateId ? `${basePath}?certificate_id=${encodeURIComponent(certificateId)}` : basePath;
 }
 
+function codF3MatchKey(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length <= 2) {
+    return "";
+  }
+  return digits.slice(0, -2);
+}
+
+function findCustomerRequirementForCodF3(requirements, codF3) {
+  const targetKey = codF3MatchKey(codF3);
+  if (!targetKey) {
+    return null;
+  }
+  const targetDigits = String(codF3 || "").replace(/\D/g, "");
+  const exact = requirements.find((item) => String(item.cod_f3 || "").replace(/\D/g, "") === targetDigits);
+  if (exact) {
+    return exact;
+  }
+  return requirements.find((item) => codF3MatchKey(item.cod_f3) === targetKey) || null;
+}
+
 export default function QuartaTaglioDetailPage() {
   const { codOdp } = useParams();
   const [searchParams] = useSearchParams();
@@ -165,6 +199,7 @@ export default function QuartaTaglioDetailPage() {
   const [savingStandardId, setSavingStandardId] = useState(null);
   const [standardError, setStandardError] = useState("");
   const [standards, setStandards] = useState([]);
+  const [customerRequirements, setCustomerRequirements] = useState([]);
   const [manualStandardId, setManualStandardId] = useState("");
   const [articleDraft, setArticleDraft] = useState({ descrizione: "", disegno: "" });
   const [articleStates, setArticleStates] = useState({});
@@ -226,6 +261,25 @@ export default function QuartaTaglioDetailPage() {
       .catch(() => {
         if (!ignore) {
           setStandards([]);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    let ignore = false;
+    apiRequest("/customer-requirements", {}, token)
+      .then((response) => {
+        if (!ignore) {
+          setCustomerRequirements(response.items || []);
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setCustomerRequirements([]);
         }
       });
 
@@ -505,6 +559,10 @@ export default function QuartaTaglioDetailPage() {
   const hasConformityIssues = conformityIssues.length > 0;
   const certificateNumber = data?.header?.numero_certificato;
   const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
+  const customerRequirement = useMemo(
+    () => findCustomerRequirementForCodF3(customerRequirements, data?.header?.codice_f3),
+    [customerRequirements, data?.header?.codice_f3],
+  );
 
   if (loading) {
     return <p className="text-sm text-slate-500">Caricamento certificato...</p>;
@@ -799,6 +857,41 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </Panel>
       </div>
+
+      {customerRequirement ? (
+        <Panel title="Requisiti cliente">
+          <div className="overflow-x-auto rounded-xl border border-rose-200">
+            <table className="min-w-[1320px] table-fixed border-collapse text-sm">
+              <colgroup>
+                {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                  <col key={field.field} className="w-[92px]" />
+                ))}
+                <col className="w-[400px]" />
+              </colgroup>
+              <thead className="bg-rose-50">
+                <tr className="text-left text-[10px] font-semibold uppercase leading-4 tracking-[0.08em] text-rose-800">
+                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                    <th className="px-2 py-2 align-bottom" key={field.field}>
+                      {field.label}
+                    </th>
+                  ))}
+                  <th className="px-3 py-2 align-bottom">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-rose-200 bg-rose-50/70">
+                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                    <td className="px-2 py-3 text-center" key={field.field}>
+                      <input className="h-4 w-4 accent-rose-700" checked={Boolean(customerRequirement[field.field])} readOnly type="checkbox" />
+                    </td>
+                  ))}
+                  <td className="px-3 py-3 text-sm font-medium text-rose-950">{customerRequirement.note || "-"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Chimica">

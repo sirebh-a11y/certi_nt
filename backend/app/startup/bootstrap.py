@@ -25,6 +25,8 @@ from app.modules.acquisition.models import (  # noqa: F401
     ManualMatchBlock,
     ReadValue,
 )
+from app.modules.customer_requirements.models import CustomerRequirement  # noqa: F401
+from app.modules.customer_requirements.service import seed_customer_requirements
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401
 from app.modules.notes.service import seed_note_templates
 from app.modules.quarta_taglio.models import (  # noqa: F401
@@ -62,6 +64,7 @@ def initialize_application() -> None:
         seed_supplier_aliases_from_csv(db)
         seed_note_templates(db)
         seed_normative_standards(db)
+        seed_customer_requirements(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()
