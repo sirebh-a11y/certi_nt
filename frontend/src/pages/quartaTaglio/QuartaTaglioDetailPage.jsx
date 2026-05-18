@@ -595,6 +595,41 @@ export default function QuartaTaglioDetailPage() {
         </span>
       </div>
 
+      {customerRequirement ? (
+        <Panel title="Requisiti cliente">
+          <div className="overflow-x-auto rounded-xl border border-rose-200 bg-rose-50">
+            <table className="w-full table-fixed border-collapse text-sm">
+              <colgroup>
+                {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                  <col key={field.field} className="w-[92px]" />
+                ))}
+                <col />
+              </colgroup>
+              <thead className="bg-rose-50">
+                <tr className="text-left text-[10px] font-semibold uppercase leading-4 tracking-[0.08em] text-rose-800">
+                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                    <th className="px-2 py-2 align-bottom" key={field.field}>
+                      {field.label}
+                    </th>
+                  ))}
+                  <th className="px-3 py-2 align-bottom">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-rose-200 bg-rose-50/70">
+                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
+                    <td className="px-2 py-3 text-center" key={field.field}>
+                      <input className="h-4 w-4 accent-rose-700" checked={Boolean(customerRequirement[field.field])} readOnly type="checkbox" />
+                    </td>
+                  ))}
+                  <td className="px-3 py-3 text-sm font-medium text-rose-950">{customerRequirement.note || "-"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ) : null}
+
       <div className="flex flex-col gap-2 rounded-xl border border-border bg-white p-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
@@ -857,41 +892,6 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </Panel>
       </div>
-
-      {customerRequirement ? (
-        <Panel title="Requisiti cliente">
-          <div className="overflow-x-auto rounded-xl border border-rose-200">
-            <table className="min-w-[1320px] table-fixed border-collapse text-sm">
-              <colgroup>
-                {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
-                  <col key={field.field} className="w-[92px]" />
-                ))}
-                <col className="w-[400px]" />
-              </colgroup>
-              <thead className="bg-rose-50">
-                <tr className="text-left text-[10px] font-semibold uppercase leading-4 tracking-[0.08em] text-rose-800">
-                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
-                    <th className="px-2 py-2 align-bottom" key={field.field}>
-                      {field.label}
-                    </th>
-                  ))}
-                  <th className="px-3 py-2 align-bottom">Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-rose-200 bg-rose-50/70">
-                  {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
-                    <td className="px-2 py-3 text-center" key={field.field}>
-                      <input className="h-4 w-4 accent-rose-700" checked={Boolean(customerRequirement[field.field])} readOnly type="checkbox" />
-                    </td>
-                  ))}
-                  <td className="px-3 py-3 text-sm font-medium text-rose-950">{customerRequirement.note || "-"}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Chimica">
