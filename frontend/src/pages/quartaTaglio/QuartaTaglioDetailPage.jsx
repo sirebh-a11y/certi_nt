@@ -171,6 +171,8 @@ export default function QuartaTaglioDetailPage() {
   const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
   const [wordUploadFile, setWordUploadFile] = useState(null);
   const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
+  const [additionalPagesFile, setAdditionalPagesFile] = useState(null);
+  const [additionalPagesState, setAdditionalPagesState] = useState({ status: "idle", message: "" });
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const articleTimersRef = useRef({});
@@ -434,6 +436,46 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
+  async function uploadAdditionalPages() {
+    if (!additionalPagesFile) {
+      setAdditionalPagesState({ status: "error", message: "Seleziona un file Word .docx con le pagine aggiuntive." });
+      return;
+    }
+    setAdditionalPagesState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", additionalPagesFile);
+      const response = await apiRequest(
+        certificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/additional-pages?certificate_id=${encodeURIComponent(certificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/additional-pages`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        token,
+      );
+      setAdditionalPagesFile(null);
+      const fileInput = document.getElementById("quarta-additional-pages-upload");
+      if (fileInput) {
+        fileInput.value = "";
+      }
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      setData(refreshed);
+      setAdditionalPagesState({
+        status: "saved",
+        message: `Pagine aggiuntive collegate al certificato ${response.draft_number}`,
+      });
+      setWordDraftState({ status: "saved", message: `Word completo aggiornato: ${response.draft_number}` });
+    } catch (requestError) {
+      setAdditionalPagesState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore caricamento pagine aggiuntive"),
+      });
+    }
+  }
+
   const headerRows = useMemo(() => {
     const header = data?.header || {};
     const codiceF3Value = header.codice_f3 ? (
@@ -460,6 +502,8 @@ export default function QuartaTaglioDetailPage() {
   }, [data]);
   const conformityIssues = data?.conformity_issues || [];
   const hasConformityIssues = conformityIssues.length > 0;
+  const certificateNumber = data?.header?.numero_certificato;
+  const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
 
   if (loading) {
     return <p className="text-sm text-slate-500">Caricamento certificato...</p>;
@@ -510,9 +554,27 @@ export default function QuartaTaglioDetailPage() {
               {wordUploadState.message}
             </p>
           ) : null}
+          {additionalPagesState.message ? (
+            <p className={`mt-1 text-sm ${additionalPagesState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+              {additionalPagesState.message}
+            </p>
+          ) : null}
           <span className={`mt-3 inline-flex w-fit rounded-lg border px-3 py-1 text-xs font-semibold ${conformityClass(data.conformity_status)}`}>
             Conformità standard: {conformityLabel(data.conformity_status)}
           </span>
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Pagine aggiuntive</div>
+            {data.additional_pages ? (
+              <p className="mt-1">
+                Presenti per certificato <span className="font-semibold text-slate-800">{data.additional_pages.certificate_number}</span>
+                {data.additional_pages.original_filename ? `: ${data.additional_pages.original_filename}` : ""}.
+              </p>
+            ) : (
+              <p className="mt-1">
+                Nessuna pagina aggiuntiva caricata. Le pagine successive devono essere senza operatore e con Quality Manager.
+              </p>
+            )}
+          </div>
         </div>
         <div className="flex flex-col gap-2 md:min-w-[360px]">
           <button
@@ -544,6 +606,33 @@ export default function QuartaTaglioDetailPage() {
                 {wordUploadState.status === "saving" ? "Carico..." : "Carica"}
               </button>
             </div>
+          </div>
+          <div className="flex flex-col gap-2 rounded-lg border border-sky-100 bg-sky-50/60 p-2">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-additional-pages-upload">
+              Carica pagine aggiuntive
+            </label>
+            <p className="text-xs text-slate-500">
+              Valgono per tutte le righe con lo stesso numero certificato; l'intestazione viene rigenerata per la riga selezionata.
+            </p>
+            <div className="flex gap-2">
+              <input
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+                disabled={!hasCertificateNumber}
+                id="quarta-additional-pages-upload"
+                onChange={(event) => setAdditionalPagesFile(event.target.files?.[0] || null)}
+                type="file"
+              />
+              <button
+                className="rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber}
+                onClick={uploadAdditionalPages}
+                type="button"
+              >
+                {additionalPagesState.status === "saving" ? "Carico..." : "Carica"}
+              </button>
+            </div>
+            {!hasCertificateNumber ? <p className="text-xs text-amber-700">Genera prima il Word numerato.</p> : null}
           </div>
         </div>
       </div>

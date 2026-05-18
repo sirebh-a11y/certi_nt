@@ -126,3 +126,16 @@ class QuartaTaglioFinalCertificate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class QuartaTaglioCertificateExtraPages(Base):
+    __tablename__ = "quarta_taglio_certificate_extra_pages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    certificate_number: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_key_docx: Mapped[str] = mapped_column(String(512), nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

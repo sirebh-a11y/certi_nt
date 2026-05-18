@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docxcompose.composer import Composer
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -42,6 +43,7 @@ def build_forgialluminio_draft_docx(
     draft_number: str,
     certified_by: User,
     quality_manager: User | None,
+    additional_pages_path: Path | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -61,9 +63,10 @@ def build_forgialluminio_draft_docx(
     _add_notes(document, detail=detail)
     _add_properties_table(document, detail=detail)
     _add_footer_signatures(document, certified_by=certified_by, quality_manager=quality_manager)
-    _add_second_page_placeholder(document)
 
     document.save(output_path)
+    if additional_pages_path is not None and additional_pages_path.exists():
+        _append_docx_body(output_path, additional_pages_path, detail=detail, draft_number=draft_number)
 
 
 def _add_header(document: Document, *, detail: QuartaTaglioDetailResponse, draft_number: str) -> None:
@@ -236,7 +239,12 @@ def _add_notes(document: Document, *, detail: QuartaTaglioDetailResponse) -> Non
 
 
 def _add_footer_signatures(document: Document, *, certified_by: User, quality_manager: User | None) -> None:
-    footer = document.sections[0].footer
+    section = document.sections[0]
+    section.different_first_page_header_footer = False
+    _fill_signature_footer(section.footer, certified_by=certified_by, quality_manager=quality_manager, include_operator=True)
+
+
+def _fill_signature_footer(footer, *, certified_by: User, quality_manager: User | None, include_operator: bool) -> None:
     footer.is_linked_to_previous = False
     if footer.paragraphs:
         footer.paragraphs[0].text = ""
@@ -252,7 +260,8 @@ def _add_footer_signatures(document: Document, *, certified_by: User, quality_ma
     operator_paragraph = table.cell(0, 0).paragraphs[0]
     operator_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     operator_paragraph.paragraph_format.space_after = Pt(0)
-    _add_signature_label_value(operator_paragraph, "Operator:", certified_by.name)
+    if include_operator:
+        _add_signature_label_value(operator_paragraph, "Operator:", certified_by.name)
 
     qm_paragraph = table.cell(0, 1).paragraphs[0]
     qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -267,10 +276,26 @@ def _add_footer_signatures(document: Document, *, certified_by: User, quality_ma
         signature_paragraph.add_run(quality_manager.name)
 
 
-def _add_second_page_placeholder(document: Document) -> None:
-    document.add_page_break()
-    _add_section_title(document, "Second page")
-    document.add_paragraph("Placeholder seconda pagina. Da completare con le regole finali.")
+def _append_docx_body(
+    base_docx_path: Path,
+    extra_docx_path: Path,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    draft_number: str,
+) -> None:
+    """Append the uploaded extra-pages DOCX as real Word body content.
+
+    ``docxcompose`` handles the Word relationship graph (images, styles and
+    numbering) much more safely than a manual XML merge. This avoids the Microsoft
+    Word "recovered unreadable content" warning seen with altChunk/manual merges.
+    """
+    master = Document(str(base_docx_path))
+    extra_document = Document(str(extra_docx_path))
+    master.add_page_break()
+    _add_header(master, detail=detail, draft_number=draft_number)
+    composer = Composer(master)
+    composer.append(extra_document)
+    composer.save(str(base_docx_path))
 
 
 def _add_section_title(document: Document, text: str) -> None:

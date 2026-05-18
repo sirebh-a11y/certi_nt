@@ -194,6 +194,13 @@ class QuartaTaglioCertifiableUnitResponse(BaseModel):
     is_primary: bool = False
 
 
+class QuartaTaglioAdditionalPagesResponse(BaseModel):
+    certificate_number: str
+    original_filename: str | None = None
+    uploaded_at: datetime | None = None
+    uploaded_by: str | None = None
+
+
 class QuartaTaglioDetailResponse(BaseModel):
     cod_odp: str
     ready: bool
@@ -215,6 +222,7 @@ class QuartaTaglioDetailResponse(BaseModel):
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] = Field(default_factory=list)
     certifiable_units: list[QuartaTaglioCertifiableUnitResponse] = Field(default_factory=list)
     second_page_placeholder: bool = True
+    additional_pages: QuartaTaglioAdditionalPagesResponse | None = None
 
 
 class QuartaTaglioStandardSelectionRequest(BaseModel):

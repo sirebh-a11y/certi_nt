@@ -22,6 +22,7 @@ from app.modules.acquisition.service import _compute_block_states_from_db
 from app.modules.quarta_taglio.certificate_docx import build_forgialluminio_draft_docx
 from app.modules.quarta_taglio.models import (
     QuartaTaglioArticleOverride,
+    QuartaTaglioCertificateExtraPages,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
     QuartaTaglioRow,
@@ -29,6 +30,7 @@ from app.modules.quarta_taglio.models import (
     QuartaTaglioSyncRun,
 )
 from app.modules.quarta_taglio.schemas import (
+    QuartaTaglioAdditionalPagesResponse,
     QuartaTaglioAggregateValueResponse,
     QuartaTaglioCertificateResponse,
     QuartaTaglioCertifiableUnitResponse,
@@ -492,6 +494,10 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         esolver_message=esolver_message,
         esolver_rows=esolver_rows,
         certifiable_units=certifiable_units,
+        additional_pages=_serialize_additional_pages(
+            db,
+            certificate_number=open_certificate_number,
+        ),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
         _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
@@ -603,18 +609,96 @@ def create_quarta_taglio_word_draft(
     storage_key = _certificate_docx_storage_key(cod_odp)
     output_path = _certificate_storage_path(storage_key)
     quality_manager = _select_quality_manager(db)
+    additional_pages_path = _additional_pages_path_for_certificate(db, certificate_number=certificate_number)
     build_forgialluminio_draft_docx(
         detail=detail,
         output_path=output_path,
         draft_number=certificate_number,
         certified_by=actor,
         quality_manager=quality_manager,
+        additional_pages_path=additional_pages_path,
     )
 
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
     certificate.certified_by_user_id = actor.id
     certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+
+    return QuartaTaglioWordDraftResponse(
+        id=certificate.id,
+        cod_odp=certificate.cod_odp,
+        draft_number=certificate.draft_number,
+        file_name=_certificate_file_name(certificate),
+        download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
+        created_at=certificate.created_at,
+    )
+
+
+def upload_quarta_taglio_additional_pages(
+    db: Session,
+    *,
+    cod_odp: str,
+    uploaded_file: UploadFile,
+    actor: User,
+    certificate_id: int | None = None,
+) -> QuartaTaglioWordDraftResponse:
+    if uploaded_file.filename is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word deve avere un nome")
+
+    original_name = Path(uploaded_file.filename).name
+    if Path(original_name).suffix.lower() != ".docx":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Caricare un file Word .docx")
+
+    file_bytes = uploaded_file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word caricato è vuoto")
+
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
+    if certificate is None or not certificate.certificate_number:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+
+    extra_storage_key = _certificate_extra_pages_storage_key(certificate.certificate_number, original_name=original_name)
+    extra_path = _certificate_storage_path(extra_storage_key)
+    extra_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_path.write_bytes(file_bytes)
+
+    extra_pages = (
+        db.query(QuartaTaglioCertificateExtraPages)
+        .filter(QuartaTaglioCertificateExtraPages.certificate_number == certificate.certificate_number)
+        .one_or_none()
+    )
+    if extra_pages is None:
+        extra_pages = QuartaTaglioCertificateExtraPages(
+            certificate_number=certificate.certificate_number,
+            cod_odp=cod_odp,
+        )
+    extra_pages.storage_key_docx = extra_storage_key
+    extra_pages.original_filename = original_name
+    extra_pages.uploaded_by_user_id = actor.id
+    db.add(extra_pages)
+
+    storage_key = _certificate_docx_storage_key(cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    quality_manager = _select_quality_manager(db)
+    build_forgialluminio_draft_docx(
+        detail=detail,
+        output_path=output_path,
+        draft_number=certificate.certificate_number,
+        certified_by=actor,
+        quality_manager=quality_manager,
+        additional_pages_path=extra_path,
+    )
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    certificate.status = certificate.status or "draft"
+    _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -680,6 +764,26 @@ def upload_quarta_taglio_word_file(
         file_name=_certificate_file_name(certificate),
         download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
         created_at=certificate.created_at,
+    )
+
+
+def _certificate_for_current_detail(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    certificate_id: int | None,
+    require_number: bool,
+) -> QuartaTaglioFinalCertificate | None:
+    if certificate_id is not None:
+        certificate = _get_certificate_context(db, cod_odp=detail.cod_odp, certificate_id=certificate_id)
+        if require_number and not certificate.certificate_number:
+            return None
+        return certificate
+    return _find_open_certificate_for_detail(
+        db,
+        cod_odp=detail.cod_odp,
+        unit_key=(detail.header or {}).get("unit_key"),
+        require_number=require_number,
     )
 
 
@@ -1082,6 +1186,12 @@ def _certificate_uploaded_docx_storage_key(cod_odp: str, *, original_name: str) 
     return f"certificati_finali/{now:%Y/%m}/{filename}"
 
 
+def _certificate_extra_pages_storage_key(certificate_number: str, *, original_name: str) -> str:
+    now = datetime.now(timezone.utc)
+    filename = f"{uuid4().hex}_{_safe_file_part(certificate_number)}_{_safe_file_part(original_name)}"
+    return f"certificati_finali/{now:%Y/%m}/pagine_aggiuntive/{filename}"
+
+
 def _certificate_storage_path(storage_key: str) -> Path:
     root = Path(settings.document_storage_root).resolve()
     path = (root / Path(storage_key)).resolve()
@@ -1092,6 +1202,46 @@ def _certificate_storage_path(storage_key: str) -> Path:
 
 def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
     return f"{_safe_file_part(certificate.draft_number)}_{_safe_file_part(certificate.cod_odp)}.docx"
+
+
+def _additional_pages_path_for_certificate(db: Session, *, certificate_number: str | None) -> Path | None:
+    extra_pages = _additional_pages_for_certificate(db, certificate_number=certificate_number)
+    if extra_pages is None:
+        return None
+    path = _certificate_storage_path(extra_pages.storage_key_docx)
+    return path if path.exists() else None
+
+
+def _additional_pages_for_certificate(
+    db: Session,
+    *,
+    certificate_number: str | None,
+) -> QuartaTaglioCertificateExtraPages | None:
+    cleaned_number = _clean_text(certificate_number)
+    if not cleaned_number:
+        return None
+    return (
+        db.query(QuartaTaglioCertificateExtraPages)
+        .filter(QuartaTaglioCertificateExtraPages.certificate_number == cleaned_number)
+        .one_or_none()
+    )
+
+
+def _serialize_additional_pages(
+    db: Session,
+    *,
+    certificate_number: str | None,
+) -> QuartaTaglioAdditionalPagesResponse | None:
+    extra_pages = _additional_pages_for_certificate(db, certificate_number=certificate_number)
+    if extra_pages is None:
+        return None
+    uploader = db.get(User, extra_pages.uploaded_by_user_id) if extra_pages.uploaded_by_user_id else None
+    return QuartaTaglioAdditionalPagesResponse(
+        certificate_number=extra_pages.certificate_number,
+        original_filename=extra_pages.original_filename,
+        uploaded_at=extra_pages.updated_at,
+        uploaded_by=uploader.name if uploader else None,
+    )
 
 
 def _cdq_signature_from_detail(detail: QuartaTaglioDetailResponse) -> list[str]:

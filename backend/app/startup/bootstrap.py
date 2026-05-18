@@ -29,6 +29,7 @@ from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  #
 from app.modules.notes.service import seed_note_templates
 from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioArticleOverride,
+    QuartaTaglioCertificateExtraPages,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
     QuartaTaglioRow,
