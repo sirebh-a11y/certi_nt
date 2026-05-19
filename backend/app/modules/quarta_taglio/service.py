@@ -20,7 +20,11 @@ from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionRow, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db
-from app.modules.quarta_taglio.certificate_docx import build_forgialluminio_draft_docx
+from app.modules.quarta_taglio.certificate_docx import (
+    build_forgialluminio_draft_docx,
+    inspect_docx_content_controls,
+    update_docx_content_controls,
+)
 from app.modules.quarta_taglio.models import (
     QuartaTaglioArticleOverride,
     QuartaTaglioCertificateExtraPages,
@@ -48,6 +52,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioStandardCandidateResponse,
     QuartaTaglioSyncRunResponse,
     QuartaTaglioWordDraftResponse,
+    QuartaTaglioWordInfoResponse,
 )
 
 
@@ -540,6 +545,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             cod_odp=group.cod_odp,
             cod_f3=_clean_text(open_certificate.cod_f3) if open_certificate else primary_unit.cod_f3 if primary_unit else None,
         ),
+        word_info=_serialize_word_info(open_certificate),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
         _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
@@ -615,6 +621,7 @@ def create_quarta_taglio_word_draft(
     cod_odp: str,
     actor: User,
     force_non_conforming: bool = False,
+    force_regenerate: bool = False,
     certificate_id: int | None = None,
 ) -> QuartaTaglioWordDraftResponse:
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
@@ -631,6 +638,11 @@ def create_quarta_taglio_word_draft(
 
     _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    if _is_manual_word(certificate) and not force_regenerate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Word corrente caricato dall'utente: usa Aggiorna campi Word oppure conferma Rigenera da zero.",
+        )
     certificate_date = _certificate_datetime_from_detail(detail)
     certificate.cert_date = certificate_date
     certificate_number = certificate.certificate_number or _assign_certificate_number(
@@ -672,6 +684,7 @@ def create_quarta_taglio_word_draft(
     certificate.download_token = secrets.token_urlsafe(32)
     certificate.certified_by_user_id = actor.id
     certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    _apply_word_file_state(certificate, output_path, source="generated")
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -709,6 +722,11 @@ def upload_quarta_taglio_additional_pages(
     certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None or not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    if _is_manual_word(certificate):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Word corrente caricato dall'utente: aggiungi o togli pagine in Word e ricarica il file modificato.",
+        )
 
     extra_storage_key = _certificate_extra_pages_storage_key(certificate.certificate_number, original_name=original_name)
     extra_path = _certificate_storage_path(extra_storage_key)
@@ -748,6 +766,7 @@ def upload_quarta_taglio_additional_pages(
     certificate.status = certificate.status or "draft"
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
+    _apply_word_file_state(certificate, output_path, source="generated")
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -800,6 +819,7 @@ def upload_quarta_taglio_word_file(
     certificate.download_token = secrets.token_urlsafe(32)
     certificate.certified_by_user_id = actor.id
     certificate.status = certificate.status or "draft"
+    _apply_word_file_state(certificate, output_path, source="user_uploaded", original_filename=original_name)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
@@ -814,6 +834,83 @@ def upload_quarta_taglio_word_file(
         download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
         created_at=certificate.created_at,
     )
+
+
+def update_quarta_taglio_word_fields(
+    db: Session,
+    *,
+    cod_odp: str,
+    actor: User,
+    certificate_id: int | None = None,
+) -> QuartaTaglioWordDraftResponse:
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
+    if certificate is None or not certificate.storage_key_docx:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nessun Word corrente da aggiornare")
+    source_path = _certificate_storage_path(certificate.storage_key_docx)
+    if not source_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word corrente non trovato")
+
+    storage_key = _certificate_docx_storage_key(cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    update_docx_content_controls(source_path, output_path, _word_content_control_values(detail, certificate))
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.word_source = "fields_updated"
+    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
+    certificate.status = certificate.status or "draft"
+    _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+
+    return QuartaTaglioWordDraftResponse(
+        id=certificate.id,
+        cod_odp=certificate.cod_odp,
+        draft_number=certificate.draft_number,
+        file_name=_certificate_file_name(certificate),
+        download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
+        created_at=certificate.created_at,
+    )
+
+
+def _apply_word_file_state(
+    certificate: QuartaTaglioFinalCertificate,
+    path: Path,
+    *,
+    source: str,
+    original_filename: str | None = None,
+) -> None:
+    present, missing = inspect_docx_content_controls(path)
+    certificate.word_source = source
+    certificate.word_original_filename = original_filename
+    certificate.word_content_controls = present
+    certificate.word_missing_content_controls = missing
+
+
+def _is_manual_word(certificate: QuartaTaglioFinalCertificate | None) -> bool:
+    return _clean_text(getattr(certificate, "word_source", None)) in {"user_uploaded", "fields_updated"}
+
+
+def _word_content_control_values(detail: QuartaTaglioDetailResponse, certificate: QuartaTaglioFinalCertificate) -> dict[str, object]:
+    header = detail.header or {}
+    return {
+        "CERT_NUMBER": certificate.certificate_number or certificate.draft_number or header.get("numero_certificato") or "",
+        "CERT_DATE": header.get("data_certificato") or "",
+        "PURCHASER": header.get("cliente") or "",
+        "ORDER_CLIENT": header.get("ordine_cliente") or "",
+        "CONFIRM_ORDER": header.get("conferma_ordine") or "",
+        "COD_F3_RAW": header.get("codice_f3_raw") or "",
+        "RAW_DESCRIPTION": header.get("descrizione_raw") or "",
+        "DDT_RAW": header.get("ddt_raw") or "",
+        "QUANTITY_RAW": header.get("quantita_raw") or "",
+        "COD_F3_FINISHED": header.get("codice_f3_finished") or "",
+        "FINISHED_DESCRIPTION": header.get("descrizione_finished") or "",
+        "DDT_FINISHED": header.get("ddt_finished") or "",
+        "QUANTITY_FINISHED": header.get("quantita_finished") or "",
+    }
 
 
 def _certificate_for_current_detail(
@@ -1413,6 +1510,44 @@ def _serialize_additional_pages(
         inherited_from_certificate_number=resolution.inherited_from_certificate_number,
         inherited_from_cod_f3=resolution.inherited_from_cod_f3,
     )
+
+
+def _serialize_word_info(certificate: QuartaTaglioFinalCertificate | None) -> QuartaTaglioWordInfoResponse:
+    if certificate is None or not certificate.storage_key_docx:
+        return QuartaTaglioWordInfoResponse()
+    download_url = (
+        f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}"
+        if certificate.download_token
+        else None
+    )
+    present = certificate.word_content_controls or []
+    missing = certificate.word_missing_content_controls or []
+    source = certificate.word_source or "generated"
+    if not present and not missing and certificate.storage_key_docx:
+        path = _certificate_storage_path(certificate.storage_key_docx)
+        if path.exists():
+            present, missing = inspect_docx_content_controls(path)
+    return QuartaTaglioWordInfoResponse(
+        has_word=True,
+        source=source,
+        source_label=_word_source_label(source),
+        original_filename=certificate.word_original_filename,
+        content_controls_present=present,
+        content_controls_missing=missing,
+        content_controls_ok=not missing,
+        updated_at=certificate.updated_at,
+        download_url=download_url,
+    )
+
+
+def _word_source_label(source: str | None) -> str:
+    if source == "user_uploaded":
+        return "Caricato dall'utente"
+    if source == "fields_updated":
+        return "Aggiornato nei campi"
+    if source == "generated":
+        return "Generato dal sistema"
+    return "Word corrente"
 
 
 def _cdq_signature_from_detail(detail: QuartaTaglioDetailResponse) -> list[str]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import zipfile
+import zlib
 from pathlib import Path
 
 from docxcompose.composer import Composer
@@ -34,6 +36,21 @@ PROPERTY_HEADER_LABELS = {
     "S": "S(mm²)",
 }
 PROPERTY_WORD_FIELDS = ["HB", "diametro", "S", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm"]
+CONTENT_CONTROL_TAGS = (
+    "CERT_NUMBER",
+    "CERT_DATE",
+    "PURCHASER",
+    "ORDER_CLIENT",
+    "CONFIRM_ORDER",
+    "COD_F3_RAW",
+    "RAW_DESCRIPTION",
+    "DDT_RAW",
+    "QUANTITY_RAW",
+    "COD_F3_FINISHED",
+    "FINISHED_DESCRIPTION",
+    "DDT_FINISHED",
+    "QUANTITY_FINISHED",
+)
 
 
 def build_forgialluminio_draft_docx(
@@ -382,12 +399,17 @@ def _add_content_control_run(
 ) -> None:
     sdt = OxmlElement("w:sdt")
     sdt_pr = OxmlElement("w:sdtPr")
+    control_id = OxmlElement("w:id")
+    control_id.set(qn("w:val"), str(_content_control_id(tag)))
     alias = OxmlElement("w:alias")
     alias.set(qn("w:val"), tag)
     tag_element = OxmlElement("w:tag")
     tag_element.set(qn("w:val"), tag)
+    text_control = OxmlElement("w:text")
+    sdt_pr.append(control_id)
     sdt_pr.append(alias)
     sdt_pr.append(tag_element)
+    sdt_pr.append(text_control)
     sdt.append(sdt_pr)
 
     content = OxmlElement("w:sdtContent")
@@ -399,13 +421,13 @@ def _add_content_control_run(
     run_pr.append(fonts)
     if bold:
         run_pr.append(OxmlElement("w:b"))
-    size_element = OxmlElement("w:sz")
-    size_element.set(qn("w:val"), str(size * 2))
-    run_pr.append(size_element)
     if color:
         color_element = OxmlElement("w:color")
         color_element.set(qn("w:val"), color)
         run_pr.append(color_element)
+    size_element = OxmlElement("w:sz")
+    size_element.set(qn("w:val"), str(size * 2))
+    run_pr.append(size_element)
     run.append(run_pr)
     text_element = OxmlElement("w:t")
     text_element.set(qn("xml:space"), "preserve")
@@ -414,6 +436,90 @@ def _add_content_control_run(
     content.append(run)
     sdt.append(content)
     paragraph._p.append(sdt)
+
+
+def _content_control_id(tag: str) -> int:
+    return zlib.crc32(f"certi_nt:{tag}".encode("utf-8")) & 0x7FFFFFFF
+
+
+def inspect_docx_content_controls(path: Path) -> tuple[list[str], list[str]]:
+    present: set[str] = set()
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            if not name.startswith("word/") or not name.endswith(".xml"):
+                continue
+            xml = archive.read(name).decode("utf-8", errors="ignore")
+            for tag in CONTENT_CONTROL_TAGS:
+                if f'w:val="{tag}"' in xml or f"w:val='{tag}'" in xml:
+                    present.add(tag)
+    ordered_present = [tag for tag in CONTENT_CONTROL_TAGS if tag in present]
+    missing = [tag for tag in CONTENT_CONTROL_TAGS if tag not in present]
+    return ordered_present, missing
+
+
+def update_docx_content_controls(source_path: Path, output_path: Path, values: dict[str, object]) -> tuple[list[str], list[str]]:
+    tmp_path = output_path.with_suffix(f"{output_path.suffix}.tmp")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    updated_tags: set[str] = set()
+    with zipfile.ZipFile(source_path, "r") as source, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            content = source.read(item.filename)
+            if item.filename.startswith("word/") and item.filename.endswith(".xml"):
+                text = content.decode("utf-8", errors="ignore")
+                for tag, value in values.items():
+                    if tag not in CONTENT_CONTROL_TAGS:
+                        continue
+                    text, changed = _replace_content_control_text(text, tag, "" if value in (None, "") else str(value))
+                    if changed:
+                        updated_tags.add(tag)
+                content = text.encode("utf-8")
+            target.writestr(item, content)
+    tmp_path.replace(output_path)
+    present, missing = inspect_docx_content_controls(output_path)
+    return [tag for tag in CONTENT_CONTROL_TAGS if tag in updated_tags], missing
+
+
+def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, bool]:
+    tag_marker = f'w:val="{tag}"'
+    start = 0
+    changed = False
+    while True:
+        tag_index = xml.find(tag_marker, start)
+        if tag_index < 0:
+            break
+        sdt_start = xml.rfind("<w:sdt", 0, tag_index)
+        sdt_end = xml.find("</w:sdt>", tag_index)
+        if sdt_start < 0 or sdt_end < 0:
+            start = tag_index + len(tag_marker)
+            continue
+        sdt_end += len("</w:sdt>")
+        block = xml[sdt_start:sdt_end]
+        text_start = block.find("<w:t")
+        if text_start < 0:
+            start = sdt_end
+            continue
+        text_open_end = block.find(">", text_start)
+        text_close = block.find("</w:t>", text_open_end)
+        if text_open_end < 0:
+            start = sdt_end
+            continue
+        escaped = _escape_xml_text(value)
+        if text_close < 0:
+            if text_open_end > 0 and block[text_open_end - 1] == "/":
+                block = block[: text_open_end - 1] + ">" + escaped + "</w:t>" + block[text_open_end + 1 :]
+            else:
+                start = sdt_end
+                continue
+        else:
+            block = block[: text_open_end + 1] + escaped + block[text_close:]
+        xml = xml[:sdt_start] + block + xml[sdt_end:]
+        changed = True
+        start = sdt_start + len(block)
+    return xml, changed
+
+
+def _escape_xml_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _force_word_field_update(document: Document) -> None:

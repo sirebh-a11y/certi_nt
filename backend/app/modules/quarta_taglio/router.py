@@ -19,6 +19,7 @@ from app.modules.quarta_taglio.service import (
     list_quarta_taglio_final_certificates,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
+    update_quarta_taglio_word_fields,
     upload_quarta_taglio_additional_pages,
     upload_quarta_taglio_word_file,
 )
@@ -118,6 +119,7 @@ def create_quarta_taglio_word_draft_route(
         cod_odp=cod_odp,
         actor=current_user,
         force_non_conforming=payload.force_non_conforming,
+        force_regenerate=payload.force_regenerate,
         certificate_id=payload.certificate_id,
     )
 
@@ -131,6 +133,16 @@ def upload_quarta_taglio_word_file_route(
     file: UploadFile = File(...),
 ) -> QuartaTaglioWordDraftResponse:
     return upload_quarta_taglio_word_file(db, cod_odp=cod_odp, uploaded_file=file, actor=current_user, certificate_id=certificate_id)
+
+
+@router.post("/{cod_odp}/word-fields", response_model=QuartaTaglioWordDraftResponse)
+def update_quarta_taglio_word_fields_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_id: int | None = Query(default=None),
+) -> QuartaTaglioWordDraftResponse:
+    return update_quarta_taglio_word_fields(db, cod_odp=cod_odp, actor=current_user, certificate_id=certificate_id)
 
 
 @router.post("/{cod_odp}/additional-pages", response_model=QuartaTaglioWordDraftResponse)

@@ -197,6 +197,14 @@ def ensure_quarta_taglio_columns() -> None:
             )
         if "conformity_issues" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN conformity_issues JSON DEFAULT '[]' NOT NULL")
+        if "word_source" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_source VARCHAR(32)")
+        if "word_original_filename" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_original_filename VARCHAR(255)")
+        if "word_content_controls" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_content_controls JSON DEFAULT '[]' NOT NULL")
+        if "word_missing_content_controls" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_missing_content_controls JSON DEFAULT '[]' NOT NULL")
         if certificate_statements:
             with engine.begin() as connection:
                 for statement in certificate_statements:

@@ -213,6 +213,7 @@ export default function QuartaTaglioDetailPage() {
   const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
   const [wordUploadFile, setWordUploadFile] = useState(null);
   const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
+  const [wordFieldsState, setWordFieldsState] = useState({ status: "idle", message: "" });
   const [additionalPagesFile, setAdditionalPagesFile] = useState(null);
   const [additionalPagesState, setAdditionalPagesState] = useState({ status: "idle", message: "" });
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
@@ -438,7 +439,7 @@ export default function QuartaTaglioDetailPage() {
     void performGenerateWordDraft(false);
   }
 
-  async function performGenerateWordDraft(forceNonConforming = false) {
+  async function performGenerateWordDraft(forceNonConforming = false, forceRegenerate = false) {
     setWordDraftState({ status: "saving", message: "" });
     setError("");
     try {
@@ -448,6 +449,7 @@ export default function QuartaTaglioDetailPage() {
           method: "POST",
           body: JSON.stringify({
             force_non_conforming: forceNonConforming,
+            force_regenerate: forceRegenerate,
             certificate_id: certificateId ? Number(certificateId) : null,
           }),
         },
@@ -468,6 +470,54 @@ export default function QuartaTaglioDetailPage() {
         message: handleRequestError(requestError, "Errore generazione bozza Word"),
       });
     }
+  }
+
+  function downloadCurrentWord() {
+    if (!wordInfo.download_url) {
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = resolveApiAssetUrl(wordInfo.download_url);
+    link.download = `${codOdp}_word_corrente.docx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  async function updateWordFields() {
+    if (!hasWord) {
+      setWordFieldsState({ status: "error", message: "Genera o ricarica prima un Word corrente." });
+      return;
+    }
+    setWordFieldsState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const response = await apiRequest(
+        certificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields?certificate_id=${encodeURIComponent(certificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields`,
+        { method: "POST" },
+        token,
+      );
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      setData(refreshed);
+      setWordFieldsState({ status: "saved", message: `Campi Word aggiornati: ${response.draft_number}` });
+    } catch (requestError) {
+      setWordFieldsState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore aggiornamento campi Word"),
+      });
+    }
+  }
+
+  function regenerateWordFromScratch() {
+    if (isManualWord) {
+      const confirmed = window.confirm("Il Word corrente è stato caricato/modificato dall'utente. Rigenerando da zero perderai quelle modifiche manuali. Continuare?");
+      if (!confirmed) {
+        return;
+      }
+    }
+    void performGenerateWordDraft(false, true);
   }
 
   async function uploadEditedWord() {
@@ -608,6 +658,9 @@ export default function QuartaTaglioDetailPage() {
   const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
   const canCreateWord = Boolean(data?.can_create_word);
   const wordCreationBlockers = data?.word_creation_blockers || [];
+  const wordInfo = data?.word_info || {};
+  const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
+  const isManualWord = wordInfo.source === "user_uploaded" || wordInfo.source === "fields_updated";
   const customerRequirement = useMemo(
     () => findCustomerRequirementForCodF3(customerRequirements, data?.header?.codice_f3),
     [customerRequirements, data?.header?.codice_f3],
@@ -707,6 +760,11 @@ export default function QuartaTaglioDetailPage() {
               {wordUploadState.message}
             </p>
           ) : null}
+          {wordFieldsState.message ? (
+            <p className={`mt-1 text-sm ${wordFieldsState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+              {wordFieldsState.message}
+            </p>
+          ) : null}
           {additionalPagesState.message ? (
             <p className={`mt-1 text-sm ${additionalPagesState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
               {additionalPagesState.message}
@@ -715,6 +773,18 @@ export default function QuartaTaglioDetailPage() {
           <span className={`mt-3 inline-flex w-fit rounded-lg border px-3 py-1 text-xs font-semibold ${conformityClass(data.conformity_status)}`}>
             Conformità standard: {conformityLabel(data.conformity_status)}
           </span>
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Word corrente</div>
+            <p className="mt-1">
+              {wordInfo.source_label || "Nessun Word"}
+              {wordInfo.original_filename ? `: ${wordInfo.original_filename}` : ""}
+            </p>
+            {hasWord ? (
+              <p className={`mt-1 font-semibold ${wordInfo.content_controls_ok ? "text-emerald-700" : "text-amber-700"}`}>
+                Content controls: {wordInfo.content_controls_ok ? "OK" : `mancano ${(wordInfo.content_controls_missing || []).join(", ")}`}
+              </p>
+            ) : null}
+          </div>
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
             <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Pagine aggiuntive</div>
             {data.additional_pages ? (
@@ -734,14 +804,42 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </div>
         <div className="flex flex-col gap-2 md:min-w-[360px]">
-          <button
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-            disabled={wordDraftState.status === "saving" || !canCreateWord}
-            onClick={generateWordDraft}
-            type="button"
-          >
-            {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
-          </button>
+          {hasWord ? (
+            <button
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark"
+              onClick={downloadCurrentWord}
+              type="button"
+            >
+              Scarica Word corrente
+            </button>
+          ) : (
+            <button
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
+              disabled={wordDraftState.status === "saving" || !canCreateWord}
+              onClick={generateWordDraft}
+              type="button"
+            >
+              {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
+            </button>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!hasWord || wordFieldsState.status === "saving"}
+              onClick={updateWordFields}
+              type="button"
+            >
+              {wordFieldsState.status === "saving" ? "Aggiorno..." : "Aggiorna campi Word"}
+            </button>
+            <button
+              className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={wordDraftState.status === "saving" || !canCreateWord}
+              onClick={regenerateWordFromScratch}
+              type="button"
+            >
+              Rigenera da zero
+            </button>
+          </div>
           <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
             <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-word-upload">
               Ricarica Word modificato
@@ -769,20 +867,20 @@ export default function QuartaTaglioDetailPage() {
               Carica pagine aggiuntive
             </label>
             <p className="text-xs text-slate-500">
-              Il file caricato diventa specifico per questo numero certificato. Se manca, viene ereditato dal CodF3 precedente dello stesso OL.
+              Il file caricato diventa specifico per questo numero certificato. Se il Word corrente è manuale, aggiungi o togli pagine in Word e ricaricalo.
             </p>
             <div className="flex gap-2">
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={!hasCertificateNumber}
+                disabled={!hasCertificateNumber || isManualWord}
                 id="quarta-additional-pages-upload"
                 onChange={(event) => setAdditionalPagesFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber}
+                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber || isManualWord}
                 onClick={uploadAdditionalPages}
                 type="button"
               >
@@ -790,6 +888,7 @@ export default function QuartaTaglioDetailPage() {
               </button>
             </div>
             {!hasCertificateNumber ? <p className="text-xs text-amber-700">Genera prima il Word numerato.</p> : null}
+            {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci le pagine in Word e ricarica il file.</p> : null}
           </div>
         </div>
       </div>

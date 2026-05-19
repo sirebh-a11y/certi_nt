@@ -204,6 +204,18 @@ class QuartaTaglioAdditionalPagesResponse(BaseModel):
     inherited_from_cod_f3: str | None = None
 
 
+class QuartaTaglioWordInfoResponse(BaseModel):
+    has_word: bool = False
+    source: str | None = None
+    source_label: str = "Nessun Word"
+    original_filename: str | None = None
+    content_controls_present: list[str] = Field(default_factory=list)
+    content_controls_missing: list[str] = Field(default_factory=list)
+    content_controls_ok: bool = False
+    updated_at: datetime | None = None
+    download_url: str | None = None
+
+
 class QuartaTaglioDetailResponse(BaseModel):
     cod_odp: str
     ready: bool
@@ -228,6 +240,7 @@ class QuartaTaglioDetailResponse(BaseModel):
     certifiable_units: list[QuartaTaglioCertifiableUnitResponse] = Field(default_factory=list)
     second_page_placeholder: bool = True
     additional_pages: QuartaTaglioAdditionalPagesResponse | None = None
+    word_info: QuartaTaglioWordInfoResponse = Field(default_factory=QuartaTaglioWordInfoResponse)
 
 
 class QuartaTaglioStandardSelectionRequest(BaseModel):
@@ -250,4 +263,5 @@ class QuartaTaglioWordDraftResponse(BaseModel):
 
 class QuartaTaglioWordDraftRequest(BaseModel):
     force_non_conforming: bool = False
+    force_regenerate: bool = False
     certificate_id: int | None = None
