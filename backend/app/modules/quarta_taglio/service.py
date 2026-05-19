@@ -459,7 +459,6 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     detail_certificate_date = (
         _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
         or _certificate_datetime_from_ddt(primary_unit.ddt if primary_unit else None)
-        or (open_certificate.cert_date if open_certificate and open_certificate.cert_date else None)
     )
     open_certificate_number = (
         open_certificate.certificate_number or open_certificate.draft_number
@@ -467,11 +466,22 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         else None
     )
 
+    word_creation_blockers = _word_creation_blockers(
+        db=db,
+        quarta_rows=rows,
+        app_rows=app_rows,
+        selected_standard_confirmed=selected_standard_confirmed,
+        certificate_date=detail_certificate_date,
+    )
+    can_create_word = not word_creation_blockers
+
     detail = QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
         ready=ready,
         status_color=detail_status_color,
         status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
+        can_create_word=can_create_word,
+        word_creation_blockers=word_creation_blockers,
         header={
             "numero_certificato": open_certificate_number,
             "certificate_id": str(open_certificate.id) if open_certificate else None,
@@ -622,7 +632,9 @@ def create_quarta_taglio_word_draft(
 
     _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
-    certificate_date = _certificate_datetime_from_detail(detail) or certificate.cert_date or datetime.now(timezone.utc)
+    certificate_date = _certificate_datetime_from_detail(detail)
+    if certificate_date is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data certificato mancante: serve DDT collegato con data")
     certificate.cert_date = certificate_date
     certificate_number = certificate.certificate_number or _assign_certificate_number(
         db,
@@ -1222,8 +1234,12 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
 
 
 def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> None:
-    if not detail.selected_standard_confirmed:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confermare lo standard prima di creare il certificato")
+    if not detail.can_create_word:
+        blockers = detail.word_creation_blockers or ["Dati certificato non completi"]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Impossibile creare il Word: " + "; ".join(blockers),
+        )
 
 
 def _certificate_docx_storage_key(cod_odp: str) -> str:
@@ -1435,6 +1451,70 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
     )
+
+
+def _word_creation_blockers(
+    *,
+    db: Session,
+    quarta_rows: list[QuartaTaglioRow],
+    app_rows: list[AcquisitionRow],
+    selected_standard_confirmed: bool,
+    certificate_date: datetime | None,
+) -> list[str]:
+    blockers: list[str] = []
+    if not selected_standard_confirmed:
+        blockers.append("Standard non confermato")
+    if certificate_date is None:
+        blockers.append("Data certificato mancante: serve DDT collegato con data")
+
+    app_rows_by_key: dict[tuple[str, str], list[AcquisitionRow]] = defaultdict(list)
+    for row in app_rows:
+        app_rows_by_key[(_norm(row.cdq), _norm(row.colata))].append(row)
+
+    seen_material_keys: set[tuple[str, str]] = set()
+    for quarta_row in quarta_rows:
+        key = (_norm(quarta_row.cdq), _norm(quarta_row.colata))
+        if key in seen_material_keys:
+            continue
+        seen_material_keys.add(key)
+
+        label = _certificate_material_label(quarta_row)
+        if not key[0]:
+            blockers.append(f"{label}: CDQ mancante da Quarta")
+            continue
+        if not key[1]:
+            blockers.append(f"{label}: colata mancante da Quarta")
+            continue
+
+        exact_rows = app_rows_by_key.get(key, [])
+        if not exact_rows:
+            candidates = [row for row in app_rows if _norm(row.cdq) == key[0]]
+            if candidates:
+                colate = ", ".join(sorted({_clean_text(row.colata) or "-" for row in candidates}))
+                blockers.append(f"{label}: CDQ trovato in Incoming ma colata non coerente. Colate Incoming: {colate}")
+            else:
+                blockers.append(f"{label}: CDQ non presente in Incoming")
+            continue
+        if len(exact_rows) > 1:
+            ids = ", ".join(f"#{row.id}" for row in exact_rows)
+            blockers.append(f"{label}: CDQ/colata presenti su più righe Incoming ({ids}), serve verifica manuale")
+            continue
+
+        row = exact_rows[0]
+        block_states = _compute_block_states_from_db(db, row)
+        for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
+            if block_states.get(block) != "verde":
+                blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
+        if row.qualita_valutazione == "respinto":
+            blockers.append(f"{label}: riga Incoming #{row.id} respinta da qualità")
+        elif row.qualita_valutazione not in {"accettato", "accettato_con_riserva"}:
+            blockers.append(f"{label}: riga Incoming #{row.id} non accettata da qualità")
+
+    return sorted(set(blockers))
+
+
+def _certificate_material_label(row: QuartaTaglioRow) -> str:
+    return f"CDQ {_clean_text(row.cdq) or '-'}, colata {_clean_text(row.colata) or '-'}"
 
 
 def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> QuartaTaglioStandardCandidateResponse | None:

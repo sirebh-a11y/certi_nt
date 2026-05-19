@@ -422,6 +422,15 @@ export default function QuartaTaglioDetailPage() {
   }
 
   function generateWordDraft() {
+    if (!canCreateWord) {
+      setWordDraftState({
+        status: "error",
+        message: wordCreationBlockers.length
+          ? `Word non creabile: ${wordCreationBlockers.join("; ")}`
+          : "Word non creabile: dati certificato non completi.",
+      });
+      return;
+    }
     if ((data?.conformity_issues || []).length > 0) {
       setWordConformityDialogOpen(true);
       return;
@@ -597,6 +606,8 @@ export default function QuartaTaglioDetailPage() {
   const hasConformityIssues = conformityIssues.length > 0;
   const certificateNumber = data?.header?.numero_certificato;
   const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
+  const canCreateWord = Boolean(data?.can_create_word);
+  const wordCreationBlockers = data?.word_creation_blockers || [];
   const customerRequirement = useMemo(
     () => findCustomerRequirementForCodF3(customerRequirements, data?.header?.codice_f3),
     [customerRequirements, data?.header?.codice_f3],
@@ -672,10 +683,20 @@ export default function QuartaTaglioDetailPage() {
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
           <p className="mt-1 text-sm text-slate-600">
-            {data.selected_standard_confirmed
-              ? "Standard confermato: puoi creare il Word numerato anche se alcuni dati sono ancora mancanti."
-              : "Serve standard confermato prima di creare il Word."}
+            {canCreateWord
+              ? "Certificato creabile: standard, righe Incoming e data DDT sono pronti."
+              : "Serve standard confermato, righe Incoming accettate o accettate con riserva, e data DDT collegata."}
           </p>
+          {!canCreateWord && wordCreationBlockers.length ? (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <div className="font-semibold uppercase tracking-[0.14em]">Blocchi creazione Word</div>
+              <ul className="mt-1 list-disc space-y-1 pl-4">
+                {wordCreationBlockers.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {wordDraftState.message ? (
             <p className={`mt-1 text-sm ${wordDraftState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
               {wordDraftState.message}
@@ -715,7 +736,7 @@ export default function QuartaTaglioDetailPage() {
         <div className="flex flex-col gap-2 md:min-w-[360px]">
           <button
             className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-            disabled={wordDraftState.status === "saving" || !data.selected_standard_confirmed}
+            disabled={wordDraftState.status === "saving" || !canCreateWord}
             onClick={generateWordDraft}
             type="button"
           >

@@ -209,6 +209,8 @@ class QuartaTaglioDetailResponse(BaseModel):
     ready: bool
     status_color: str
     status_message: str
+    can_create_word: bool = False
+    word_creation_blockers: list[str] = Field(default_factory=list)
     header: dict[str, str | None]
     materials: list[QuartaTaglioMaterialResponse]
     missing_items: list[QuartaTaglioMissingItemResponse]
