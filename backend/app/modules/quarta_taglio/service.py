@@ -99,6 +99,7 @@ CHEMISTRY_FIELDS = [
 PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 
 CERTIFICATE_NUMBER_START = 7000
+STANDARD_LIMIT_EPSILON = 1e-9
 ESOLVER_DDT_BATCH_SIZE = 500
 
 NOTE_FIELDS = [
@@ -1746,7 +1747,7 @@ def _aggregate_block_values(
             )
             continue
 
-        if len(values) == len(app_rows) and all(weight is not None and weight > 0 for _, weight in values):
+        if len(values) > 1 and len(values) == len(app_rows) and all(weight is not None and weight > 0 for _, weight in values):
             total_weight = sum(float(weight or 0) for _, weight in values)
             aggregated = sum(value * float(weight or 0) for value, weight in values) / total_weight
             method = "weighted"
@@ -1861,13 +1862,24 @@ def _check_against_limits(
         messages.append(f"manca valore per {', '.join(sorted(set(missing_rows)))}")
     if limit_min is None and limit_max is None:
         return ("missing" if missing_rows else "not_checked"), "; ".join(messages) or "standard non selezionato o limite non presente"
-    if limit_min is not None and value < limit_min:
-        messages.append(f"sotto minimo {limit_min:g}")
-    if limit_max is not None and value > limit_max:
-        messages.append(f"sopra massimo {limit_max:g}")
+    if not _value_within_limits(value=value, limit_min=limit_min, limit_max=limit_max):
+        if limit_min is not None and value < limit_min:
+            messages.append(f"sotto minimo {limit_min:g}")
+        if limit_max is not None and value > limit_max:
+            messages.append(f"sopra massimo {limit_max:g}")
     if messages:
         return "out_of_range" if any("minimo" in item or "massimo" in item for item in messages) else "missing", "; ".join(messages)
     return "ok", None
+
+
+def _value_within_limits(*, value: float, limit_min: float | None, limit_max: float | None) -> bool:
+    if limit_min is not None and limit_max is not None:
+        return (value + STANDARD_LIMIT_EPSILON) >= limit_min and (value - STANDARD_LIMIT_EPSILON) <= limit_max
+    if limit_min is not None:
+        return (value + STANDARD_LIMIT_EPSILON) >= limit_min
+    if limit_max is not None:
+        return (value - STANDARD_LIMIT_EPSILON) <= limit_max
+    return True
 
 
 def _evaluate_notes(app_rows: list[AcquisitionRow], system_note_texts: dict[str, str] | None = None) -> list[QuartaTaglioNoteResponse]:
