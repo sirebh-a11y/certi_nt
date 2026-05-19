@@ -219,6 +219,14 @@ function qualityEvaluationTone(value) {
   return "verde";
 }
 
+function isQualityEvaluated(row) {
+  return Boolean(row.qualita_valutazione);
+}
+
+function isWaitingForDdt(row) {
+  return isQualityEvaluated(row) && !documentMatchingClosed(row);
+}
+
 function compactNoteReference(row) {
   const noteValue = row.note_documento?.trim();
   if (noteValue) {
@@ -243,6 +251,7 @@ function searchableFieldValues(row) {
     row.ordine,
     row.qualita_valutazione,
     qualityEvaluationLabel(row.qualita_valutazione),
+    isWaitingForDdt(row) ? "attesa ddt attesa match" : null,
     row.qualita_note,
     matchCellLabel(row),
     compactMatchReference(row),
@@ -334,7 +343,7 @@ function ddtCoreState(row) {
 }
 
 function rowActivityState(row) {
-  if (row.validata_finale) {
+  if (isQualityEvaluated(row)) {
     return { tone: qualityEvaluationTone(row.qualita_valutazione), label: qualityEvaluationLabel(row.qualita_valutazione) };
   }
 
@@ -392,6 +401,9 @@ function activityRank(label) {
     return 2;
   }
   if (label === "quasi") {
+    return 1;
+  }
+  if (label === "Attesa DDT") {
     return 1;
   }
   return 0;
@@ -500,14 +512,34 @@ function displayCellState(row, state) {
   return documentMatchingClosed(row) ? "documento_chiuso" : state;
 }
 
+function compactStateLabel(label, hasSecondary) {
+  if (!hasSecondary) {
+    return label;
+  }
+  if (label === "Accettato con riserva") {
+    return "Acc. riserva";
+  }
+  return label;
+}
+
 function RowStateCell({ row, onClick, onKeyDown }) {
   const activity = rowActivityState(row);
+  const secondary = isWaitingForDdt(row) ? "Attesa DDT" : "";
+  const label = compactStateLabel(activity.label, Boolean(secondary));
+  const title = secondary ? `${activity.label} - ${secondary}` : activity.label;
+  const labelClassName = secondary
+    ? "block truncate text-[10px] font-semibold leading-none"
+    : "block truncate text-xs font-semibold leading-tight";
 
   return (
     <div className="min-w-[96px] py-1">
       <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
-        <div className={`mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-start rounded-lg border px-2.5 pb-1.5 pt-2 ${stateSurfaceClasses(activity.tone)}`}>
-          <span className="block text-xs font-semibold">{activity.label}</span>
+        <div
+          className={`mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-center overflow-hidden rounded-lg border px-1.5 pb-1 pt-1 ${stateSurfaceClasses(activity.tone)}`}
+          title={title}
+        >
+          <span className={labelClassName}>{label}</span>
+          {secondary ? <span className="mt-1 block truncate text-[9px] font-semibold uppercase leading-none opacity-90">{secondary}</span> : null}
         </div>
       </CellShell>
     </div>
@@ -639,7 +671,7 @@ export default function AcquisitionListPage() {
 
   const visibleRows = useMemo(() => {
     let nextRows = rows;
-    nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale : !row.validata_finale));
+    nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale || isQualityEvaluated(row) : !row.validata_finale));
 
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
@@ -697,7 +729,8 @@ export default function AcquisitionListPage() {
   const summary = useMemo(() => {
     const total = rows.length;
     const open = rows.filter((row) => !row.validata_finale).length;
-    return { total, open };
+    const waitingDdt = rows.filter((row) => isWaitingForDdt(row)).length;
+    return { total, open, waitingDdt };
   }, [rows]);
 
   useEffect(() => {
@@ -916,6 +949,7 @@ export default function AcquisitionListPage() {
         <div className="flex flex-wrap gap-2">
           <SummaryCell label="Righe" value={summary.total} />
           <SummaryCell label="Aperte" value={summary.open} />
+          <SummaryCell label="Attesa DDT" value={summary.waitingDdt} />
           <SummaryCell label="Logica attività" value="Placeholder" />
           <SummaryCell label="Masking e nuovo OCR icone" value="Placeholder" />
           <SummaryCell label="Aggiungi nuovo elemento chimico" value="Placeholder" />
@@ -1007,6 +1041,11 @@ export default function AcquisitionListPage() {
           >
             {showConfirmedOnly ? "Confermati" : "Aperte"}
           </button>
+        </div>
+        <div className="max-w-[360px] self-end pb-2 text-xs font-semibold text-rose-700">
+          {showConfirmedOnly
+            ? "Include anche certificati già valutati ma ancora in attesa DDT/match."
+            : "Aperte include anche certificati valutati ma non ancora chiusi per DDT/match mancanti."}
         </div>
         <div className="ml-auto min-w-[88px] max-w-[88px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-row-limit">

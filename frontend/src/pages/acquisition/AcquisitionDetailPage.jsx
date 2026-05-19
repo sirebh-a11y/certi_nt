@@ -82,7 +82,7 @@ const BLOCK_DEFAULT_SOURCE = {
   note: "certificato",
 };
 
-const FINAL_REQUIRED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
+const QUALITY_REQUIRED_BLOCKS = ["chimica", "proprieta", "note"];
 const ORDERED_BLOCKS = ["ddt", "match", "chimica", "proprieta", "note"];
 const QUALITY_EVALUATION_OPTIONS = [
   { value: "accettato", label: "Accettato", state: "verde" },
@@ -143,7 +143,7 @@ function safeText(value) {
 
 function workflowStepState(row, step) {
   if (step === "validazione_finale") {
-    if (row?.validata_finale) {
+    if (row?.qualita_valutazione) {
       if (row.qualita_valutazione === "respinto") {
         return "rosso";
       }
@@ -152,14 +152,14 @@ function workflowStepState(row, step) {
       }
       return row.qualita_valutazione === "accettato" ? "verde" : "giallo";
     }
-    return FINAL_REQUIRED_BLOCKS.every((block) => row?.block_states?.[block] === "verde") ? "giallo" : "rosso";
+    return QUALITY_REQUIRED_BLOCKS.every((block) => row?.block_states?.[block] === "verde") ? "giallo" : "rosso";
   }
   return row?.block_states?.[step] || "rosso";
 }
 
 function workflowStepLabel(step) {
   if (step === "validazione_finale") {
-    return "Validazione finale";
+    return "Valutazione qualità";
   }
   return BLOCK_LABELS[step] || step;
 }
@@ -290,6 +290,19 @@ export default function AcquisitionDetailPage() {
     return true;
   }
 
+  function guardQualityEvaluatedTechnicalEdit() {
+    if (!row?.qualita_valutazione) {
+      return false;
+    }
+    setFinalValidationWarning({
+      title: "Riga già valutata qualità",
+      message: canReopenFinalValidation
+        ? "Puoi completare DDT e match. Per modificare chimica, proprietà, note o dati del certificato devi prima usare Forza riapertura."
+        : "Puoi completare DDT e match. Per modificare la parte tecnica serve Forza riapertura da manager o admin.",
+    });
+    return true;
+  }
+
   useEffect(() => {
     let ignore = false;
 
@@ -357,7 +370,7 @@ export default function AcquisitionDetailPage() {
     if (!row?.block_states) {
       return false;
     }
-    return FINAL_REQUIRED_BLOCKS.every((block) => row.block_states?.[block] === "verde");
+    return QUALITY_REQUIRED_BLOCKS.every((block) => row.block_states?.[block] === "verde");
   }, [row]);
 
   const isCertificateFirstRow = useMemo(
@@ -494,7 +507,7 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleRefreshCertificateFirst() {
-    if (guardFinalValidatedEdit()) {
+    if (guardFinalValidatedEdit() || guardQualityEvaluatedTechnicalEdit()) {
       return;
     }
     setRefreshingCertificateFirst(true);
@@ -527,7 +540,7 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleSaveCertificateFirstFields() {
-    if (guardFinalValidatedEdit()) {
+    if (guardFinalValidatedEdit() || guardQualityEvaluatedTechnicalEdit()) {
       return;
     }
     setSavingCertificateFirst(true);
@@ -614,7 +627,7 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectNotes() {
-    if (guardFinalValidatedEdit()) {
+    if (guardFinalValidatedEdit() || guardQualityEvaluatedTechnicalEdit()) {
       return;
     }
     setProcessingNotes(true);
@@ -634,7 +647,7 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectChemistry() {
-    if (guardFinalValidatedEdit()) {
+    if (guardFinalValidatedEdit() || guardQualityEvaluatedTechnicalEdit()) {
       return;
     }
     setProcessingChemistry(true);
@@ -654,7 +667,7 @@ export default function AcquisitionDetailPage() {
   }
 
   async function handleDetectProperties() {
-    if (guardFinalValidatedEdit()) {
+    if (guardFinalValidatedEdit() || guardQualityEvaluatedTechnicalEdit()) {
       return;
     }
     setProcessingProperties(true);
@@ -940,7 +953,7 @@ export default function AcquisitionDetailPage() {
       {finalValidationWarning ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-lg rounded-3xl border border-amber-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Validazione finale</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Valutazione qualità</p>
             <h3 className="mt-3 text-xl font-semibold text-ink">{finalValidationWarning.title}</h3>
             <p className="mt-3 text-sm leading-6 text-slate-600">{finalValidationWarning.message}</p>
             <div className="mt-6 flex justify-end">
@@ -958,10 +971,10 @@ export default function AcquisitionDetailPage() {
       {finalValidationDialog ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-lg rounded-3xl border border-emerald-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Validazione finale</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Valutazione qualità</p>
             <h3 className="mt-3 text-xl font-semibold text-ink">Riga validata</h3>
             <p className="mt-3 text-sm leading-6 text-slate-600">
-              Stato finale: <span className="font-semibold text-ink">{qualityEvaluationLabel(finalValidationDialog.qualityEvaluation)}</span>.
+              Stato qualità: <span className="font-semibold text-ink">{qualityEvaluationLabel(finalValidationDialog.qualityEvaluation)}</span>.
             </p>
             <p className="mt-2 text-sm text-slate-500">Tra pochi secondi torni a Incoming materiale.</p>
           </div>
@@ -971,7 +984,7 @@ export default function AcquisitionDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-xl rounded-3xl border border-amber-100 bg-white p-6 shadow-2xl shadow-slate-900/20">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Forza riapertura</p>
-            <h3 className="mt-3 text-xl font-semibold text-ink">Riaprire la valutazione finale?</h3>
+            <h3 className="mt-3 text-xl font-semibold text-ink">Riaprire la valutazione qualità?</h3>
             <p className="mt-3 text-sm leading-6 text-slate-600">
               Stai riaprendo una decisione gia presa. La riga tornera modificabile e uscira dalla vista Confermati finche non
               verra rivalutata.
@@ -1014,16 +1027,16 @@ export default function AcquisitionDetailPage() {
               <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
                 {processingVision ? "Vision..." : "Vision DDT"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document} onClick={handleDetectChemistry} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectChemistry} type="button">
                 {processingChemistry ? "Chimica..." : "Rileva chimica"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document} onClick={handleDetectProperties} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectProperties} type="button">
                 {processingProperties ? "Proprietà..." : "Rileva proprietà"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document} onClick={handleDetectNotes} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectNotes} type="button">
                 {processingNotes ? "Note..." : "Rileva note"}
               </button>
-              <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document} onClick={handleProcessMinimal} type="button">
+              <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document || Boolean(row?.qualita_valutazione)} onClick={handleProcessMinimal} type="button">
                 {processing ? "Processo..." : "Processo minimo"}
               </button>
             </div>
@@ -1055,15 +1068,20 @@ export default function AcquisitionDetailPage() {
             <div className="rounded-2xl border border-border bg-white p-4">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="max-w-2xl">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Valutazione finale qualità</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Valutazione qualità</div>
                   <p className="mt-2 text-sm text-slate-600">
                     I dati tecnici restano confermati. Inserisci prima un giudizio nella nota valutazione: non è necessario se tutto è conforme, ma è obbligatorio per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
                   </p>
-                  {row.validata_finale ? (
+                  {row.qualita_valutazione ? (
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>
                         {qualityEvaluationLabel(row.qualita_valutazione)}
                       </span>
+                      {!row.validata_finale ? (
+                        <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                          Attesa DDT/match
+                        </span>
+                      ) : null}
                       {canReopenFinalValidation ? (
                         <button
                           className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
@@ -1083,7 +1101,7 @@ export default function AcquisitionDetailPage() {
                   </label>
                   <textarea
                     className="min-h-20 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
-                    disabled={row.validata_finale || processingFinalValidation}
+                    disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}
                     id="final-quality-note"
                     onChange={(event) => setFinalQualityNote(event.target.value)}
                     placeholder="Obbligatoria per accettato con riserva o respinto."
@@ -1091,7 +1109,7 @@ export default function AcquisitionDetailPage() {
                   />
                 </div>
               </div>
-              {!row.validata_finale ? (
+              {!row.qualita_valutazione ? (
                 <div className="mt-4 flex flex-wrap gap-2">
                   {QUALITY_EVALUATION_OPTIONS.map((option) => (
                     <button
@@ -1113,7 +1131,7 @@ export default function AcquisitionDetailPage() {
                 </div>
               ) : null}
               {!canValidateFinal ? (
-                <p className="mt-3 text-sm text-rose-600">La valutazione finale si abilita solo quando DDT, match, chimica, proprietà e note sono verdi.</p>
+                <p className="mt-3 text-sm text-rose-600">La valutazione qualità si abilita quando chimica, proprietà e note sono verdi. DDT e match possono arrivare dopo.</p>
               ) : null}
             </div>
 

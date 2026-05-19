@@ -7708,6 +7708,7 @@ DOCUMENT_SIDE_FIELD_LABELS: dict[str, str] = {
     "peso": "Peso",
     "ordine": "Ordine",
 }
+QUALITY_LOCKED_BLOCKS = {"chimica", "proprieta", "note"}
 DDT_SIDE_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "lega_base": ("lega",),
     "diametro": ("diametro",),
@@ -9078,6 +9079,7 @@ def save_notes_section(
     payload: AcquisitionNotesSectionUpdateRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    _raise_if_quality_block_locked(row, "note")
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="note")
 
     requested_ids = list(dict.fromkeys(payload.custom_note_template_ids))
@@ -9212,8 +9214,7 @@ def create_evidence(
     payload: DocumentEvidenceCreateRequest,
     actor_id: int,
 ) -> DocumentEvidenceResponse:
-    if row.validata_finale:
-        _raise_final_validation_locked()
+    _raise_if_quality_block_locked(row, payload.blocco)
     document = get_document(db, payload.document_id)
     if payload.document_page_id is not None:
         page = (
@@ -9258,6 +9259,7 @@ def upsert_read_value(
     payload: ReadValueUpsertRequest,
     actor_id: int,
 ) -> ReadValueResponse:
+    _raise_if_quality_block_locked(row, payload.blocco)
     if payload.document_evidence_id is not None:
         evidence = db.get(DocumentEvidence, payload.document_evidence_id)
         if evidence is None or evidence.acquisition_row_id != row.id:
@@ -9391,6 +9393,7 @@ def detect_standard_notes(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    _raise_if_quality_block_locked(row, "note")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -9491,6 +9494,7 @@ def detect_chemistry(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    _raise_if_quality_block_locked(row, "chimica")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -9604,6 +9608,7 @@ def detect_properties(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    _raise_if_quality_block_locked(row, "proprieta")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -9710,12 +9715,12 @@ def validate_final_row(
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
     block_states = _compute_block_states_from_db(db, row)
-    required_blocks = ("ddt", "match", "chimica", "proprieta", "note")
+    required_blocks = ("chimica", "proprieta", "note")
     not_ready = [block for block in required_blocks if block_states.get(block) != "verde"]
     if not_ready:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Final validation requires all blocks green. Missing: {', '.join(not_ready)}",
+            detail=f"La valutazione qualità richiede chimica, proprietà e note verdi. Mancano: {', '.join(not_ready)}",
         )
 
     if payload.qualita_valutazione in {"accettato_con_riserva", "respinto"} and not payload.qualita_note:
@@ -9726,19 +9731,19 @@ def validate_final_row(
 
     row.qualita_valutazione = payload.qualita_valutazione
     row.qualita_note = payload.qualita_note
-    row.validata_finale = True
-    row.stato_workflow = "validata_quality"
-    row.stato_tecnico = "verde"
-    row.priorita_operativa = "bassa"
     row.qualita_numero_analisi_da_ricontrollare = False
     row.qualita_note_da_ricontrollare = False
+    row.validata_finale = _is_row_documentally_confirmed(block_states)
+    row.stato_workflow = "validata_quality" if row.validata_finale else "attesa_ddt"
+    _sync_row_statuses(db, row, block_states=block_states)
     db.add(row)
     _record_history_event(
         db=db,
         acquisition_row_id=row.id,
         blocco="workflow",
-        azione="validazione_finale_confermata",
+        azione="valutazione_qualita_confermata",
         user_id=actor_id,
+        nota_breve="documenti completi" if row.validata_finale else "attesa DDT/match",
     )
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
@@ -9749,7 +9754,7 @@ def reopen_final_validation(
     row: AcquisitionRow,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
-    if not row.validata_finale:
+    if not row.validata_finale and row.qualita_valutazione is None:
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
     row.validata_finale = False
@@ -9762,9 +9767,9 @@ def reopen_final_validation(
         db=db,
         acquisition_row_id=row.id,
         blocco="workflow",
-        azione="validazione_finale_riaperta_forzata",
+        azione="valutazione_qualita_riaperta_forzata",
         user_id=actor_id,
-        nota_breve="Valutazione finale riaperta manualmente",
+        nota_breve="Valutazione qualità riaperta manualmente",
     )
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
@@ -15842,6 +15847,15 @@ def _merge_certificate_only_row_into_ddt_row(
 
     if target_row.note_documento is None and source_row.note_documento is not None:
         target_row.note_documento = source_row.note_documento
+    if source_row.qualita_valutazione and not target_row.qualita_valutazione:
+        target_row.qualita_valutazione = source_row.qualita_valutazione
+        target_row.qualita_note = source_row.qualita_note
+        target_row.qualita_numero_analisi = source_row.qualita_numero_analisi
+        target_row.qualita_data_ricezione = source_row.qualita_data_ricezione
+        target_row.qualita_data_accettazione = source_row.qualita_data_accettazione
+        target_row.qualita_data_richiesta = source_row.qualita_data_richiesta
+        target_row.qualita_numero_analisi_da_ricontrollare = source_row.qualita_numero_analisi_da_ricontrollare
+        target_row.qualita_note_da_ricontrollare = source_row.qualita_note_da_ricontrollare
     _sync_row_from_match_values(db, target_row)
     _sync_row_statuses(db, target_row)
     db.add(target_row)
@@ -16880,6 +16894,23 @@ def _raise_final_validation_locked() -> None:
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=FINAL_VALIDATION_LOCK_MESSAGE)
 
 
+def _raise_quality_evaluation_locked() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Riga gia valutata qualita: puoi completare DDT e match, "
+            "ma per modificare chimica, proprieta o note devi prima usare Forza riapertura."
+        ),
+    )
+
+
+def _raise_if_quality_block_locked(row: AcquisitionRow, block: str | None) -> None:
+    if row.validata_finale:
+        _raise_final_validation_locked()
+    if row.qualita_valutazione and block in QUALITY_LOCKED_BLOCKS:
+        _raise_quality_evaluation_locked()
+
+
 def _reopen_row_if_validated(
     db: Session,
     row: AcquisitionRow,
@@ -16892,8 +16923,8 @@ def _reopen_row_if_validated(
     _raise_final_validation_locked()
 
 
-def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
-    block_states = _compute_block_states_from_db(db, row)
+def _sync_row_statuses(db: Session, row: AcquisitionRow, block_states: dict[str, str] | None = None) -> None:
+    block_states = block_states or _compute_block_states_from_db(db, row)
     required_blocks = ("ddt", "match", "chimica", "proprieta", "note")
     required_states = [block_states.get(block, "rosso") for block in required_blocks]
 
@@ -16904,9 +16935,15 @@ def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
     else:
         row.stato_tecnico = "giallo"
 
-    if row.validata_finale:
+    if row.qualita_valutazione and _is_row_documentally_confirmed(block_states) and _is_row_quality_confirmed(block_states):
+        row.validata_finale = True
         row.stato_workflow = "validata_quality"
-    elif row.stato_workflow not in {"riaperta", "validata_quality"}:
+    elif row.qualita_valutazione:
+        row.validata_finale = False
+        row.stato_workflow = "attesa_ddt"
+    elif row.validata_finale:
+        row.stato_workflow = "validata_quality"
+    elif row.stato_workflow not in {"riaperta", "validata_quality", "attesa_ddt"}:
         has_activity = any(block_states.get(block) != "rosso" for block in required_blocks)
         row.stato_workflow = "in_lavorazione" if has_activity else "nuova"
 
@@ -16918,6 +16955,14 @@ def _sync_row_statuses(db: Session, row: AcquisitionRow) -> None:
         row.priorita_operativa = "bassa"
 
     db.add(row)
+
+
+def _is_row_quality_confirmed(block_states: dict[str, str]) -> bool:
+    return all(block_states.get(block) == "verde" for block in ("chimica", "proprieta", "note"))
+
+
+def _is_row_documentally_confirmed(block_states: dict[str, str]) -> bool:
+    return all(block_states.get(block) == "verde" for block in ("ddt", "match"))
 
 
 def _is_row_fully_confirmed_for_quality(db: Session, row: AcquisitionRow) -> bool:

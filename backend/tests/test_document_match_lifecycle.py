@@ -20,11 +20,13 @@ from app.modules.acquisition.models import (
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
 from app.modules.acquisition.schemas import AcquisitionRowUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
+from app.modules.acquisition.schemas import AcquisitionFinalValidationRequest
 from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
     _manual_match_block_exists,
+    _merge_certificate_only_row_into_ddt_row,
     _plan_cross_run_auto_rematch,
     _run_cross_run_auto_rematch,
     _score_certificate_candidate,
@@ -36,6 +38,7 @@ from app.modules.acquisition.service import (
     update_quality_row,
     update_acquisition_row,
     upsert_read_value,
+    validate_final_row,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.suppliers.models import Supplier
@@ -787,6 +790,114 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(updated.qualita_valutazione, "accettato_con_riserva")
         self.assertFalse(updated.qualita_numero_analisi_da_ricontrollare)
         self.assertTrue(updated.qualita_note_da_ricontrollare)
+
+    def test_quality_evaluation_can_wait_for_ddt_when_certificate_blocks_are_green(self):
+        supplier = Supplier(ragione_sociale="Test Supplier")
+        certificate_document = Document(tipo_documento="certificato", nome_file_originale="cert.pdf", storage_key="cert-only.pdf")
+        self.db.add_all([supplier, certificate_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="CERT-1",
+            colata="CAST-1",
+        )
+        self.db.add(row)
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="sistema",
+                    fonte_documentale="sistema",
+                )
+            )
+        self.db.commit()
+
+        validated = validate_final_row(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionFinalValidationRequest(qualita_valutazione="accettato", qualita_note=None),
+            actor_id=1,
+        )
+
+        self.assertEqual(validated.qualita_valutazione, "accettato")
+        self.assertFalse(validated.validata_finale)
+        self.assertEqual(validated.stato_workflow, "attesa_ddt")
+
+    def test_certificate_first_merge_preserves_quality_evaluation_waiting_for_ddt(self):
+        supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")
+        certificate_document = Document(tipo_documento="certificato", nome_file_originale="cert.pdf", storage_key="cert-merge.pdf")
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt-merge.pdf")
+        self.db.add_all([supplier, certificate_document, ddt_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        ddt_document.fornitore_id = supplier.id
+        source = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="EEP73062",
+            colata="C70025341313",
+            qualita_valutazione="accettato_con_riserva",
+            qualita_note="Da usare con riserva",
+            stato_workflow="attesa_ddt",
+            validata_finale=False,
+        )
+        target = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="EEP73062",
+            colata="C70025341313",
+            ddt="28209127",
+        )
+        self.db.add_all([source, target])
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=source.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="sistema",
+                    fonte_documentale="sistema",
+                )
+            )
+        self.db.commit()
+
+        merged = _merge_certificate_only_row_into_ddt_row(
+            db=self.db,
+            target_row=get_acquisition_row(self.db, target.id),
+            source_row_id=source.id,
+            actor_id=1,
+        )
+
+        self.assertTrue(merged)
+        merged_row = get_acquisition_row(self.db, target.id)
+        self.assertEqual(merged_row.qualita_valutazione, "accettato_con_riserva")
+        self.assertEqual(merged_row.qualita_note, "Da usare con riserva")
 
     def test_certificate_first_arconic_row_merges_when_matching_ddt_arrives_later(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")

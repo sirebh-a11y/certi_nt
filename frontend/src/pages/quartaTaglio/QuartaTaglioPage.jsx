@@ -594,8 +594,8 @@ export default function QuartaTaglioPage() {
       </div>
 
       <div className="grid gap-2 md:grid-cols-3">
-        <LegendCell color="green" title="Verde" text="CDQ presente, colata coerente, iter completo e qualità accettata." />
-        <LegendCell color="yellow" title="Giallo" text="CDQ presente ma manca match, chimica, proprietà, note o qualità; include accettato con riserva." />
+        <LegendCell color="green" title="Verde" text="CDQ presente, colata coerente, chimica/proprietà/note confermate e qualità accettata." />
+        <LegendCell color="yellow" title="Giallo" text="CDQ presente ma manca chimica, proprietà, note o qualità; include accettato con riserva." />
         <LegendCell color="red" title="Rosso" text="CDQ mancante, colata diversa o qualità respinta." />
       </div>
 

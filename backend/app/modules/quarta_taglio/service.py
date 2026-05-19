@@ -2234,7 +2234,7 @@ def _evaluate_cdq(
 
     for row in exact_rows:
         block_states = _compute_block_states_from_db(db, row)
-        for block, label in (("match", "match"), ("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
+        for block, label in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
             if block_states.get(block) != "verde":
                 details.append(f"Riga app #{row.id}: manca conferma {label}")
         if row.qualita_valutazione is None:

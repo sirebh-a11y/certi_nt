@@ -17,6 +17,9 @@ function workflowLabel(value) {
   if (value === "validata_quality") {
     return "Validata";
   }
+  if (value === "attesa_ddt") {
+    return "Attesa DDT";
+  }
   if (value === "riaperta") {
     return "Riaperta";
   }
@@ -125,9 +128,14 @@ export default function AcquisitionRowSummaryCard({
                     <div className="flex flex-wrap gap-1.5">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateClasses(row.stato_tecnico)}`}>Tecnico {row.stato_tecnico}</span>
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow)}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.validata_finale ? stateClasses(qualityEvaluationState(row.qualita_valutazione)) : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
-                        {row.validata_finale ? qualityEvaluationLabel(row.qualita_valutazione) : canValidateFinal ? "Pronta da validare" : "Non pronta"}
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.qualita_valutazione ? stateClasses(qualityEvaluationState(row.qualita_valutazione)) : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
+                        {row.qualita_valutazione ? qualityEvaluationLabel(row.qualita_valutazione) : canValidateFinal ? "Pronta da valutare" : "Non pronta"}
                       </span>
+                      {row.qualita_valutazione && !row.validata_finale ? (
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                          Attesa DDT
+                        </span>
+                      ) : null}
                     </div>
                   </td>
                 ) : null}
