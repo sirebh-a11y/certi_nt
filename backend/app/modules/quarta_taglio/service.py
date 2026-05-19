@@ -1188,11 +1188,11 @@ def _format_certificate_suffix(suffix: int) -> str:
 
 def _cod_f3_certificate_suffix(cod_f3: str | None) -> str:
     digits = re.sub(r"\D", "", _clean_text(cod_f3) or "")
-    if len(digits) >= 3:
-        return digits[-3:]
+    if len(digits) >= 2:
+        return digits[-2:]
     if digits:
-        return digits.zfill(3)
-    return "000"
+        return digits.zfill(2)
+    return "00"
 
 
 def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:

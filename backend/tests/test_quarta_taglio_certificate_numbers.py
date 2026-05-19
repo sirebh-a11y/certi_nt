@@ -79,11 +79,11 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
             2,
         )
 
-    def test_cod_f3_suffix_uses_last_three_digits(self):
-        self.assertEqual(_cod_f3_certificate_suffix("047012883"), "883")
-        self.assertEqual(_cod_f3_certificate_suffix("605000900"), "900")
-        self.assertEqual(_cod_f3_certificate_suffix("7"), "007")
-        self.assertEqual(_cod_f3_certificate_suffix(None), "000")
+    def test_cod_f3_suffix_uses_last_two_digits(self):
+        self.assertEqual(_cod_f3_certificate_suffix("047012883"), "83")
+        self.assertEqual(_cod_f3_certificate_suffix("605000900"), "00")
+        self.assertEqual(_cod_f3_certificate_suffix("7"), "07")
+        self.assertEqual(_cod_f3_certificate_suffix(None), "00")
 
 
 if __name__ == "__main__":
