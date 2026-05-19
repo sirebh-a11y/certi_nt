@@ -471,7 +471,6 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         quarta_rows=rows,
         app_rows=app_rows,
         selected_standard_confirmed=selected_standard_confirmed,
-        certificate_date=detail_certificate_date,
     )
     can_create_word = not word_creation_blockers
 
@@ -633,8 +632,6 @@ def create_quarta_taglio_word_draft(
     _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
     certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
     certificate_date = _certificate_datetime_from_detail(detail)
-    if certificate_date is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data certificato mancante: serve DDT collegato con data")
     certificate.cert_date = certificate_date
     certificate_number = certificate.certificate_number or _assign_certificate_number(
         db,
@@ -1459,13 +1456,10 @@ def _word_creation_blockers(
     quarta_rows: list[QuartaTaglioRow],
     app_rows: list[AcquisitionRow],
     selected_standard_confirmed: bool,
-    certificate_date: datetime | None,
 ) -> list[str]:
     blockers: list[str] = []
     if not selected_standard_confirmed:
         blockers.append("Standard non confermato")
-    if certificate_date is None:
-        blockers.append("Data certificato mancante: serve DDT collegato con data")
 
     app_rows_by_key: dict[tuple[str, str], list[AcquisitionRow]] = defaultdict(list)
     for row in app_rows:

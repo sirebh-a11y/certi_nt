@@ -684,8 +684,8 @@ export default function QuartaTaglioDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
           <p className="mt-1 text-sm text-slate-600">
             {canCreateWord
-              ? "Certificato creabile: standard, righe Incoming e data DDT sono pronti."
-              : "Serve standard confermato, righe Incoming accettate o accettate con riserva, e data DDT collegata."}
+              ? "Certificato creabile: standard e righe Incoming sono pronti. Se manca la data DDT, resterà come campo mancante."
+              : "Serve standard confermato e righe Incoming accettate o accettate con riserva."}
           </p>
           {!canCreateWord && wordCreationBlockers.length ? (
             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
