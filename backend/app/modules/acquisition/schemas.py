@@ -121,6 +121,7 @@ class ChemistryTableCaptureRequest(BaseModel):
     y1_ratio: float = Field(ge=0, le=1)
     x2_ratio: float = Field(ge=0, le=1)
     y2_ratio: float = Field(ge=0, le=1)
+    row_id: int | None = None
 
 
 class ChemistryTableCaptureResponse(BaseModel):

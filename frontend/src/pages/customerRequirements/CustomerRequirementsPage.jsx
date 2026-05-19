@@ -640,14 +640,14 @@ export default function CustomerRequirementsPage() {
             className="incoming-grid-scroll overflow-x-hidden overflow-y-visible"
             onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           >
-          <table ref={tableRef} className="min-w-[1870px] table-fixed border-collapse text-sm">
+          <table ref={tableRef} className="min-w-[1786px] table-fixed border-collapse text-sm">
             <colgroup>
               <col className="w-[180px]" />
               <col className="w-[164px]" />
               {BOOLEAN_COLUMNS.map((column) => (
                 <col key={column.field} className="w-[54px]" />
               ))}
-              <col className="w-[700px]" />
+              <col className="w-[616px]" />
               <col className="w-[150px]" />
             </colgroup>
             <thead>

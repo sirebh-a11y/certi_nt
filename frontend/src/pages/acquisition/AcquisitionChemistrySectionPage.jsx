@@ -262,6 +262,7 @@ function ChemistryPdfPanel({
   onCaptureValue,
   overlayPreviewItems,
   onTableCaptureProposal,
+  rowId,
   tableCaptureActive,
   token,
 }) {
@@ -447,6 +448,7 @@ function ChemistryPdfPanel({
             y1_ratio: y1 / rectHeight,
             x2_ratio: x2 / rectWidth,
             y2_ratio: y2 / rectHeight,
+            row_id: rowId || null,
           }),
         },
         token,
@@ -1201,6 +1203,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       onCaptureValue={handleCaptureValue}
       overlayPreviewItems={overlayPreviewItems}
       onTableCaptureProposal={handleTableCaptureProposal}
+      rowId={rowId}
       tableCaptureActive={tableCaptureActive}
       token={token}
       />

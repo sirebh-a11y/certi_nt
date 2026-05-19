@@ -394,7 +394,8 @@ def capture_chemistry_table_route(
     db: DbSession,
 ) -> ChemistryTableCaptureResponse:
     page = get_document_page(db, page_id)
-    return capture_chemistry_table_from_page(page=page, payload=payload)
+    row = get_acquisition_row(db, payload.row_id) if payload.row_id is not None else None
+    return capture_chemistry_table_from_page(page=page, payload=payload, row=row)
 
 
 @router.get("/rows/{row_id}/chemistry-overlay-preview", response_model=ChemistryOverlayPreviewResponse)
