@@ -218,6 +218,7 @@ export default function QuartaTaglioDetailPage() {
   const [additionalPagesState, setAdditionalPagesState] = useState({ status: "idle", message: "" });
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
+  const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -512,10 +513,8 @@ export default function QuartaTaglioDetailPage() {
 
   function regenerateWordFromScratch() {
     if (isManualWord) {
-      const confirmed = window.confirm("Il Word corrente è stato caricato/modificato dall'utente. Rigenerando da zero perderai quelle modifiche manuali. Continuare?");
-      if (!confirmed) {
-        return;
-      }
+      setWordRegenerateDialogOpen(true);
+      return;
     }
     void performGenerateWordDraft(false, true);
   }
@@ -1134,7 +1133,54 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </div>
       ) : null}
+
+      {wordRegenerateDialogOpen ? (
+        <ConfirmActionDialog
+          confirmLabel="Rigenera da zero"
+          message="Il Word corrente è stato caricato o modificato dall'utente. Rigenerando da zero perderai quelle modifiche manuali."
+          onCancel={() => setWordRegenerateDialogOpen(false)}
+          onConfirm={() => {
+            setWordRegenerateDialogOpen(false);
+            void performGenerateWordDraft(false, true);
+          }}
+          title="Rigenerare il Word?"
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ConfirmActionDialog({ confirmLabel, message, onCancel, onConfirm, title }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <div className="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xl font-black text-amber-700">
+            !
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{message}</p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+            onClick={onCancel}
+            type="button"
+          >
+            Annulla
+          </button>
+          <button
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700"
+            onClick={onConfirm}
+            type="button"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

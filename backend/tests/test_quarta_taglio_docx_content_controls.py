@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from app.core.departments.models import Department  # noqa: F401 - ensures SQLAlchemy relationship resolution
@@ -147,9 +148,14 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
                 for name in archive.namelist()
                 if name.startswith("word/header")
             )
+            for name in archive.namelist():
+                if name.startswith("word/") and name.endswith(".xml"):
+                    ET.fromstring(archive.read(name))
         self.assertIn("19/05/2026", header_xml)
         self.assertIn("1133-19/05/2026", header_xml)
         self.assertIn("605001860", header_xml)
+        self.assertIn("<w:text/>", header_xml)
+        self.assertIn("<w:sdtContent>", header_xml)
 
 
 if __name__ == "__main__":

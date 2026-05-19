@@ -6,7 +6,7 @@ from pathlib import Path
 
 from docxcompose.composer import Composer
 from docx import Document
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -20,6 +20,9 @@ APP_ROOT = Path(__file__).resolve().parents[2]
 ASSET_ROOT = APP_ROOT / "assets" / "certificates"
 LOGO_PATH = ASSET_ROOT / "forgialluminio_logo.png"
 QUALITY_MANAGER_SIGNATURE_PATH = ASSET_ROOT / "quality_manager_signature.png"
+HEADER_WIDTH = Inches(7.1)
+HEADER_LOGO_WIDTH = Inches(2.23)
+HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
 
 PROPERTY_HEADER_LABELS = {
     "HB": "HB",
@@ -123,7 +126,7 @@ def _apply_document_shell(
 def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_number: str) -> None:
     certificate_header = detail.header or {}
     _clear_header_footer(header)
-    table = header.add_table(rows=1, cols=3, width=Inches(7.1))
+    table = header.add_table(rows=1, cols=3, width=HEADER_WIDTH)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_table_borders(table)
     _set_column_widths(table, [Inches(1.2), Inches(4.4), Inches(1.5)])
@@ -131,7 +134,10 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
     if LOGO_PATH.exists():
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(str(LOGO_PATH), width=Inches(3.16))
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 0.8
+        paragraph.add_run().add_picture(str(LOGO_PATH), width=HEADER_LOGO_WIDTH)
     else:
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -139,51 +145,60 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
     right.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
     p = right.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.space_after = Pt(0)
     run = p.add_run("Mod. 065 Rev. 01")
-    run.font.size = Pt(6)
+    run.font.size = Pt(5.5)
     p = right.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
     run = p.add_run("Pag. ")
-    run.font.size = Pt(11)
+    run.font.size = Pt(9)
     _add_field(p, "PAGE")
     run = p.add_run(" / ")
-    run.font.size = Pt(11)
+    run.font.size = Pt(9)
     _add_field(p, "NUMPAGES")
 
-    title_table = header.add_table(rows=1, cols=2, width=Inches(7.1))
+    title_table = header.add_table(rows=1, cols=2, width=HEADER_WIDTH)
     _clear_table_borders(title_table)
     title_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    _set_table_width(title_table, Inches(7.1))
+    _set_table_width(title_table, HEADER_WIDTH)
+    _set_column_widths(title_table, [Inches(3.15), Inches(3.95)])
     left_title, right_title = title_table.rows[0].cells
     left_paragraph = left_title.paragraphs[0]
-    left_paragraph.paragraph_format.space_before = Pt(4)
-    left_paragraph.paragraph_format.space_after = Pt(8)
+    left_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    left_paragraph.paragraph_format.space_before = Pt(0)
+    left_paragraph.paragraph_format.space_after = Pt(0)
+    left_paragraph.paragraph_format.line_spacing = 0.85
     left_run = left_paragraph.add_run("EN 10204 - 3.1")
     left_run.bold = True
-    left_run.font.size = Pt(17)
+    left_run.font.size = Pt(13)
+    _set_cell_no_wrap(left_title)
+
     right_paragraph = right_title.paragraphs[0]
     right_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    right_paragraph.paragraph_format.space_before = Pt(6)
-    right_paragraph.paragraph_format.space_after = Pt(8)
+    right_paragraph.paragraph_format.space_before = Pt(0)
+    right_paragraph.paragraph_format.space_after = Pt(0)
+    right_paragraph.paragraph_format.line_spacing = 0.85
     prefix_run = right_paragraph.add_run("Certificate n°: ")
-    prefix_run.font.size = Pt(12)
+    prefix_run.font.size = Pt(10)
     _add_content_control_run(
         right_paragraph,
         tag="CERT_NUMBER",
         text=draft_number,
         font_name="Arial",
-        size=12,
+        size=10,
     )
     dated_run = right_paragraph.add_run(" dated ")
-    dated_run.font.size = Pt(12)
+    dated_run.font.size = Pt(10)
     _add_content_control_run(
         right_paragraph,
         tag="CERT_DATE",
         text=certificate_header.get("data_certificato") or "",
         font_name="Arial",
-        size=12,
+        size=10,
     )
+    _set_cell_no_wrap(right_title)
 
     _add_certificate_header_flow_table(header, certificate_header)
 
@@ -487,14 +502,18 @@ def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, 
         tag_index = xml.find(tag_marker, start)
         if tag_index < 0:
             break
-        sdt_start = xml.rfind("<w:sdt", 0, tag_index)
+        sdt_start = _find_content_control_start(xml, tag_index)
         sdt_end = xml.find("</w:sdt>", tag_index)
         if sdt_start < 0 or sdt_end < 0:
             start = tag_index + len(tag_marker)
             continue
         sdt_end += len("</w:sdt>")
         block = xml[sdt_start:sdt_end]
-        text_start = block.find("<w:t")
+        content_start = block.find("<w:sdtContent")
+        if content_start < 0:
+            start = sdt_end
+            continue
+        text_start = _find_word_text_start(block, content_start)
         if text_start < 0:
             start = sdt_end
             continue
@@ -516,6 +535,19 @@ def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, 
         changed = True
         start = sdt_start + len(block)
     return xml, changed
+
+
+def _find_content_control_start(xml: str, before_index: int) -> int:
+    exact = xml.rfind("<w:sdt>", 0, before_index)
+    with_attrs = xml.rfind("<w:sdt ", 0, before_index)
+    return max(exact, with_attrs)
+
+
+def _find_word_text_start(xml: str, from_index: int) -> int:
+    exact = xml.find("<w:t>", from_index)
+    with_attrs = xml.find("<w:t ", from_index)
+    candidates = [index for index in (exact, with_attrs) if index >= 0]
+    return min(candidates) if candidates else -1
 
 
 def _escape_xml_text(value: str) -> str:
@@ -592,10 +624,11 @@ def _add_header_data_table(container, rows: list[tuple[tuple[str, str, object], 
 
 
 def _add_certificate_header_flow_table(container, certificate_header: dict[str, object]) -> None:
-    table = container.add_table(rows=0, cols=3, width=Inches(7.1))
+    table = container.add_table(rows=0, cols=3, width=HEADER_WIDTH)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
+    _set_table_cell_margins(table, left=35, right=35, top=15, bottom=15)
+    _set_column_widths(table, HEADER_FLOW_COLUMN_WIDTHS)
     rows = [
         (
             ("Purchaser:", "Cliente:", certificate_header.get("cliente"), "PURCHASER"),
@@ -620,11 +653,14 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
         (("", "", "", None), ("", "", "", None), ("", "", "", None)),
     ]
     for cells_data in rows:
-        cells = table.add_row().cells
+        row = table.add_row()
+        row.height = Inches(0.30)
+        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+        cells = row.cells
         for cell, (english_label, italian_label, value, control_tag) in zip(cells, cells_data):
             _fill_header_block_cell(cell, english_label, italian_label, value, control_tag=control_tag)
-    _set_table_width(table, Inches(7.1))
-    _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
+    _set_table_width(table, HEADER_WIDTH)
+    _set_column_widths(table, HEADER_FLOW_COLUMN_WIDTHS)
 
 
 def _fill_header_block_cell(cell, english_label: str, italian_label: str, value: object, *, control_tag: str | None = None) -> None:
@@ -637,7 +673,7 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         label_run = paragraph.add_run(english_label)
         label_run.bold = True
         label_run.font.name = "Arial"
-        label_run.font.size = Pt(12)
+        label_run.font.size = Pt(10)
     if italian_label:
         italian = cell.add_paragraph()
         italian.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -645,7 +681,7 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         italian.paragraph_format.line_spacing = 1
         run = italian.add_run(italian_label)
         run.font.name = "Arial"
-        run.font.size = Pt(8)
+        run.font.size = Pt(6.5)
     value_text = "" if value in (None, "") else str(value)
     if value_text or control_tag:
         value_paragraph = cell.add_paragraph()
@@ -658,13 +694,13 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
                 tag=control_tag,
                 text=value_text,
                 font_name="Times New Roman",
-                size=10 if len(value_text) > 42 else 12,
+                size=9 if len(value_text) > 42 else 10,
                 color="0070C0",
             )
         else:
             value_run = value_paragraph.add_run(value_text)
             value_run.font.name = "Times New Roman"
-            value_run.font.size = Pt(10 if len(value_text) > 42 else 12)
+            value_run.font.size = Pt(9 if len(value_text) > 42 else 10)
             value_run.font.color.rgb = RGBColor(0, 112, 192)
 
 
@@ -805,13 +841,18 @@ def _set_table_width_with_first_column(table, *, total_inches: float, first_colu
     _set_column_widths(table, widths)
 
 
-def _set_table_cell_margins(table, *, left: int, right: int) -> None:
+def _set_table_cell_margins(table, *, left: int, right: int, top: int | None = None, bottom: int | None = None) -> None:
     tbl_pr = table._tbl.tblPr
     tbl_cell_mar = tbl_pr.first_child_found_in("w:tblCellMar")
     if tbl_cell_mar is None:
         tbl_cell_mar = OxmlElement("w:tblCellMar")
         tbl_pr.append(tbl_cell_mar)
-    for edge, value in {"left": left, "right": right}.items():
+    values = {"left": left, "right": right}
+    if top is not None:
+        values["top"] = top
+    if bottom is not None:
+        values["bottom"] = bottom
+    for edge, value in values.items():
         element = tbl_cell_mar.find(qn(f"w:{edge}"))
         if element is None:
             element = OxmlElement(f"w:{edge}")
