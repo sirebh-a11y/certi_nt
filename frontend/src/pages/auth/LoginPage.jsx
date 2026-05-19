@@ -82,7 +82,7 @@ export default function LoginPage() {
 
         <div className="relative z-10 flex h-full items-center px-6 py-8 sm:px-10 lg:px-12">
           <div className="ml-auto w-full max-w-md rounded-[1.75rem] rounded-bl-md rounded-tr-xl border border-slate-100 bg-white p-7 shadow-2xl shadow-slate-900/20 sm:p-8">
-            <p className="text-sm font-semibold tracking-[0.08em] text-slate-500">CERTificazione Intelligente</p>
+            <p className="text-sm font-semibold tracking-[0.08em] text-slate-500">AI-Driven Certification</p>
             <h1 className="mt-3 text-3xl font-semibold text-ink">Login</h1>
             <p className="mt-2 text-sm text-slate-600">Accedi al core platform con email e password.</p>
 

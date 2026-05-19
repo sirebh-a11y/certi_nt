@@ -22,7 +22,7 @@ export default function Header() {
           />
           <div>
             <p className="text-lg font-semibold tracking-[0.28em] text-slate-500">CertI_nt</p>
-            <h1 className="text-xl font-semibold text-ink">Certificazione intelligente</h1>
+            <h1 className="text-xl font-semibold text-ink">AI-Driven Certification</h1>
           </div>
         </div>
         <div className="flex items-center gap-4">
