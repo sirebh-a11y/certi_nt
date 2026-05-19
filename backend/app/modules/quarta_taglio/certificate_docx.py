@@ -153,14 +153,7 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
     right_run = right_paragraph.add_run(f"Certificate n°{draft_number} dated {certificate_date}")
     right_run.font.size = Pt(12)
 
-    data_rows = [
-        (("Purchaser:", "Cliente:", certificate_header.get("cliente")), ("Cod. F3:", "Cod. F3:", certificate_header.get("codice_f3"))),
-        (("Description:", "Descrizione:", certificate_header.get("descrizione")), ("Drawing:", "Disegno:", certificate_header.get("disegno"))),
-        (("Order.:", "Ordine:", certificate_header.get("ordine_cliente")), ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"))),
-        (("D.d.T.:", "D.d.T.:", certificate_header.get("ddt")), ("Amount:", "Quantità:", _format_quantity(certificate_header.get("quantita")))),
-        (("", "", ""), ("", "", "")),
-    ]
-    _add_header_data_table(header, data_rows)
+    _add_certificate_header_flow_table(header, certificate_header)
 
 
 def _add_chemistry_intro(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
@@ -429,6 +422,73 @@ def _add_header_data_table(container, rows: list[tuple[tuple[str, str, object], 
         _fill_header_data_cell(cells[0], left[0], left[1], left[2])
         _fill_header_data_cell(cells[1], right[0], right[1], right[2])
     _set_table_width(table, Inches(7.1))
+
+
+def _add_certificate_header_flow_table(container, certificate_header: dict[str, object]) -> None:
+    table = container.add_table(rows=0, cols=3, width=Inches(7.1))
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
+    rows = [
+        (
+            ("Purchaser:", "Cliente:", certificate_header.get("cliente")),
+            ("Cod. F3 Raw:", "Cod. F3 del grezzo:", certificate_header.get("codice_f3_raw")),
+            ("Cod. F3 Finished:", "Cod. F3 del finito:", certificate_header.get("codice_f3_finished")),
+        ),
+        (
+            ("Order.:", "Ordine:", certificate_header.get("ordine_cliente")),
+            ("Drawing / Description Raw:", "Disegno / Descrizione del grezzo:", certificate_header.get("descrizione_raw")),
+            ("Drawing / Description Finished:", "Disegno / Descrizione del finito:", certificate_header.get("descrizione_finished")),
+        ),
+        (
+            ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine")),
+            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_raw")),
+            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_finished")),
+        ),
+        (
+            ("", "", ""),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_raw")),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_finished")),
+        ),
+        (("", "", ""), ("", "", ""), ("", "", "")),
+    ]
+    for cells_data in rows:
+        cells = table.add_row().cells
+        for cell, (english_label, italian_label, value) in zip(cells, cells_data):
+            _fill_header_block_cell(cell, english_label, italian_label, value)
+    _set_table_width(table, Inches(7.1))
+    _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
+
+
+def _fill_header_block_cell(cell, english_label: str, italian_label: str, value: object) -> None:
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1
+    if english_label:
+        label_run = paragraph.add_run(english_label)
+        label_run.bold = True
+        label_run.font.name = "Arial"
+        label_run.font.size = Pt(12)
+    if italian_label:
+        italian = cell.add_paragraph()
+        italian.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        italian.paragraph_format.space_after = Pt(0)
+        italian.paragraph_format.line_spacing = 1
+        run = italian.add_run(italian_label)
+        run.font.name = "Arial"
+        run.font.size = Pt(8)
+    value_text = "" if value in (None, "") else str(value)
+    if value_text:
+        value_paragraph = cell.add_paragraph()
+        value_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        value_paragraph.paragraph_format.space_after = Pt(0)
+        value_paragraph.paragraph_format.line_spacing = 1
+        value_run = value_paragraph.add_run(value_text)
+        value_run.font.name = "Times New Roman"
+        value_run.font.size = Pt(10 if len(value_text) > 42 else 12)
+        value_run.font.color.rgb = RGBColor(0, 112, 192)
 
 
 def _fill_header_data_cell(cell, english_label: str, italian_label: str, value: object) -> None:

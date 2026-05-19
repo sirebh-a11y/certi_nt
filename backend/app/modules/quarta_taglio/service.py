@@ -450,6 +450,12 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     )
     codice_f3 = _codice_f3_from_unit_or_quarta(unit=primary_unit, quarta_rows=rows)
     open_certificate = selected_certificate or _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
+    header_flow = _certificate_header_flow(
+        current_unit=primary_unit,
+        certifiable_units=certifiable_units,
+        quarta_rows=rows,
+        raw_description=des_art,
+    )
     detail_certificate_date = (
         _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
         or _certificate_datetime_from_ddt(primary_unit.ddt if primary_unit else None)
@@ -480,6 +486,14 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             "codice_f3_esolver": codice_f3["esolver"],
             "codice_f3_quarta": codice_f3["quarta"],
             "codice_f3_warning": codice_f3["warning"],
+            "codice_f3_raw": header_flow["raw_cod_f3"],
+            "descrizione_raw": header_flow["raw_description"],
+            "ddt_raw": header_flow["raw_ddt"],
+            "quantita_raw": header_flow["raw_quantita"],
+            "codice_f3_finished": header_flow["finished_cod_f3"],
+            "descrizione_finished": header_flow["finished_description"],
+            "ddt_finished": header_flow["finished_ddt"],
+            "quantita_finished": header_flow["finished_quantita"],
             "descrizione_articolo_quarta": des_art,
             "descrizione": descrizione,
             "descrizione_proposta": descrizione_proposta,
@@ -2626,6 +2640,40 @@ def _select_primary_unit(
             return matching_unit
     ready_unit = next((unit for unit in units if unit.status == "ready"), None)
     return ready_unit or units[0]
+
+
+def _certificate_header_flow(
+    *,
+    current_unit: QuartaTaglioCertifiableUnitResponse | None,
+    certifiable_units: list[QuartaTaglioCertifiableUnitResponse],
+    quarta_rows: list[QuartaTaglioRow],
+    raw_description: str | None,
+) -> dict[str, str | None]:
+    raw_cod_f3 = _join_unique(row.cod_art for row in quarta_rows) or None
+    current_cod_f3 = _clean_text(current_unit.cod_f3) if current_unit else None
+    raw_unit = current_unit if _norm(current_cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(certifiable_units, raw_cod_f3)
+    finished_unit = current_unit if _norm(current_cod_f3) and _norm(current_cod_f3) != _norm(raw_cod_f3) else None
+    return {
+        "raw_cod_f3": raw_cod_f3,
+        "raw_description": _clean_text(raw_description),
+        "raw_ddt": _clean_text(raw_unit.ddt) if raw_unit and raw_unit.ddt else None,
+        "raw_quantita": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else None,
+        "finished_cod_f3": _clean_text(finished_unit.cod_f3) if finished_unit else None,
+        "finished_description": None,
+        "finished_ddt": _clean_text(finished_unit.ddt) if finished_unit and finished_unit.ddt else None,
+        "finished_quantita": _format_quantity(finished_unit.quantita) if finished_unit and finished_unit.ddt and finished_unit.quantita is not None else None,
+    }
+
+
+def _unit_for_cod_f3(
+    units: list[QuartaTaglioCertifiableUnitResponse],
+    cod_f3: str | None,
+) -> QuartaTaglioCertifiableUnitResponse | None:
+    target = _norm(cod_f3)
+    if not target:
+        return None
+    ready_match = next((unit for unit in units if _norm(unit.cod_f3) == target and unit.status == "ready"), None)
+    return ready_match or next((unit for unit in units if _norm(unit.cod_f3) == target), None)
 
 
 def _all_same_bool(values: Any) -> bool | None:

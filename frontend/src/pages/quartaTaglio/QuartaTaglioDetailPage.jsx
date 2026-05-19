@@ -562,6 +562,37 @@ export default function QuartaTaglioDetailPage() {
       ["Quantità", formatQuantity(header.quantita)],
     ];
   }, [data]);
+  const headerFlowColumns = useMemo(() => {
+    const header = data?.header || {};
+    return [
+      {
+        title: "Cliente",
+        rows: [
+          ["Purchaser", header.cliente || ""],
+          ["Order", header.ordine_cliente || ""],
+          ["Confirm of order", header.conferma_ordine || ""],
+        ],
+      },
+      {
+        title: "Raw",
+        rows: [
+          ["Cod. F3 Raw", header.codice_f3_raw || ""],
+          ["Drawing / Description Raw", header.descrizione_raw || ""],
+          ["D.d.T.", header.ddt_raw || ""],
+          ["Quantity", header.quantita_raw || ""],
+        ],
+      },
+      {
+        title: "Finished",
+        rows: [
+          ["Cod. F3 Finished", header.codice_f3_finished || ""],
+          ["Drawing / Description Finished", header.descrizione_finished || ""],
+          ["D.d.T.", header.ddt_finished || ""],
+          ["Quantity", header.quantita_finished || ""],
+        ],
+      },
+    ];
+  }, [data]);
   const conformityIssues = data?.conformity_issues || [];
   const hasConformityIssues = conformityIssues.length > 0;
   const certificateNumber = data?.header?.numero_certificato;
@@ -794,36 +825,27 @@ export default function QuartaTaglioDetailPage() {
                 <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
               </div>
             ))}
-            <EditableArticleField
-              label="Descrizione"
-              onBlur={() => flushArticleField("descrizione")}
-              onChange={(value) => updateArticleDraftAndAutosave("descrizione", value)}
-              origin={data.header?.descrizione_origine}
-              proposal={data.header?.descrizione_proposta}
-              state={articleStates.descrizione}
-              title={articleAutosaveTitle(articleStates.descrizione)}
-              value={articleDraft.descrizione}
-              warning={data.header?.descrizione_diversa_da_quarta === "true"}
-            />
-            <EditableArticleField
-              label="Disegno"
-              onBlur={() => flushArticleField("disegno")}
-              onChange={(value) => updateArticleDraftAndAutosave("disegno", value)}
-              origin={data.header?.disegno_origine}
-              proposal={data.header?.disegno_proposta}
-              state={articleStates.disegno}
-              title={articleAutosaveTitle(articleStates.disegno)}
-              value={articleDraft.disegno}
-              warning={data.header?.disegno_diverso_da_quarta === "true"}
-            />
           </div>
-          {data.header?.descrizione_articolo_quarta ? (
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">DES_ART Quarta</div>
-              <div className="mt-1 font-medium text-slate-900">{data.header.descrizione_articolo_quarta}</div>
-              <div className="mt-1 text-xs text-slate-500">Separazione disegno: {data.header.disegno_confidenza || "da verificare"}</div>
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
+            <div className="border-b border-slate-200 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Header Word
             </div>
-          ) : null}
+            <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
+              {headerFlowColumns.map((column) => (
+                <div className="min-w-0" key={column.title}>
+                  <div className="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{column.title}</div>
+                  <div className="divide-y divide-slate-100">
+                    {column.rows.map(([label, value]) => (
+                      <div className="px-3 py-2" key={label}>
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
+                        <div className="mt-1 min-h-[18px] break-words font-medium text-sky-700">{value || ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </Panel>
 
         <Panel title="Standard">
