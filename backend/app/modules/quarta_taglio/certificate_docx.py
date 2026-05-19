@@ -149,9 +149,24 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
     right_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     right_paragraph.paragraph_format.space_before = Pt(6)
     right_paragraph.paragraph_format.space_after = Pt(8)
-    certificate_date = certificate_header.get("data_certificato") or "-"
-    right_run = right_paragraph.add_run(f"Certificate n°{draft_number} dated {certificate_date}")
-    right_run.font.size = Pt(12)
+    prefix_run = right_paragraph.add_run("Certificate n°: ")
+    prefix_run.font.size = Pt(12)
+    _add_content_control_run(
+        right_paragraph,
+        tag="CERT_NUMBER",
+        text=draft_number,
+        font_name="Arial",
+        size=12,
+    )
+    dated_run = right_paragraph.add_run(" dated ")
+    dated_run.font.size = Pt(12)
+    _add_content_control_run(
+        right_paragraph,
+        tag="CERT_DATE",
+        text=certificate_header.get("data_certificato") or "",
+        font_name="Arial",
+        size=12,
+    )
 
     _add_certificate_header_flow_table(header, certificate_header)
 
@@ -355,6 +370,52 @@ def _add_field(paragraph, instruction: str) -> None:
     paragraph._p.append(field)
 
 
+def _add_content_control_run(
+    paragraph,
+    *,
+    tag: str,
+    text: object,
+    font_name: str,
+    size: int,
+    bold: bool = False,
+    color: str | None = None,
+) -> None:
+    sdt = OxmlElement("w:sdt")
+    sdt_pr = OxmlElement("w:sdtPr")
+    alias = OxmlElement("w:alias")
+    alias.set(qn("w:val"), tag)
+    tag_element = OxmlElement("w:tag")
+    tag_element.set(qn("w:val"), tag)
+    sdt_pr.append(alias)
+    sdt_pr.append(tag_element)
+    sdt.append(sdt_pr)
+
+    content = OxmlElement("w:sdtContent")
+    run = OxmlElement("w:r")
+    run_pr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:ascii"), font_name)
+    fonts.set(qn("w:hAnsi"), font_name)
+    run_pr.append(fonts)
+    if bold:
+        run_pr.append(OxmlElement("w:b"))
+    size_element = OxmlElement("w:sz")
+    size_element.set(qn("w:val"), str(size * 2))
+    run_pr.append(size_element)
+    if color:
+        color_element = OxmlElement("w:color")
+        color_element.set(qn("w:val"), color)
+        run_pr.append(color_element)
+    run.append(run_pr)
+    text_element = OxmlElement("w:t")
+    text_element.set(qn("xml:space"), "preserve")
+    text_element.text = "" if text in (None, "") else str(text)
+    run.append(text_element)
+    content.append(run)
+    sdt.append(content)
+    paragraph._p.append(sdt)
+
+
 def _force_word_field_update(document: Document) -> None:
     settings = document.settings.element
     update_fields = settings.find(qn("w:updateFields"))
@@ -431,36 +492,36 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
     _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
     rows = [
         (
-            ("Purchaser:", "Cliente:", certificate_header.get("cliente")),
-            ("Cod. F3 Raw:", "Cod. F3 del grezzo:", certificate_header.get("codice_f3_raw")),
-            ("Cod. F3 Finished:", "Cod. F3 del finito:", certificate_header.get("codice_f3_finished")),
+            ("Purchaser:", "Cliente:", certificate_header.get("cliente"), "PURCHASER"),
+            ("Cod. F3 Raw:", "Cod. F3 del grezzo:", certificate_header.get("codice_f3_raw"), "COD_F3_RAW"),
+            ("Cod. F3 Finished:", "Cod. F3 del finito:", certificate_header.get("codice_f3_finished"), "COD_F3_FINISHED"),
         ),
         (
-            ("Order.:", "Ordine:", certificate_header.get("ordine_cliente")),
-            ("Drawing / Description Raw:", "Disegno / Descrizione del grezzo:", certificate_header.get("descrizione_raw")),
-            ("Drawing / Description Finished:", "Disegno / Descrizione del finito:", certificate_header.get("descrizione_finished")),
+            ("Order.:", "Ordine:", certificate_header.get("ordine_cliente"), "ORDER_CLIENT"),
+            ("Drawing / Description Raw:", "Disegno / Descrizione del grezzo:", certificate_header.get("descrizione_raw"), "RAW_DESCRIPTION"),
+            ("Drawing / Description Finished:", "Disegno / Descrizione del finito:", certificate_header.get("descrizione_finished"), "FINISHED_DESCRIPTION"),
         ),
         (
-            ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine")),
-            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_raw")),
-            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_finished")),
+            ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"), "CONFIRM_ORDER"),
+            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_raw"), "DDT_RAW"),
+            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_finished"), "DDT_FINISHED"),
         ),
         (
-            ("", "", ""),
-            ("Quantity:", "Quantità:", certificate_header.get("quantita_raw")),
-            ("Quantity:", "Quantità:", certificate_header.get("quantita_finished")),
+            ("", "", "", None),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_raw"), "QUANTITY_RAW"),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_finished"), "QUANTITY_FINISHED"),
         ),
-        (("", "", ""), ("", "", ""), ("", "", "")),
+        (("", "", "", None), ("", "", "", None), ("", "", "", None)),
     ]
     for cells_data in rows:
         cells = table.add_row().cells
-        for cell, (english_label, italian_label, value) in zip(cells, cells_data):
-            _fill_header_block_cell(cell, english_label, italian_label, value)
+        for cell, (english_label, italian_label, value, control_tag) in zip(cells, cells_data):
+            _fill_header_block_cell(cell, english_label, italian_label, value, control_tag=control_tag)
     _set_table_width(table, Inches(7.1))
     _set_column_widths(table, [Inches(2.05), Inches(2.525), Inches(2.525)])
 
 
-def _fill_header_block_cell(cell, english_label: str, italian_label: str, value: object) -> None:
+def _fill_header_block_cell(cell, english_label: str, italian_label: str, value: object, *, control_tag: str | None = None) -> None:
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     paragraph = cell.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -480,15 +541,25 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         run.font.name = "Arial"
         run.font.size = Pt(8)
     value_text = "" if value in (None, "") else str(value)
-    if value_text:
+    if value_text or control_tag:
         value_paragraph = cell.add_paragraph()
         value_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         value_paragraph.paragraph_format.space_after = Pt(0)
         value_paragraph.paragraph_format.line_spacing = 1
-        value_run = value_paragraph.add_run(value_text)
-        value_run.font.name = "Times New Roman"
-        value_run.font.size = Pt(10 if len(value_text) > 42 else 12)
-        value_run.font.color.rgb = RGBColor(0, 112, 192)
+        if control_tag:
+            _add_content_control_run(
+                value_paragraph,
+                tag=control_tag,
+                text=value_text,
+                font_name="Times New Roman",
+                size=10 if len(value_text) > 42 else 12,
+                color="0070C0",
+            )
+        else:
+            value_run = value_paragraph.add_run(value_text)
+            value_run.font.name = "Times New Roman"
+            value_run.font.size = Pt(10 if len(value_text) > 42 else 12)
+            value_run.font.color.rgb = RGBColor(0, 112, 192)
 
 
 def _fill_header_data_cell(cell, english_label: str, italian_label: str, value: object) -> None:
