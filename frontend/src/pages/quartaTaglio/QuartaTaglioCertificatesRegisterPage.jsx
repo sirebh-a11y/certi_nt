@@ -87,10 +87,10 @@ function compareValues(left, right, direction) {
     return 0;
   }
   if (leftEmpty) {
-    return 1;
+    return direction === "asc" ? -1 : 1;
   }
   if (rightEmpty) {
-    return -1;
+    return direction === "asc" ? 1 : -1;
   }
   return String(left).localeCompare(String(right), "it", { numeric: true, sensitivity: "base" }) * multiplier;
 }

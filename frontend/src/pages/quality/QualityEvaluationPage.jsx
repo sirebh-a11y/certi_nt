@@ -184,10 +184,10 @@ function compareValues(left, right, direction) {
     return 0;
   }
   if (leftEmpty) {
-    return 1;
+    return direction === "asc" ? -1 : 1;
   }
   if (rightEmpty) {
-    return -1;
+    return direction === "asc" ? 1 : -1;
   }
   if (typeof left === "number" && typeof right === "number") {
     return (left - right) * multiplier;
