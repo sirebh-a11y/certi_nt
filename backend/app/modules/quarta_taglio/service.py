@@ -1805,7 +1805,7 @@ def _suggest_standard_candidates(
             continue
         if standard_alloy in alloys:
             score += 50
-            reasons.append(f"lega {standard.lega_base}")
+            reasons.append(f"lega {_standard_alloy_label(standard)}")
 
         if measure_type and standard.misura_tipo:
             if _norm(standard.misura_tipo) != _norm(measure_type):
@@ -1917,13 +1917,23 @@ def _infer_product_type(
 
 def _standard_label(standard: NormativeStandard) -> str:
     parts = [
-        standard.lega_base,
+        _standard_alloy_label(standard),
         standard.norma,
         standard.trattamento_termico,
         standard.tipo_prodotto,
         standard.misura_tipo,
     ]
     return " · ".join(_unique_clean(parts)) or standard.code
+
+
+def _standard_alloy_label(standard: NormativeStandard) -> str:
+    designation = _clean_text(standard.lega_designazione)
+    base = _clean_text(standard.lega_base)
+    variant = _clean_text(standard.variante_lega)
+    label = designation or base or ""
+    if variant and _norm(variant) not in _norm(label):
+        label = f"{label} {variant}".strip()
+    return label or standard.code
 
 
 def _first_numeric(values: Any) -> float | None:

@@ -212,6 +212,17 @@ function hydrateDraft(item) {
   };
 }
 
+function standardDisplayLabel(item) {
+  const designation = String(item.lega_designazione || "").trim();
+  const base = String(item.lega_base || "").trim();
+  const variant = String(item.variante_lega || "").trim();
+  let alloy = designation || base;
+  if (variant && !alloy.toLowerCase().includes(variant.toLowerCase())) {
+    alloy = `${alloy} ${variant}`.trim();
+  }
+  return [alloy, item.norma, item.trattamento_termico, item.tipo_prodotto, item.misura_tipo].filter(Boolean).join(" · ");
+}
+
 function serializeDraft(draft) {
   const legaBase = draft.lega_base.trim();
   const variante = draft.variante_lega.trim();
@@ -317,7 +328,16 @@ export default function StandardsPage() {
       return items;
     }
     return items.filter((item) =>
-      [item.lega_base, item.lega_designazione, item.norma, item.trattamento_termico, item.tipo_prodotto, item.stato_validazione]
+      [
+        item.lega_base,
+        item.lega_designazione,
+        item.variante_lega,
+        item.norma,
+        item.trattamento_termico,
+        item.tipo_prodotto,
+        item.misura_tipo,
+        item.stato_validazione,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -526,11 +546,10 @@ function addPropertyRow() {
                 type="button"
               >
                 <span className="block font-semibold text-ink">
-                  {item.lega_designazione}
-                  {item.tipo_prodotto ? ` - ${item.tipo_prodotto}` : ""}
+                  {standardDisplayLabel(item)}
                 </span>
                 <span className="mt-1 block text-xs text-slate-500">
-                  {[item.norma, item.trattamento_termico, item.misura_tipo].filter(Boolean).join(" / ") || "Solo chimica"}
+                  {item.code}
                 </span>
                 <span
                   className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
@@ -549,10 +568,7 @@ function addPropertyRow() {
           <div className="border-b border-slate-100 pb-4">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Dettaglio standard</p>
             <h3 className="mt-2 text-xl font-semibold">
-              {draft.lega_designazione || "Nuovo standard"}
-              {draft.norma ? ` - ${draft.norma}` : ""}
-              {draft.trattamento_termico ? ` - ${draft.trattamento_termico}` : ""}
-              {draft.tipo_prodotto ? ` - ${draft.tipo_prodotto}` : ""}
+              {draft.lega_base ? standardDisplayLabel(draft) : "Nuovo standard"}
             </h3>
           </div>
 

@@ -77,6 +77,7 @@ def create_standard(
     actor_email: str,
 ) -> StandardResponse:
     _ensure_unique_code(db, payload.code)
+    _ensure_unique_display_label(db, payload)
     _validate_payload_limits(payload)
     item = NormativeStandard()
     _apply_standard_payload(item, payload)
@@ -98,6 +99,7 @@ def update_standard(
 ) -> StandardResponse:
     if standard.code != payload.code:
         _ensure_unique_code(db, payload.code)
+    _ensure_unique_display_label(db, payload, exclude_id=standard.id)
     _validate_payload_limits(payload)
     _apply_standard_payload(standard, payload)
     db.add(standard)
@@ -244,6 +246,89 @@ def _ensure_unique_code(db: Session, code: str) -> None:
     existing = db.query(NormativeStandard).filter(NormativeStandard.code == code).one_or_none()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Standard code already exists")
+
+
+def _ensure_unique_display_label(
+    db: Session,
+    payload: StandardCreateRequest | StandardUpdateRequest,
+    *,
+    exclude_id: int | None = None,
+) -> None:
+    target_label = _standard_payload_display_label(payload)
+    target_key = _label_key(target_label)
+    standards = db.query(NormativeStandard).all()
+    for standard in standards:
+        if exclude_id is not None and standard.id == exclude_id:
+            continue
+        if _label_key(_standard_model_display_label(standard)) != target_key:
+            continue
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Etichetta standard già esistente: {target_label}. Usa una designazione o variante distinguibile.",
+        )
+
+
+def _standard_payload_display_label(payload: StandardCreateRequest | StandardUpdateRequest) -> str:
+    return _join_standard_label_parts(
+        _standard_alloy_label(
+            lega_designazione=payload.lega_designazione,
+            lega_base=payload.lega_base,
+            variante_lega=payload.variante_lega,
+            fallback=payload.code,
+        ),
+        payload.norma,
+        payload.trattamento_termico,
+        payload.tipo_prodotto,
+        payload.misura_tipo,
+    )
+
+
+def _standard_model_display_label(standard: NormativeStandard) -> str:
+    return _join_standard_label_parts(
+        _standard_alloy_label(
+            lega_designazione=standard.lega_designazione,
+            lega_base=standard.lega_base,
+            variante_lega=standard.variante_lega,
+            fallback=standard.code,
+        ),
+        standard.norma,
+        standard.trattamento_termico,
+        standard.tipo_prodotto,
+        standard.misura_tipo,
+    )
+
+
+def _standard_alloy_label(
+    *,
+    lega_designazione: str | None,
+    lega_base: str | None,
+    variante_lega: str | None,
+    fallback: str,
+) -> str:
+    designation = (lega_designazione or "").strip()
+    base = (lega_base or "").strip()
+    variant = (variante_lega or "").strip()
+    label = designation or base
+    if variant and variant.casefold() not in label.casefold():
+        label = f"{label} {variant}".strip()
+    return label or fallback
+
+
+def _join_standard_label_parts(*parts: str | None) -> str:
+    seen: set[str] = set()
+    values: list[str] = []
+    for part in parts:
+        cleaned = (part or "").strip()
+        key = _label_key(cleaned)
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        values.append(cleaned)
+    return " · ".join(values)
+
+
+def _label_key(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().casefold())
 
 
 def _slugify(value: str) -> str:

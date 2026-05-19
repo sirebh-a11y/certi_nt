@@ -151,8 +151,15 @@ function articleAutosaveTitle(cellState) {
 }
 
 function standardLabel(standard) {
+  const designation = String(standard.lega_designazione || "").trim();
+  const base = String(standard.lega_base || "").trim();
+  const variant = String(standard.variante_lega || "").trim();
+  let alloy = designation || base;
+  if (variant && !alloy.toLowerCase().includes(variant.toLowerCase())) {
+    alloy = `${alloy} ${variant}`.trim();
+  }
   return [
-    standard.lega_base,
+    alloy,
     standard.norma,
     standard.trattamento_termico,
     standard.tipo_prodotto,
