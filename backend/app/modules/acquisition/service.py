@@ -7283,6 +7283,80 @@ def _add_failed_notification_item(failed_items: list[dict[str, str]], *, file_na
         failed_items.append(item)
 
 
+def _error_detail_text(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        return str(exc.detail)
+    return str(exc)
+
+
+def _is_retryable_processing_error(exc: Exception) -> bool:
+    text_value = _error_detail_text(exc).lower()
+    retryable_tokens = (
+        "timeout",
+        "timed out",
+        "temporar",
+        "connection",
+        "network",
+        "rate limit",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "ai request failed",
+        "openai",
+        "invalid json",
+        "unexpected",
+    )
+    non_retryable_tokens = (
+        "fornitore",
+        "supplier",
+        "duplicato",
+        "duplicate",
+        "not found",
+        "non trovato",
+        "empty",
+        "vuoto",
+        "no image pages",
+        "pdf",
+        "api key",
+        "non configur",
+        "not configured",
+    )
+    return any(token in text_value for token in retryable_tokens) and not any(
+        token in text_value for token in non_retryable_tokens
+    )
+
+
+def _run_retryable_processing_step(
+    *,
+    run: AutonomousProcessingRun,
+    db: Session,
+    label: str,
+    operation,
+    max_retries: int = 2,
+):
+    attempts = max_retries + 1
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts or not _is_retryable_processing_error(exc):
+                raise
+            _save_run(
+                db,
+                run,
+                ultimo_errore=_error_detail_text(exc),
+                messaggio_corrente=f"{label}: errore temporaneo, ritento {attempt + 1}/{attempts}",
+            )
+            time.sleep(min(2 * attempt, 5))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"{label}: errore non specificato")
+
+
 def _send_autonomous_run_notification(
     *,
     run: AutonomousProcessingRun,
@@ -7415,12 +7489,17 @@ def run_autonomous_processing(
                 if template is None or not _supplier_supports_ai_vision_pipeline(template.supplier_key):
                     continue
                 try:
-                    _get_supplier_certificate_ai_payload(
+                    _run_retryable_processing_step(
+                        run=run,
                         db=db,
-                        supplier_key=template.supplier_key,
-                        certificate_document=certificate_document,
-                        openai_api_key=openai_api_key,
-                        certificate_ai_cache=certificate_ai_cache,
+                        label=f"Lettura AI certificato {certificate_document.nome_file_originale}",
+                        operation=lambda certificate_document=certificate_document, template=template: _get_supplier_certificate_ai_payload(
+                            db=db,
+                            supplier_key=template.supplier_key,
+                            certificate_document=certificate_document,
+                            openai_api_key=openai_api_key,
+                            certificate_ai_cache=certificate_ai_cache,
+                        ),
                     )
                 except HTTPException as exc:
                     _add_failed_notification_item(
@@ -7466,12 +7545,17 @@ def run_autonomous_processing(
                     messaggio_corrente=f"Creo le righe DDT con AI per {ddt_document.nome_file_originale}",
                 )
                 try:
-                    rows, created_count = _ensure_autonomous_rows_with_ai(
+                    rows, created_count = _run_retryable_processing_step(
+                        run=run,
                         db=db,
-                        ddt_document=ddt_document,
-                        actor_id=actor_id,
-                        actor_email=actor_email,
-                        openai_api_key=openai_api_key,
+                        label=f"Intervento AI DDT {ddt_document.nome_file_originale}",
+                        operation=lambda ddt_document=ddt_document: _ensure_autonomous_rows_with_ai(
+                            db=db,
+                            ddt_document=ddt_document,
+                            actor_id=actor_id,
+                            actor_email=actor_email,
+                            openai_api_key=openai_api_key,
+                        ),
                     )
                     if created_count:
                         _save_run(db, run, righe_create=run.righe_create + created_count)
@@ -7523,11 +7607,16 @@ def run_autonomous_processing(
                             messaggio_corrente=f"Uso Vision DDT sulla riga #{row.id}",
                         )
                         try:
-                            extract_ddt_fields_with_vision(
+                            _run_retryable_processing_step(
+                                run=run,
                                 db=db,
-                                row=row,
-                                actor_id=actor_id,
-                                openai_api_key=openai_api_key,
+                                label=f"Vision DDT riga #{row.id}",
+                                operation=lambda row=row: extract_ddt_fields_with_vision(
+                                    db=db,
+                                    row=row,
+                                    actor_id=actor_id,
+                                    openai_api_key=openai_api_key,
+                                ),
                             )
                             row = get_acquisition_row(db, row.id)
                         except HTTPException as exc:
