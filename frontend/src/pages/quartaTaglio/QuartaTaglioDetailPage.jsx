@@ -597,27 +597,12 @@ export default function QuartaTaglioDetailPage() {
 
   const headerRows = useMemo(() => {
     const header = data?.header || {};
-    const codiceF3Value = header.codice_f3 ? (
-      <div>
-        <div>{header.codice_f3}</div>
-        {header.codice_f3_origine === "quarta_fallback" ? (
-          <div className="mt-1 text-[11px] font-semibold text-amber-700">Fallback Quarta</div>
-        ) : null}
-        {header.codice_f3_warning ? <div className="mt-1 text-[11px] font-semibold text-amber-700">{header.codice_f3_warning}</div> : null}
-      </div>
-    ) : (
-      "-"
-    );
     return [
       ["Certificato", header.numero_certificato || "Da assegnare"],
-      ["Cliente", header.cliente || "Da eSolver"],
-      ["Ordine cliente", header.ordine_cliente || "Da eSolver"],
-      ["C.d.O.", header.conferma_ordine || "Da eSolver"],
-      ["DDT", header.ddt || "Da eSolver"],
       ["Data certificato", header.data_certificato || "-"],
-      ["Codice F3", codiceF3Value],
       ["Colata", header.colata || "-"],
-      ["Quantità", formatQuantity(header.quantita)],
+      ["Materiale fornito", header.materiale_fornito || "-"],
+      ["Diametro", header.diametro || "-"],
     ];
   }, [data]);
   const headerFlowColumns = useMemo(() => {
@@ -935,39 +920,46 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-        <Panel title="Dati certificato">
-          <div className="grid gap-2 md:grid-cols-2">
-            {headerRows.map(([label, value]) => (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-                <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
-            <div className="border-b border-slate-200 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Header Word
-            </div>
-            <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
-              {headerFlowColumns.map((column) => (
-                <div className="min-w-0" key={column.title}>
-                  <div className="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{column.title}</div>
-                  <div className="divide-y divide-slate-100">
-                    {column.rows.map(([label, value]) => (
-                      <div className="px-3 py-2" key={label}>
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
-                        <div className="mt-1 min-h-[18px] break-words font-medium text-sky-700">{value || ""}</div>
-                      </div>
-                    ))}
-                  </div>
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr] xl:items-start">
+        <div className="space-y-4">
+          <Panel title="Dati importanti">
+            <div className="grid gap-2 md:grid-cols-2">
+              {headerRows.map(([label, value]) => (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+                  <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
                 </div>
               ))}
             </div>
-          </div>
-        </Panel>
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
+              <div className="border-b border-slate-200 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Header Word
+              </div>
+              <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
+                {headerFlowColumns.map((column) => (
+                  <div className="min-w-0" key={column.title}>
+                    <div className="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{column.title}</div>
+                    <div className="divide-y divide-slate-100">
+                      {column.rows.map(([label, value]) => (
+                        <div className="px-3 py-2" key={label}>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
+                          <div className="mt-1 min-h-[18px] break-words font-medium text-sky-700">{value || ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Panel>
 
-        <Panel title="Standard">
+          <Panel title="Chimica">
+            <ValueTable numberDigits={3} values={data.chemistry || []} />
+          </Panel>
+        </div>
+
+        <div className="space-y-4">
+          <Panel title="Standard">
           {data.selected_standard ? (
             <div
               className={`rounded-lg border px-3 py-2 text-sm ${
@@ -1038,14 +1030,8 @@ export default function QuartaTaglioDetailPage() {
               </button>
             </div>
           </div>
-        </Panel>
-      </div>
+          </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Chimica">
-          <ValueTable numberDigits={3} values={data.chemistry || []} />
-        </Panel>
-        <div className="space-y-4">
           <Panel title="Proprietà">
             <div className="max-h-[280px] overflow-y-auto pr-1">
               <ValueTable values={data.properties || []} />

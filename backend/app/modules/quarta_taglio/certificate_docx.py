@@ -650,7 +650,6 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
             ("Quantity:", "Quantità:", certificate_header.get("quantita_raw"), "QUANTITY_RAW"),
             ("Quantity:", "Quantità:", certificate_header.get("quantita_finished"), "QUANTITY_FINISHED"),
         ),
-        (("", "", "", None), ("", "", "", None), ("", "", "", None)),
     ]
     for cells_data in rows:
         row = table.add_row()

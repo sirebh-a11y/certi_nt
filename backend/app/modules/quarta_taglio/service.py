@@ -522,6 +522,8 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             "disegno_diverso_da_quarta": "true" if disegno_override and _norm(disegno_override) != _norm(disegno_proposta) else None,
             "disegno_confidenza": disegno_confidenza,
             "colata": group.colata,
+            "materiale_fornito": _join_unique(_materiale_fornito_from_app_row(row) for row in app_rows) or None,
+            "diametro": _join_unique(row.diametro for row in app_rows) or None,
             "quantita": _format_quantity(esolver_qta if esolver_qta is not None else group.qta_totale)
             if (esolver_qta is not None or group.qta_totale is not None)
             else None,
@@ -3033,6 +3035,10 @@ def _format_quantity(value: Any) -> str | None:
     if numeric_value is None:
         return _clean_text(value)
     return str(int(round(numeric_value)))
+
+
+def _materiale_fornito_from_app_row(row: AcquisitionRow) -> str | None:
+    return _join_unique((row.lega_designazione, row.lega_base, row.variante_lega), separator=" ")
 
 
 def _certificate_datetime_from_detail(detail: QuartaTaglioDetailResponse) -> datetime | None:
