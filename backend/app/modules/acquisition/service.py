@@ -393,6 +393,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
         block_states=_compute_block_states(row),
+        quick_confirmed_blocks=_quick_confirmed_blocks_from_row(row),
         match_state=row.certificate_match.stato if row.certificate_match is not None else "mancante",
         certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
         ddt_required_fields=list(_ddt_required_fields(supplier_key)),
@@ -427,6 +428,16 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         history_events=[serialize_history_event(event) for event in row.history_events],
         value_history=[serialize_value_history(entry) for entry in row.value_history],
     )
+
+
+def _quick_confirmed_blocks_from_row(row: AcquisitionRow) -> dict[str, bool]:
+    result = {"chimica": False, "proprieta": False}
+    for event in getattr(row, "history_events", None) or []:
+        if event.azione != "conferma_rapida_certificazione":
+            continue
+        if event.blocco in result:
+            result[event.blocco] = True
+    return result
 
 
 def serialize_quality_row(row: AcquisitionRow) -> AcquisitionQualityRowResponse:
@@ -6102,6 +6113,7 @@ def _manual_document_linked_rows(
         db.query(AcquisitionRow)
         .options(
             selectinload(AcquisitionRow.values),
+            selectinload(AcquisitionRow.history_events),
             joinedload(AcquisitionRow.supplier),
             joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
             joinedload(AcquisitionRow.certificate_match),
@@ -7946,6 +7958,7 @@ def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:
         db.query(AcquisitionRow)
         .options(
             selectinload(AcquisitionRow.values),
+            selectinload(AcquisitionRow.history_events),
             joinedload(AcquisitionRow.supplier),
             joinedload(AcquisitionRow.certificate_match),
         )

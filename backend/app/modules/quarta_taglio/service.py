@@ -20,8 +20,8 @@ from app.core.integrations.models import ExternalConnection
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
-from app.modules.acquisition.models import AcquisitionRow, ReadValue
-from app.modules.acquisition.service import _compute_block_states_from_db
+from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, ReadValue
+from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
     build_forgialluminio_draft_docx,
     inspect_docx_content_controls,
@@ -461,6 +461,18 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         properties=properties,
         selected_standard_confirmed=selected_standard_confirmed,
     )
+    quick_confirm_blockers = _quick_incoming_confirm_blockers(
+        app_rows=app_rows,
+        selected_standard_confirmed=selected_standard_confirmed,
+        chemistry=chemistry,
+        properties=properties,
+    )
+    quick_confirm_applied = _quick_incoming_confirm_applied(app_rows)
+    quick_confirm_warning = (
+        "Standard cambiato: ora ci sono non conformità. Controlla Incoming per i CDQ coinvolti."
+        if quick_confirm_applied and conformity_issues
+        else None
+    )
     esolver_rows = _esolver_rows_from_link(esolver_link)
     esolver_status = esolver_link.status if esolver_link else "not_checked"
     esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
@@ -579,6 +591,10 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         notes=notes,
         conformity_status=conformity_status,
         conformity_issues=conformity_issues,
+        quick_incoming_confirm_available=not quick_confirm_blockers,
+        quick_incoming_confirm_applied=quick_confirm_applied,
+        quick_incoming_confirm_blockers=quick_confirm_blockers,
+        quick_incoming_confirm_warning=quick_confirm_warning,
         esolver_status=esolver_status,
         esolver_message=esolver_message,
         esolver_rows=esolver_rows,
@@ -630,6 +646,69 @@ def confirm_quarta_taglio_standard(
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
     _sync_open_certificate_conformity(db, detail=detail)
     return detail
+
+
+def apply_quick_incoming_confirmation(
+    db: Session,
+    *,
+    cod_odp: str,
+    certificate_id: int | None,
+    actor_id: int | None,
+) -> QuartaTaglioDetailResponse:
+    rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cod_odp == cod_odp)
+        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
+
+    app_rows = _load_matching_app_rows(db, rows)
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    blockers = _quick_incoming_confirm_blockers(
+        app_rows=app_rows,
+        selected_standard_confirmed=detail.selected_standard_confirmed,
+        chemistry=detail.chemistry,
+        properties=detail.properties,
+    )
+    if blockers:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(blockers))
+
+    changed = 0
+    for row in app_rows:
+        for block in ("chimica", "proprieta"):
+            block_values = [
+                value
+                for value in row.values
+                if value.blocco == block and _read_value_has_payload_for_quick_confirm(value)
+            ]
+            if not block_values:
+                continue
+            block_changed = False
+            for value in block_values:
+                if value.stato != "confermato":
+                    value.stato = "confermato"
+                    value.utente_ultima_modifica_id = actor_id
+                    value.timestamp_ultima_modifica = datetime.now(timezone.utc)
+                    db.add(value)
+                    block_changed = True
+                    changed += 1
+            if block_changed or not _has_quick_confirmation_event(row, block):
+                db.add(
+                    AcquisitionHistoryEvent(
+                        acquisition_row_id=row.id,
+                        blocco=block,
+                        azione="conferma_rapida_certificazione",
+                        utente_id=actor_id,
+                        nota_breve=f"OL {cod_odp}",
+                    )
+                )
+        _sync_row_statuses(db, row)
+        db.add(row)
+
+    db.commit()
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
 
 
 def update_quarta_taglio_article_data(
@@ -1793,6 +1872,7 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
         db.query(AcquisitionRow)
         .options(
             selectinload(AcquisitionRow.values),
+            selectinload(AcquisitionRow.history_events),
             selectinload(AcquisitionRow.certificate_match),
             selectinload(AcquisitionRow.custom_note_links).joinedload(AcquisitionRowNoteTemplate.note_template),
         )
@@ -1800,6 +1880,54 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
     )
+
+
+def _quick_incoming_confirm_blockers(
+    *,
+    app_rows: list[AcquisitionRow],
+    selected_standard_confirmed: bool,
+    chemistry: list[QuartaTaglioAggregateValueResponse],
+    properties: list[QuartaTaglioAggregateValueResponse],
+) -> list[str]:
+    blockers: list[str] = []
+    if not selected_standard_confirmed:
+        blockers.append("Standard non confermato")
+    if not app_rows:
+        blockers.append("Nessuna riga Incoming collegata")
+    if not chemistry:
+        blockers.append("Chimica non disponibile")
+    if not properties:
+        blockers.append("Proprietà non disponibili")
+    chemistry_blockers = _non_ok_quick_items(chemistry)
+    if chemistry_blockers:
+        blockers.append(f"Chimica non tutta OK: {', '.join(chemistry_blockers)}")
+    property_blockers = _non_ok_quick_items(properties)
+    if property_blockers:
+        blockers.append(f"Proprietà non tutte OK: {', '.join(property_blockers)}")
+    return blockers
+
+
+def _non_ok_quick_items(items: list[QuartaTaglioAggregateValueResponse]) -> list[str]:
+    return [item.field for item in items if item.status != "ok"]
+
+
+def _quick_incoming_confirm_applied(app_rows: list[AcquisitionRow]) -> bool:
+    return any(
+        event.azione == "conferma_rapida_certificazione"
+        for row in app_rows
+        for event in (getattr(row, "history_events", None) or [])
+    )
+
+
+def _has_quick_confirmation_event(row: AcquisitionRow, block: str) -> bool:
+    return any(
+        event.blocco == block and event.azione == "conferma_rapida_certificazione"
+        for event in (getattr(row, "history_events", None) or [])
+    )
+
+
+def _read_value_has_payload_for_quick_confirm(value: ReadValue) -> bool:
+    return bool(_clean_text(value.valore_finale) or _clean_text(value.valore_standardizzato) or _clean_text(value.valore_grezzo))
 
 
 def _word_creation_blockers(

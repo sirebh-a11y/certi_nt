@@ -12,6 +12,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioWordDraftResponse,
 )
 from app.modules.quarta_taglio.service import (
+    apply_quick_incoming_confirmation,
     confirm_quarta_taglio_standard,
     create_quarta_taglio_word_draft,
     get_quarta_taglio_detail,
@@ -88,6 +89,16 @@ def confirm_quarta_taglio_standard_route(
     db: DbSession,
 ) -> QuartaTaglioDetailResponse:
     return confirm_quarta_taglio_standard(db, cod_odp=cod_odp, standard_id=payload.standard_id, actor_id=current_user.id)
+
+
+@router.post("/{cod_odp}/quick-incoming-confirm", response_model=QuartaTaglioDetailResponse)
+def apply_quick_incoming_confirmation_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_id: int | None = Query(default=None),
+) -> QuartaTaglioDetailResponse:
+    return apply_quick_incoming_confirmation(db, cod_odp=cod_odp, certificate_id=certificate_id, actor_id=current_user.id)
 
 
 @router.patch("/{cod_odp}/article-data", response_model=QuartaTaglioDetailResponse)

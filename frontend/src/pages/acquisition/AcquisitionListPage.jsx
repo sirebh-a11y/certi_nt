@@ -104,6 +104,17 @@ function activityLabelFromState(state) {
     return activityLabelFromState(state);
   }
 
+function blockDisplayLabel(row, block) {
+  if (
+    (block === "chimica" || block === "proprieta") &&
+    row.block_states?.[block] === "verde" &&
+    row.quick_confirmed_blocks?.[block]
+  ) {
+    return "Conf. da Cert.";
+  }
+  return blockActivityLabel(block, row.block_states?.[block] || "rosso");
+}
+
 function compactMatchReference(row) {
   const hasDdt = Boolean(row.document_ddt_id);
   const hasCertificate = Boolean(row.document_certificato_id);
@@ -1204,7 +1215,7 @@ export default function AcquisitionListPage() {
                           label={BLOCK_LABELS.chimica}
                           onClick={() => openSection(row.id, "chemistry")}
                           onKeyDown={(event) => handleSectionKeyDown(event, row.id, "chemistry")}
-                          secondary={blockActivityLabel("chimica", row.block_states?.chimica || "rosso")}
+                          secondary={blockDisplayLabel(row, "chimica")}
                           state={row.block_states?.chimica || "rosso"}
                         />
                       </td>
@@ -1213,7 +1224,7 @@ export default function AcquisitionListPage() {
                           label={BLOCK_LABELS.proprieta}
                           onClick={() => openSection(row.id, "properties")}
                           onKeyDown={(event) => handleSectionKeyDown(event, row.id, "properties")}
-                          secondary={blockActivityLabel("proprieta", row.block_states?.proprieta || "rosso")}
+                          secondary={blockDisplayLabel(row, "proprieta")}
                           state={row.block_states?.proprieta || "rosso"}
                         />
                       </td>

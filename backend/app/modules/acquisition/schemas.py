@@ -662,6 +662,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
     block_states: dict[str, str]
+    quick_confirmed_blocks: dict[str, bool] = Field(default_factory=dict)
     match_state: str
     certificate_file_name: str | None
     ddt_required_fields: list[str]

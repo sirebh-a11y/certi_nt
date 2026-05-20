@@ -224,6 +224,8 @@ export default function QuartaTaglioDetailPage() {
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
+  const [quickConfirmEnabled, setQuickConfirmEnabled] = useState(false);
+  const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -474,6 +476,30 @@ export default function QuartaTaglioDetailPage() {
       setWordDraftState({
         status: "error",
         message: handleRequestError(requestError, "Errore generazione bozza Word"),
+      });
+    }
+  }
+
+  async function applyQuickIncomingConfirmation() {
+    if (!quickConfirmEnabled) {
+      return;
+    }
+    setQuickConfirmState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const response = await apiRequest(
+        certificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm?certificate_id=${encodeURIComponent(certificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm`,
+        { method: "POST" },
+        token,
+      );
+      setData(response);
+      setQuickConfirmState({ status: "saved", message: "Incoming aggiornato: chimica e proprietà confermate." });
+    } catch (requestError) {
+      setQuickConfirmState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore conferma rapida Incoming"),
       });
     }
   }
@@ -982,6 +1008,47 @@ export default function QuartaTaglioDetailPage() {
             </div>
           )}
           {standardError ? <div className="mt-2 text-sm text-rose-600">{standardError}</div> : null}
+          {data.quick_incoming_confirm_warning ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              {data.quick_incoming_confirm_warning}
+            </div>
+          ) : null}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <input
+                  checked={quickConfirmEnabled}
+                  className="h-4 w-4 accent-accent"
+                  onChange={(event) => setQuickConfirmEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                Conferma rapida Incoming
+              </label>
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!quickConfirmEnabled || !data.quick_incoming_confirm_available || quickConfirmState.status === "saving"}
+                onClick={applyQuickIncomingConfirmation}
+                type="button"
+              >
+                {quickConfirmState.status === "saving" ? "Confermo..." : "Applica"}
+              </button>
+            </div>
+            {quickConfirmState.message ? (
+              <p className={`mt-2 text-xs ${quickConfirmState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+                {quickConfirmState.message}
+              </p>
+            ) : null}
+            {quickConfirmEnabled && !data.quick_incoming_confirm_available ? (
+              <div className="mt-2 space-y-1 text-xs text-amber-800">
+                {(data.quick_incoming_confirm_blockers || []).map((item) => (
+                  <div key={item}>{item}</div>
+                ))}
+              </div>
+            ) : null}
+            {data.quick_incoming_confirm_applied ? (
+              <p className="mt-2 text-xs text-slate-500">Conferma rapida già applicata ad almeno una riga Incoming collegata.</p>
+            ) : null}
+          </div>
           <div className="mt-3 space-y-2">
             {(data.standard_candidates || []).map((candidate) => (
               <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm" key={candidate.id}>

@@ -235,6 +235,10 @@ class QuartaTaglioDetailResponse(BaseModel):
     notes: list[QuartaTaglioNoteResponse]
     conformity_status: str = "da_verificare"
     conformity_issues: list[QuartaTaglioConformityIssueResponse] = Field(default_factory=list)
+    quick_incoming_confirm_available: bool = False
+    quick_incoming_confirm_applied: bool = False
+    quick_incoming_confirm_blockers: list[str] = Field(default_factory=list)
+    quick_incoming_confirm_warning: str | None = None
     esolver_status: str = "not_checked"
     esolver_message: str | None = None
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] = Field(default_factory=list)
