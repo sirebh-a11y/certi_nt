@@ -21,6 +21,7 @@ from fastapi import HTTPException, status
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from pypdf import PdfReader
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -7280,6 +7281,24 @@ def _run_document_ids_from_storage(raw_value: str | None) -> list[int]:
     return [int(item) for item in payload if isinstance(item, int) or (isinstance(item, str) and item.isdigit())]
 
 
+def _count_final_rows_for_run_documents(
+    db: Session,
+    *,
+    ddt_document_ids: list[int],
+    certificate_document_ids: list[int],
+) -> int:
+    normalized_ddt_ids = _normalize_document_id_list(ddt_document_ids)
+    normalized_certificate_ids = _normalize_document_id_list(certificate_document_ids)
+    filters = []
+    if normalized_ddt_ids:
+        filters.append(AcquisitionRow.document_ddt_id.in_(normalized_ddt_ids))
+    if normalized_certificate_ids:
+        filters.append(AcquisitionRow.document_certificato_id.in_(normalized_certificate_ids))
+    if not filters:
+        return 0
+    return db.query(AcquisitionRow.id).filter(or_(*filters)).distinct().count()
+
+
 def _add_failed_notification_item(failed_items: list[dict[str, str]], *, file_name: str, reason: str) -> None:
     normalized_file_name = _string_or_none(file_name) or "Documento senza nome"
     normalized_reason = _string_or_none(reason) or "Errore non specificato"
@@ -7796,13 +7815,20 @@ def run_autonomous_processing(
             if cross_run_matches:
                 _save_run(db, run, match_proposti=run.match_proposti + cross_run_matches)
 
+        final_row_count = _count_final_rows_for_run_documents(
+            db,
+            ddt_document_ids=ddt_document_ids,
+            certificate_document_ids=certificate_document_ids,
+        )
         run = _save_run(
             db,
             run,
             stato="completato",
             fase_corrente="completato",
             messaggio_corrente="Compilazione automatica completata. Ora puo intervenire quality.",
-            totale_righe_target=max(run.righe_processate, run.righe_create),
+            righe_create=final_row_count,
+            righe_processate=final_row_count,
+            totale_righe_target=final_row_count,
             current_row_id=None,
             finished_at=datetime.now(UTC),
         )
