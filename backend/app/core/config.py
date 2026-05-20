@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     smtp_tls: bool = Field(default=False, alias="SMTP_TLS")
     mail_from_email: str = Field(default="noreply@certi.local", alias="MAIL_FROM_EMAIL")
     mail_from_name: str = Field(default="CERTI_nt System", alias="MAIL_FROM_NAME")
+    acquisition_notification_admin_email: str | None = Field(default=None, alias="ACQUISITION_NOTIFICATION_ADMIN_EMAIL")
     document_storage_root: str = Field(default="storage/documents", alias="DOCUMENT_STORAGE_ROOT")
     document_vision_model: str = Field(default="gpt-5.5", alias="DOCUMENT_VISION_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")

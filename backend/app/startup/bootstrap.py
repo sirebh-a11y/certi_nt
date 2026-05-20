@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+import json
+
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -15,6 +18,7 @@ from app.core.users.models import User
 from app.modules.acquisition.models import (  # noqa: F401
     AcquisitionHistoryEvent,
     AcquisitionRow,
+    AcquisitionUploadBatch,
     AcquisitionValueHistory,
     AutonomousProcessingRun,
     CertificateMatch,
@@ -51,6 +55,7 @@ from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_s
 def initialize_application() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
+    ensure_acquisition_processing_run_columns()
     ensure_acquisition_quality_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
@@ -65,6 +70,8 @@ def initialize_application() -> None:
         seed_note_templates(db)
         seed_normative_standards(db)
         seed_customer_requirements(db)
+        recover_interrupted_acquisition_runs(db)
+        recover_interrupted_upload_batches(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()
@@ -86,6 +93,93 @@ def ensure_document_upload_columns() -> None:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+
+
+def ensure_acquisition_processing_run_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("acquisition_processing_runs"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("acquisition_processing_runs")}
+    statements: list[str] = []
+
+    if "upload_batch_id" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN upload_batch_id VARCHAR(64)")
+    if "ddt_document_ids" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN ddt_document_ids TEXT")
+    if "certificate_document_ids" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN certificate_document_ids TEXT")
+    if "notification_email" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN notification_email VARCHAR(255)")
+    if "admin_notification_email" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN admin_notification_email VARCHAR(255)")
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def _run_document_ids(raw_value: str | None) -> list[int]:
+    if not raw_value:
+        return []
+    try:
+        payload = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [int(item) for item in payload if isinstance(item, int) or (isinstance(item, str) and item.isdigit())]
+
+
+def recover_interrupted_acquisition_runs(db: Session) -> None:
+    runs = (
+        db.query(AutonomousProcessingRun)
+        .filter(AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")))
+        .all()
+    )
+    if not runs:
+        return
+
+    now = datetime.now(UTC)
+    for run in runs:
+        document_ids = [*_run_document_ids(run.ddt_document_ids), *_run_document_ids(run.certificate_document_ids)]
+        if document_ids:
+            (
+                db.query(Document)
+                .filter(Document.id.in_(document_ids), Document.stato_elaborazione == "in_lavorazione")
+                .update({Document.stato_elaborazione: "errore"}, synchronize_session=False)
+            )
+        run.stato = "errore"
+        run.fase_corrente = "errore"
+        run.messaggio_corrente = "Run interrotto da riavvio server"
+        run.ultimo_errore = "Interrotto da riavvio server"
+        run.finished_at = now
+        db.add(run)
+        if run.upload_batch_id:
+            batch = db.get(AcquisitionUploadBatch, run.upload_batch_id)
+            if batch is not None:
+                batch.status = "errore"
+                batch.active_uploads = 0
+                batch.message = "Run interrotto da riavvio server"
+                db.add(batch)
+    db.commit()
+
+
+def recover_interrupted_upload_batches(db: Session) -> None:
+    batches = db.query(AcquisitionUploadBatch).filter(AcquisitionUploadBatch.active_uploads > 0).all()
+    if not batches:
+        return
+    for batch in batches:
+        batch.active_uploads = 0
+        if batch.status == "uploading":
+            batch.status = "aperto"
+            batch.message = "Caricamento interrotto da riavvio server: verifica i documenti caricati"
+        elif batch.status == "avvio_ai_prenotato":
+            batch.status = "errore"
+            batch.message = "Avvio Assistente AI interrotto da riavvio server"
+        db.add(batch)
+    db.commit()
 
 
 def ensure_acquisition_quality_columns() -> None:

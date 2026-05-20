@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import time
 import pytesseract
 from dataclasses import dataclass
 from functools import lru_cache
@@ -24,10 +25,13 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.email.schemas import NotificationEmail
+from app.core.email.service import email_service
 from app.core.logs.service import log_service
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
     AcquisitionRow,
+    AcquisitionUploadBatch,
     AcquisitionValueHistory,
     AutonomousProcessingRun,
     CertificateMatch,
@@ -479,6 +483,50 @@ def discard_current_upload_batch(db: Session, *, actor_id: int) -> CurrentUpload
         return CurrentUploadBatchResponse(upload_batch_id=None, items=[])
     _delete_temporary_upload_batch(db, actor_id=actor_id, upload_batch_id=upload_batch_id)
     return CurrentUploadBatchResponse(upload_batch_id=None, items=[])
+
+
+def _get_or_create_upload_batch(db: Session, *, upload_batch_id: str, actor_id: int) -> AcquisitionUploadBatch:
+    batch = db.get(AcquisitionUploadBatch, upload_batch_id)
+    if batch is None:
+        batch = AcquisitionUploadBatch(id=upload_batch_id, actor_id=actor_id, status="aperto", active_uploads=0)
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+    return batch
+
+
+def _begin_upload_batch(db: Session, *, upload_batch_id: str, actor_id: int) -> AcquisitionUploadBatch:
+    batch = _get_or_create_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
+    if batch.actor_id is not None and batch.actor_id != actor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Batch non autorizzato")
+    if batch.status in {"in_elaborazione", "completato"} or (batch.status == "avvio_ai_prenotato" and batch.active_uploads <= 0):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch gia chiuso: crea un nuovo batch per altri file")
+    batch.actor_id = actor_id
+    batch.active_uploads = max(0, batch.active_uploads) + 1
+    batch.status = "uploading"
+    batch.message = "Caricamento documenti in corso"
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def _finish_upload_batch(db: Session, *, upload_batch_id: str, error_message: str | None = None) -> None:
+    batch = db.get(AcquisitionUploadBatch, upload_batch_id)
+    if batch is None:
+        return
+    batch.active_uploads = max(0, batch.active_uploads - 1)
+    if error_message:
+        batch.message = error_message
+    elif batch.active_uploads > 0:
+        batch.message = "Caricamento documenti in corso"
+    elif batch.status == "uploading":
+        batch.status = "aperto"
+        batch.message = "Documenti caricati, in attesa di Assistente AI"
+    elif batch.status == "avvio_ai_prenotato":
+        batch.message = "Caricamento completato, Assistente AI in partenza"
+    db.add(batch)
+    db.commit()
 
 
 def get_document(db: Session, document_id: int) -> Document:
@@ -5852,6 +5900,7 @@ def upload_documents_batch(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided for batch upload")
 
     resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _get_latest_temporary_upload_batch_id(db, actor_id=actor_id) or uuid4().hex
+    _begin_upload_batch(db, upload_batch_id=resolved_upload_batch_id, actor_id=actor_id)
     existing_batch_ids = {
         document.id
         for document in db.query(Document.id)
@@ -5866,43 +5915,45 @@ def upload_documents_batch(
     failed: list[DocumentBatchErrorResponse] = []
     uploaded_ids: set[int] = set(existing_batch_ids)
 
-    for uploaded_file in uploaded_files:
-        file_name = Path(uploaded_file.filename or "").name or f"{tipo_documento}.bin"
-        try:
-            uploaded_document = upload_document(
-                db=db,
-                tipo_documento=tipo_documento,
-                uploaded_file=uploaded_file,
-                actor_id=actor_id,
-                actor_email=actor_email,
-                fornitore_id=fornitore_id,
-                documento_padre_id=documento_padre_id,
-                origine_upload=origine_upload,
-                upload_batch_id=resolved_upload_batch_id,
-            )
-            if uploaded_document.id in uploaded_ids:
-                failed.append(
-                    DocumentBatchErrorResponse(
-                        file_name=file_name,
-                        detail="File duplicato: gia presente nel batch temporaneo aperto",
-                    )
+    try:
+        for uploaded_file in uploaded_files:
+            file_name = Path(uploaded_file.filename or "").name or f"{tipo_documento}.bin"
+            try:
+                uploaded_document = upload_document(
+                    db=db,
+                    tipo_documento=tipo_documento,
+                    uploaded_file=uploaded_file,
+                    actor_id=actor_id,
+                    actor_email=actor_email,
+                    fornitore_id=fornitore_id,
+                    documento_padre_id=documento_padre_id,
+                    origine_upload=origine_upload,
+                    upload_batch_id=resolved_upload_batch_id,
                 )
-                continue
-            uploaded_ids.add(uploaded_document.id)
-            uploaded.append(uploaded_document)
-        except HTTPException as exc:
-            failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc.detail)))
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc)))
-
-    return DocumentBatchUploadResponse(
-        requested_count=len(uploaded_files),
-        uploaded_count=len(uploaded),
-        failed_count=len(failed),
-        upload_batch_id=resolved_upload_batch_id,
-        uploaded=uploaded,
-        failed=failed,
-    )
+                if uploaded_document.id in uploaded_ids:
+                    failed.append(
+                        DocumentBatchErrorResponse(
+                            file_name=file_name,
+                            detail="File duplicato: gia presente nel batch temporaneo aperto",
+                        )
+                    )
+                    continue
+                uploaded_ids.add(uploaded_document.id)
+                uploaded.append(uploaded_document)
+            except HTTPException as exc:
+                failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc.detail)))
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc)))
+        return DocumentBatchUploadResponse(
+            requested_count=len(uploaded_files),
+            uploaded_count=len(uploaded),
+            failed_count=len(failed),
+            upload_batch_id=resolved_upload_batch_id,
+            uploaded=uploaded,
+            failed=failed,
+        )
+    finally:
+        _finish_upload_batch(db, upload_batch_id=resolved_upload_batch_id)
 
 
 def upload_or_reuse_manual_document(
@@ -7100,21 +7151,33 @@ def start_autonomous_run(
     *,
     payload: AutonomousRunStartRequest,
     actor_id: int,
+    actor_email: str,
 ) -> AutonomousRunResponse:
     ddt_document_ids = _normalize_document_id_list(payload.ddt_document_ids)
     certificate_document_ids = _normalize_document_id_list(payload.certificate_document_ids)
-    if not ddt_document_ids and not certificate_document_ids:
+    upload_batch_id = _normalize_upload_batch_id(payload.upload_batch_id)
+    if not ddt_document_ids and not certificate_document_ids and upload_batch_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one DDT or certificate document")
 
     _ensure_documents_type(db, ddt_document_ids, "ddt")
     _ensure_documents_type(db, certificate_document_ids, "certificato")
-
     active_run = get_active_autonomous_run(db, actor_id=actor_id)
     if active_run is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="There is already an autonomous processing run in progress",
         )
+
+    if upload_batch_id is not None:
+        batch = _get_or_create_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
+        if batch.actor_id is not None and batch.actor_id != actor_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Batch non autorizzato")
+        if batch.status in {"in_elaborazione", "completato"}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch gia in lavorazione")
+        batch.status = "avvio_ai_prenotato"
+        batch.message = "Assistente AI prenotato: partira al termine del caricamento"
+        db.add(batch)
+        db.commit()
 
     _set_documents_processing_state(
         db,
@@ -7123,9 +7186,18 @@ def start_autonomous_run(
     )
 
     run = AutonomousProcessingRun(
+        upload_batch_id=upload_batch_id,
+        ddt_document_ids=json.dumps(ddt_document_ids),
+        certificate_document_ids=json.dumps(certificate_document_ids),
+        notification_email=actor_email,
+        admin_notification_email=_string_or_none(settings.acquisition_notification_admin_email),
         stato="in_coda",
         fase_corrente="in_attesa",
-        messaggio_corrente="In attesa di avvio della presa in carico automatica",
+        messaggio_corrente=(
+            "Assistente AI prenotato: aspetto la fine del caricamento"
+            if upload_batch_id is not None
+            else "In attesa di avvio della presa in carico automatica"
+        ),
         totale_documenti_ddt=len(ddt_document_ids),
         totale_documenti_certificato=len(certificate_document_ids),
         totale_righe_target=len(ddt_document_ids) + len(certificate_document_ids),
@@ -7138,11 +7210,113 @@ def start_autonomous_run(
     return serialize_autonomous_run(run)
 
 
+def _documents_for_upload_batch(db: Session, *, upload_batch_id: str, actor_id: int) -> tuple[list[int], list[int]]:
+    rows = (
+        db.query(Document.id, Document.tipo_documento)
+        .filter(
+            Document.utente_upload_id == actor_id,
+            Document.upload_batch_id == upload_batch_id,
+        )
+        .order_by(Document.id.asc())
+        .all()
+    )
+    ddt_ids = [row.id for row in rows if row.tipo_documento == "ddt"]
+    certificate_ids = [row.id for row in rows if row.tipo_documento == "certificato"]
+    return ddt_ids, certificate_ids
+
+
+def _wait_for_upload_batch_documents(
+    db: Session,
+    *,
+    run: AutonomousProcessingRun,
+    upload_batch_id: str,
+    actor_id: int,
+    fallback_ddt_document_ids: list[int],
+    fallback_certificate_document_ids: list[int],
+) -> tuple[list[int], list[int]]:
+    deadline = time.monotonic() + 300
+    last_message_at = 0.0
+    while True:
+        batch = db.get(AcquisitionUploadBatch, upload_batch_id)
+        ddt_ids, certificate_ids = _documents_for_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
+        active_uploads = batch.active_uploads if batch is not None else 0
+        if active_uploads <= 0 and (ddt_ids or certificate_ids):
+            if batch is not None:
+                batch.status = "in_elaborazione"
+                batch.message = "Assistente AI in lavorazione"
+                db.add(batch)
+                db.commit()
+            return ddt_ids, certificate_ids
+        if time.monotonic() >= deadline:
+            if ddt_ids or certificate_ids:
+                return ddt_ids, certificate_ids
+            return fallback_ddt_document_ids, fallback_certificate_document_ids
+        now = time.monotonic()
+        if now - last_message_at >= 5:
+            _save_run(
+                db,
+                run,
+                fase_corrente="attesa_upload",
+                messaggio_corrente="Caricamento ancora in corso: l'Assistente AI partira appena il batch e pronto",
+            )
+            last_message_at = now
+        time.sleep(1)
+
+
+def _run_document_ids_from_storage(raw_value: str | None) -> list[int]:
+    if not raw_value:
+        return []
+    try:
+        payload = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [int(item) for item in payload if isinstance(item, int) or (isinstance(item, str) and item.isdigit())]
+
+
+def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_email: str, success: bool) -> None:
+    recipients = []
+    for email in [run.notification_email, actor_email, run.admin_notification_email]:
+        normalized = _string_or_none(email)
+        if normalized and normalized not in recipients:
+            recipients.append(normalized)
+    if not recipients:
+        return
+
+    outcome = "completato" if success else "in errore"
+    subject = f"CERTI_nt - Assistente AI {outcome} (run #{run.id})"
+    lines = [
+        f"Assistente AI {outcome}.",
+        "",
+        f"Run: #{run.id}",
+        f"DDT caricati: {run.totale_documenti_ddt}",
+        f"Certificati caricati: {run.totale_documenti_certificato}",
+        f"Righe create: {run.righe_create}",
+        f"Righe processate: {run.righe_processate}/{run.totale_righe_target}",
+        f"Match proposti: {run.match_proposti}",
+        f"Chimica rilevata: {run.chimica_rilevata}",
+        f"Proprieta rilevate: {run.proprieta_rilevate}",
+        f"Note rilevate: {run.note_rilevate}",
+    ]
+    if run.ultimo_errore:
+        lines.extend(["", f"Errore/avviso: {run.ultimo_errore}"])
+    lines.extend(["", "Controlla la pagina Incoming Materiale per completare le verifiche."])
+    body = "\n".join(lines)
+
+    for recipient in recipients:
+        try:
+            email_service.send_notification(NotificationEmail(to_email=recipient, subject=subject, body=body))
+        except Exception as exc:  # pragma: no cover - notification must not fail the run
+            log_service.record("email", f"Notification failed for run {run.id}: {recipient} - {exc}", actor_email)
+
+
 def run_autonomous_processing(
     *,
     run_id: int,
     ddt_document_ids: list[int],
     certificate_document_ids: list[int],
+    upload_batch_id: str | None = None,
     actor_id: int,
     actor_email: str,
     openai_api_key: str | None,
@@ -7152,6 +7326,32 @@ def run_autonomous_processing(
     db = SessionLocal()
     try:
         run = get_autonomous_run(db, run_id)
+        resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _normalize_upload_batch_id(run.upload_batch_id)
+        if resolved_upload_batch_id is not None:
+            ddt_document_ids, certificate_document_ids = _wait_for_upload_batch_documents(
+                db,
+                run=run,
+                upload_batch_id=resolved_upload_batch_id,
+                actor_id=actor_id,
+                fallback_ddt_document_ids=_normalize_document_id_list(ddt_document_ids),
+                fallback_certificate_document_ids=_normalize_document_id_list(certificate_document_ids),
+            )
+            run = _save_run(
+                db,
+                run,
+                ddt_document_ids=json.dumps(ddt_document_ids),
+                certificate_document_ids=json.dumps(certificate_document_ids),
+                totale_documenti_ddt=len(ddt_document_ids),
+                totale_documenti_certificato=len(certificate_document_ids),
+                totale_righe_target=len(ddt_document_ids) + len(certificate_document_ids),
+            )
+        if not ddt_document_ids and not certificate_document_ids:
+            raise RuntimeError("Nessun documento disponibile nel batch per avviare Assistente AI")
+        _set_documents_processing_state(
+            db,
+            [*ddt_document_ids, *certificate_document_ids],
+            stato_elaborazione="in_lavorazione",
+        )
         _save_run(
             db,
             run,
@@ -7419,7 +7619,7 @@ def run_autonomous_processing(
             if cross_run_matches:
                 _save_run(db, run, match_proposti=run.match_proposti + cross_run_matches)
 
-        _save_run(
+        run = _save_run(
             db,
             run,
             stato="completato",
@@ -7435,17 +7635,30 @@ def run_autonomous_processing(
             stato_elaborazione="indicizzato",
         )
         _promote_documents_to_persistent(db, [*ddt_document_ids, *certificate_document_ids])
+        if resolved_upload_batch_id is not None:
+            batch = db.get(AcquisitionUploadBatch, resolved_upload_batch_id)
+            if batch is not None:
+                batch.status = "completato"
+                batch.message = "Assistente AI completato"
+                db.add(batch)
+                db.commit()
+        _send_autonomous_run_notification(run=run, actor_email=actor_email, success=True)
         log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
     except Exception as exc:  # pragma: no cover - defensive safeguard for background task
         db.rollback()
         run = db.get(AutonomousProcessingRun, run_id)
+        failed_ddt_ids = ddt_document_ids
+        failed_certificate_ids = certificate_document_ids
+        if run is not None:
+            failed_ddt_ids = _run_document_ids_from_storage(run.ddt_document_ids) or failed_ddt_ids
+            failed_certificate_ids = _run_document_ids_from_storage(run.certificate_document_ids) or failed_certificate_ids
         _set_documents_processing_state(
             db,
-            [*ddt_document_ids, *certificate_document_ids],
+            [*failed_ddt_ids, *failed_certificate_ids],
             stato_elaborazione="errore",
         )
         if run is not None:
-            _save_run(
+            run = _save_run(
                 db,
                 run,
                 stato="errore",
@@ -7454,6 +7667,15 @@ def run_autonomous_processing(
                 ultimo_errore=str(exc),
                 finished_at=datetime.now(UTC),
             )
+            failed_batch_id = _normalize_upload_batch_id(run.upload_batch_id) or _normalize_upload_batch_id(upload_batch_id)
+            if failed_batch_id is not None:
+                batch = db.get(AcquisitionUploadBatch, failed_batch_id)
+                if batch is not None:
+                    batch.status = "errore"
+                    batch.message = "Assistente AI interrotto"
+                    db.add(batch)
+                    db.commit()
+            _send_autonomous_run_notification(run=run, actor_email=actor_email, success=False)
         log_service.record("acquisition", f"Autonomous processing failed: run {run_id}", actor_email)
     finally:
         db.close()
@@ -13873,6 +14095,11 @@ def _delete_storage_key_if_present(storage_key: str | None) -> None:
 
 
 def _delete_temporary_upload_batch(db: Session, *, actor_id: int, upload_batch_id: str) -> None:
+    batch = db.get(AcquisitionUploadBatch, upload_batch_id)
+    if batch is not None and (
+        batch.active_uploads > 0 or batch.status in {"avvio_ai_prenotato", "in_elaborazione"}
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot discard a batch that is already in use")
     documents = (
         db.query(Document)
         .options(joinedload(Document.pages), joinedload(Document.evidences))

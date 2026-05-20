@@ -134,15 +134,16 @@ def start_automation_run_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AutonomousRunResponse:
-    run = start_autonomous_run(db=db, payload=payload, actor_id=current_user.id)
     openai_api_key = _resolve_openai_api_key(current_user)
     if payload.usa_intervento_ai and not openai_api_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
+    run = start_autonomous_run(db=db, payload=payload, actor_id=current_user.id, actor_email=current_user.email)
     background_tasks.add_task(
         run_autonomous_processing,
         run_id=run.id,
         ddt_document_ids=payload.ddt_document_ids,
         certificate_document_ids=payload.certificate_document_ids,
+        upload_batch_id=payload.upload_batch_id,
         actor_id=current_user.id,
         actor_email=current_user.email,
         openai_api_key=openai_api_key,

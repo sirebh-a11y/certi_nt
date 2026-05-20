@@ -6,6 +6,13 @@ import { useAuth } from "../../app/auth";
 
 const UPLOAD_BATCH_STORAGE_KEY = "acquisition.uploadBatchId";
 
+function createUploadBatchId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+  return `${Date.now()}${Math.random().toString(16).slice(2)}`.slice(0, 32);
+}
+
 function mergeUploadedDocuments(currentItems, uploadedItems) {
   const map = new Map(currentItems.map((item) => [item.id, item]));
   uploadedItems.forEach((item) => {
@@ -80,6 +87,7 @@ export default function AcquisitionUploadPage() {
   const [processingDdt, setProcessingDdt] = useState(false);
   const [processingCertificates, setProcessingCertificates] = useState(false);
   const [startingAiRun, setStartingAiRun] = useState(false);
+  const [pendingAiStart, setPendingAiStart] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [ddtResult, setDdtResult] = useState(null);
@@ -95,15 +103,18 @@ export default function AcquisitionUploadPage() {
   const activeSuppliers = useMemo(() => suppliers.filter((item) => item.attivo), [suppliers]);
 
   function addDdtFiles(incomingFiles) {
+    setUploadBatchId((current) => current || createUploadBatchId());
     setDdtFiles((current) => mergeSelectedFiles(current, incomingFiles));
   }
 
   function addCertificateFiles(incomingFiles) {
+    setUploadBatchId((current) => current || createUploadBatchId());
     setCertificateFiles((current) => mergeSelectedFiles(current, incomingFiles));
   }
 
   const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
   const hasDocumentsWithoutSupplier = [...sessionDdtDocuments, ...sessionCertificateDocuments].some((item) => !item.fornitore_id);
+  const canRequestAi = hasAutomationDocuments || processingDdt || processingCertificates;
 
   function handleRequestError(requestError) {
     const message = requestError?.message || "Request failed";
@@ -189,9 +200,9 @@ export default function AcquisitionUploadPage() {
 
     const formData = new FormData();
     formData.append("tipo_documento", tipoDocumento);
-    if (uploadBatchId) {
-      formData.append("upload_batch_id", uploadBatchId);
-    }
+    const batchId = uploadBatchId || createUploadBatchId();
+    setUploadBatchId(batchId);
+    formData.append("upload_batch_id", batchId);
     files.forEach((file) => formData.append("files", file));
 
     setProcessing(true);
@@ -230,6 +241,16 @@ export default function AcquisitionUploadPage() {
   }
 
   async function startAutomationRun() {
+    if (processingDdt || processingCertificates) {
+      setPendingAiStart(true);
+      setError("");
+      setNotice("Caricamento ancora in corso. L'Assistente AI partira appena tutti i file saranno caricati. Puoi continuare a usare l'app.");
+      return;
+    }
+    if (ddtFiles.length || certificateFiles.length) {
+      setError("Ci sono file selezionati ma non ancora caricati: premi Carica DDT o Carica certificati prima di avviare l'Assistente AI.");
+      return;
+    }
     if (!hasAutomationDocuments) {
       setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
       return;
@@ -249,6 +270,7 @@ export default function AcquisitionUploadPage() {
           body: JSON.stringify({
             ddt_document_ids: sessionDdtDocuments.map((item) => item.id),
             certificate_document_ids: sessionCertificateDocuments.map((item) => item.id),
+            upload_batch_id: uploadBatchId || null,
             usa_ddt_vision: true,
             usa_intervento_ai: true,
           }),
@@ -256,6 +278,7 @@ export default function AcquisitionUploadPage() {
         token,
       );
       setCurrentRun(run);
+      setPendingAiStart(false);
       setUploadBatchId("");
     } catch (requestError) {
       const message = requestError?.message || "Request failed";
@@ -332,6 +355,16 @@ export default function AcquisitionUploadPage() {
       window.clearInterval(intervalId);
     };
   }, [currentRun, token]);
+
+  useEffect(() => {
+    if (!pendingAiStart || processingDdt || processingCertificates) {
+      return;
+    }
+    if (ddtFiles.length || certificateFiles.length) {
+      return;
+    }
+    startAutomationRun();
+  }, [pendingAiStart, processingDdt, processingCertificates, ddtFiles.length, certificateFiles.length, hasAutomationDocuments, hasDocumentsWithoutSupplier]);
 
   function replaceSessionDocument(updatedDocument) {
     const updater = (items) => items.map((item) => (item.id === updatedDocument.id ? updatedDocument : item));
@@ -476,7 +509,8 @@ export default function AcquisitionUploadPage() {
               className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
               disabled={
                 startingAiRun ||
-                !hasAutomationDocuments ||
+                pendingAiStart ||
+                !canRequestAi ||
                 hasDocumentsWithoutSupplier ||
                 (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))
               }
@@ -486,7 +520,7 @@ export default function AcquisitionUploadPage() {
               <MaskedAiIcon />
               <span className="flex flex-col">
                 <span className="text-base font-semibold leading-tight">
-                  {startingAiRun ? "Avvio lettura intelligente..." : "Avvia lettura intelligente dei documenti"}
+                  {pendingAiStart ? "Assistente AI prenotato..." : startingAiRun ? "Avvio lettura intelligente..." : "Avvia lettura intelligente dei documenti"}
                 </span>
                 <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
               </span>

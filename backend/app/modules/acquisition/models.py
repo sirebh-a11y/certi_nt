@@ -67,6 +67,25 @@ class Document(Base):
     )
 
 
+class AcquisitionUploadBatch(Base):
+    __tablename__ = "acquisition_upload_batches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="aperto", nullable=False, index=True)
+    active_uploads: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    actor = relationship("User", foreign_keys=[actor_id])
+
+
 class DocumentPage(Base):
     __tablename__ = "documenti_fornitore_pagine"
     __table_args__ = (UniqueConstraint("document_id", "numero_pagina", name="uq_document_page_number"),)
@@ -342,6 +361,11 @@ class AutonomousProcessingRun(Base):
     __tablename__ = "acquisition_processing_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    upload_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ddt_document_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    certificate_document_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    admin_notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     stato: Mapped[str] = mapped_column(String(32), default="in_coda", nullable=False, index=True)
     fase_corrente: Mapped[str] = mapped_column(String(64), default="in_attesa", nullable=False)
     messaggio_corrente: Mapped[str | None] = mapped_column(String(255), nullable=True)

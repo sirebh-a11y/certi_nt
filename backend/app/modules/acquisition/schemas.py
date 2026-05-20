@@ -316,8 +316,14 @@ class CurrentUploadBatchResponse(BaseModel):
 class AutonomousRunStartRequest(BaseModel):
     ddt_document_ids: list[int] = Field(default_factory=list)
     certificate_document_ids: list[int] = Field(default_factory=list)
+    upload_batch_id: str | None = Field(default=None, max_length=64)
     usa_ddt_vision: bool = True
     usa_intervento_ai: bool = False
+
+    @field_validator("upload_batch_id")
+    @classmethod
+    def normalize_upload_batch_id(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
 
 
 class AutonomousRunResponse(BaseModel):
