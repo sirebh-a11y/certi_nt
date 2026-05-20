@@ -602,7 +602,7 @@ export default function QuartaTaglioDetailPage() {
       ["Data certificato", header.data_certificato || "-"],
       ["Colata", header.colata || "-"],
       ["Materiale fornito", header.materiale_fornito || "-"],
-      ["Diametro", header.diametro || "-"],
+      ["Materiale / profilo raw", header.materiale_raw || "-"],
     ];
   }, [data]);
   const headerFlowColumns = useMemo(() => {
@@ -921,9 +921,14 @@ export default function QuartaTaglioDetailPage() {
       ) : null}
 
       <Panel title="Dati importanti">
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
           {headerRows.map(([label, value]) => (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
+            <div
+              className={`rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 ${
+                label === "Materiale / profilo raw" ? "md:col-span-2 xl:col-span-4" : ""
+              }`}
+              key={label}
+            >
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
               <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
             </div>

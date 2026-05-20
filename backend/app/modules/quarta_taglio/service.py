@@ -563,6 +563,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             "colata": group.colata,
             "materiale_fornito": _join_unique(_materiale_fornito_from_app_row(row) for row in app_rows) or None,
             "diametro": _join_unique(row.diametro for row in app_rows) or None,
+            "materiale_raw": _join_unique((_materiale_raw_from_app_row(row) for row in app_rows), separator=" | ") or None,
             "quantita": _format_quantity(esolver_qta if esolver_qta is not None else group.qta_totale)
             if (esolver_qta is not None or group.qta_totale is not None)
             else None,
@@ -3251,6 +3252,25 @@ def _format_quantity(value: Any) -> str | None:
 
 def _materiale_fornito_from_app_row(row: AcquisitionRow) -> str | None:
     return _join_unique((row.lega_designazione, row.lega_base, row.variante_lega), separator=" ")
+
+
+def _materiale_raw_from_app_row(row: AcquisitionRow) -> str | None:
+    raw_value = (
+        _read_value(row, "ddt", "product_description_raw")
+        or _read_value(row, "match", "descrizione_profilo_cliente_certificato")
+        or _read_value(row, "ddt", "customer_item_description_raw")
+    )
+    if raw_value:
+        return _clean_text(raw_value)
+    composed = _join_unique(
+        (
+            _read_value(row, "ddt", "material_raw"),
+            _read_value(row, "ddt", "diameter_raw"),
+            _read_value(row, "ddt", "die_dimension_raw"),
+        ),
+        separator=" ",
+    )
+    return composed or _join_unique((_materiale_fornito_from_app_row(row), row.diametro), separator=" ")
 
 
 def _certificate_datetime_from_detail(detail: QuartaTaglioDetailResponse) -> datetime | None:
