@@ -440,7 +440,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         else None
     )
 
-    material_weights = {row.cdq: row.qta_totale for row in rows}
+    material_weights = {_norm(row.cdq): row.qta_totale for row in rows if _norm(row.cdq)}
     chemistry = _aggregate_block_values(
         fields=_chemistry_fields_for_detail(standard=selected_standard_model, app_rows=app_rows),
         block="chimica",
@@ -1933,15 +1933,16 @@ def _aggregate_block_values(
             if value is None:
                 missing_rows.append(row.cdq or f"riga #{row.id}")
                 continue
-            values.append((row, value, material_weights.get(row.cdq or "")))
+            values.append((row, value, _material_weight_for_app_row(row, material_weights)))
 
         if block == "chimica" and standard is not None and _field_key(field) not in standard_chemistry_keys:
             if values:
+                aggregated, method = _aggregate_numeric_values(values)
                 result.append(
                     QuartaTaglioAggregateValueResponse(
                         field=field,
-                        value=_round_aggregate_value(block, sum(value for _, value, _ in values) / len(values)),
-                        method="average" if len(values) > 1 else "single",
+                        value=_round_aggregate_value(block, aggregated),
+                        method=method,
                         status="not_in_standard",
                         message="Elemento trovato nei certificati fornitore ma non previsto dallo standard: non riportare nel certificato finale",
                     )
@@ -1964,16 +1965,7 @@ def _aggregate_block_values(
             )
             continue
 
-        if len(values) > 1 and len(values) == len(app_rows) and all(weight is not None and weight > 0 for _, _, weight in values):
-            total_weight = sum(float(weight or 0) for _, _, weight in values)
-            aggregated = sum(value * float(weight or 0) for _, value, weight in values) / total_weight
-            method = "weighted"
-        elif len(values) == 1:
-            aggregated = values[0][1]
-            method = "single"
-        else:
-            aggregated = sum(value for _, value, _ in values) / len(values)
-            method = "average"
+        aggregated, method = _aggregate_numeric_values(values)
 
         if block == "proprieta" and standard is not None and not standard_confirmed:
             result.append(
@@ -2027,6 +2019,25 @@ def _aggregate_block_values(
 
 def _round_aggregate_value(block: str, value: float) -> float:
     return round(value, 3 if block == "chimica" else 4)
+
+
+def _material_weight_for_app_row(row: AcquisitionRow, material_weights: dict[str, float | None]) -> float | None:
+    cdq_weight = material_weights.get(_norm(row.cdq)) or material_weights.get(row.cdq or "")
+    if cdq_weight is not None and cdq_weight > 0:
+        return cdq_weight
+    row_weight = _as_float(getattr(row, "peso", None))
+    if row_weight is not None and row_weight > 0:
+        return row_weight
+    return None
+
+
+def _aggregate_numeric_values(values: list[tuple[AcquisitionRow, float, float | None]]) -> tuple[float, str]:
+    if len(values) == 1:
+        return values[0][1], "single"
+    if len(values) > 1 and all(weight is not None and weight > 0 for _, _, weight in values):
+        total_weight = sum(float(weight or 0) for _, _, weight in values)
+        return sum(value * float(weight or 0) for _, value, weight in values) / total_weight, "weighted"
+    return sum(value for _, value, _ in values) / len(values), "average"
 
 
 def _build_standard_conformity(

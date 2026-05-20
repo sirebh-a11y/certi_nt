@@ -155,6 +155,27 @@ class QuartaTaglioChemistryTest(unittest.TestCase):
         self.assertEqual(values[0].method, "weighted")
         self.assertEqual(values[0].value, 1.1)
 
+    def test_weighted_average_uses_row_weight_when_quarta_weight_is_missing(self):
+        standard = SimpleNamespace(
+            chemistry_limits=[_limit("Si", 0.7, 1.3)],
+            property_limits=[],
+        )
+        app_rows = [
+            SimpleNamespace(id=1, cdq="CDQ-1", peso="1.0", values=[_value("Si", "0.8")]),
+            SimpleNamespace(id=2, cdq="CDQ-2", peso="3.0", values=[_value("Si", "1.2")]),
+        ]
+
+        values = _aggregate_block_values(
+            fields=["Si"],
+            block="chimica",
+            app_rows=app_rows,
+            material_weights={},
+            standard=standard,
+        )
+
+        self.assertEqual(values[0].method, "weighted")
+        self.assertEqual(values[0].value, 1.1)
+
     def test_chemistry_standard_range_rejects_values_outside_min_and_max(self):
         standard = SimpleNamespace(
             chemistry_limits=[_limit("Si", 0.7, 1.3)],
