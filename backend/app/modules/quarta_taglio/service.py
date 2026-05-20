@@ -464,13 +464,12 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     quick_confirm_blockers = _quick_incoming_confirm_blockers(
         app_rows=app_rows,
         selected_standard_confirmed=selected_standard_confirmed,
-        chemistry=chemistry,
-        properties=properties,
+        conformity_status=conformity_status,
     )
     quick_confirm_applied = _quick_incoming_confirm_applied(app_rows)
     quick_confirm_warning = (
-        "Standard cambiato: ora ci sono non conformità. Controlla Incoming per i CDQ coinvolti."
-        if quick_confirm_applied and conformity_issues
+        "Standard modificato: controlla in Incoming chimica e proprietà dei CDQ collegati."
+        if quick_confirm_applied and selected_standard_confirmed and conformity_status != "conforme"
         else None
     )
     esolver_rows = _esolver_rows_from_link(esolver_link)
@@ -669,8 +668,7 @@ def apply_quick_incoming_confirmation(
     blockers = _quick_incoming_confirm_blockers(
         app_rows=app_rows,
         selected_standard_confirmed=detail.selected_standard_confirmed,
-        chemistry=detail.chemistry,
-        properties=detail.properties,
+        conformity_status=detail.conformity_status,
     )
     if blockers:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(blockers))
@@ -682,8 +680,6 @@ def apply_quick_incoming_confirmation(
                 for value in row.values
                 if value.blocco == block and _read_value_has_payload_for_quick_confirm(value)
             ]
-            if not block_values:
-                continue
             block_changed = False
             for value in block_values:
                 if value.stato != "confermato":
@@ -1884,29 +1880,16 @@ def _quick_incoming_confirm_blockers(
     *,
     app_rows: list[AcquisitionRow],
     selected_standard_confirmed: bool,
-    chemistry: list[QuartaTaglioAggregateValueResponse],
-    properties: list[QuartaTaglioAggregateValueResponse],
+    conformity_status: str,
 ) -> list[str]:
     blockers: list[str] = []
     if not selected_standard_confirmed:
         blockers.append("Standard non confermato")
     if not app_rows:
         blockers.append("Nessuna riga Incoming collegata")
-    if not chemistry:
-        blockers.append("Chimica non disponibile")
-    if not properties:
-        blockers.append("Proprietà non disponibili")
-    chemistry_blockers = _non_ok_quick_items(chemistry)
-    if chemistry_blockers:
-        blockers.append(f"Chimica non tutta OK: {', '.join(chemistry_blockers)}")
-    property_blockers = _non_ok_quick_items(properties)
-    if property_blockers:
-        blockers.append(f"Proprietà non tutte OK: {', '.join(property_blockers)}")
+    if conformity_status != "conforme":
+        blockers.append("Conformità standard non OK")
     return blockers
-
-
-def _non_ok_quick_items(items: list[QuartaTaglioAggregateValueResponse]) -> list[str]:
-    return [item.field for item in items if item.status != "ok"]
 
 
 def _quick_incoming_confirm_applied(app_rows: list[AcquisitionRow]) -> bool:

@@ -17447,18 +17447,27 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
     for value in row.values:
         values_by_block.setdefault(value.blocco, []).append(value)
     supplier_key = _resolve_row_supplier_key(row)
+    quick_confirmed_blocks = _quick_confirmed_blocks_from_events(getattr(row, "history_events", None) or [])
 
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state(row),
-        "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
-        "proprieta": _compute_properties_block_state(
-            values_by_block.get("proprieta", []),
-            processed=_row_has_block_history_event(
-                row,
-                blocco="proprieta",
-                actions=("proprieta_rilevate", "proprieta_non_rilevate"),
-            ),
+        "chimica": (
+            "verde"
+            if "chimica" in quick_confirmed_blocks
+            else _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True)
+        ),
+        "proprieta": (
+            "verde"
+            if "proprieta" in quick_confirmed_blocks
+            else _compute_properties_block_state(
+                values_by_block.get("proprieta", []),
+                processed=_row_has_block_history_event(
+                    row,
+                    blocco="proprieta",
+                    actions=("proprieta_rilevate", "proprieta_non_rilevate"),
+                ),
+            )
         ),
         "note": _compute_note_block_state(
             values_by_block.get("note", []),
@@ -17477,6 +17486,7 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     for value in values:
         values_by_block.setdefault(value.blocco, []).append(value)
     supplier_key = _resolve_row_supplier_key(row)
+    quick_confirmed_blocks = _quick_confirmed_blocks_from_db(db, row.id)
 
     match = (
         db.query(CertificateMatch)
@@ -17487,15 +17497,23 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
         "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
-        "chimica": _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True),
-        "proprieta": _compute_properties_block_state(
-            values_by_block.get("proprieta", []),
-            processed=_db_has_block_history_event(
-                db,
-                acquisition_row_id=row.id,
-                blocco="proprieta",
-                actions=("proprieta_rilevate", "proprieta_non_rilevate"),
-            ),
+        "chimica": (
+            "verde"
+            if "chimica" in quick_confirmed_blocks
+            else _compute_value_block_state(values_by_block.get("chimica", []), require_payload=True)
+        ),
+        "proprieta": (
+            "verde"
+            if "proprieta" in quick_confirmed_blocks
+            else _compute_properties_block_state(
+                values_by_block.get("proprieta", []),
+                processed=_db_has_block_history_event(
+                    db,
+                    acquisition_row_id=row.id,
+                    blocco="proprieta",
+                    actions=("proprieta_rilevate", "proprieta_non_rilevate"),
+                ),
+            )
         ),
         "note": _compute_note_block_state(
             values_by_block.get("note", []),
@@ -17506,6 +17524,29 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
                 actions=("note_rilevate", "note_non_rilevate"),
             ),
         ),
+    }
+
+
+def _quick_confirmed_blocks_from_events(events: list[AcquisitionHistoryEvent]) -> set[str]:
+    return {
+        event.blocco
+        for event in events
+        if event.azione == "conferma_rapida_certificazione" and event.blocco in {"chimica", "proprieta"}
+    }
+
+
+def _quick_confirmed_blocks_from_db(db: Session, acquisition_row_id: int) -> set[str]:
+    return {
+        row[0]
+        for row in (
+            db.query(AcquisitionHistoryEvent.blocco)
+            .filter(
+                AcquisitionHistoryEvent.acquisition_row_id == acquisition_row_id,
+                AcquisitionHistoryEvent.azione == "conferma_rapida_certificazione",
+                AcquisitionHistoryEvent.blocco.in_(("chimica", "proprieta")),
+            )
+            .all()
+        )
     }
 
 
