@@ -920,7 +920,18 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr] xl:items-stretch">
+      <Panel title="Dati importanti">
+        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5">
+          {headerRows.map(([label, value]) => (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
         <Panel className="h-full" title="Header Word">
           <div className="rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
             <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
@@ -941,19 +952,7 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </Panel>
 
-        <div className="grid gap-4 xl:grid-rows-[auto_1fr]">
-          <Panel title="Dati importanti">
-            <div className="grid gap-2 md:grid-cols-2">
-              {headerRows.map(([label, value]) => (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" key={label}>
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-                  <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
-                </div>
-              ))}
-            </div>
-          </Panel>
-
-          <Panel className="h-full" title="Standard">
+        <Panel className="h-full" title="Standard">
           {data.selected_standard ? (
             <div
               className={`rounded-lg border px-3 py-2 text-sm ${
@@ -1024,8 +1023,7 @@ export default function QuartaTaglioDetailPage() {
               </button>
             </div>
           </div>
-          </Panel>
-        </div>
+        </Panel>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -1035,9 +1033,7 @@ export default function QuartaTaglioDetailPage() {
 
         <div className="space-y-4">
           <Panel title="Proprietà">
-            <div className="max-h-[280px] overflow-y-auto pr-1">
-              <ValueTable values={data.properties || []} />
-            </div>
+            <ValueTable values={data.properties || []} />
           </Panel>
           <Panel title="Note">
             <Table
