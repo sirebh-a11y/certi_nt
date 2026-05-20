@@ -145,6 +145,11 @@ from app.modules.document_reader.table_analysis import choose_measured_lines
 from app.modules.suppliers.models import Supplier, SupplierAlias
 
 logger = logging.getLogger(__name__)
+OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
+
+
+def _make_openai_client(openai_api_key: str) -> OpenAI:
+    return OpenAI(api_key=openai_api_key, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
 
 
 CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
@@ -7481,13 +7486,23 @@ def run_autonomous_processing(
         ]
         certificate_ai_cache: dict[int, dict[str, object]] = {}
         if use_ai_intervention and openai_api_key:
-            for certificate_document in certificate_documents:
+            for certificate_index, certificate_document in enumerate(certificate_documents, start=1):
                 template = resolve_supplier_template(
                     certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
                     certificate_document.nome_file_originale,
                 )
                 if template is None or not _supplier_supports_ai_vision_pipeline(template.supplier_key):
                     continue
+                _save_run(
+                    db,
+                    run,
+                    fase_corrente="lettura_certificati",
+                    current_document_name=certificate_document.nome_file_originale,
+                    messaggio_corrente=(
+                        f"Leggo certificato {certificate_index}/{len(certificate_documents)}: "
+                        f"{certificate_document.nome_file_originale}"
+                    ),
+                )
                 try:
                     _run_retryable_processing_step(
                         run=run,
@@ -7516,7 +7531,14 @@ def run_autonomous_processing(
                         ),
                     )
         total_target_rows = 0
-        for ddt_document in ddt_documents:
+        for ddt_index, ddt_document in enumerate(ddt_documents, start=1):
+            _save_run(
+                db,
+                run,
+                fase_corrente="analisi_ddt",
+                current_document_name=ddt_document.nome_file_originale,
+                messaggio_corrente=f"Analizzo righe DDT {ddt_index}/{len(ddt_documents)}: {ddt_document.nome_file_originale}",
+            )
             plan = build_document_row_split_plan(prepare_document_for_reader(db, ddt_document))
             candidate_count = len(plan.row_split_candidates)
             total_target_rows += candidate_count if candidate_count else 1
@@ -7805,6 +7827,7 @@ def run_autonomous_processing(
         )
         log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
     except Exception as exc:  # pragma: no cover - defensive safeguard for background task
+        logger.exception("Autonomous acquisition run %s failed", run_id)
         db.rollback()
         run = db.get(AutonomousProcessingRun, run_id)
         failed_ddt_ids = ddt_document_ids
@@ -10494,7 +10517,7 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -10562,7 +10585,7 @@ def _extract_impol_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -12348,7 +12371,7 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -12656,7 +12679,7 @@ def _extract_grupa_kety_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -13009,7 +13032,7 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -13237,7 +13260,7 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -13533,7 +13556,7 @@ def _extract_metalba_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -19902,7 +19925,7 @@ def _extract_ddt_fields_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, dict[str, str | None]]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     field_names = [
         "ddt",
         "numero_certificato_ddt",
@@ -19983,7 +20006,7 @@ def _extract_certificate_fields_from_openai(
     field_names: list[str],
     instruction: str,
 ) -> dict[str, dict[str, str | None]]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -20222,7 +20245,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -20502,7 +20525,7 @@ def _extract_impol_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -20798,7 +20821,7 @@ def _extract_metalba_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -21091,7 +21114,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -21487,7 +21510,7 @@ def _extract_aww_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -21932,7 +21955,7 @@ def _extract_neuman_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -22345,7 +22368,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -22570,7 +22593,7 @@ def _extract_aww_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -22891,7 +22914,7 @@ def _extract_neuman_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -23517,7 +23540,7 @@ def _extract_zalco_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
 ) -> tuple[str | None, list[dict[str, object]], str]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -23829,7 +23852,7 @@ def _extract_zalco_certificate_payload_from_openai(
     *,
     openai_api_key: str,
 ) -> dict[str, object]:
-    client = OpenAI(api_key=openai_api_key)
+    client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
         {
             "type": "input_text",
