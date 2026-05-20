@@ -7275,7 +7275,21 @@ def _run_document_ids_from_storage(raw_value: str | None) -> list[int]:
     return [int(item) for item in payload if isinstance(item, int) or (isinstance(item, str) and item.isdigit())]
 
 
-def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_email: str, success: bool) -> None:
+def _add_failed_notification_item(failed_items: list[dict[str, str]], *, file_name: str, reason: str) -> None:
+    normalized_file_name = _string_or_none(file_name) or "Documento senza nome"
+    normalized_reason = _string_or_none(reason) or "Errore non specificato"
+    item = {"file_name": normalized_file_name, "reason": normalized_reason}
+    if item not in failed_items:
+        failed_items.append(item)
+
+
+def _send_autonomous_run_notification(
+    *,
+    run: AutonomousProcessingRun,
+    actor_email: str,
+    success: bool,
+    failed_items: list[dict[str, str]] | None = None,
+) -> None:
     recipients = []
     for email in [run.notification_email, actor_email, run.admin_notification_email]:
         normalized = _string_or_none(email)
@@ -7284,13 +7298,20 @@ def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_ema
     if not recipients:
         return
 
-    outcome = "completato" if success else "in errore"
+    normalized_failed_items = failed_items or []
+    outcome = "completato con errori" if success and normalized_failed_items else "completato" if success else "in errore"
     subject = f"CERTI_nt - Assistente AI {outcome} (run #{run.id})"
     batch_ddt_count = len(_run_document_ids_from_storage(run.ddt_document_ids))
     batch_certificate_count = len(_run_document_ids_from_storage(run.certificate_document_ids))
     archive_certificate_count = max(0, run.totale_documenti_certificato - batch_certificate_count)
     lines = [
-        "Assistente Ai ha completato il caricamento." if success else "Assistente Ai non ha completato il caricamento.",
+        (
+            "Assistente Ai ha completato il caricamento con errori."
+            if success and normalized_failed_items
+            else "Assistente Ai ha completato il caricamento."
+            if success
+            else "Assistente Ai non ha completato il caricamento."
+        ),
         "",
         f"Run: #{run.id}",
         f"DDT caricati nel batch: {batch_ddt_count}",
@@ -7302,9 +7323,17 @@ def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_ema
         f"Chimica rilevata: {run.chimica_rilevata}",
         f"Proprieta rilevate: {run.proprieta_rilevate}",
         f"Note rilevate: {run.note_rilevate}",
+        f"File con errori: {len(normalized_failed_items)}",
     ]
+    if normalized_failed_items:
+        lines.append("")
+        lines.append("Errori:")
+        for item in normalized_failed_items:
+            lines.append(f"- {item['file_name']}: {item['reason']}")
     if run.ultimo_errore:
         lines.extend(["", f"Errore/avviso: {run.ultimo_errore}"])
+    if normalized_failed_items:
+        lines.extend(["", "Ricaricare i file con errori in un nuovo batch se necessario."])
     lines.extend(["", "Controlla la pagina Incoming Materiale per completare le verifiche."])
     body = "\n".join(lines)
 
@@ -7328,6 +7357,7 @@ def run_autonomous_processing(
     use_ai_intervention: bool,
 ) -> None:
     db = SessionLocal()
+    failed_notification_items: list[dict[str, str]] = []
     try:
         run = get_autonomous_run(db, run_id)
         resolved_upload_batch_id = _normalize_upload_batch_id(upload_batch_id) or _normalize_upload_batch_id(run.upload_batch_id)
@@ -7393,6 +7423,11 @@ def run_autonomous_processing(
                         certificate_ai_cache=certificate_ai_cache,
                     )
                 except HTTPException as exc:
+                    _add_failed_notification_item(
+                        failed_notification_items,
+                        file_name=certificate_document.nome_file_originale,
+                        reason=f"Lettura AI certificato non riuscita: {exc.detail}",
+                    )
                     _save_run(
                         db,
                         run,
@@ -7441,6 +7476,11 @@ def run_autonomous_processing(
                     if created_count:
                         _save_run(db, run, righe_create=run.righe_create + created_count)
                 except HTTPException as exc:
+                    _add_failed_notification_item(
+                        failed_notification_items,
+                        file_name=ddt_document.nome_file_originale,
+                        reason=f"Intervento AI DDT non riuscito: {exc.detail}",
+                    )
                     _save_run(
                         db,
                         run,
@@ -7491,6 +7531,16 @@ def run_autonomous_processing(
                             )
                             row = get_acquisition_row(db, row.id)
                         except HTTPException as exc:
+                            document_name = (
+                                row.ddt_document.nome_file_originale
+                                if row.ddt_document is not None
+                                else f"Riga #{row.id}"
+                            )
+                            _add_failed_notification_item(
+                                failed_notification_items,
+                                file_name=document_name,
+                                reason=f"Vision DDT non riuscita su riga #{row.id}: {exc.detail}",
+                            )
                             _save_run(
                                 db,
                                 run,
@@ -7559,6 +7609,18 @@ def run_autonomous_processing(
                             _save_run(db, run, note_rilevate=run.note_rilevate + 1)
                 except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
                     db.rollback()
+                    document_name = (
+                        row.ddt_document.nome_file_originale
+                        if row.ddt_document is not None
+                        else row.certificate_document.nome_file_originale
+                        if row.certificate_document is not None
+                        else f"Riga #{row.id}"
+                    )
+                    _add_failed_notification_item(
+                        failed_notification_items,
+                        file_name=document_name,
+                        reason=f"Errore sulla riga #{row.id}: {exc}",
+                    )
                     _save_run(
                         db,
                         run,
@@ -7646,7 +7708,12 @@ def run_autonomous_processing(
                 batch.message = "Assistente AI completato"
                 db.add(batch)
                 db.commit()
-        _send_autonomous_run_notification(run=run, actor_email=actor_email, success=True)
+        _send_autonomous_run_notification(
+            run=run,
+            actor_email=actor_email,
+            success=True,
+            failed_items=failed_notification_items,
+        )
         log_service.record("acquisition", f"Autonomous processing completed: run {run.id}", actor_email)
     except Exception as exc:  # pragma: no cover - defensive safeguard for background task
         db.rollback()
@@ -7662,6 +7729,15 @@ def run_autonomous_processing(
             stato_elaborazione="errore",
         )
         if run is not None:
+            if not failed_notification_items:
+                failed_document_ids = [*failed_ddt_ids, *failed_certificate_ids]
+                failed_documents = db.query(Document).filter(Document.id.in_(failed_document_ids)).all() if failed_document_ids else []
+                for document in failed_documents:
+                    _add_failed_notification_item(
+                        failed_notification_items,
+                        file_name=document.nome_file_originale,
+                        reason=f"Run interrotto: {exc}",
+                    )
             run = _save_run(
                 db,
                 run,
@@ -7679,7 +7755,12 @@ def run_autonomous_processing(
                     batch.message = "Assistente AI interrotto"
                     db.add(batch)
                     db.commit()
-            _send_autonomous_run_notification(run=run, actor_email=actor_email, success=False)
+            _send_autonomous_run_notification(
+                run=run,
+                actor_email=actor_email,
+                success=False,
+                failed_items=failed_notification_items,
+            )
         log_service.record("acquisition", f"Autonomous processing failed: run {run_id}", actor_email)
     finally:
         db.close()
