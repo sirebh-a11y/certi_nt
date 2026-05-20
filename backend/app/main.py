@@ -24,7 +24,7 @@ from app.startup.bootstrap import initialize_application
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    initialize_application()
+    initialize_application(recover_interrupted_jobs=True)
     sync_task = asyncio.create_task(quarta_taglio_periodic_sync_loop())
     try:
         yield

@@ -52,7 +52,7 @@ from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
 
-def initialize_application() -> None:
+def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
     ensure_acquisition_processing_run_columns()
@@ -70,8 +70,9 @@ def initialize_application() -> None:
         seed_note_templates(db)
         seed_normative_standards(db)
         seed_customer_requirements(db)
-        recover_interrupted_acquisition_runs(db)
-        recover_interrupted_upload_batches(db)
+        if recover_interrupted_jobs:
+            recover_interrupted_acquisition_runs(db)
+            recover_interrupted_upload_batches(db)
         log_service.record("system", "Application initialized")
     finally:
         db.close()
