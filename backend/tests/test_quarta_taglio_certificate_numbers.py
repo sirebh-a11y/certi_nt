@@ -8,6 +8,7 @@ from app.modules.quarta_taglio.service import (
     _certificate_suffix_for_ol_or_next,
     _certificate_suffix_parts,
     _cod_f3_certificate_suffix,
+    _find_existing_certificate_for_unit,
     _format_certificate_suffix,
     _next_certificate_suffix,
 )
@@ -84,6 +85,24 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
         self.assertEqual(_cod_f3_certificate_suffix("605000900"), "00")
         self.assertEqual(_cod_f3_certificate_suffix("7"), "07")
         self.assertEqual(_cod_f3_certificate_suffix(None), "00")
+
+    def test_existing_certificate_without_ddt_is_reused_when_esolver_adds_ddt(self):
+        certificates = [
+            SimpleNamespace(id=1, status="draft", cod_f3="292000100", ddt=None),
+            SimpleNamespace(id=2, status="draft", cod_f3="605000700", ddt="1133"),
+        ]
+        unit = SimpleNamespace(cod_f3="292000100", ddt="1204-29/04/2026")
+
+        self.assertIs(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids=set()), certificates[0])
+
+    def test_existing_certificate_matching_keeps_distinct_cod_f3_lines_separate(self):
+        certificates = [
+            SimpleNamespace(id=1, status="draft", cod_f3="292000100", ddt=None),
+            SimpleNamespace(id=2, status="draft", cod_f3="605000700", ddt=None),
+        ]
+        unit = SimpleNamespace(cod_f3="605000700", ddt="2526-10/12/2025")
+
+        self.assertIs(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids={1}), certificates[1])
 
 
 if __name__ == "__main__":

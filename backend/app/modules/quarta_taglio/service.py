@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 import secrets
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
@@ -320,6 +322,7 @@ def _latest_quarta_sync_run(db: Session) -> QuartaTaglioSyncRun | None:
 
 
 def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCertificateRegisterResponse:
+    _refresh_final_certificate_register_from_external_data(db)
     certificates = (
         db.query(QuartaTaglioFinalCertificate)
         .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
@@ -337,9 +340,45 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         if _clean_text(certificate.unit_key) or certificate.cod_odp not in ol_with_unit_specific_certificates
     ]
     return QuartaTaglioFinalCertificateRegisterResponse(
-        items=[_serialize_final_certificate_register_item(certificate, db=db) for certificate in visible_certificates],
+        items=[_serialize_final_certificate_register_item(certificate) for certificate in visible_certificates],
         total_items=len(visible_certificates),
     )
+
+
+def _refresh_final_certificate_register_from_external_data(db: Session) -> None:
+    cod_odps = [
+        row[0]
+        for row in db.query(QuartaTaglioFinalCertificate.cod_odp)
+        .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+        .distinct()
+        .all()
+        if _clean_text(row[0])
+    ]
+    stale_cod_odps = _stale_register_cod_odps(db, cod_odps=cod_odps)
+    for cod_odp in stale_cod_odps:
+        try:
+            get_quarta_taglio_detail(db, cod_odp=cod_odp)
+        except HTTPException:
+            db.rollback()
+    db.commit()
+
+
+def _stale_register_cod_odps(db: Session, *, cod_odps: list[str]) -> list[str]:
+    if not cod_odps:
+        return []
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    links = (
+        db.query(QuartaTaglioEsolverLink)
+        .filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps))
+        .all()
+    )
+    links_by_odp = {_clean_text(link.cod_odp): link for link in links}
+    stale: list[str] = []
+    for cod_odp in cod_odps:
+        link = links_by_odp.get(_clean_text(cod_odp))
+        if link is None or link.last_checked_at is None or link.last_checked_at < freshness_cutoff:
+            stale.append(cod_odp)
+    return stale
 
 
 def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int | None = None) -> QuartaTaglioDetailResponse:
@@ -899,6 +938,10 @@ def _is_manual_word(certificate: QuartaTaglioFinalCertificate | None) -> bool:
 
 def _word_content_control_values(detail: QuartaTaglioDetailResponse, certificate: QuartaTaglioFinalCertificate) -> dict[str, object]:
     header = detail.header or {}
+    return _word_content_control_values_from_header(header, certificate)
+
+
+def _word_content_control_values_from_header(header: dict[str, object], certificate: QuartaTaglioFinalCertificate) -> dict[str, object]:
     return {
         "CERT_NUMBER": certificate.certificate_number or certificate.draft_number or header.get("numero_certificato") or "",
         "CERT_DATE": header.get("data_certificato") or "",
@@ -914,6 +957,36 @@ def _word_content_control_values(detail: QuartaTaglioDetailResponse, certificate
         "DDT_FINISHED": header.get("ddt_finished") or "",
         "QUANTITY_FINISHED": header.get("quantita_finished") or "",
     }
+
+
+def _word_content_control_values_for_unit(
+    detail: QuartaTaglioDetailResponse,
+    certificate: QuartaTaglioFinalCertificate,
+    unit: QuartaTaglioCertifiableUnitResponse,
+) -> dict[str, object]:
+    header = dict(detail.header or {})
+    raw_cod_f3 = _join_unique(item.cod_art for item in detail.materials) or None
+    raw_unit = unit if _norm(unit.cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(detail.certifiable_units, raw_cod_f3)
+    finished_unit = unit if _norm(unit.cod_f3) and _norm(unit.cod_f3) != _norm(raw_cod_f3) else None
+    unit_date = _certificate_datetime_from_ddt(unit.ddt)
+    header.update(
+        {
+            "numero_certificato": certificate.certificate_number or certificate.draft_number,
+            "data_certificato": _format_certificate_date(unit_date) or header.get("data_certificato") or "",
+            "cliente": unit.cliente or header.get("cliente") or "",
+            "ordine_cliente": unit.ordine_cliente or header.get("ordine_cliente") or "",
+            "conferma_ordine": unit.conferma_ordine or header.get("conferma_ordine") or "",
+            "codice_f3_raw": raw_cod_f3 or "",
+            "descrizione_raw": header.get("descrizione_raw") or _join_unique((item.des_art for item in detail.materials), separator=" | ") or "",
+            "ddt_raw": raw_unit.ddt if raw_unit and raw_unit.ddt else "",
+            "quantita_raw": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else "",
+            "codice_f3_finished": _clean_text(finished_unit.cod_f3) if finished_unit else "",
+            "descrizione_finished": "",
+            "ddt_finished": _clean_text(finished_unit.ddt) if finished_unit and finished_unit.ddt else "",
+            "quantita_finished": _format_quantity(finished_unit.quantita) if finished_unit and finished_unit.ddt and finished_unit.quantita is not None else "",
+        }
+    )
+    return _word_content_control_values_from_header(header, certificate)
 
 
 def _certificate_for_current_detail(
@@ -1101,11 +1174,16 @@ def _sync_certifiable_unit_register(
         for certificate in existing_certificates
         if _clean_text(certificate.unit_key)
     }
+    used_certificate_ids: set[int] = set()
     synced: list[QuartaTaglioFinalCertificate] = []
     cert_date = datetime.now(timezone.utc)
     cdq_key = _cdq_key_from_detail(detail)
     for unit in units:
-        certificate = existing_by_unit_key.get(unit.unit_key)
+        certificate = existing_by_unit_key.get(unit.unit_key) or _find_existing_certificate_for_unit(
+            existing_certificates,
+            unit=unit,
+            used_certificate_ids=used_certificate_ids,
+        )
         if certificate is None:
             if not create_missing:
                 continue
@@ -1125,11 +1203,15 @@ def _sync_certifiable_unit_register(
             db.add(certificate)
             db.flush()
             existing_by_unit_key[unit.unit_key] = certificate
+        if certificate.id is not None:
+            used_certificate_ids.add(certificate.id)
 
         if certificate.status == "pdf_final":
             synced.append(certificate)
             continue
         _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
+        if certificate.unit_key:
+            existing_by_unit_key[certificate.unit_key] = certificate
         unit_certificate_date = _certificate_datetime_from_ddt(unit.ddt)
         if unit_certificate_date:
             certificate.cert_date = unit_certificate_date
@@ -1145,10 +1227,40 @@ def _sync_certifiable_unit_register(
             )
         certificate.draft_number = certificate.certificate_number or certificate.draft_number
         _apply_certificate_conformity(certificate, detail)
+        if certificate.certificate_number and _ensure_register_word_current(db, certificate=certificate, detail=detail, unit=unit):
+            db.add(certificate)
         db.add(certificate)
         synced.append(certificate)
     db.flush()
     return synced
+
+
+def _find_existing_certificate_for_unit(
+    certificates: list[QuartaTaglioFinalCertificate],
+    *,
+    unit: QuartaTaglioCertifiableUnitResponse,
+    used_certificate_ids: set[int],
+) -> QuartaTaglioFinalCertificate | None:
+    unit_cod_f3 = _norm(unit.cod_f3)
+    if not unit_cod_f3:
+        return None
+
+    candidates = [
+        certificate
+        for certificate in certificates
+        if certificate.id not in used_certificate_ids
+        and certificate.status != "pdf_final"
+        and _norm(certificate.cod_f3) == unit_cod_f3
+    ]
+    if not candidates:
+        return None
+
+    unit_ddt = _norm(unit.ddt)
+    exact_ddt = next((certificate for certificate in candidates if unit_ddt and _norm(certificate.ddt) == unit_ddt), None)
+    if exact_ddt is not None:
+        return exact_ddt
+    missing_ddt = next((certificate for certificate in candidates if not _norm(certificate.ddt)), None)
+    return missing_ddt
 
 
 def _apply_certificate_conformity(certificate: QuartaTaglioFinalCertificate, detail: QuartaTaglioDetailResponse) -> None:
@@ -1548,9 +1660,109 @@ def _word_source_label(source: str | None) -> str:
         return "Caricato dall'utente"
     if source == "fields_updated":
         return "Aggiornato nei campi"
+    if source == "inherited":
+        return "Ereditato e aggiornato"
     if source == "generated":
         return "Generato dal sistema"
     return "Word corrente"
+
+
+def _ensure_register_word_current(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+    detail: QuartaTaglioDetailResponse,
+    unit: QuartaTaglioCertifiableUnitResponse | None = None,
+) -> bool:
+    if certificate.status == "pdf_final" or not certificate.certificate_number:
+        return False
+    values = _word_content_control_values_for_unit(detail, certificate, unit) if unit is not None else _word_content_control_values(detail, certificate)
+    current_path = _certificate_storage_path(certificate.storage_key_docx) if certificate.storage_key_docx else None
+    source_path = _certificate_word_source_path_for_auto_update(db, certificate=certificate, values=values)
+    if source_path is None:
+        return False
+    source_label = certificate.word_source or "generated"
+    if current_path is None or source_path != current_path:
+        source_label = "inherited"
+
+    storage_key = _certificate_docx_storage_key(certificate.cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    update_docx_content_controls(source_path, output_path, values)
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.word_source = source_label
+    certificate.word_original_filename = None
+    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
+    return True
+
+
+def _certificate_word_source_path_for_auto_update(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+    values: dict[str, object],
+) -> Path | None:
+    current_path = _certificate_storage_path(certificate.storage_key_docx) if certificate.storage_key_docx else None
+    if current_path is not None and current_path.exists() and certificate.word_source in {None, "generated", "inherited"}:
+        if _docx_needs_content_control_update(current_path, values):
+            return current_path
+        return None
+
+    if certificate.storage_key_docx:
+        return None
+
+    source_certificate = _previous_word_certificate_for_inheritance(db, certificate=certificate)
+    if source_certificate is None or not source_certificate.storage_key_docx:
+        return None
+    source_path = _certificate_storage_path(source_certificate.storage_key_docx)
+    if not source_path.exists():
+        return None
+    present, _missing = inspect_docx_content_controls(source_path)
+    return source_path if present else None
+
+
+def _previous_word_certificate_for_inheritance(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+) -> QuartaTaglioFinalCertificate | None:
+    current_cod_f3 = _cod_f3_sort_value(certificate.cod_f3)
+    if current_cod_f3 is None:
+        return None
+    candidates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == certificate.cod_odp,
+            QuartaTaglioFinalCertificate.id != certificate.id,
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
+            QuartaTaglioFinalCertificate.cod_f3.isnot(None),
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .all()
+    )
+    return _previous_cod_f3_certificate(
+        candidates,
+        cod_odp=certificate.cod_odp,
+        current_cod_f3=current_cod_f3,
+        visited_numbers={_clean_text(certificate.certificate_number) or ""},
+    )
+
+
+def _docx_needs_content_control_update(path: Path, values: dict[str, object]) -> bool:
+    expected_values = [str(value) for value in values.values() if value not in (None, "")]
+    if not expected_values:
+        return False
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml = "".join(
+                archive.read(name).decode("utf-8", errors="ignore")
+                for name in archive.namelist()
+                if name.startswith("word/") and name.endswith(".xml")
+            )
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return any(value not in xml and escape(value) not in xml for value in expected_values)
 
 
 def _cdq_signature_from_detail(detail: QuartaTaglioDetailResponse) -> list[str]:
