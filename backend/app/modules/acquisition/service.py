@@ -7290,7 +7290,7 @@ def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_ema
     batch_certificate_count = len(_run_document_ids_from_storage(run.certificate_document_ids))
     archive_certificate_count = max(0, run.totale_documenti_certificato - batch_certificate_count)
     lines = [
-        f"Assistente AI {outcome}.",
+        "Assistente Ai ha completato il caricamento." if success else "Assistente Ai non ha completato il caricamento.",
         "",
         f"Run: #{run.id}",
         f"DDT caricati nel batch: {batch_ddt_count}",
