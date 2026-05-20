@@ -7286,13 +7286,16 @@ def _send_autonomous_run_notification(*, run: AutonomousProcessingRun, actor_ema
 
     outcome = "completato" if success else "in errore"
     subject = f"CERTI_nt - Assistente AI {outcome} (run #{run.id})"
+    batch_ddt_count = len(_run_document_ids_from_storage(run.ddt_document_ids))
+    batch_certificate_count = len(_run_document_ids_from_storage(run.certificate_document_ids))
+    archive_certificate_count = max(0, run.totale_documenti_certificato - batch_certificate_count)
     lines = [
         f"Assistente AI {outcome}.",
         "",
         f"Run: #{run.id}",
-        f"DDT caricati nel batch: {len(_run_document_ids_from_storage(run.ddt_document_ids))}",
-        f"Certificati caricati nel batch: {len(_run_document_ids_from_storage(run.certificate_document_ids))}",
-        f"Certificati considerati dal sistema: {run.totale_documenti_certificato}",
+        f"DDT caricati nel batch: {batch_ddt_count}",
+        f"Certificati caricati nel batch: {batch_certificate_count}",
+        f"Certificati gia in archivio usati per match: {archive_certificate_count}",
         f"Righe create: {run.righe_create}",
         f"Righe processate: {run.righe_processate}/{run.totale_righe_target}",
         f"Match proposti: {run.match_proposti}",
