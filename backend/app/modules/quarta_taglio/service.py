@@ -1937,7 +1937,7 @@ def _aggregate_block_values(
 
         if block == "chimica" and standard is not None and _field_key(field) not in standard_chemistry_keys:
             if values:
-                aggregated, method = _aggregate_numeric_values(values)
+                aggregated, method = _aggregate_numeric_values(values, block=block)
                 result.append(
                     QuartaTaglioAggregateValueResponse(
                         field=field,
@@ -1965,7 +1965,7 @@ def _aggregate_block_values(
             )
             continue
 
-        aggregated, method = _aggregate_numeric_values(values)
+        aggregated, method = _aggregate_numeric_values(values, block=block)
 
         if block == "proprieta" and standard is not None and not standard_confirmed:
             result.append(
@@ -2031,9 +2031,11 @@ def _material_weight_for_app_row(row: AcquisitionRow, material_weights: dict[str
     return None
 
 
-def _aggregate_numeric_values(values: list[tuple[AcquisitionRow, float, float | None]]) -> tuple[float, str]:
+def _aggregate_numeric_values(values: list[tuple[AcquisitionRow, float, float | None]], *, block: str) -> tuple[float, str]:
     if len(values) == 1:
         return values[0][1], "single"
+    if block == "proprieta":
+        return min(value for _, value, _ in values), "minimum"
     if len(values) > 1 and all(weight is not None and weight > 0 for _, _, weight in values):
         total_weight = sum(float(weight or 0) for _, _, weight in values)
         return sum(value * float(weight or 0) for _, value, weight in values) / total_weight, "weighted"

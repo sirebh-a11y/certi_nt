@@ -255,6 +255,8 @@ class QuartaTaglioChemistryTest(unittest.TestCase):
         )
 
         self.assertEqual(values[0].status, "ok")
+        self.assertEqual(values[0].method, "minimum")
+        self.assertEqual(values[0].value, 350)
         self.assertEqual(values[0].standard_label, "range multipli")
         self.assertIn("CDQ-1 Ø98: OK", values[0].message)
         self.assertIn("CDQ-2 Ø190: OK", values[0].message)
@@ -281,8 +283,32 @@ class QuartaTaglioChemistryTest(unittest.TestCase):
         )
 
         self.assertEqual(values[0].status, "out_of_range")
+        self.assertEqual(values[0].method, "minimum")
+        self.assertEqual(values[0].value, 320)
         self.assertIn("CDQ-2 Ø190", values[0].message)
         self.assertIn("sotto minimo 340", values[0].message)
+
+    def test_properties_use_lowest_value_not_weighted_average(self):
+        standard = SimpleNamespace(
+            chemistry_limits=[],
+            property_limits=[_property_limit("Rm", 20.0, 150.0, 310.0)],
+        )
+        app_rows = [
+            SimpleNamespace(id=1, cdq="CDQ-1", diametro="98", values=[_property_value("Rm", "365")]),
+            SimpleNamespace(id=2, cdq="CDQ-2", diametro="98", values=[_property_value("Rm", "350")]),
+        ]
+
+        values = _aggregate_block_values(
+            fields=["Rm"],
+            block="proprieta",
+            app_rows=app_rows,
+            material_weights={"CDQ-1": 1.0, "CDQ-2": 10.0},
+            standard=standard,
+        )
+
+        self.assertEqual(values[0].method, "minimum")
+        self.assertEqual(values[0].value, 350)
+        self.assertEqual(values[0].status, "ok")
 
 
 if __name__ == "__main__":

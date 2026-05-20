@@ -41,6 +41,7 @@ const STATUS_LABELS = {
 const METHOD_LABELS = {
   weighted: "media pesata",
   average: "media",
+  minimum: "minimo",
   single: "singolo",
   missing: "-",
 };
