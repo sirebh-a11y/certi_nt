@@ -892,7 +892,7 @@ def _format_value(value: float | str | None) -> str:
     if value is None or value == "":
         return "-"
     if isinstance(value, float):
-        return f"{value:.4f}".rstrip("0").rstrip(".").replace(".", ",")
+        return f"{value:.2f}".rstrip("0").rstrip(".").replace(".", ",")
     return str(value)
 
 

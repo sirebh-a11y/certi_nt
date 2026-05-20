@@ -454,6 +454,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         app_rows=app_rows,
         material_weights=material_weights,
         standard=selected_standard_model,
+        standard_confirmed=selected_standard_confirmed,
     )
     conformity_status, conformity_issues = _build_standard_conformity(
         chemistry=chemistry,
@@ -1920,25 +1921,26 @@ def _aggregate_block_values(
     app_rows: list[AcquisitionRow],
     material_weights: dict[str, float | None],
     standard: NormativeStandard | None,
+    standard_confirmed: bool = True,
 ) -> list[QuartaTaglioAggregateValueResponse]:
     result: list[QuartaTaglioAggregateValueResponse] = []
     standard_chemistry_keys = _standard_chemistry_field_keys(standard) if block == "chimica" else set()
     for field in fields:
-        values: list[tuple[float, float | None]] = []
+        values: list[tuple[AcquisitionRow, float, float | None]] = []
         missing_rows: list[str] = []
         for row in app_rows:
             value = _as_float(_read_value(row, block, field))
             if value is None:
                 missing_rows.append(row.cdq or f"riga #{row.id}")
                 continue
-            values.append((value, material_weights.get(row.cdq or "")))
+            values.append((row, value, material_weights.get(row.cdq or "")))
 
         if block == "chimica" and standard is not None and _field_key(field) not in standard_chemistry_keys:
             if values:
                 result.append(
                     QuartaTaglioAggregateValueResponse(
                         field=field,
-                        value=_round_aggregate_value(block, sum(value for value, _ in values) / len(values)),
+                        value=_round_aggregate_value(block, sum(value for _, value, _ in values) / len(values)),
                         method="average" if len(values) > 1 else "single",
                         status="not_in_standard",
                         message="Elemento trovato nei certificati fornitore ma non previsto dallo standard: non riportare nel certificato finale",
@@ -1962,21 +1964,43 @@ def _aggregate_block_values(
             )
             continue
 
-        if len(values) > 1 and len(values) == len(app_rows) and all(weight is not None and weight > 0 for _, weight in values):
-            total_weight = sum(float(weight or 0) for _, weight in values)
-            aggregated = sum(value * float(weight or 0) for value, weight in values) / total_weight
+        if len(values) > 1 and len(values) == len(app_rows) and all(weight is not None and weight > 0 for _, _, weight in values):
+            total_weight = sum(float(weight or 0) for _, _, weight in values)
+            aggregated = sum(value * float(weight or 0) for _, value, weight in values) / total_weight
             method = "weighted"
         elif len(values) == 1:
-            aggregated = values[0][0]
+            aggregated = values[0][1]
             method = "single"
         else:
-            aggregated = sum(value for value, _ in values) / len(values)
+            aggregated = sum(value for _, value, _ in values) / len(values)
             method = "average"
 
-        limit_min, limit_max = _standard_limits_for_field(standard, block=block, field=field, app_rows=app_rows)
+        if block == "proprieta" and standard is not None and not standard_confirmed:
+            result.append(
+                QuartaTaglioAggregateValueResponse(
+                    field=field,
+                    value=_round_aggregate_value(block, aggregated),
+                    method=method,
+                    status="not_checked",
+                    message="Confermare standard per verificare le proprietà",
+                )
+            )
+            continue
+
+        limit_min, limit_max, standard_label, property_message, property_status = _standard_check_context_for_field(
+            standard=standard,
+            block=block,
+            field=field,
+            values=values,
+            app_rows=app_rows,
+            aggregated=aggregated,
+        )
         if block == "chimica" and standard is None:
             check_status = "not_checked"
             message = "Confermare lo standard per sapere se l'elemento va riportato"
+        elif property_status is not None:
+            check_status = property_status
+            message = property_message
         else:
             check_status, message = _check_against_limits(
                 value=aggregated,
@@ -1993,6 +2017,7 @@ def _aggregate_block_values(
                 method=method,
                 standard_min=limit_min,
                 standard_max=limit_max,
+                standard_label=standard_label,
                 status=check_status,
                 message=message,
             )
@@ -2016,7 +2041,7 @@ def _build_standard_conformity(
     issues: list[QuartaTaglioConformityIssueResponse] = []
     for block, items in (("chimica", chemistry), ("proprieta", properties)):
         for item in items:
-            if item.status == "out_of_range":
+            if item.status == "out_of_range" or (block == "proprieta" and item.status in {"missing_diameter", "range_not_found"}):
                 issues.append(
                     QuartaTaglioConformityIssueResponse(
                         block=block,
@@ -2063,6 +2088,133 @@ def _standard_limits_for_field(
     ]
     selected = ranged_limits[0] if ranged_limits else matching_limits[0]
     return selected.min_value, selected.max_value
+
+
+def _standard_check_context_for_field(
+    *,
+    standard: NormativeStandard | None,
+    block: str,
+    field: str,
+    values: list[tuple[AcquisitionRow, float, float | None]],
+    app_rows: list[AcquisitionRow],
+    aggregated: float,
+) -> tuple[float | None, float | None, str | None, str | None, str | None]:
+    if standard is None:
+        return None, None, None, None, None
+    if block != "proprieta":
+        limit_min, limit_max = _standard_limits_for_field(standard, block=block, field=field, app_rows=app_rows)
+        return limit_min, limit_max, None, None, None
+
+    matching_limits = [limit for limit in standard.property_limits if _field_key(limit.proprieta) == _field_key(field)]
+    if not matching_limits:
+        return None, None, None, None, None
+
+    if not values:
+        return None, None, None, None, None
+
+    checked_rows: list[tuple[AcquisitionRow, float, Any]] = []
+    missing_diameter: list[str] = []
+    range_not_found: list[str] = []
+    for row, value, _ in values:
+        diameter = _as_float(row.diametro)
+        row_label = row.cdq or f"riga #{row.id}"
+        if diameter is None:
+            missing_diameter.append(row_label)
+            continue
+        limit = _property_limit_for_diameter(matching_limits, diameter)
+        if limit is None:
+            range_not_found.append(f"{row_label} Ø{diameter:g}")
+            continue
+        checked_rows.append((row, value, limit))
+
+    if missing_diameter:
+        return (
+            None,
+            None,
+            None,
+            f"Diametro mancante per {', '.join(sorted(set(missing_diameter)))}: impossibile scegliere il range standard",
+            "missing_diameter",
+        )
+    if range_not_found:
+        return (
+            None,
+            None,
+            None,
+            f"Diametro fuori dai range standard: {', '.join(range_not_found)}",
+            "range_not_found",
+        )
+    if not checked_rows:
+        return matching_limits[0].min_value, matching_limits[0].max_value, None, None, None
+
+    unique_ranges = {
+        (
+            limit.misura_min,
+            limit.misura_max,
+            limit.min_value,
+            limit.max_value,
+            _property_range_label(limit),
+        )
+        for _, _, limit in checked_rows
+    }
+    if len(unique_ranges) == 1:
+        limit = checked_rows[0][2]
+        return limit.min_value, limit.max_value, None, None, None
+
+    checked_row_ids = {row.id for row, _, _ in checked_rows}
+    missing_value_rows = sorted(
+        {
+            row.cdq or f"riga #{row.id}"
+            for row in app_rows
+            if row.id not in checked_row_ids and _as_float(_read_value(row, "proprieta", field)) is None
+        }
+    )
+    messages: list[str] = []
+    out_of_range = False
+    for row, value, limit in checked_rows:
+        row_label = row.cdq or f"riga #{row.id}"
+        diameter = _as_float(row.diametro)
+        range_label = _property_range_label(limit)
+        if _value_within_limits(value=value, limit_min=limit.min_value, limit_max=limit.max_value):
+            messages.append(f"{row_label} Ø{diameter:g}: OK su {range_label}")
+            continue
+        out_of_range = True
+        status, message = _check_against_limits(value=value, limit_min=limit.min_value, limit_max=limit.max_value, missing_rows=[])
+        messages.append(f"{row_label} Ø{diameter:g}: {field} {value:g} {message or status}")
+    if missing_value_rows:
+        messages.append(f"manca valore per {', '.join(missing_value_rows)}")
+    return (
+        None,
+        None,
+        "range multipli",
+        "; ".join(messages),
+        "out_of_range" if out_of_range else "missing" if missing_value_rows else "ok",
+    )
+
+
+def _property_limit_for_diameter(limits: list[Any], diameter: float) -> Any | None:
+    for limit in limits:
+        if (limit.misura_min is None or diameter > limit.misura_min) and (limit.misura_max is None or diameter <= limit.misura_max):
+            return limit
+    return None
+
+
+def _property_range_label(limit: Any) -> str:
+    lower = f">{limit.misura_min:g}" if limit.misura_min is not None else ""
+    upper = f"<={limit.misura_max:g}" if limit.misura_max is not None else ""
+    measure = "Ø"
+    range_part = " ".join(part for part in (lower, upper) if part) or "range non definito"
+    standard_part = _format_standard_limit(limit.min_value, limit.max_value)
+    return f"{measure} {range_part} ({standard_part})" if standard_part else f"{measure} {range_part}"
+
+
+def _format_standard_limit(limit_min: float | None, limit_max: float | None) -> str | None:
+    if limit_min is not None and limit_max is not None:
+        return f"{limit_min:g}-{limit_max:g}"
+    if limit_min is not None:
+        return f">= {limit_min:g}"
+    if limit_max is not None:
+        return f"<= {limit_max:g}"
+    return None
 
 
 def _check_against_limits(

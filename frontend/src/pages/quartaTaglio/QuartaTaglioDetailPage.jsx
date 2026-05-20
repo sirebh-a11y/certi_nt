@@ -15,6 +15,8 @@ const STATUS_CLASSES = {
   out_of_range: "border-rose-200 bg-rose-50 text-rose-800",
   not_in_standard: "border-rose-200 bg-rose-50 text-rose-800",
   not_checked: "border-slate-200 bg-slate-50 text-slate-700",
+  missing_diameter: "border-amber-200 bg-amber-50 text-amber-800",
+  range_not_found: "border-rose-200 bg-rose-50 text-rose-800",
   mismatch: "border-rose-200 bg-rose-50 text-rose-800",
   error: "border-rose-200 bg-rose-50 text-rose-800",
 };
@@ -30,6 +32,8 @@ const STATUS_LABELS = {
   out_of_range: "Fuori standard",
   not_in_standard: "Non previsto",
   not_checked: "Non verificato",
+  missing_diameter: "Diametro mancante",
+  range_not_found: "Range mancante",
   mismatch: "Non coerente",
   error: "Errore",
 };
@@ -1037,9 +1041,9 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
 
         <div className="space-y-4">
-          <Panel title="Proprietà">
-            <ValueTable values={data.properties || []} />
-          </Panel>
+        <Panel title="Proprietà">
+            <ValueTable numberDigits={2} values={data.properties || []} />
+        </Panel>
           <Panel title="Note">
             <Table
               columns={["Nota", "Valore", "Stato", "Messaggio"]}
@@ -1249,7 +1253,7 @@ function ValueTable({ numberDigits = 4, values }) {
         item.field,
         formatNumber(item.value, numberDigits),
         METHOD_LABELS[item.method] || item.method,
-        formatLimit(item.standard_min, item.standard_max, numberDigits),
+        item.standard_label || formatLimit(item.standard_min, item.standard_max, numberDigits),
         <StatusPill key="status" status={item.status} />,
         item.message || "-",
       ])}

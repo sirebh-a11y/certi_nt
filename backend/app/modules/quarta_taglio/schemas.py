@@ -144,6 +144,7 @@ class QuartaTaglioAggregateValueResponse(BaseModel):
     method: str
     standard_min: float | None = None
     standard_max: float | None = None
+    standard_label: str | None = None
     status: str
     message: str | None = None
 
