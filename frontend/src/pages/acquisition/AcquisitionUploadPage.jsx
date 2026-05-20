@@ -114,7 +114,7 @@ export default function AcquisitionUploadPage() {
 
   const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
   const hasDocumentsWithoutSupplier = [...sessionDdtDocuments, ...sessionCertificateDocuments].some((item) => !item.fornitore_id);
-  const canRequestAi = hasAutomationDocuments || processingDdt || processingCertificates;
+  const canRequestAi = hasAutomationDocuments || ddtFiles.length > 0 || certificateFiles.length > 0 || processingDdt || processingCertificates;
 
   function handleRequestError(requestError) {
     const message = requestError?.message || "Request failed";
@@ -187,7 +187,7 @@ export default function AcquisitionUploadPage() {
     }
   }
 
-  async function handleBatchUpload(tipoDocumento) {
+  async function uploadSelectedFiles(tipoDocumento) {
     const files = tipoDocumento === "ddt" ? ddtFiles : certificateFiles;
     const setProcessing = tipoDocumento === "ddt" ? setProcessingDdt : setProcessingCertificates;
     const setResult = tipoDocumento === "ddt" ? setDdtResult : setCertificateResult;
@@ -195,7 +195,7 @@ export default function AcquisitionUploadPage() {
 
     if (!files.length) {
       setError(`Seleziona almeno un file ${tipoDocumento === "ddt" ? "DDT" : "certificato"}.`);
-      return;
+      return null;
     }
 
     const formData = new FormData();
@@ -233,11 +233,21 @@ export default function AcquisitionUploadPage() {
       if (movedCount) {
         setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riclassificato" : "sono stati riclassificati"} automaticamente.`);
       }
+      return {
+        batchId: response.upload_batch_id || batchId,
+        detectedDdt,
+        detectedCertificates,
+      };
     } catch (requestError) {
       handleRequestError(requestError);
+      return null;
     } finally {
       setProcessing(false);
     }
+  }
+
+  async function handleBatchUpload(tipoDocumento) {
+    await uploadSelectedFiles(tipoDocumento);
   }
 
   async function startAutomationRun() {
@@ -247,16 +257,46 @@ export default function AcquisitionUploadPage() {
       setNotice("Caricamento ancora in corso. L'Assistente AI partira appena tutti i file saranno caricati. Puoi continuare a usare l'app.");
       return;
     }
-    if (ddtFiles.length || certificateFiles.length) {
-      setError("Ci sono file selezionati ma non ancora caricati: premi Carica DDT o Carica certificati prima di avviare l'Assistente AI.");
-      return;
+    let nextDdtDocuments = sessionDdtDocuments;
+    let nextCertificateDocuments = sessionCertificateDocuments;
+    let runBatchId = uploadBatchId || "";
+
+    if (ddtFiles.length) {
+      setStartingAiRun(true);
+      setNotice("Carico i DDT selezionati, poi avvio l'Assistente AI.");
+      const uploadResult = await uploadSelectedFiles("ddt");
+      if (!uploadResult) {
+        setStartingAiRun(false);
+        return;
+      }
+      runBatchId = uploadResult.batchId || runBatchId;
+      nextDdtDocuments = mergeUploadedDocuments(nextDdtDocuments, uploadResult.detectedDdt);
+      nextCertificateDocuments = mergeUploadedDocuments(nextCertificateDocuments, uploadResult.detectedCertificates);
     }
-    if (!hasAutomationDocuments) {
+
+    if (certificateFiles.length) {
+      setStartingAiRun(true);
+      setNotice("Carico i certificati selezionati, poi avvio l'Assistente AI.");
+      const uploadResult = await uploadSelectedFiles("certificato");
+      if (!uploadResult) {
+        setStartingAiRun(false);
+        return;
+      }
+      runBatchId = uploadResult.batchId || runBatchId;
+      nextDdtDocuments = mergeUploadedDocuments(nextDdtDocuments, uploadResult.detectedDdt);
+      nextCertificateDocuments = mergeUploadedDocuments(nextCertificateDocuments, uploadResult.detectedCertificates);
+    }
+
+    const hasRunDocuments = nextDdtDocuments.length > 0 || nextCertificateDocuments.length > 0;
+    const hasRunDocumentsWithoutSupplier = [...nextDdtDocuments, ...nextCertificateDocuments].some((item) => !item.fornitore_id);
+    if (!hasRunDocuments) {
       setError("Carica almeno un DDT o un certificato per avviare la lavorazione.");
+      setStartingAiRun(false);
       return;
     }
-    if (hasDocumentsWithoutSupplier) {
+    if (hasRunDocumentsWithoutSupplier) {
       setError("Assegna un fornitore a tutti i documenti pronti prima di avviare la lettura intelligente.");
+      setStartingAiRun(false);
       return;
     }
 
@@ -268,9 +308,9 @@ export default function AcquisitionUploadPage() {
         {
           method: "POST",
           body: JSON.stringify({
-            ddt_document_ids: sessionDdtDocuments.map((item) => item.id),
-            certificate_document_ids: sessionCertificateDocuments.map((item) => item.id),
-            upload_batch_id: uploadBatchId || null,
+            ddt_document_ids: nextDdtDocuments.map((item) => item.id),
+            certificate_document_ids: nextCertificateDocuments.map((item) => item.id),
+            upload_batch_id: runBatchId || null,
             usa_ddt_vision: true,
             usa_intervento_ai: true,
           }),
@@ -284,6 +324,7 @@ export default function AcquisitionUploadPage() {
       const message = requestError?.message || "Request failed";
       if (message === "There is already an autonomous processing run in progress") {
         setError("");
+        setPendingAiStart(false);
         setNotice("C'è già una lavorazione automatica in corso: mi aggancio a quel run.");
         await loadActiveRun();
         return;
@@ -401,7 +442,7 @@ export default function AcquisitionUploadPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">Caricamento documenti</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Flusso: carichi DDT e certificati nel batch corrente, il sistema li riconosce e poi premi l'assistente AI per processarli.
+              Flusso: metti DDT e certificati nel batch corrente e premi l'assistente AI. Se ci sono file nei box, li carica e poi li processa.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
