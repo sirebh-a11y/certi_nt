@@ -38,6 +38,7 @@ const STATUS_SORT_RANK = {
 };
 
 const LIST_STATE_STORAGE_KEY = "certi_nt.quarta_taglio_list_state.v1";
+const QUICK_INCOMING_CONFIRM_STORAGE_KEY = "certi_nt.quarta_taglio_quick_incoming_confirm.v1";
 const DEFAULT_LIST_STATE = {
   queryOne: "",
   queryTwo: "",
@@ -52,6 +53,20 @@ const DEFAULT_LIST_STATE = {
   scrollTop: 0,
   windowScrollY: 0,
 };
+
+function loadQuickIncomingConfirmSetting() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(QUICK_INCOMING_CONFIRM_STORAGE_KEY) === "true";
+}
+
+function saveQuickIncomingConfirmSetting(value) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(QUICK_INCOMING_CONFIRM_STORAGE_KEY, value ? "true" : "false");
+}
 
 function loadPersistedListState() {
   if (typeof window === "undefined") {
@@ -323,6 +338,7 @@ export default function QuartaTaglioPage() {
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
   const [onlyTaglioActive, setOnlyTaglioActive] = useState(initialListStateRef.current.onlyTaglioActive);
   const [hideCertified, setHideCertified] = useState(initialListStateRef.current.hideCertified);
+  const [quickIncomingConfirm, setQuickIncomingConfirm] = useState(loadQuickIncomingConfirmSetting);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [totalItems, setTotalItems] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -335,6 +351,11 @@ export default function QuartaTaglioPage() {
   const sectionRef = useRef(null);
   const initialSyncDoneRef = useRef(false);
   const latestRequestRef = useRef(0);
+
+  function updateQuickIncomingConfirm(value) {
+    setQuickIncomingConfirm(value);
+    saveQuickIncomingConfirmSetting(value);
+  }
 
   async function fetchItems({ append = false, sync = false, offset = 0 } = {}) {
     const requestId = latestRequestRef.current + 1;
@@ -597,6 +618,25 @@ export default function QuartaTaglioPage() {
         <LegendCell color="green" title="Verde" text="CDQ presente, colata coerente, chimica/proprietà/note confermate e qualità accettata." />
         <LegendCell color="yellow" title="Giallo" text="CDQ presente ma manca chimica, proprietà, note o qualità; include accettato con riserva." />
         <LegendCell color="red" title="Rosso" text="CDQ mancante, colata diversa o qualità respinta." />
+      </div>
+
+      <div className="rounded-xl border border-border bg-white px-4 py-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Metodo Incoming</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">Conferma rapida da Certificazione</div>
+            <div className="mt-0.5 text-xs text-slate-500">Se attiva, aprendo un OL idoneo conferma CHIM. e PROP. in Incoming.</div>
+          </div>
+          <label className="inline-flex w-fit items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            <input
+              checked={quickIncomingConfirm}
+              className="h-4 w-4 accent-accent"
+              onChange={(event) => updateQuickIncomingConfirm(event.target.checked)}
+              type="checkbox"
+            />
+            {quickIncomingConfirm ? "Attiva" : "Disattiva"}
+          </label>
+        </div>
       </div>
 
       <div className="flex items-end gap-2 overflow-x-auto pb-1">

@@ -675,7 +675,6 @@ def apply_quick_incoming_confirmation(
     if blockers:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(blockers))
 
-    changed = 0
     for row in app_rows:
         for block in ("chimica", "proprieta"):
             block_values = [
@@ -693,7 +692,6 @@ def apply_quick_incoming_confirmation(
                     value.timestamp_ultima_modifica = datetime.now(timezone.utc)
                     db.add(value)
                     block_changed = True
-                    changed += 1
             if block_changed or not _has_quick_confirmation_event(row, block):
                 db.add(
                     AcquisitionHistoryEvent(

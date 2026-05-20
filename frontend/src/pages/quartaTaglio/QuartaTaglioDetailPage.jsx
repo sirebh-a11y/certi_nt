@@ -73,6 +73,7 @@ const CUSTOMER_REQUIREMENT_FIELDS = [
 
 const ARTICLE_AUTOSAVE_DELAY_MS = 800;
 const ARTICLE_SAVED_FEEDBACK_MS = 1200;
+const QUICK_INCOMING_CONFIRM_STORAGE_KEY = "certi_nt.quarta_taglio_quick_incoming_confirm.v1";
 
 function statusClass(status) {
   return STATUS_CLASSES[status] || STATUS_CLASSES.not_checked;
@@ -179,6 +180,13 @@ function quartaDetailApiPath(codOdp, certificateId) {
   return certificateId ? `${basePath}?certificate_id=${encodeURIComponent(certificateId)}` : basePath;
 }
 
+function quickIncomingConfirmEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(QUICK_INCOMING_CONFIRM_STORAGE_KEY) === "true";
+}
+
 function codF3MatchKey(value) {
   const digits = String(value || "").replace(/\D/g, "");
   if (digits.length <= 2) {
@@ -224,12 +232,12 @@ export default function QuartaTaglioDetailPage() {
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
-  const [quickConfirmEnabled, setQuickConfirmEnabled] = useState(false);
   const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
   const latestArticleDraftRef = useRef({ descrizione: "", disegno: "" });
+  const autoQuickConfirmAttemptRef = useRef("");
 
   function handleRequestError(requestError, fallbackMessage = "Errore richiesta") {
     const message = requestError.message || fallbackMessage;
@@ -324,6 +332,33 @@ export default function QuartaTaglioDetailPage() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!data?.cod_odp || !quickIncomingConfirmEnabled()) {
+      return;
+    }
+    if (!data.quick_incoming_confirm_available || data.quick_incoming_confirm_applied) {
+      return;
+    }
+    const signature = [
+      data.cod_odp,
+      data.header?.certificate_id || "",
+      data.selected_standard?.id || "",
+      data.conformity_status || "",
+    ].join("|");
+    if (autoQuickConfirmAttemptRef.current === signature) {
+      return;
+    }
+    autoQuickConfirmAttemptRef.current = signature;
+    void applyQuickIncomingConfirmation();
+  }, [
+    data?.cod_odp,
+    data?.header?.certificate_id,
+    data?.selected_standard?.id,
+    data?.conformity_status,
+    data?.quick_incoming_confirm_available,
+    data?.quick_incoming_confirm_applied,
+  ]);
 
   function confirmStandard(standardId) {
     setSavingStandardId(standardId);
@@ -481,9 +516,6 @@ export default function QuartaTaglioDetailPage() {
   }
 
   async function applyQuickIncomingConfirmation() {
-    if (!quickConfirmEnabled) {
-      return;
-    }
     setQuickConfirmState({ status: "saving", message: "" });
     setError("");
     try {
@@ -711,6 +743,18 @@ export default function QuartaTaglioDetailPage() {
           {STATUS_LABELS[data.status_color] || data.status_color}
         </span>
       </div>
+
+      {quickConfirmState.message ? (
+        <div
+          className={`rounded-xl border px-4 py-2 text-sm font-medium ${
+            quickConfirmState.status === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-800"
+              : "border-emerald-200 bg-emerald-50 text-emerald-800"
+          }`}
+        >
+          {quickConfirmState.message}
+        </div>
+      ) : null}
 
       {customerRequirement ? (
         <Panel title="Requisiti cliente">
@@ -1013,42 +1057,6 @@ export default function QuartaTaglioDetailPage() {
               {data.quick_incoming_confirm_warning}
             </div>
           ) : null}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                <input
-                  checked={quickConfirmEnabled}
-                  className="h-4 w-4 accent-accent"
-                  onChange={(event) => setQuickConfirmEnabled(event.target.checked)}
-                  type="checkbox"
-                />
-                Conferma rapida Incoming
-              </label>
-              <button
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!quickConfirmEnabled || !data.quick_incoming_confirm_available || quickConfirmState.status === "saving"}
-                onClick={applyQuickIncomingConfirmation}
-                type="button"
-              >
-                {quickConfirmState.status === "saving" ? "Confermo..." : "Applica"}
-              </button>
-            </div>
-            {quickConfirmState.message ? (
-              <p className={`mt-2 text-xs ${quickConfirmState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
-                {quickConfirmState.message}
-              </p>
-            ) : null}
-            {quickConfirmEnabled && !data.quick_incoming_confirm_available ? (
-              <div className="mt-2 space-y-1 text-xs text-amber-800">
-                {(data.quick_incoming_confirm_blockers || []).map((item) => (
-                  <div key={item}>{item}</div>
-                ))}
-              </div>
-            ) : null}
-            {data.quick_incoming_confirm_applied ? (
-              <p className="mt-2 text-xs text-slate-500">Conferma rapida già applicata ad almeno una riga Incoming collegata.</p>
-            ) : null}
-          </div>
           <div className="mt-3 space-y-2">
             {(data.standard_candidates || []).map((candidate) => (
               <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm" key={candidate.id}>
