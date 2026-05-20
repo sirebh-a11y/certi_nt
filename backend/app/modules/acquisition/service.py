@@ -13738,6 +13738,10 @@ def _sanitize_metalba_vision_certificate_fields(
     def _payload(value: str | None) -> dict[str, str | None]:
         return {"value": value, "evidence": value, "source_crop": source_crop}
 
+    cast_value = _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{5}[A-Z]\b", disallow={"10204"})
+    if cast_value is None:
+        cast_value = _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{4}[A-Z]\b", disallow={"10204"})
+
     return {
         "numero_certificato_certificato": _payload(
             _extract_token_from_value_or_evidence(
@@ -13754,9 +13758,7 @@ def _sanitize_metalba_vision_certificate_fields(
         ),
         "lega_certificato": _payload(_normalize_metalba_alloy_from_text(alloy_raw)),
         "diametro_certificato": _payload(_normalize_metalba_diameter_from_text(diameter_context)),
-        "colata_certificato": _payload(
-            _extract_token_from_value_or_evidence(cast_raw, cast_raw, r"\b\d{5}[A-Z]\b", disallow={"10204"})
-        ),
+        "colata_certificato": _payload(cast_value),
         "peso_certificato": _payload(_normalize_weight_value(weight_raw)),
     }
 
