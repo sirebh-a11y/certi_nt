@@ -15,6 +15,7 @@ from app.modules.quarta_taglio.service import (
     apply_quick_incoming_confirmation,
     confirm_quarta_taglio_standard,
     create_quarta_taglio_word_draft,
+    get_quarta_taglio_additional_page_template_file,
     get_quarta_taglio_detail,
     get_quarta_taglio_word_draft_file,
     list_quarta_taglio_final_certificates,
@@ -69,6 +70,18 @@ def list_quarta_taglio_final_certificates_route(
     db: DbSession,
 ) -> QuartaTaglioFinalCertificateRegisterResponse:
     return list_quarta_taglio_final_certificates(db)
+
+
+@router.get("/additional-pages/template")
+def get_quarta_taglio_additional_page_template_route(
+    current_user: CurrentUser,
+) -> FileResponse:
+    path, file_name = get_quarta_taglio_additional_page_template_file()
+    return FileResponse(
+        path=path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=file_name,
+    )
 
 
 @router.get("/{cod_odp}", response_model=QuartaTaglioDetailResponse)

@@ -56,6 +56,85 @@ CONTENT_CONTROL_TAGS = (
 )
 
 
+def build_additional_page_template_docx(output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    document = Document()
+    _set_document_sections_layout(document)
+    _clear_header_footer(document.sections[0].header)
+    _clear_header_footer(document.sections[0].footer)
+
+    normal_style = document.styles["Normal"]
+    normal_style.font.name = "Arial"
+    normal_style.font.size = Pt(10)
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    title.paragraph_format.space_before = Pt(0)
+    title.paragraph_format.space_after = Pt(8)
+    title_run = title.add_run("Titolo pagina aggiuntiva")
+    title_run.bold = True
+    title_run.font.name = "Arial"
+    title_run.font.size = Pt(12)
+
+    subtitle = document.add_paragraph()
+    subtitle.paragraph_format.space_before = Pt(0)
+    subtitle.paragraph_format.space_after = Pt(8)
+    subtitle_run = subtitle.add_run("Testo o descrizione breve")
+    subtitle_run.font.name = "Arial"
+    subtitle_run.font.size = Pt(10)
+    subtitle_run.font.color.rgb = RGBColor(90, 90, 90)
+
+    data_table = document.add_table(rows=6, cols=4)
+    data_table.style = "Table Grid"
+    data_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_width(data_table, Inches(7.1))
+    _set_table_cell_margins(data_table, left=45, right=45, top=25, bottom=25)
+    headers = ("Campo", "Valore", "Campo", "Valore")
+    for index, label in enumerate(headers):
+        paragraph = data_table.rows[0].cells[index].paragraphs[0]
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run(label)
+        run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(9)
+    for row in data_table.rows:
+        row.height = Inches(0.23)
+        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    _set_table_font(data_table, size=9)
+
+    spacer = document.add_paragraph()
+    spacer.paragraph_format.space_before = Pt(8)
+    spacer.paragraph_format.space_after = Pt(4)
+
+    image_table = document.add_table(rows=1, cols=1)
+    image_table.style = "Table Grid"
+    image_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _set_table_width(image_table, Inches(7.1))
+    _set_table_cell_margins(image_table, left=45, right=45, top=35, bottom=35)
+    image_row = image_table.rows[0]
+    image_row.height = Inches(3.35)
+    image_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    image_cell = image_row.cells[0]
+    image_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    image_paragraph = image_cell.paragraphs[0]
+    image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    image_run = image_paragraph.add_run("Area immagine / tabella / allegato")
+    image_run.font.name = "Arial"
+    image_run.font.size = Pt(10)
+    image_run.font.color.rgb = RGBColor(120, 120, 120)
+
+    note = document.add_paragraph()
+    note.paragraph_format.space_before = Pt(8)
+    note.paragraph_format.space_after = Pt(0)
+    note_run = note.add_run("Contenuto modificabile: usa questo modello per mantenere larghezze e spazi compatibili con il certificato.")
+    note_run.font.name = "Arial"
+    note_run.font.size = Pt(8)
+    note_run.font.color.rgb = RGBColor(120, 120, 120)
+
+    document.save(output_path)
+
+
 def build_forgialluminio_draft_docx(
     *,
     detail: QuartaTaglioDetailResponse,

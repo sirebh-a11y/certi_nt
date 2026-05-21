@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { apiRequest, resolveApiAssetUrl } from "../../app/api";
+import { apiRequest, fetchApiBlob, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
 const STATUS_CLASSES = {
@@ -548,6 +548,27 @@ export default function QuartaTaglioDetailPage() {
     link.remove();
   }
 
+  async function downloadAdditionalPageTemplate() {
+    setAdditionalPagesState({ status: "saving", message: "" });
+    try {
+      const blob = await fetchApiBlob("/api/quarta-taglio/additional-pages/template", token);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = "modello_seconda_pagina_forgialluminio.docx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      setAdditionalPagesState({ status: "saved", message: "Modello seconda pagina scaricato." });
+    } catch (requestError) {
+      setAdditionalPagesState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore download modello seconda pagina"),
+      });
+    }
+  }
+
   async function updateWordFields() {
     if (!hasWord) {
       setWordFieldsState({ status: "error", message: "Genera o ricarica prima un Word corrente." });
@@ -922,9 +943,18 @@ export default function QuartaTaglioDetailPage() {
             </div>
           </div>
           <div className="flex flex-col gap-2 rounded-lg border border-sky-100 bg-sky-50/60 p-2">
-            <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-additional-pages-upload">
-              Carica pagine aggiuntive
-            </label>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-additional-pages-upload">
+                Carica pagine aggiuntive
+              </label>
+              <button
+                className="w-fit rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900"
+                onClick={downloadAdditionalPageTemplate}
+                type="button"
+              >
+                Scarica modello seconda pagina
+              </button>
+            </div>
             <p className="text-xs text-slate-500">
               Il file caricato diventa specifico per questo numero certificato. Se il Word corrente è manuale, aggiungi o togli pagine in Word e ricaricalo.
             </p>

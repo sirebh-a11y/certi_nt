@@ -23,6 +23,7 @@ from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
+    build_additional_page_template_docx,
     build_forgialluminio_draft_docx,
     inspect_docx_content_controls,
     update_docx_content_controls,
@@ -896,6 +897,13 @@ def upload_quarta_taglio_additional_pages(
         download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
         created_at=certificate.created_at,
     )
+
+
+def get_quarta_taglio_additional_page_template_file() -> tuple[Path, str]:
+    file_name = "modello_seconda_pagina_forgialluminio.docx"
+    path = Path(settings.document_storage_root) / "templates" / file_name
+    build_additional_page_template_docx(path)
+    return path, file_name
 
 
 def upload_quarta_taglio_word_file(
