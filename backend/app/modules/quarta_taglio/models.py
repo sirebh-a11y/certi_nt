@@ -95,6 +95,21 @@ class QuartaTaglioArticleOverride(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class QuartaTaglioIncomingRowOverride(Base):
+    __tablename__ = "quarta_taglio_incoming_row_overrides"
+    __table_args__ = (
+        UniqueConstraint("cod_odp", "cdq", "colata", name="uq_quarta_taglio_incoming_row_override"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    cdq: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    colata: Mapped[str] = mapped_column(String(160), default="", nullable=False, index=True)
+    acquisition_row_id: Mapped[int] = mapped_column(ForeignKey("datimaterialeincoming.id"), nullable=False, index=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class QuartaTaglioFinalCertificate(Base):
     __tablename__ = "quarta_taglio_final_certificates"
 

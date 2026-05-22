@@ -780,6 +780,33 @@ export default function QuartaTaglioDetailPage() {
     query.set("returnTo", `${location.pathname}${location.search}${location.hash}`);
     return `/acquisition?${query.toString()}`;
   }, [codOdp, data?.cod_odp, linkedIncomingRowIds, location.hash, location.pathname, location.search]);
+  const materialByCdqColata = useMemo(() => {
+    const map = new Map();
+    (data?.materials || []).forEach((item) => {
+      map.set(`${String(item.cdq || "").toLowerCase()}|${String(item.colata || "").toLowerCase()}`, item);
+    });
+    return map;
+  }, [data?.materials]);
+
+  function resolveIncomingPathForMissingItem(item) {
+    const material = materialByCdqColata.get(`${String(item.cdq || "").toLowerCase()}|${String(item.colata || "").toLowerCase()}`);
+    const rowIds = Array.from(new Set(material?.matching_row_ids || [])).filter(Boolean);
+    if (rowIds.length < 2) {
+      return "";
+    }
+    const query = new URLSearchParams();
+    query.set("scope", "certificazione");
+    query.set("mode", "resolve_row");
+    query.set("ol", data?.cod_odp || codOdp || "");
+    query.set("cdq", item.cdq || "");
+    query.set("colata", item.colata || "");
+    if (material?.qta_totale != null) {
+      query.set("qta", String(material.qta_totale));
+    }
+    query.set("row_ids", rowIds.join(","));
+    query.set("returnTo", `${location.pathname}${location.search}${location.hash}`);
+    return `/acquisition?${query.toString()}`;
+  }
   const codF3Candidates = data?.cod_f3_candidates || [];
   const rawCodF3Candidate = codF3Candidates.find((candidate) => candidate.relation === "raw") || null;
   const selectedCodF3Candidate =
@@ -1137,19 +1164,30 @@ export default function QuartaTaglioDetailPage() {
         <Panel title="Dati ancora mancanti">
           <Table
             columns={["CDQ", "Colata", "Stato", "Cosa manca"]}
-            rows={(data.missing_items || []).map((item) => [
-              item.cdq,
-              item.colata || "-",
-              <StatusPill key="status" status={item.status_color} />,
-              <div className="space-y-1" key="details">
-                <div className="font-medium">{item.message}</div>
-                {(item.details || []).map((detail) => (
-                  <div className="text-xs text-slate-500" key={detail}>
-                    {detail}
-                  </div>
-                ))}
-              </div>,
-            ])}
+            rows={(data.missing_items || []).map((item) => {
+              const resolvePath = resolveIncomingPathForMissingItem(item);
+              return [
+                item.cdq,
+                item.colata || "-",
+                <StatusPill key="status" status={item.status_color} />,
+                <div className="space-y-2" key="details">
+                  <div className="font-medium">{item.message}</div>
+                  {(item.details || []).map((detail) => (
+                    <div className="text-xs text-slate-500" key={detail}>
+                      {detail}
+                    </div>
+                  ))}
+                  {resolvePath ? (
+                    <Link
+                      className="inline-flex rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50"
+                      to={resolvePath}
+                    >
+                      Risolvi in Incoming
+                    </Link>
+                  ) : null}
+                </div>,
+              ];
+            })}
             emptyText="Nessun blocco tecnico rilevato."
           />
         </Panel>

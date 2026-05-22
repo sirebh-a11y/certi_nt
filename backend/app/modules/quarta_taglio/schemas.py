@@ -287,6 +287,12 @@ class QuartaTaglioArticleDataRequest(BaseModel):
     disegno: str | None = None
 
 
+class QuartaTaglioIncomingRowOverrideRequest(BaseModel):
+    cdq: str
+    colata: str | None = None
+    acquisition_row_id: int
+
+
 class QuartaTaglioWordDraftResponse(BaseModel):
     id: int
     cod_odp: str

@@ -6,6 +6,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioArticleDataRequest,
     QuartaTaglioDetailResponse,
     QuartaTaglioFinalCertificateRegisterResponse,
+    QuartaTaglioIncomingRowOverrideRequest,
     QuartaTaglioListResponse,
     QuartaTaglioStandardSelectionRequest,
     QuartaTaglioWordDraftRequest,
@@ -19,6 +20,7 @@ from app.modules.quarta_taglio.service import (
     get_quarta_taglio_detail,
     get_quarta_taglio_word_draft_file,
     list_quarta_taglio_final_certificates,
+    set_quarta_taglio_incoming_row_override,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
     upload_quarta_taglio_additional_pages,
@@ -112,6 +114,16 @@ def apply_quick_incoming_confirmation_route(
     certificate_id: int | None = Query(default=None),
 ) -> QuartaTaglioDetailResponse:
     return apply_quick_incoming_confirmation(db, cod_odp=cod_odp, certificate_id=certificate_id, actor_id=current_user.id)
+
+
+@router.post("/{cod_odp}/incoming-row-override", response_model=QuartaTaglioDetailResponse)
+def set_quarta_taglio_incoming_row_override_route(
+    cod_odp: str,
+    payload: QuartaTaglioIncomingRowOverrideRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioDetailResponse:
+    return set_quarta_taglio_incoming_row_override(db, cod_odp=cod_odp, payload=payload, actor_id=current_user.id)
 
 
 @router.patch("/{cod_odp}/article-data", response_model=QuartaTaglioDetailResponse)

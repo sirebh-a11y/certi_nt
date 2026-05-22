@@ -33,6 +33,7 @@ from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificateExtraPages,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
+    QuartaTaglioIncomingRowOverride,
     QuartaTaglioRow,
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
@@ -48,6 +49,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioEsolverDdtRowResponse,
     QuartaTaglioFinalCertificateRegisterItem,
     QuartaTaglioFinalCertificateRegisterResponse,
+    QuartaTaglioIncomingRowOverrideRequest,
     QuartaTaglioListResponse,
     QuartaTaglioMaterialResponse,
     QuartaTaglioMissingItemResponse,
@@ -821,6 +823,61 @@ def update_quarta_taglio_article_data(
         override.disegno = _clean_text(disegno)
     override.updated_by_user_id = actor_id
     db.add(override)
+    db.commit()
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp)
+
+
+def set_quarta_taglio_incoming_row_override(
+    db: Session,
+    *,
+    cod_odp: str,
+    payload: QuartaTaglioIncomingRowOverrideRequest,
+    actor_id: int | None,
+) -> QuartaTaglioDetailResponse:
+    cdq = _clean_text(payload.cdq)
+    colata = _clean_text(payload.colata) or ""
+    if not cdq:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CDQ mancante")
+
+    rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cod_odp == cod_odp)
+        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
+
+    material_exists = any(_norm(row.cdq) == _norm(cdq) and _norm(row.colata) == _norm(colata) for row in rows)
+    if not material_exists:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CDQ/colata non presenti su questo OL")
+
+    app_row = db.get(AcquisitionRow, payload.acquisition_row_id)
+    if app_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Riga Incoming non trovata")
+    if _norm(app_row.cdq) != _norm(cdq) or _norm(app_row.colata) != _norm(colata):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La riga Incoming scelta non ha lo stesso CDQ/colata dell'OL",
+        )
+
+    override = (
+        db.query(QuartaTaglioIncomingRowOverride)
+        .filter(
+            QuartaTaglioIncomingRowOverride.cod_odp == cod_odp,
+            QuartaTaglioIncomingRowOverride.cdq == cdq,
+            QuartaTaglioIncomingRowOverride.colata == colata,
+        )
+        .one_or_none()
+    )
+    if override is None:
+        override = QuartaTaglioIncomingRowOverride(cod_odp=cod_odp, cdq=cdq, colata=colata)
+    override.acquisition_row_id = app_row.id
+    override.updated_by_user_id = actor_id
+    db.add(override)
+    db.flush()
+
+    _refresh_quarta_rows_from_incoming(db, rows=rows)
     db.commit()
     return get_quarta_taglio_detail(db, cod_odp=cod_odp)
 
@@ -2071,6 +2128,91 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
     )
 
 
+def _weight_candidates_for_quarta(value: Any, *, target: float | None) -> set[float]:
+    raw = _clean_text(value)
+    parsed = _as_float(value)
+    candidates: set[float] = set()
+    if parsed is not None:
+        candidates.add(parsed)
+    if not raw:
+        return candidates
+
+    compact = raw.replace(" ", "")
+    # Incoming puo contenere pesi con punto come separatore migliaia (es. 8.554 = 8554 kg).
+    if "." in compact and "," not in compact:
+        thousands_candidate = _as_float(compact.replace(".", ""))
+        if thousands_candidate is not None:
+            candidates.add(thousands_candidate)
+    if "." in compact and "," in compact:
+        european_candidate = _as_float(compact.replace(".", "").replace(",", "."))
+        if european_candidate is not None:
+            candidates.add(european_candidate)
+        us_candidate = _as_float(compact.replace(",", ""))
+        if us_candidate is not None:
+            candidates.add(us_candidate)
+    if "," in compact and "." not in compact and target is not None and abs(target) >= 1000:
+        thousands_candidate = _as_float(compact.replace(",", ""))
+        if thousands_candidate is not None:
+            candidates.add(thousands_candidate)
+    return candidates
+
+
+def _incoming_row_weight_matches_quarta(row: AcquisitionRow, qta_totale: float | None) -> bool:
+    if qta_totale is None:
+        return False
+    tolerance = max(1.0, abs(qta_totale) * 0.001)
+    return any(abs(candidate - qta_totale) <= tolerance for candidate in _weight_candidates_for_quarta(row.peso, target=qta_totale))
+
+
+def _matching_override_for_material(
+    db: Session,
+    *,
+    cod_odp: str | None,
+    cdq: str,
+    colata: str | None,
+) -> QuartaTaglioIncomingRowOverride | None:
+    clean_cod_odp = _clean_text(cod_odp)
+    clean_cdq = _clean_text(cdq)
+    clean_colata = _clean_text(colata) or ""
+    if not clean_cod_odp or not clean_cdq:
+        return None
+    return (
+        db.query(QuartaTaglioIncomingRowOverride)
+        .filter(
+            QuartaTaglioIncomingRowOverride.cod_odp == clean_cod_odp,
+            QuartaTaglioIncomingRowOverride.cdq == clean_cdq,
+            QuartaTaglioIncomingRowOverride.colata == clean_colata,
+        )
+        .one_or_none()
+    )
+
+
+def _effective_incoming_rows_for_quarta_material(
+    db: Session,
+    *,
+    cod_odp: str | None,
+    cdq: str,
+    colata: str | None,
+    qta_totale: float | None,
+    exact_rows: list[AcquisitionRow],
+) -> tuple[list[AcquisitionRow], str | None]:
+    if len(exact_rows) <= 1:
+        return exact_rows, None
+
+    override = _matching_override_for_material(db, cod_odp=cod_odp, cdq=cdq, colata=colata)
+    if override is not None:
+        selected = [row for row in exact_rows if row.id == override.acquisition_row_id]
+        if selected:
+            return selected, None
+        return exact_rows, "Scelta manuale non più valida: riga Incoming non coerente con CDQ/colata"
+
+    weight_matches = [row for row in exact_rows if _incoming_row_weight_matches_quarta(row, qta_totale)]
+    if len(weight_matches) == 1:
+        return weight_matches, None
+
+    return exact_rows, "CDQ presente su più righe app: verifica manuale"
+
+
 def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> None:
     cdq_values = {
         candidate
@@ -2102,8 +2244,10 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
     for row in rows:
         status_color, status_message, status_details, matching_row_ids = _evaluate_cdq(
             db=db,
+            cod_odp=row.cod_odp,
             cdq=row.cdq,
             colata=row.colata,
+            qta_totale=row.qta_totale,
             rows_by_cdq=rows_by_cdq,
         )
         if (
@@ -2332,7 +2476,15 @@ def _word_creation_blockers(
             else:
                 blockers.append(f"{label}: CDQ non presente in Incoming")
             continue
-        if len(exact_rows) > 1:
+        exact_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
+            db,
+            cod_odp=quarta_row.cod_odp,
+            cdq=quarta_row.cdq,
+            colata=quarta_row.colata,
+            qta_totale=quarta_row.qta_totale,
+            exact_rows=exact_rows,
+        )
+        if ambiguity_message:
             ids = ", ".join(f"#{row.id}" for row in exact_rows)
             blockers.append(f"{label}: CDQ/colata presenti su più righe Incoming ({ids}), serve verifica manuale")
             continue
@@ -3341,8 +3493,10 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
 
         status_color, status_message, status_details, matching_row_ids = _evaluate_cdq(
             db=db,
+            cod_odp=cod_odp,
             cdq=cdq,
             colata=colata,
+            qta_totale=_as_float(external_row.get("QTA_TOTALE")),
             rows_by_cdq=rows_by_cdq,
         )
 
@@ -3381,8 +3535,10 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
 def _evaluate_cdq(
     *,
     db: Session,
+    cod_odp: str | None,
     cdq: str,
     colata: str | None,
+    qta_totale: float | None,
     rows_by_cdq: dict[str, list[AcquisitionRow]],
 ) -> tuple[str, str, list[str], list[int]]:
     candidates = rows_by_cdq.get(_norm(cdq), [])
@@ -3395,9 +3551,17 @@ def _evaluate_cdq(
         return "red", "CDQ trovato in app, ma colata non coerente con Quarta", details, [row.id for row in candidates]
 
     details: list[str] = []
+    exact_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
+        db,
+        cod_odp=cod_odp,
+        cdq=cdq,
+        colata=colata,
+        qta_totale=qta_totale,
+        exact_rows=exact_rows,
+    )
     matching_ids = [row.id for row in exact_rows]
-    if len(exact_rows) > 1:
-        details.append("CDQ presente su più righe app: verifica manuale")
+    if ambiguity_message:
+        details.append(ambiguity_message)
 
     for row in exact_rows:
         if row.qualita_valutazione == "respinto":

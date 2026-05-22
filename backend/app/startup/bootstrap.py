@@ -38,6 +38,7 @@ from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioCertificateExtraPages,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
+    QuartaTaglioIncomingRowOverride,
     QuartaTaglioRow,
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,

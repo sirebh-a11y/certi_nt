@@ -130,6 +130,10 @@ function parseCertificationIncomingScope(search) {
   return {
     rowIds: Array.from(new Set(rowIds)),
     ol: params.get("ol") || "",
+    mode: params.get("mode") || "",
+    cdq: params.get("cdq") || "",
+    colata: params.get("colata") || "",
+    qta: params.get("qta") || "",
     returnTo: params.get("returnTo") || "/quarta-taglio",
   };
 }
@@ -641,6 +645,10 @@ export default function AcquisitionListPage() {
   const firstDocumentAnchorRefs = useRef({});
   const firstDocumentCellRefs = useRef({});
   const lastDocumentCellRefs = useRef({});
+  const [resolveCandidate, setResolveCandidate] = useState(null);
+  const [resolveError, setResolveError] = useState("");
+  const [savingResolve, setSavingResolve] = useState(false);
+  const isIncomingResolveScope = certificationScope?.mode === "resolve_row";
 
   useEffect(() => {
     const nextState = isCertificationScope ? DEFAULT_LIST_STATE : loadPersistedListState();
@@ -653,6 +661,8 @@ export default function AcquisitionListPage() {
     setRowLimit(nextState.rowLimit);
     setShowConfirmedOnly(nextState.showConfirmedOnly);
     setSortConfig(nextState.sortConfig);
+    setResolveCandidate(null);
+    setResolveError("");
   }, [isCertificationScope, location.search]);
 
   useEffect(() => {
@@ -945,6 +955,33 @@ export default function AcquisitionListPage() {
     navigate(`/acquisition/${rowId}/${sectionKey}${isCertificationScope ? location.search : ""}`);
   }
 
+  async function confirmIncomingResolveSelection() {
+    if (!resolveCandidate || !certificationScope?.ol || !certificationScope?.cdq) {
+      return;
+    }
+    setSavingResolve(true);
+    setResolveError("");
+    try {
+      await apiRequest(
+        `/quarta-taglio/${encodeURIComponent(certificationScope.ol)}/incoming-row-override`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            cdq: certificationScope.cdq,
+            colata: certificationScope.colata || null,
+            acquisition_row_id: resolveCandidate.id,
+          }),
+        },
+        token,
+      );
+      navigate(certificationScope.returnTo || "/quarta-taglio");
+    } catch (requestError) {
+      setResolveError(requestError.message);
+    } finally {
+      setSavingResolve(false);
+    }
+  }
+
   function handleRowKeyDown(event, rowId) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -1027,11 +1064,16 @@ export default function AcquisitionListPage() {
         <div className="flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <span className="font-semibold">
-              Righe Incoming collegate{certificationScope.ol ? ` a ${certificationScope.ol}` : ""}
+              {isIncomingResolveScope
+                ? `Scegli riga Incoming per ${certificationScope.ol || "OL"}`
+                : `Righe Incoming collegate${certificationScope.ol ? ` a ${certificationScope.ol}` : ""}`}
             </span>
             <span className="ml-2 text-sky-700">
-              Vista temporanea: i filtri normali di Incoming non vengono modificati.
+              {isIncomingResolveScope
+                ? `CDQ ${certificationScope.cdq || "-"} · colata ${certificationScope.colata || "-"}${certificationScope.qta ? ` · peso Quarta ${certificationScope.qta}` : ""}. Apri le righe se vuoi controllare i documenti, poi usa il pulsante sulla riga corretta.`
+                : "Vista temporanea: i filtri normali di Incoming non vengono modificati."}
             </span>
+            {resolveError ? <div className="mt-1 text-xs font-semibold text-rose-700">{resolveError}</div> : null}
           </div>
           <Link className="w-fit rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100" to={certificationScope.returnTo}>
             Torna al certificato
@@ -1194,7 +1236,18 @@ export default function AcquisitionListPage() {
               <tbody className="divide-y divide-slate-100">
                 {displayedRows.map((row) => (
                   <tr className="relative align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70" key={row.id}>
-                    <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-700">{row.id}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-700">
+                      <div>{row.id}</div>
+                      {isIncomingResolveScope ? (
+                        <button
+                          className="mt-2 rounded-lg border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-800 hover:bg-sky-50"
+                          onClick={() => setResolveCandidate(row)}
+                          type="button"
+                        >
+                          Usa per OL
+                        </button>
+                      ) : null}
+                    </td>
                     <td className="relative min-w-[220px] max-w-[220px] overflow-visible px-0 py-0" ref={(element) => setFirstDocumentAnchorRef(row.id, element)}>
                       <div
                         className={`pointer-events-none absolute left-3 z-0 rounded-2xl border ${documentPlateClasses(documentMatchVisualState(row))}`}
@@ -1323,6 +1376,50 @@ export default function AcquisitionListPage() {
           </div>
         ) : null}
       </div>
+      {resolveCandidate ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-white p-5 shadow-2xl">
+            <p className="text-sm uppercase tracking-[0.18em] text-slate-500">Scelta riga Incoming</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">Conferma questa riga per l'OL</h2>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+              <div>
+                <span className="font-semibold">OL:</span> {certificationScope?.ol || "-"}
+              </div>
+              <div>
+                <span className="font-semibold">CDQ / colata:</span> {certificationScope?.cdq || "-"} / {certificationScope?.colata || "-"}
+              </div>
+              <div>
+                <span className="font-semibold">Riga Incoming:</span> #{resolveCandidate.id} · {displaySupplierName(resolveCandidate)}
+              </div>
+              <div>
+                <span className="font-semibold">Peso riga:</span> {formatRowFieldDisplay("peso", resolveCandidate.peso)}
+                {certificationScope?.qta ? ` · peso Quarta ${certificationScope.qta}` : ""}
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600">
+              La scelta non modifica i dati Incoming: collega solo questo OL/CDQ/colata alla riga corretta per sbloccare la certificazione.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                disabled={savingResolve}
+                onClick={() => setResolveCandidate(null)}
+                type="button"
+              >
+                Annulla
+              </button>
+              <button
+                className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={savingResolve}
+                onClick={confirmIncomingResolveSelection}
+                type="button"
+              >
+                {savingResolve ? "Salvataggio..." : "Conferma scelta"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
