@@ -432,6 +432,7 @@ def get_quarta_taglio_detail(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
+    _refresh_quarta_rows_from_incoming(db, rows=rows)
     esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
     esolver_link = esolver_links.get(cod_odp)
     group = _serialize_ol_group(rows, esolver_link=esolver_link)
@@ -731,6 +732,7 @@ def apply_quick_incoming_confirmation(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
+    _refresh_quarta_rows_from_incoming(db, rows=rows)
     app_rows = _load_matching_app_rows(db, rows)
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     blockers = _quick_incoming_confirm_blockers(
@@ -2059,6 +2061,58 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
     )
+
+
+def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> None:
+    cdq_values = {
+        candidate
+        for row in rows
+        for candidate in {
+            _clean_text(row.cdq),
+            _norm(row.cdq),
+            _norm(row.cdq).upper(),
+            _norm(row.cdq).lower(),
+        }
+        if candidate
+    }
+    if not cdq_values:
+        return
+
+    app_rows = (
+        db.query(AcquisitionRow)
+        .filter(AcquisitionRow.cdq.in_(sorted(cdq_values)))
+        .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
+        .all()
+    )
+    rows_by_cdq: dict[str, list[AcquisitionRow]] = defaultdict(list)
+    for app_row in app_rows:
+        key = _norm(app_row.cdq)
+        if key:
+            rows_by_cdq[key].append(app_row)
+
+    changed = False
+    for row in rows:
+        status_color, status_message, status_details, matching_row_ids = _evaluate_cdq(
+            db=db,
+            cdq=row.cdq,
+            colata=row.colata,
+            rows_by_cdq=rows_by_cdq,
+        )
+        if (
+            row.status_color != status_color
+            or row.status_message != status_message
+            or (row.status_details or []) != status_details
+            or (row.matching_row_ids or []) != matching_row_ids
+        ):
+            row.status_color = status_color
+            row.status_message = status_message
+            row.status_details = status_details
+            row.matching_row_ids = matching_row_ids
+            db.add(row)
+            changed = True
+
+    if changed:
+        db.flush()
 
 
 def _quick_incoming_confirm_blockers(
