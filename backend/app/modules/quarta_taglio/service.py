@@ -416,7 +416,13 @@ def _stale_register_cod_odps(db: Session, *, cod_odps: list[str]) -> list[str]:
     return stale
 
 
-def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int | None = None) -> QuartaTaglioDetailResponse:
+def get_quarta_taglio_detail(
+    db: Session,
+    *,
+    cod_odp: str,
+    certificate_id: int | None = None,
+    candidate_cod_f3: str | None = None,
+) -> QuartaTaglioDetailResponse:
     rows = (
         db.query(QuartaTaglioRow)
         .filter(QuartaTaglioRow.cod_odp == cod_odp)
@@ -544,6 +550,18 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     certifiable_units = _build_certifiable_units(cod_odp=group.cod_odp, esolver_rows=esolver_rows, quarta_rows=rows)
     selected_certificate = _get_certificate_context(db, cod_odp=group.cod_odp, certificate_id=certificate_id)
     primary_unit = _select_unit_for_certificate(certifiable_units, selected_certificate) or _primary_certifiable_unit(certifiable_units)
+    selected_candidate = _candidate_by_cod_f3(
+        cod_f3_candidates,
+        selected_certificate.cod_f3 if selected_certificate else candidate_cod_f3,
+    )
+    if selected_candidate is not None and (
+        primary_unit is None or _norm(primary_unit.cod_f3) != _norm(selected_candidate.cod_f3)
+    ):
+        candidate_unit = _unit_from_certiol_candidate(cod_odp=group.cod_odp, candidate=selected_candidate)
+        certifiable_units = [item.model_copy(update={"is_primary": False}) for item in certifiable_units if item.unit_key != candidate_unit.unit_key]
+        candidate_unit = candidate_unit.model_copy(update={"is_primary": True})
+        certifiable_units.insert(0, candidate_unit)
+        primary_unit = candidate_unit
     esolver_qta = (
         selected_certificate.quantita
         if selected_certificate is not None and selected_certificate.quantita is not None
@@ -559,6 +577,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         quarta_rows=rows,
         raw_description=des_art,
         raw_cod_f3_override=next((_clean_text(candidate.cod_f3_odp) for candidate in cod_f3_candidates if _clean_text(candidate.cod_f3_odp)), None),
+        finished_description_override=_clean_text(selected_candidate.des_f3) if selected_candidate is not None else None,
     )
     detail_certificate_date = (
         _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
@@ -598,7 +617,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
             "codice_f3_origine": codice_f3["origin"],
             "codice_f3_esolver": codice_f3["esolver"],
             "codice_f3_quarta": codice_f3["quarta"],
-            "codice_f3_warning": codice_f3["warning"],
+            "codice_f3_warning": None if selected_candidate is not None else codice_f3["warning"],
             "codice_f3_raw": header_flow["raw_cod_f3"],
             "descrizione_raw": header_flow["raw_description"],
             "ddt_raw": header_flow["raw_ddt"],
@@ -801,7 +820,7 @@ def create_quarta_taglio_word_draft(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CodF3 candidato da verificare: attendere DDT o scegliere un candidato affidabile")
         if candidate.blocked_reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=candidate.blocked_reason)
-        candidate_unit = _unit_from_certiol_candidate(detail=detail, candidate=candidate)
+        candidate_unit = _unit_from_certiol_candidate(cod_odp=detail.cod_odp, candidate=candidate)
         detail = _detail_for_certiol_candidate(detail=detail, candidate=candidate, unit=candidate_unit)
     _ensure_word_draft_can_be_created(detail)
     if detail.conformity_issues and not force_non_conforming:
@@ -1138,12 +1157,12 @@ def _word_content_control_values_for_unit(
 
 def _unit_from_certiol_candidate(
     *,
-    detail: QuartaTaglioDetailResponse,
+    cod_odp: str,
     candidate: QuartaTaglioCodF3CandidateResponse,
 ) -> QuartaTaglioCertifiableUnitResponse:
     return QuartaTaglioCertifiableUnitResponse(
-        unit_key=_certifiable_unit_key(cod_odp=detail.cod_odp, cod_f3=candidate.cod_f3, ddt=None),
-        cod_odp=detail.cod_odp,
+        unit_key=_certifiable_unit_key(cod_odp=cod_odp, cod_f3=candidate.cod_f3, ddt=None),
+        cod_odp=cod_odp,
         cod_f3=candidate.cod_f3,
         ddt=None,
         cliente=candidate.rag_soc,
@@ -3836,6 +3855,7 @@ def _certificate_header_flow(
     quarta_rows: list[QuartaTaglioRow],
     raw_description: str | None,
     raw_cod_f3_override: str | None = None,
+    finished_description_override: str | None = None,
 ) -> dict[str, str | None]:
     raw_cod_f3 = _clean_text(raw_cod_f3_override) or _join_unique(row.cod_art for row in quarta_rows) or None
     current_cod_f3 = _clean_text(current_unit.cod_f3) if current_unit else None
@@ -3847,7 +3867,7 @@ def _certificate_header_flow(
         "raw_ddt": _clean_text(raw_unit.ddt) if raw_unit and raw_unit.ddt else None,
         "raw_quantita": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else None,
         "finished_cod_f3": _clean_text(finished_unit.cod_f3) if finished_unit else None,
-        "finished_description": None,
+        "finished_description": _clean_text(finished_description_override) if finished_unit else None,
         "finished_ddt": _clean_text(finished_unit.ddt) if finished_unit and finished_unit.ddt else None,
         "finished_quantita": _format_quantity(finished_unit.quantita) if finished_unit and finished_unit.ddt and finished_unit.quantita is not None else None,
     }

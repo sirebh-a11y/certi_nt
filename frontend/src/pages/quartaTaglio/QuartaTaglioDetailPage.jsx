@@ -175,9 +175,16 @@ function standardLabel(standard) {
     .join(" · ");
 }
 
-function quartaDetailApiPath(codOdp, certificateId) {
+function quartaDetailApiPath(codOdp, params = {}) {
   const basePath = `/quarta-taglio/${encodeURIComponent(codOdp)}`;
-  return certificateId ? `${basePath}?certificate_id=${encodeURIComponent(certificateId)}` : basePath;
+  const query = new URLSearchParams();
+  if (params.certificateId) {
+    query.set("certificate_id", params.certificateId);
+  } else if (params.candidateCodF3) {
+    query.set("candidate_cod_f3", params.candidateCodF3);
+  }
+  const queryString = query.toString();
+  return queryString ? `${basePath}?${queryString}` : basePath;
 }
 
 function quartaDetailUiPath(codOdp, params = {}) {
@@ -202,18 +209,34 @@ function codF3CandidateClass(confidence) {
   return "border-amber-200 bg-amber-50 text-amber-800";
 }
 
+function codF3CandidateStatusClass(candidate) {
+  if (candidate.has_word && candidate.waiting_ddt) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  if (candidate.has_word) {
+    return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+  return codF3CandidateClass(candidate.confidence);
+}
+
 function codF3CandidateLabel(candidate) {
+  if (candidate.has_word && candidate.waiting_ddt) {
+    return "Word aperto - attesa DDT";
+  }
+  if (candidate.has_word) {
+    return "Word aperto";
+  }
   if (candidate.confidence === "ddt") {
-    return "DDT";
+    return "Candidato";
   }
   if (candidate.confidence === "raw") {
     return "Raw";
   }
   if (candidate.confidence === "ready") {
-    return "Preparabile";
+    return "Candidato";
   }
   if (candidate.confidence === "medium") {
-    return "Probabile";
+    return "Candidato";
   }
   return "Da verificare";
 }
@@ -231,6 +254,10 @@ function codF3MatchKey(value) {
     return "";
   }
   return digits.slice(0, -2);
+}
+
+function codF3ExactKey(value) {
+  return String(value || "").replace(/\D/g, "");
 }
 
 function findCustomerRequirementForCodF3(requirements, codF3) {
@@ -293,7 +320,7 @@ export default function QuartaTaglioDetailPage() {
     let ignore = false;
     setLoading(true);
     setError("");
-    apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token)
+    apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
       .then((response) => {
         if (!ignore) {
           setData(response);
@@ -313,7 +340,7 @@ export default function QuartaTaglioDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [codOdp, certificateId, token]);
+  }, [codOdp, certificateId, selectedCandidateCodF3, token]);
 
   useEffect(() => {
     let ignore = false;
@@ -413,7 +440,10 @@ export default function QuartaTaglioDetailPage() {
       token,
     )
       .then(async (response) => {
-        const nextResponse = certificateId ? await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token) : response;
+        const nextResponse =
+          certificateId || selectedCandidateCodF3
+            ? await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
+            : response;
         setData(nextResponse);
         if ((response.conformity_issues || []).length > 0) {
           setStandardConformityDialogOpen(true);
@@ -482,7 +512,10 @@ export default function QuartaTaglioDetailPage() {
       if (articleVersionsRef.current[field] !== version) {
         return;
       }
-      const nextResponse = certificateId ? await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token) : response;
+      const nextResponse =
+        certificateId || selectedCandidateCodF3
+          ? await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
+          : response;
       setData(nextResponse);
       const nextDraft = {
         descrizione: nextResponse.header?.descrizione || "",
@@ -507,7 +540,8 @@ export default function QuartaTaglioDetailPage() {
   }
 
   function generateWordDraft(candidateCodF3 = activeCandidateCodF3) {
-    const blockedReason = candidateCodF3 && activeCodF3Candidate?.cod_f3 === candidateCodF3 ? activeWordBlockedReason : "";
+    const blockedReason =
+      candidateCodF3 && codF3ExactKey(activeCodF3Candidate?.cod_f3) === codF3ExactKey(candidateCodF3) ? activeWordBlockedReason : "";
     if (!canCreateWord || blockedReason) {
       setWordDraftState({
         status: "error",
@@ -550,7 +584,7 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, response.id), {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId: response.id }), {}, token);
       setData(refreshed);
       navigate(quartaDetailUiPath(codOdp, { certificateId: response.id }), { replace: true });
       setPendingWordCandidateCodF3(null);
@@ -568,8 +602,8 @@ export default function QuartaTaglioDetailPage() {
     setError("");
     try {
       const response = await apiRequest(
-        certificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm?certificate_id=${encodeURIComponent(certificateId)}`
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm?certificate_id=${encodeURIComponent(activeCertificateId)}`
           : `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm`,
         { method: "POST" },
         token,
@@ -626,13 +660,13 @@ export default function QuartaTaglioDetailPage() {
     setError("");
     try {
       const response = await apiRequest(
-        certificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields?certificate_id=${encodeURIComponent(certificateId)}`
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields?certificate_id=${encodeURIComponent(activeCertificateId)}`
           : `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields`,
         { method: "POST" },
         token,
       );
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
       setData(refreshed);
       setWordFieldsState({ status: "saved", message: `Campi Word aggiornati: ${response.draft_number}` });
     } catch (requestError) {
@@ -666,8 +700,8 @@ export default function QuartaTaglioDetailPage() {
       const formData = new FormData();
       formData.append("file", wordUploadFile);
       const response = await apiRequest(
-        certificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file?certificate_id=${encodeURIComponent(certificateId)}`
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file?certificate_id=${encodeURIComponent(activeCertificateId)}`
           : `/quarta-taglio/${encodeURIComponent(codOdp)}/word-file`,
         {
           method: "POST",
@@ -680,7 +714,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
       setData(refreshed);
       setWordUploadState({ status: "saved", message: `Word ricaricato sul certificato ${response.draft_number}` });
     } catch (requestError) {
@@ -702,8 +736,8 @@ export default function QuartaTaglioDetailPage() {
       const formData = new FormData();
       formData.append("file", additionalPagesFile);
       const response = await apiRequest(
-        certificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/additional-pages?certificate_id=${encodeURIComponent(certificateId)}`
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/additional-pages?certificate_id=${encodeURIComponent(activeCertificateId)}`
           : `/quarta-taglio/${encodeURIComponent(codOdp)}/additional-pages`,
         {
           method: "POST",
@@ -716,7 +750,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
       setData(refreshed);
       setAdditionalPagesState({
         status: "saved",
@@ -753,7 +787,9 @@ export default function QuartaTaglioDetailPage() {
   const codF3Candidates = data?.cod_f3_candidates || [];
   const rawCodF3Candidate = codF3Candidates.find((candidate) => candidate.relation === "raw") || null;
   const selectedCodF3Candidate =
-    codF3Candidates.find((candidate) => codF3MatchKey(candidate.cod_f3) === codF3MatchKey(selectedCandidateCodF3)) || null;
+    selectedCandidateCodF3
+      ? codF3Candidates.find((candidate) => codF3ExactKey(candidate.cod_f3) === codF3ExactKey(selectedCandidateCodF3)) || null
+      : null;
   const activeCodF3Candidate = certificateId ? null : selectedCodF3Candidate || rawCodF3Candidate;
   const activeCandidateCodF3 = activeCodF3Candidate?.cod_f3 || null;
   const codF3CandidateSummary = data?.cod_f3_candidate_summary || {};
@@ -800,6 +836,7 @@ export default function QuartaTaglioDetailPage() {
     ? { has_word: false, source_label: "Nessun Word per il CodF3 selezionato" }
     : data?.word_info || {};
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
+  const activeCertificateId = certificateId || data?.header?.certificate_id || "";
   const isManualWord = wordInfo.source === "user_uploaded" || wordInfo.source === "fields_updated";
   const activeWordLabel = certificateId
     ? `${data?.header?.codice_f3 || "CodF3"}${certificateNumber ? ` - ${certificateNumber}` : ""}`
@@ -1015,13 +1052,14 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+                disabled={!hasWord || !activeCertificateId}
                 id="quarta-word-upload"
                 onChange={(event) => setWordUploadFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={wordUploadState.status === "saving" || !wordUploadFile}
+                disabled={wordUploadState.status === "saving" || !wordUploadFile || !hasWord || !activeCertificateId}
                 onClick={uploadEditedWord}
                 type="button"
               >
@@ -1049,14 +1087,14 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={!hasCertificateNumber || isManualWord}
+                disabled={!hasCertificateNumber || !activeCertificateId || isManualWord}
                 id="quarta-additional-pages-upload"
                 onChange={(event) => setAdditionalPagesFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber || isManualWord}
+                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber || !activeCertificateId || isManualWord}
                 onClick={uploadAdditionalPages}
                 type="button"
               >
@@ -1142,7 +1180,7 @@ export default function QuartaTaglioDetailPage() {
                 const canOpenCandidate = candidate.confidence !== "review";
                 const isActiveCandidate =
                   (certificateId && String(candidate.certificate_id || "") === String(certificateId)) ||
-                  (!certificateId && activeCodF3Candidate && codF3MatchKey(activeCodF3Candidate.cod_f3) === codF3MatchKey(candidate.cod_f3));
+                  (!certificateId && activeCodF3Candidate && codF3ExactKey(activeCodF3Candidate.cod_f3) === codF3ExactKey(candidate.cod_f3));
                 const candidateActionLabel = candidate.certificate_id ? "Apri" : isActiveCandidate ? "Selezionato" : "Seleziona";
                 return (
                   <div
@@ -1155,19 +1193,9 @@ export default function QuartaTaglioDetailPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold text-slate-950">{candidate.cod_f3}</span>
-                          <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateClass(candidate.confidence)}`}>
+                          <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateStatusClass(candidate)}`}>
                             {codF3CandidateLabel(candidate)}
                           </span>
-                          {candidate.waiting_ddt ? (
-                            <span className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                              In attesa DDT
-                            </span>
-                          ) : null}
-                          {candidate.has_word ? (
-                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-                              Word
-                            </span>
-                          ) : null}
                         </div>
                         <p className="mt-1 break-words text-sm text-slate-700">{candidate.des_f3 || "-"}</p>
                         {candidate.message ? <p className="mt-1 text-xs text-slate-500">{candidate.message}</p> : null}

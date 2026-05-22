@@ -90,8 +90,9 @@ def get_quarta_taglio_detail_route(
     current_user: CurrentUser,
     db: DbSession,
     certificate_id: int | None = Query(default=None),
+    candidate_cod_f3: str | None = Query(default=None),
 ) -> QuartaTaglioDetailResponse:
-    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id, candidate_cod_f3=candidate_cod_f3)
 
 
 @router.post("/{cod_odp}/standard", response_model=QuartaTaglioDetailResponse)
