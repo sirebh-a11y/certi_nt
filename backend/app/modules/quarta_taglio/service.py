@@ -20,7 +20,7 @@ from app.core.integrations.models import ExternalConnection
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
-from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, ReadValue
+from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, AcquisitionValueHistory, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
     build_additional_page_template_docx,
@@ -110,8 +110,16 @@ CHEMISTRY_FIELDS = [
     "Zr+Ti",
     "Bi+Pb",
 ]
+DERIVED_CHEMISTRY_FIELDS = {
+    "Zr+Ti": ("Zr", "Ti"),
+    "Mn+Cr": ("Mn", "Cr"),
+    "Bi+Pb": ("Bi", "Pb"),
+}
 
 PROPERTY_FIELDS = ["Rp0.2", "Rm", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
+DERIVED_PROPERTY_FIELDS = {
+    "Rp0.2 / Rm": ("Rp0.2", "Rm"),
+}
 
 CERTIFICATE_NUMBER_START = 7000
 STANDARD_LIMIT_EPSILON = 1e-9
@@ -711,6 +719,17 @@ def confirm_quarta_taglio_standard(
     selection.selected_by_user_id = actor_id
     db.add(selection)
     db.commit()
+    rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cod_odp == cod_odp)
+        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
+        .all()
+    )
+    _refresh_quarta_rows_from_incoming(db, rows=rows)
+    app_rows = _load_matching_app_rows(db, rows)
+    if _ensure_derived_incoming_values(db, app_rows=app_rows, actor_id=actor_id):
+        _refresh_quarta_rows_from_incoming(db, rows=rows)
+        db.commit()
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp)
     _sync_open_certificate_conformity(db, detail=detail)
     return detail
@@ -734,6 +753,10 @@ def apply_quick_incoming_confirmation(
 
     _refresh_quarta_rows_from_incoming(db, rows=rows)
     app_rows = _load_matching_app_rows(db, rows)
+    if _ensure_derived_incoming_values(db, app_rows=app_rows, actor_id=actor_id):
+        _refresh_quarta_rows_from_incoming(db, rows=rows)
+        db.commit()
+        app_rows = _load_matching_app_rows(db, rows)
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     blockers = _quick_incoming_confirm_blockers(
         app_rows=app_rows,
@@ -844,7 +867,7 @@ def create_quarta_taglio_word_draft(
     if _is_manual_word(certificate) and not force_regenerate:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Word corrente caricato dall'utente: usa Aggiorna campi Word oppure conferma Rigenera da zero.",
+            detail="Word corrente caricato dall'utente: conferma Rigenera da zero per perdere le modifiche manuali.",
         )
     certificate_date = _certificate_datetime_from_detail(detail)
     certificate.cert_date = certificate_date
@@ -1030,46 +1053,6 @@ def upload_quarta_taglio_word_file(
     certificate.certified_by_user_id = actor.id
     certificate.status = certificate.status or "draft"
     _apply_word_file_state(certificate, output_path, source="user_uploaded", original_filename=original_name)
-    _apply_certificate_register_fields(certificate, detail)
-    _apply_certificate_conformity(certificate, detail)
-    db.add(certificate)
-    db.commit()
-    db.refresh(certificate)
-
-    return QuartaTaglioWordDraftResponse(
-        id=certificate.id,
-        cod_odp=certificate.cod_odp,
-        draft_number=certificate.draft_number,
-        file_name=_certificate_file_name(certificate),
-        download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
-        created_at=certificate.created_at,
-    )
-
-
-def update_quarta_taglio_word_fields(
-    db: Session,
-    *,
-    cod_odp: str,
-    actor: User,
-    certificate_id: int | None = None,
-) -> QuartaTaglioWordDraftResponse:
-    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
-    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
-    if certificate is None or not certificate.storage_key_docx:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nessun Word corrente da aggiornare")
-    source_path = _certificate_storage_path(certificate.storage_key_docx)
-    if not source_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word corrente non trovato")
-
-    storage_key = _certificate_docx_storage_key(cod_odp)
-    output_path = _certificate_storage_path(storage_key)
-    update_docx_content_controls(source_path, output_path, _word_content_control_values(detail, certificate))
-    certificate.storage_key_docx = storage_key
-    certificate.download_token = secrets.token_urlsafe(32)
-    certificate.certified_by_user_id = actor.id
-    certificate.word_source = "fields_updated"
-    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
-    certificate.status = certificate.status or "draft"
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
@@ -1701,7 +1684,32 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
     path = _certificate_storage_path(certificate.storage_key_docx)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
+    _sync_word_fields_for_download(db, certificate=certificate, path=path)
     return path, _certificate_file_name(certificate)
+
+
+def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> None:
+    if certificate.status == "pdf_final":
+        return
+    try:
+        present, missing = inspect_docx_content_controls(path)
+    except (OSError, zipfile.BadZipFile):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File Word corrente non valido")
+    if not present:
+        if (certificate.word_content_controls or []) != present or (certificate.word_missing_content_controls or []) != missing:
+            certificate.word_content_controls = present
+            certificate.word_missing_content_controls = missing
+            db.add(certificate)
+            db.commit()
+        return
+
+    detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
+    update_docx_content_controls(path, path, _word_content_control_values(detail, certificate))
+    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(path)
+    _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
+    db.add(certificate)
+    db.commit()
 
 
 def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> None:
@@ -2113,6 +2121,140 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
 
     if changed:
         db.flush()
+
+
+def _ensure_derived_incoming_values(db: Session, *, app_rows: list[AcquisitionRow], actor_id: int | None) -> bool:
+    changed = False
+    for row in app_rows:
+        row_changed = False
+        for field, source_fields in DERIVED_CHEMISTRY_FIELDS.items():
+            row_changed = _ensure_derived_read_value(
+                db,
+                row=row,
+                block="chimica",
+                field=field,
+                source_fields=source_fields,
+                operation="sum",
+                actor_id=actor_id,
+            ) or row_changed
+        for field, source_fields in DERIVED_PROPERTY_FIELDS.items():
+            row_changed = _ensure_derived_read_value(
+                db,
+                row=row,
+                block="proprieta",
+                field=field,
+                source_fields=source_fields,
+                operation="ratio",
+                actor_id=actor_id,
+            ) or row_changed
+        if row_changed:
+            _sync_row_statuses(db, row)
+            db.add(row)
+            changed = True
+    if changed:
+        db.flush()
+    return changed
+
+
+def _ensure_derived_read_value(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    block: str,
+    field: str,
+    source_fields: tuple[str, ...],
+    operation: str,
+    actor_id: int | None,
+) -> bool:
+    source_values = [_find_read_value(row, block, source_field) for source_field in source_fields]
+    if any(value is None for value in source_values):
+        return False
+    numbers = [_as_float(_read_value_payload(value)) for value in source_values]
+    if any(value is None for value in numbers):
+        return False
+    if operation == "sum":
+        calculated = sum(float(value or 0) for value in numbers)
+    elif operation == "ratio":
+        numerator, denominator = numbers
+        if denominator in (None, 0):
+            return False
+        calculated = float(numerator or 0) / float(denominator)
+    else:
+        return False
+
+    existing = _find_read_value(row, block, field)
+    existing_payload = _read_value_payload(existing)
+    if existing is not None and existing_payload and not _read_value_is_calculated(existing):
+        return False
+
+    formatted = _format_derived_incoming_number(calculated)
+    if existing is None:
+        existing = ReadValue(acquisition_row_id=row.id, blocco=block, campo=field)
+        row.values.append(existing)
+        db.add(existing)
+        before_value = None
+    else:
+        before_value = _read_value_payload(existing)
+        if before_value == formatted and _read_value_is_calculated(existing):
+            return False
+
+    derived_status = "confermato" if all(value is not None and value.stato == "confermato" for value in source_values) else "proposto"
+    existing.valore_grezzo = formatted
+    existing.valore_standardizzato = formatted
+    existing.valore_finale = formatted
+    existing.stato = derived_status
+    existing.document_evidence_id = None
+    existing.metodo_lettura = "sistema"
+    existing.fonte_documentale = "calcolato"
+    existing.confidenza = None
+    existing.utente_ultima_modifica_id = actor_id
+    existing.timestamp_ultima_modifica = datetime.now(timezone.utc)
+    db.add(existing)
+    db.flush()
+
+    if before_value != formatted:
+        db.add(
+            AcquisitionValueHistory(
+                acquisition_row_id=row.id,
+                value_id=existing.id,
+                blocco=block,
+                campo=field,
+                valore_prima=before_value,
+                valore_dopo=formatted,
+                utente_id=actor_id,
+            )
+        )
+        db.add(
+            AcquisitionHistoryEvent(
+                acquisition_row_id=row.id,
+                blocco=block,
+                azione="valore_calcolato",
+                utente_id=actor_id,
+                nota_breve=field,
+            )
+        )
+    return True
+
+
+def _find_read_value(row: AcquisitionRow, block: str, field: str) -> ReadValue | None:
+    for value in row.values:
+        if _norm(value.blocco) == _norm(block) and _field_key(value.campo) == _field_key(field):
+            return value
+    return None
+
+
+def _read_value_payload(value: ReadValue | None) -> str | None:
+    if value is None:
+        return None
+    return value.valore_finale or value.valore_standardizzato or value.valore_grezzo
+
+
+def _read_value_is_calculated(value: ReadValue) -> bool:
+    return _norm(value.metodo_lettura) in {"sistema", "calcolato"} or _norm(value.fonte_documentale) == "calcolato"
+
+
+def _format_derived_incoming_number(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
 def _quick_incoming_confirm_blockers(

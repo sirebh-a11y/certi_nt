@@ -10,10 +10,10 @@ const STATUS_CLASSES = {
   red: "border-rose-200 bg-rose-50 text-rose-800",
   ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
   missing: "border-amber-200 bg-amber-50 text-amber-800",
-  missing_from_supplier: "border-rose-200 bg-rose-50 text-rose-800",
+  missing_from_supplier: "border-slate-200 bg-slate-50 text-slate-700",
   different: "border-amber-200 bg-amber-50 text-amber-800",
   out_of_range: "border-rose-200 bg-rose-50 text-rose-800",
-  not_in_standard: "border-rose-200 bg-rose-50 text-rose-800",
+  not_in_standard: "border-slate-200 bg-slate-50 text-slate-700",
   not_checked: "border-slate-200 bg-slate-50 text-slate-700",
   missing_diameter: "border-amber-200 bg-amber-50 text-amber-800",
   range_not_found: "border-rose-200 bg-rose-50 text-rose-800",
@@ -293,7 +293,6 @@ export default function QuartaTaglioDetailPage() {
   const [wordDraftState, setWordDraftState] = useState({ status: "idle", message: "" });
   const [wordUploadFile, setWordUploadFile] = useState(null);
   const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
-  const [wordFieldsState, setWordFieldsState] = useState({ status: "idle", message: "" });
   const [additionalPagesFile, setAdditionalPagesFile] = useState(null);
   const [additionalPagesState, setAdditionalPagesState] = useState({ status: "idle", message: "" });
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
@@ -651,32 +650,6 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
-  async function updateWordFields() {
-    if (!hasWord) {
-      setWordFieldsState({ status: "error", message: "Genera o ricarica prima un Word corrente." });
-      return;
-    }
-    setWordFieldsState({ status: "saving", message: "" });
-    setError("");
-    try {
-      const response = await apiRequest(
-        activeCertificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields?certificate_id=${encodeURIComponent(activeCertificateId)}`
-          : `/quarta-taglio/${encodeURIComponent(codOdp)}/word-fields`,
-        { method: "POST" },
-        token,
-      );
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
-      setData(refreshed);
-      setWordFieldsState({ status: "saved", message: `Campi Word aggiornati: ${response.draft_number}` });
-    } catch (requestError) {
-      setWordFieldsState({
-        status: "error",
-        message: handleRequestError(requestError, "Errore aggiornamento campi Word"),
-      });
-    }
-  }
-
   function regenerateWordFromScratch() {
     if (!hasWord) {
       generateWordDraft();
@@ -774,14 +747,21 @@ export default function QuartaTaglioDetailPage() {
     navigate(quartaDetailUiPath(codOdp, { candidateCodF3: candidate.cod_f3 }));
   }
 
-  const headerRows = useMemo(() => {
+  const standardDefinitionRows = useMemo(() => {
     const header = data?.header || {};
     return [
-      ["Certificato", header.numero_certificato || "Da assegnare"],
-      ["Data certificato", header.data_certificato || "-"],
-      ["Colata", header.colata || "-"],
       ["Materiale fornito", header.materiale_fornito || "-"],
       ["Materiale / profilo raw", header.materiale_raw || "-"],
+    ];
+  }, [data]);
+  const headerSummaryRows = useMemo(() => {
+    const header = data?.header || {};
+    const cdqList = Array.from(new Set((data?.materials || []).map((item) => item.cdq).filter(Boolean)));
+    return [
+      ["Certificato", header.numero_certificato || "Da assegnare"],
+      ["Data", header.data_certificato || "-"],
+      ["CDQ", cdqList.length ? cdqList.join(", ") : "-"],
+      ["Colata", header.colata || "-"],
     ];
   }, [data]);
   const codF3Candidates = data?.cod_f3_candidates || [];
@@ -873,7 +853,17 @@ export default function QuartaTaglioDetailPage() {
             Torna a Certificazione
           </Link>
           <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Certificato materiale</p>
-          <h2 className="mt-1 text-2xl font-semibold text-slate-950">OL {data.cod_odp}</h2>
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-5 gap-y-2">
+            <h2 className="text-2xl font-semibold text-slate-950">OL {data.cod_odp}</h2>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+              {headerSummaryRows.map(([label, value]) => (
+                <span className="inline-flex items-baseline gap-1.5" key={label}>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</span>
+                  <span className="font-semibold text-slate-900">{value}</span>
+                </span>
+              ))}
+            </div>
+          </div>
           <p className="mt-1 text-sm text-slate-500">{data.status_message}</p>
         </div>
         <span className={`inline-flex w-fit rounded-lg border px-3 py-1.5 text-sm font-semibold ${statusClass(data.status_color)}`}>
@@ -960,11 +950,6 @@ export default function QuartaTaglioDetailPage() {
               {wordUploadState.message}
             </p>
           ) : null}
-          {wordFieldsState.message ? (
-            <p className={`mt-1 text-sm ${wordFieldsState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
-              {wordFieldsState.message}
-            </p>
-          ) : null}
           {additionalPagesState.message ? (
             <p className={`mt-1 text-sm ${additionalPagesState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
               {additionalPagesState.message}
@@ -1026,15 +1011,7 @@ export default function QuartaTaglioDetailPage() {
                   : "Genera Word"}
             </button>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!hasWord || wordFieldsState.status === "saving"}
-              onClick={updateWordFields}
-              type="button"
-            >
-              {wordFieldsState.status === "saving" ? "Aggiorno..." : "Aggiorna campi Word"}
-            </button>
+          <div className="grid grid-cols-1 gap-2">
             <button
               className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={wordDraftState.status === "saving" || !canGenerateActiveWord || !hasWord}
@@ -1150,22 +1127,6 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
-      <Panel title="Dati importanti">
-        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
-          {headerRows.map(([label, value]) => (
-            <div
-              className={`rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 ${
-                label === "Materiale / profilo raw" ? "md:col-span-2 xl:col-span-4" : ""
-              }`}
-              key={label}
-            >
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
       {codF3CandidateSummary.count ? (
         <Panel title="CodF3 da eSolver">
           {codF3CandidateSummary.status === "review" && hiddenCodF3CandidateCount > 0 ? (
@@ -1244,6 +1205,14 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
 
         <Panel className="h-full" title="Standard">
+          <div className="mb-3 text-sm text-slate-700">
+            {standardDefinitionRows.map(([label, value], index) => (
+              <span key={label}>
+                {index > 0 ? " · " : ""}
+                <span>{label}:</span> <span className="font-semibold text-slate-900">{value}</span>
+              </span>
+            ))}
+          </div>
           {data.selected_standard ? (
             <div
               className={`rounded-lg border px-3 py-2 text-sm ${
