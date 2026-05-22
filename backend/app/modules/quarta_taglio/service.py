@@ -370,7 +370,10 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
     _refresh_final_certificate_register_from_external_data(db)
     certificates = (
         db.query(QuartaTaglioFinalCertificate)
-        .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+        .filter(
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
+        )
         .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
@@ -394,7 +397,10 @@ def _refresh_final_certificate_register_from_external_data(db: Session) -> None:
     cod_odps = [
         row[0]
         for row in db.query(QuartaTaglioFinalCertificate.cod_odp)
-        .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
+        .filter(
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
+        )
         .distinct()
         .all()
         if _clean_text(row[0])
@@ -686,7 +692,7 @@ def get_quarta_taglio_detail(
         word_info=_serialize_word_info(open_certificate),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
-        _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
+        _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=False)
         db.commit()
     return detail
 
@@ -915,7 +921,7 @@ def create_quarta_taglio_word_draft(
             },
         )
 
-    _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
+    _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=False)
     certificate = (
         _get_or_create_open_certificate_for_unit(db, detail=detail, unit=candidate_unit, actor=actor)
         if candidate_unit is not None
@@ -936,6 +942,7 @@ def create_quarta_taglio_word_draft(
         now=certificate_date,
     )
     certificate.certificate_number = certificate_number
+    _ensure_certificate_number_unique(db, certificate)
     certificate.draft_number = certificate_number
     certificate.status = certificate.status or "draft"
     certificate.cert_date = certificate_date
@@ -1322,6 +1329,21 @@ def _get_or_create_open_certificate_for_unit(
         return _get_or_create_open_certificate(db, detail=detail, actor=actor)
     certificate = _find_open_certificate_for_detail(db, cod_odp=detail.cod_odp, unit_key=unit.unit_key)
     if certificate is None:
+        existing_certificates = (
+            db.query(QuartaTaglioFinalCertificate)
+            .filter(
+                QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp,
+                QuartaTaglioFinalCertificate.status != "pdf_final",
+            )
+            .order_by(QuartaTaglioFinalCertificate.created_at.asc(), QuartaTaglioFinalCertificate.id.asc())
+            .all()
+        )
+        certificate = _find_existing_certificate_for_unit(
+            existing_certificates,
+            unit=unit,
+            used_certificate_ids=set(),
+        )
+    if certificate is None:
         certificate = QuartaTaglioFinalCertificate(
             cod_odp=detail.cod_odp,
             status="draft",
@@ -1342,7 +1364,10 @@ def _get_or_create_open_certificate_for_unit(
         _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
         if not certificate.cdq_key:
             certificate.cdq_key = _cdq_key_from_detail(detail)
-        if not certificate.cert_date:
+        unit_certificate_date = _certificate_datetime_from_ddt(unit.ddt)
+        if unit_certificate_date:
+            certificate.cert_date = unit_certificate_date
+        elif not certificate.cert_date:
             certificate.cert_date = datetime.now(timezone.utc)
     return certificate
 
@@ -1448,6 +1473,7 @@ def _has_numbered_certificate_for_ol(db: Session, *, cod_odp: str) -> bool:
         .filter(
             QuartaTaglioFinalCertificate.cod_odp == cod_odp,
             QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
         )
         .first()
         is not None
@@ -1527,6 +1553,7 @@ def _sync_certifiable_unit_register(
                 cod_f3=certificate.cod_f3,
                 now=certificate.cert_date,
             )
+        _ensure_certificate_number_unique(db, certificate)
         certificate.draft_number = certificate.certificate_number or certificate.draft_number
         _apply_certificate_conformity(certificate, detail)
         if certificate.certificate_number and _ensure_register_word_current(db, certificate=certificate, detail=detail, unit=unit):
@@ -1665,6 +1692,25 @@ def _assign_certificate_number(
         if main_number is not None:
             max_main = max(max_main, main_number)
     return f"{max_main + 1}_00_{cod_f3_suffix}/{year_suffix}"
+
+
+def _ensure_certificate_number_unique(db: Session, certificate: QuartaTaglioFinalCertificate) -> None:
+    certificate_number = _clean_text(certificate.certificate_number)
+    if not certificate_number:
+        return
+    duplicate = (
+        db.query(QuartaTaglioFinalCertificate.id)
+        .filter(
+            QuartaTaglioFinalCertificate.certificate_number == certificate_number,
+            QuartaTaglioFinalCertificate.id != certificate.id,
+        )
+        .first()
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Numero certificato duplicato: {certificate_number}",
+        )
 
 
 def _certificate_main_number(value: str | None) -> int | None:
