@@ -28,6 +28,7 @@ DEFAULT_CONNECTIONS = {
         "object_settings": {
             "anagrafiche_view": "CertiCliForF3",
             "righe_ddt_view": "CertiRigheDDT",
+            "certiol_view": "CertiOL",
         },
         "notes": "",
     },

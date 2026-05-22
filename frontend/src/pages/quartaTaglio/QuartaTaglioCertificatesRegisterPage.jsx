@@ -31,6 +31,7 @@ function formatDate(value) {
 }
 
 function searchableValues(item) {
+  const statusLabel = registerStatusLabel(item);
   return [
     item.certificate_number,
     item.cdq,
@@ -42,7 +43,7 @@ function searchableValues(item) {
     item.cdo_lega,
     item.fornitore_cliente,
     item.status,
-    STATUS_LABELS[item.status],
+    statusLabel,
     item.conformity_status,
     CONFORMITY_LABELS[item.conformity_status],
     ...(item.conformity_issues || []).map((issue) => `${issue.block} ${issue.field} ${issue.message || ""}`),
@@ -147,9 +148,22 @@ function SortableHeader({ field, label, onSort, sortConfig }) {
   );
 }
 
-function statusClass(status) {
-  if (status === "pdf_final") {
+function registerStatusLabel(item) {
+  if (item.status === "pdf_final") {
+    return STATUS_LABELS.pdf_final;
+  }
+  if (!item.ddt) {
+    return "In attesa DDT";
+  }
+  return STATUS_LABELS[item.status] || item.status;
+}
+
+function statusClass(item) {
+  if (item.status === "pdf_final") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (!item.ddt) {
+    return "border-sky-200 bg-sky-50 text-sky-800";
   }
   return "border-amber-200 bg-amber-50 text-amber-800";
 }
@@ -427,8 +441,8 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status)}`}>
-                      {STATUS_LABELS[item.status] || item.status}
+                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item)}`}>
+                      {registerStatusLabel(item)}
                     </span>
                   </td>
                   <td className="px-4 py-3">

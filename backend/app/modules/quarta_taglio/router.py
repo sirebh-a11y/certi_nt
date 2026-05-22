@@ -145,6 +145,7 @@ def create_quarta_taglio_word_draft_route(
         force_non_conforming=payload.force_non_conforming,
         force_regenerate=payload.force_regenerate,
         certificate_id=payload.certificate_id,
+        candidate_cod_f3=payload.candidate_cod_f3,
     )
 
 

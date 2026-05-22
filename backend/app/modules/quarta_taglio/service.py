@@ -42,6 +42,8 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioAggregateValueResponse,
     QuartaTaglioCertificateResponse,
     QuartaTaglioCertifiableUnitResponse,
+    QuartaTaglioCodF3CandidateResponse,
+    QuartaTaglioCodF3CandidateSummaryResponse,
     QuartaTaglioDetailResponse,
     QuartaTaglioEsolverDdtRowResponse,
     QuartaTaglioFinalCertificateRegisterItem,
@@ -69,6 +71,16 @@ class _AdditionalPagesResolution:
     is_inherited: bool = False
     inherited_from_certificate_number: str | None = None
     inherited_from_cod_f3: str | None = None
+
+
+@dataclass(frozen=True)
+class _CertiOlRow:
+    orp: str | None
+    cod_cli: str | None
+    rag_soc: str | None
+    cod_f3_odp: str | None
+    cod_f3: str | None
+    des_f3: str | None
 
 STATUS_SEVERITY = {
     "green": 1,
@@ -217,6 +229,19 @@ where ltrim(rtrim(cast(ORP as varchar(128)))) in ({placeholders})
 order by ORP, DDT, IdDocumento, IdRigaDoc
 """
 
+ESOLVER_CERTIOL_BATCH_QUERY_TEMPLATE = """
+select
+    cast(ORP as varchar(128)) as ORP,
+    cast(CodCli as varchar(128)) as CodCli,
+    cast(RagSoc as varchar(255)) as RagSoc,
+    cast(CodF3ODP as varchar(128)) as CodF3ODP,
+    cast(CodF3 as varchar(128)) as CodF3,
+    cast(DesF3 as varchar(max)) as DesF3
+from {qualified_view}
+where ltrim(rtrim(cast(ORP as varchar(128)))) in ({placeholders})
+order by ORP, CodF3
+"""
+
 
 def sync_and_list_quarta_taglio(
     db: Session,
@@ -275,8 +300,17 @@ def sync_and_list_quarta_taglio(
     page_groups = filtered_groups[safe_offset : safe_offset + safe_limit]
     page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
     esolver_links = _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
+    certiol_rows_by_odp = _fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _group_rows in page_groups])
     page_items = [
-        _serialize_ol_group(group_rows, esolver_link=esolver_links.get(summary.cod_odp))
+        _serialize_ol_group(
+            group_rows,
+            esolver_link=esolver_links.get(summary.cod_odp),
+            cod_f3_candidates=_build_certiol_candidates(
+                certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
+                quarta_rows=group_rows,
+                esolver_rows=_esolver_rows_from_link(esolver_links.get(summary.cod_odp)),
+            ),
+        )
         for summary, group_rows in page_groups
     ]
     return QuartaTaglioListResponse(
@@ -476,6 +510,17 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
     esolver_rows = _esolver_rows_from_link(esolver_link)
     esolver_status = esolver_link.status if esolver_link else "not_checked"
     esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
+    certiol_rows = _fetch_certiol_rows_batch(db, [group.cod_odp]).get(group.cod_odp, [])
+    cod_f3_candidates = _build_certiol_candidates(
+        certiol_rows=certiol_rows,
+        quarta_rows=rows,
+        esolver_rows=esolver_rows,
+    )
+    cod_f3_candidates = _enrich_certiol_candidates_with_certificates(
+        db,
+        cod_odp=group.cod_odp,
+        candidates=cod_f3_candidates,
+    )
     if esolver_status != "ok":
         missing_items.append(
             QuartaTaglioMissingItemResponse(
@@ -513,6 +558,7 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         certifiable_units=certifiable_units,
         quarta_rows=rows,
         raw_description=des_art,
+        raw_cod_f3_override=next((_clean_text(candidate.cod_f3_odp) for candidate in cod_f3_candidates if _clean_text(candidate.cod_f3_odp)), None),
     )
     detail_certificate_date = (
         _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
@@ -598,6 +644,8 @@ def get_quarta_taglio_detail(db: Session, *, cod_odp: str, certificate_id: int |
         esolver_status=esolver_status,
         esolver_message=esolver_message,
         esolver_rows=esolver_rows,
+        cod_f3_candidates=cod_f3_candidates,
+        cod_f3_candidate_summary=_certiol_candidate_summary(cod_f3_candidates),
         certifiable_units=certifiable_units,
         additional_pages=_serialize_additional_pages(
             db,
@@ -741,8 +789,20 @@ def create_quarta_taglio_word_draft(
     force_non_conforming: bool = False,
     force_regenerate: bool = False,
     certificate_id: int | None = None,
+    candidate_cod_f3: str | None = None,
 ) -> QuartaTaglioWordDraftResponse:
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    candidate = _candidate_by_cod_f3(detail.cod_f3_candidates, candidate_cod_f3)
+    candidate_unit: QuartaTaglioCertifiableUnitResponse | None = None
+    if candidate_cod_f3 and candidate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CodF3 candidato non trovato per questo OL")
+    if candidate is not None:
+        if candidate.confidence == "review":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CodF3 candidato da verificare: attendere DDT o scegliere un candidato affidabile")
+        if candidate.blocked_reason:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=candidate.blocked_reason)
+        candidate_unit = _unit_from_certiol_candidate(detail=detail, candidate=candidate)
+        detail = _detail_for_certiol_candidate(detail=detail, candidate=candidate, unit=candidate_unit)
     _ensure_word_draft_can_be_created(detail)
     if detail.conformity_issues and not force_non_conforming:
         raise HTTPException(
@@ -755,7 +815,11 @@ def create_quarta_taglio_word_draft(
         )
 
     _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=True)
-    certificate = _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    certificate = (
+        _get_or_create_open_certificate_for_unit(db, detail=detail, unit=candidate_unit, actor=actor)
+        if candidate_unit is not None
+        else _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    )
     if _is_manual_word(certificate) and not force_regenerate:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1048,7 +1112,7 @@ def _word_content_control_values_for_unit(
     unit: QuartaTaglioCertifiableUnitResponse,
 ) -> dict[str, object]:
     header = dict(detail.header or {})
-    raw_cod_f3 = _join_unique(item.cod_art for item in detail.materials) or None
+    raw_cod_f3 = _clean_text(header.get("codice_f3_raw")) or _join_unique(item.cod_art for item in detail.materials) or None
     raw_unit = unit if _norm(unit.cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(detail.certifiable_units, raw_cod_f3)
     finished_unit = unit if _norm(unit.cod_f3) and _norm(unit.cod_f3) != _norm(raw_cod_f3) else None
     unit_date = _certificate_datetime_from_ddt(unit.ddt)
@@ -1064,12 +1128,70 @@ def _word_content_control_values_for_unit(
             "ddt_raw": raw_unit.ddt if raw_unit and raw_unit.ddt else "",
             "quantita_raw": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else "",
             "codice_f3_finished": _clean_text(finished_unit.cod_f3) if finished_unit else "",
-            "descrizione_finished": "",
+            "descrizione_finished": header.get("descrizione_finished") or "",
             "ddt_finished": _clean_text(finished_unit.ddt) if finished_unit and finished_unit.ddt else "",
             "quantita_finished": _format_quantity(finished_unit.quantita) if finished_unit and finished_unit.ddt and finished_unit.quantita is not None else "",
         }
     )
     return _word_content_control_values_from_header(header, certificate)
+
+
+def _unit_from_certiol_candidate(
+    *,
+    detail: QuartaTaglioDetailResponse,
+    candidate: QuartaTaglioCodF3CandidateResponse,
+) -> QuartaTaglioCertifiableUnitResponse:
+    return QuartaTaglioCertifiableUnitResponse(
+        unit_key=_certifiable_unit_key(cod_odp=detail.cod_odp, cod_f3=candidate.cod_f3, ddt=None),
+        cod_odp=detail.cod_odp,
+        cod_f3=candidate.cod_f3,
+        ddt=None,
+        cliente=candidate.rag_soc,
+        quantita=None,
+        certificato_presente=None,
+        source="certiol",
+        status="ready",
+        message="CodF3 preparato da CertiOL in attesa DDT",
+        rows_count=1,
+        is_primary=True,
+    )
+
+
+def _detail_for_certiol_candidate(
+    *,
+    detail: QuartaTaglioDetailResponse,
+    candidate: QuartaTaglioCodF3CandidateResponse,
+    unit: QuartaTaglioCertifiableUnitResponse,
+) -> QuartaTaglioDetailResponse:
+    raw_cod_f3 = candidate.cod_f3_odp or _join_unique(item.cod_art for item in detail.materials) or None
+    raw_description = (detail.header or {}).get("descrizione_raw") or _join_unique((item.des_art for item in detail.materials), separator=" | ") or ""
+    is_raw = _norm(candidate.cod_f3) == _norm(raw_cod_f3)
+    units = [item.model_copy(update={"is_primary": False}) for item in detail.certifiable_units if item.unit_key != unit.unit_key]
+    units.insert(0, unit)
+    header = dict(detail.header or {})
+    header.update(
+        {
+            "unit_key": unit.unit_key,
+            "cliente": candidate.rag_soc or header.get("cliente"),
+            "codice_f3": candidate.cod_f3,
+            "codice_f3_origine": "certiol",
+            "codice_f3_esolver": candidate.cod_f3,
+            "codice_f3_warning": None,
+            "codice_f3_raw": raw_cod_f3,
+            "descrizione_raw": candidate.des_f3 if is_raw and candidate.des_f3 else raw_description,
+            "ddt_raw": header.get("ddt_raw") if is_raw else "",
+            "quantita_raw": header.get("quantita_raw") if is_raw else "",
+            "codice_f3_finished": "" if is_raw else candidate.cod_f3,
+            "descrizione_finished": "" if is_raw else candidate.des_f3 or "",
+            "ddt_finished": "",
+            "quantita_finished": "",
+            "descrizione": candidate.des_f3 or header.get("descrizione"),
+            "data_certificato": header.get("data_certificato") or "",
+            "ddt": "",
+            "quantita": header.get("quantita") or "",
+        }
+    )
+    return detail.model_copy(update={"header": header, "certifiable_units": units})
 
 
 def _certificate_for_current_detail(
@@ -1124,6 +1246,42 @@ def _get_or_create_open_certificate(
         if detail_certificate_date:
             certificate.cert_date = detail_certificate_date
         elif not certificate.cert_date:
+            certificate.cert_date = datetime.now(timezone.utc)
+    return certificate
+
+
+def _get_or_create_open_certificate_for_unit(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    unit: QuartaTaglioCertifiableUnitResponse | None,
+    actor: User,
+) -> QuartaTaglioFinalCertificate:
+    if unit is None:
+        return _get_or_create_open_certificate(db, detail=detail, actor=actor)
+    certificate = _find_open_certificate_for_detail(db, cod_odp=detail.cod_odp, unit_key=unit.unit_key)
+    if certificate is None:
+        certificate = QuartaTaglioFinalCertificate(
+            cod_odp=detail.cod_odp,
+            status="draft",
+            certificate_number=None,
+            draft_number="",
+            unit_key=unit.unit_key,
+            cdq_key=_cdq_key_from_detail(detail),
+            cdq_signature=_cdq_signature_from_detail(detail),
+            cdq_values=_cdq_values_from_detail(detail),
+            cert_date=_certificate_datetime_from_ddt(unit.ddt) or datetime.now(timezone.utc),
+            download_token=secrets.token_urlsafe(32),
+            created_by_user_id=actor.id,
+        )
+        _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
+        db.add(certificate)
+        db.flush()
+    else:
+        _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
+        if not certificate.cdq_key:
+            certificate.cdq_key = _cdq_key_from_detail(detail)
+        if not certificate.cert_date:
             certificate.cert_date = datetime.now(timezone.utc)
     return certificate
 
@@ -2786,6 +2944,71 @@ def _fetch_esolver_ddt_rows_batch(
     return result
 
 
+def _fetch_certiol_rows_batch(db: Session, cod_odps: list[str]) -> dict[str, list[_CertiOlRow]]:
+    cleaned_odps = _unique_clean(cod_odps)
+    if not cleaned_odps:
+        return {}
+    if len(cleaned_odps) > ESOLVER_DDT_BATCH_SIZE:
+        combined: dict[str, list[_CertiOlRow]] = {}
+        for index in range(0, len(cleaned_odps), ESOLVER_DDT_BATCH_SIZE):
+            combined.update(_fetch_certiol_rows_batch(db, cleaned_odps[index : index + ESOLVER_DDT_BATCH_SIZE]))
+        return combined
+
+    connection = db.query(ExternalConnection).filter(ExternalConnection.code == "esolver").one_or_none()
+    if connection is None or not connection.enabled or not connection.password_encrypted:
+        return {}
+
+    try:
+        import pymssql
+    except ImportError:
+        return {}
+
+    object_settings = connection.object_settings or {}
+    view_name = _sql_identifier(str(object_settings.get("certiol_view") or "CertiOL"))
+    schema_name = _sql_identifier(connection.schema_name or "dbo")
+    if view_name is None or schema_name is None:
+        return {}
+
+    result: dict[str, list[_CertiOlRow]] = defaultdict(list)
+    try:
+        password = decrypt_secret(connection.password_encrypted)
+        with pymssql.connect(
+            server=connection.server_host,
+            port=connection.port,
+            user=connection.username,
+            password=password,
+            database=connection.database_name,
+            login_timeout=connection.connection_timeout,
+            timeout=connection.query_timeout,
+            as_dict=True,
+        ) as sql_connection:
+            with sql_connection.cursor() as cursor:
+                placeholders = ", ".join(["%s"] * len(cleaned_odps))
+                query = ESOLVER_CERTIOL_BATCH_QUERY_TEMPLATE.format(
+                    qualified_view=f"[{schema_name}].[{view_name}]",
+                    placeholders=placeholders,
+                )
+                cursor.execute(query, tuple(cleaned_odps))
+                odp_key_map = {_norm(cod_odp): cod_odp for cod_odp in cleaned_odps}
+                for raw_row in list(cursor.fetchall()):
+                    source_odp = odp_key_map.get(_norm(raw_row.get("ORP")))
+                    if not source_odp:
+                        continue
+                    result[source_odp].append(
+                        _CertiOlRow(
+                            orp=_clean_text(raw_row.get("ORP")),
+                            cod_cli=_clean_text(raw_row.get("CodCli")),
+                            rag_soc=_clean_text(raw_row.get("RagSoc")),
+                            cod_f3_odp=_clean_text(raw_row.get("CodF3ODP")),
+                            cod_f3=_clean_text(raw_row.get("CodF3")),
+                            des_f3=_clean_text(raw_row.get("DesF3")),
+                        )
+                    )
+    except Exception:
+        return {}
+    return dict(result)
+
+
 def _esolver_status_for_rows(
     rows: list[QuartaTaglioEsolverDdtRowResponse],
     *,
@@ -3218,7 +3441,12 @@ def _quarta_group_sort_key(item: QuartaTaglioRowResponse, *, sort_field: str | N
     )
 
 
-def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTaglioEsolverLink | None = None) -> QuartaTaglioRowResponse:
+def _serialize_ol_group(
+    rows: list[QuartaTaglioRow],
+    *,
+    esolver_link: QuartaTaglioEsolverLink | None = None,
+    cod_f3_candidates: list[QuartaTaglioCodF3CandidateResponse] | None = None,
+) -> QuartaTaglioRowResponse:
     primary = rows[0]
     worst_color = max((row.status_color for row in rows), key=lambda color: STATUS_SEVERITY.get(color, 0))
     status_details = _group_status_details(rows)
@@ -3250,11 +3478,252 @@ def _serialize_ol_group(rows: list[QuartaTaglioRow], *, esolver_link: QuartaTagl
         esolver_ddt=esolver_link.ddt if esolver_link else None,
         esolver_qta_totale=esolver_link.qta_totale if esolver_link else None,
         esolver_last_checked_at=esolver_link.last_checked_at if esolver_link else None,
+        cod_f3_candidate_summary=_certiol_candidate_summary(cod_f3_candidates or []),
         certificates=[_serialize_certificate(row) for row in rows],
         seen_in_last_sync=all(row.seen_in_last_sync for row in rows),
         first_seen_at=min(row.first_seen_at for row in rows),
         last_seen_at=max(row.last_seen_at for row in rows),
     )
+
+
+def _certiol_candidate_summary(candidates: list[QuartaTaglioCodF3CandidateResponse]) -> QuartaTaglioCodF3CandidateSummaryResponse:
+    count = len(candidates)
+    if count == 0:
+        return QuartaTaglioCodF3CandidateSummaryResponse()
+    visible = [candidate for candidate in candidates if candidate.confidence != "review"]
+    if visible:
+        return QuartaTaglioCodF3CandidateSummaryResponse(
+            count=count,
+            visible_count=len(visible),
+            status="ready",
+            label=f"{count} CodF3",
+            message="CodF3 disponibili da eSolver",
+        )
+    if count > 10:
+        return QuartaTaglioCodF3CandidateSummaryResponse(
+            count=count,
+            visible_count=len(visible),
+            status="review",
+            label=f"{count} CodF3: verifica",
+            message="Troppi CodF3 candidati per proposta automatica",
+        )
+    return QuartaTaglioCodF3CandidateSummaryResponse(
+        count=count,
+        visible_count=0,
+        status="review",
+        label=f"{count} CodF3 da verificare",
+        message="Candidati presenti ma non abbastanza chiari",
+    )
+
+
+def _enrich_certiol_candidates_with_certificates(
+    db: Session,
+    *,
+    cod_odp: str,
+    candidates: list[QuartaTaglioCodF3CandidateResponse],
+) -> list[QuartaTaglioCodF3CandidateResponse]:
+    if not candidates:
+        return []
+
+    certificates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+        )
+        .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .all()
+    )
+    latest_by_cod_f3: dict[str, QuartaTaglioFinalCertificate] = {}
+    for certificate in certificates:
+        key = _norm(certificate.cod_f3)
+        if key and key not in latest_by_cod_f3:
+            latest_by_cod_f3[key] = certificate
+
+    raw_key = _norm(next((_clean_text(candidate.cod_f3_odp) for candidate in candidates if _clean_text(candidate.cod_f3_odp)), None))
+    raw_certificate = latest_by_cod_f3.get(raw_key) if raw_key else None
+    raw_has_word = bool(raw_certificate and raw_certificate.storage_key_docx)
+
+    enriched: list[QuartaTaglioCodF3CandidateResponse] = []
+    for candidate in candidates:
+        key = _norm(candidate.cod_f3)
+        certificate = latest_by_cod_f3.get(key)
+        is_raw = bool(raw_key and key == raw_key)
+        blocked_reason = candidate.blocked_reason
+        message = candidate.message
+        if not blocked_reason and not is_raw and not raw_has_word:
+            blocked_reason = "Crea prima il Word Raw"
+            message = blocked_reason
+        certificate_has_ddt = bool(certificate and _clean_text(certificate.ddt))
+        waiting_ddt = bool(certificate and certificate.certificate_number and not certificate_has_ddt)
+        enriched.append(
+            candidate.model_copy(
+                update={
+                    "message": message,
+                    "certificate_id": certificate.id if certificate else None,
+                    "certificate_number": certificate.certificate_number if certificate else None,
+                    "has_word": bool(certificate and certificate.storage_key_docx),
+                    "certificate_has_ddt": certificate_has_ddt,
+                    "waiting_ddt": waiting_ddt,
+                    "blocked_reason": blocked_reason,
+                }
+            )
+        )
+    return enriched
+
+
+def _build_certiol_candidates(
+    *,
+    certiol_rows: list[_CertiOlRow],
+    quarta_rows: list[QuartaTaglioRow],
+    esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] | None = None,
+) -> list[QuartaTaglioCodF3CandidateResponse]:
+    if not certiol_rows:
+        return []
+    by_cod_f3: dict[str, _CertiOlRow] = {}
+    for row in certiol_rows:
+        key = _norm(row.cod_f3)
+        if key and key not in by_cod_f3:
+            by_cod_f3[key] = row
+    rows = list(by_cod_f3.values())
+    if not rows:
+        return []
+
+    raw_values = sorted({_clean_text(row.cod_f3_odp) for row in rows if _clean_text(row.cod_f3_odp)})
+    raw_anomaly = len(raw_values) > 1
+    raw_cod_f3 = raw_values[0] if raw_values else _join_unique(row.cod_art for row in quarta_rows) or None
+    raw_key = _norm(raw_cod_f3)
+    raw_row = next((row for row in rows if _norm(row.cod_f3) == raw_key), None)
+    raw_description = _clean_text(raw_row.des_f3) if raw_row else _join_unique((row.des_art for row in quarta_rows), separator=" | ")
+    candidate_count = len(rows)
+    raw_suffix = _cod_f3_last_two(raw_cod_f3)
+    is_old_codification = _is_old_certiol_codification(raw_cod_f3)
+    prefix = _cod_f3_prefix(raw_cod_f3)
+    ddt_cod_f3_keys = {_norm(row.cod_f3) for row in (esolver_rows or []) if _norm(row.cod_f3)}
+
+    result: list[QuartaTaglioCodF3CandidateResponse] = []
+    if raw_cod_f3 and raw_row is None and not raw_anomaly:
+        result.append(
+            QuartaTaglioCodF3CandidateResponse(
+                cod_f3_odp=raw_cod_f3,
+                cod_f3=raw_cod_f3,
+                des_f3=raw_description,
+                relation="raw",
+                confidence="raw",
+                message="Raw CodF3ODP non presente tra i CodF3 esposti",
+                reasons=["CodF3ODP", "raw teorico"],
+                has_ddt=raw_key in ddt_cod_f3_keys,
+            )
+        )
+    for row in sorted(rows, key=lambda item: (_cod_f3_sort_value(item.cod_f3) is None, _cod_f3_sort_value(item.cod_f3) or 0, item.cod_f3 or "")):
+        cod_f3 = _clean_text(row.cod_f3)
+        if not cod_f3:
+            continue
+        key = _norm(cod_f3)
+        is_raw = key == raw_key
+        same_prefix = bool(prefix and _cod_f3_prefix(cod_f3) == prefix)
+        same_old_family = _is_old_certiol_child(raw_cod_f3, cod_f3)
+        same_family = same_old_family if is_old_codification else same_prefix
+        description_score = _description_similarity_score(raw_description, row.des_f3)
+        reasons: list[str] = []
+        if is_raw:
+            reasons.append("CodF3ODP")
+        if same_family:
+            reasons.append("vecchia codifica" if is_old_codification and not is_raw else "stesso prefisso")
+        if description_score >= 2:
+            reasons.append("descrizione coerente")
+        if key in ddt_cod_f3_keys:
+            reasons.append("DDT presente")
+
+        confidence = "review"
+        message = "Da verificare prima di preparare il Word"
+        blocked_reason = None
+        if raw_anomaly:
+            blocked_reason = "Anomalia CodF3ODP: più raw dichiarati per lo stesso OL"
+            message = blocked_reason
+        elif key in ddt_cod_f3_keys:
+            confidence = "ddt"
+            message = "Confermato da DDT eSolver"
+        elif is_raw:
+            confidence = "raw"
+            message = "CodF3ODP/raw"
+        elif is_old_codification and same_old_family and candidate_count <= 25:
+            confidence = "ready" if description_score >= 1 else "medium"
+            message = "Candidato preparabile" if confidence == "ready" else "Candidato probabile"
+        elif is_old_codification and same_old_family:
+            message = "Troppi candidati vecchia codifica: attendere DDT o verificare manualmente"
+        elif candidate_count <= 5 and raw_suffix in {"00", "01", "02"} and same_prefix:
+            confidence = "ready" if description_score >= 1 else "medium"
+            message = "Candidato preparabile" if confidence == "ready" else "Candidato probabile"
+        elif candidate_count <= 10 and raw_suffix in {"00", "01", "02"} and same_prefix and description_score >= 2:
+            confidence = "medium"
+            message = "Candidato probabile"
+        elif candidate_count > 10:
+            message = "Troppi candidati: attendere DDT o cercare manualmente"
+
+        result.append(
+            QuartaTaglioCodF3CandidateResponse(
+                cod_f3_odp=raw_cod_f3,
+                cod_f3=cod_f3,
+                des_f3=_clean_text(row.des_f3),
+                rag_soc=_clean_text(row.rag_soc),
+                cod_cli=_clean_text(row.cod_cli),
+                relation="raw" if is_raw else "candidate",
+                confidence=confidence,
+                message=message,
+                reasons=reasons,
+                has_ddt=key in ddt_cod_f3_keys,
+                blocked_reason=blocked_reason,
+            )
+        )
+    return result
+
+
+def _is_old_certiol_codification(value: str | None) -> bool:
+    digits = re.sub(r"\D", "", _clean_text(value) or "")
+    return bool(digits and len(digits) < 9)
+
+
+def _is_old_certiol_child(raw_cod_f3: str | None, cod_f3: str | None) -> bool:
+    raw_digits = re.sub(r"\D", "", _clean_text(raw_cod_f3) or "")
+    cod_digits = re.sub(r"\D", "", _clean_text(cod_f3) or "")
+    if not raw_digits or not cod_digits:
+        return False
+    return cod_digits == raw_digits or (len(cod_digits) > len(raw_digits) and cod_digits.startswith(raw_digits))
+
+
+def _cod_f3_prefix(value: str | None) -> str | None:
+    digits = re.sub(r"\D", "", _clean_text(value) or "")
+    return digits[:-2] if len(digits) > 2 else None
+
+
+def _cod_f3_last_two(value: str | None) -> str | None:
+    digits = re.sub(r"\D", "", _clean_text(value) or "")
+    return digits[-2:] if len(digits) >= 2 else None
+
+
+def _description_similarity_score(left: str | None, right: str | None) -> int:
+    left_tokens = _description_tokens(left)
+    right_tokens = _description_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0
+    return len(left_tokens.intersection(right_tokens))
+
+
+def _description_tokens(value: str | None) -> set[str]:
+    text = re.sub(r"[^0-9A-Za-zÀ-ÿ]+", " ", _clean_text(value) or "").upper()
+    ignored = {"DI", "DEL", "DELLA", "DELLO", "THE", "AND", "FOR", "CON", "SENZA", "GREZZO", "GREZZA"}
+    return {token for token in text.split() if len(token) >= 3 and token not in ignored}
+
+
+def _candidate_by_cod_f3(
+    candidates: list[QuartaTaglioCodF3CandidateResponse],
+    cod_f3: str | None,
+) -> QuartaTaglioCodF3CandidateResponse | None:
+    target = _norm(cod_f3)
+    if not target:
+        return None
+    return next((candidate for candidate in candidates if _norm(candidate.cod_f3) == target), None)
 
 
 def _build_certifiable_units(
@@ -3366,8 +3835,9 @@ def _certificate_header_flow(
     certifiable_units: list[QuartaTaglioCertifiableUnitResponse],
     quarta_rows: list[QuartaTaglioRow],
     raw_description: str | None,
+    raw_cod_f3_override: str | None = None,
 ) -> dict[str, str | None]:
-    raw_cod_f3 = _join_unique(row.cod_art for row in quarta_rows) or None
+    raw_cod_f3 = _clean_text(raw_cod_f3_override) or _join_unique(row.cod_art for row in quarta_rows) or None
     current_cod_f3 = _clean_text(current_unit.cod_f3) if current_unit else None
     raw_unit = current_unit if _norm(current_cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(certifiable_units, raw_cod_f3)
     finished_unit = current_unit if _norm(current_cod_f3) and _norm(current_cod_f3) != _norm(raw_cod_f3) else None

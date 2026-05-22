@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -180,6 +180,44 @@ function quartaDetailApiPath(codOdp, certificateId) {
   return certificateId ? `${basePath}?certificate_id=${encodeURIComponent(certificateId)}` : basePath;
 }
 
+function quartaDetailUiPath(codOdp, params = {}) {
+  const basePath = `/quarta-taglio/${encodeURIComponent(codOdp)}`;
+  const query = new URLSearchParams();
+  if (params.certificateId) {
+    query.set("certificateId", params.certificateId);
+  } else if (params.candidateCodF3) {
+    query.set("candidateCodF3", params.candidateCodF3);
+  }
+  const queryString = query.toString();
+  return queryString ? `${basePath}?${queryString}` : basePath;
+}
+
+function codF3CandidateClass(confidence) {
+  if (confidence === "ddt" || confidence === "raw" || confidence === "ready") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (confidence === "medium") {
+    return "border-sky-200 bg-sky-50 text-sky-800";
+  }
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function codF3CandidateLabel(candidate) {
+  if (candidate.confidence === "ddt") {
+    return "DDT";
+  }
+  if (candidate.confidence === "raw") {
+    return "Raw";
+  }
+  if (candidate.confidence === "ready") {
+    return "Preparabile";
+  }
+  if (candidate.confidence === "medium") {
+    return "Probabile";
+  }
+  return "Da verificare";
+}
+
 function quickIncomingConfirmEnabled() {
   if (typeof window === "undefined") {
     return false;
@@ -212,6 +250,8 @@ export default function QuartaTaglioDetailPage() {
   const { codOdp } = useParams();
   const [searchParams] = useSearchParams();
   const certificateId = searchParams.get("certificateId");
+  const selectedCandidateCodF3 = searchParams.get("candidateCodF3");
+  const navigate = useNavigate();
   const { clearAuth, token } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -232,6 +272,7 @@ export default function QuartaTaglioDetailPage() {
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
+  const [pendingWordCandidateCodF3, setPendingWordCandidateCodF3] = useState(null);
   const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
@@ -465,24 +506,28 @@ export default function QuartaTaglioDetailPage() {
     queueArticleSave(field, value, 0);
   }
 
-  function generateWordDraft() {
-    if (!canCreateWord) {
+  function generateWordDraft(candidateCodF3 = activeCandidateCodF3) {
+    const blockedReason = candidateCodF3 && activeCodF3Candidate?.cod_f3 === candidateCodF3 ? activeWordBlockedReason : "";
+    if (!canCreateWord || blockedReason) {
       setWordDraftState({
         status: "error",
-        message: wordCreationBlockers.length
+        message: blockedReason
+          ? `Word non creabile: ${blockedReason}.`
+          : wordCreationBlockers.length
           ? `Word non creabile: ${wordCreationBlockers.join("; ")}`
           : "Word non creabile: dati certificato non completi.",
       });
       return;
     }
+    setPendingWordCandidateCodF3(candidateCodF3);
     if ((data?.conformity_issues || []).length > 0) {
       setWordConformityDialogOpen(true);
       return;
     }
-    void performGenerateWordDraft(false);
+    void performGenerateWordDraft(false, false, candidateCodF3);
   }
 
-  async function performGenerateWordDraft(forceNonConforming = false, forceRegenerate = false) {
+  async function performGenerateWordDraft(forceNonConforming = false, forceRegenerate = false, candidateCodF3 = pendingWordCandidateCodF3) {
     setWordDraftState({ status: "saving", message: "" });
     setError("");
     try {
@@ -494,6 +539,7 @@ export default function QuartaTaglioDetailPage() {
             force_non_conforming: forceNonConforming,
             force_regenerate: forceRegenerate,
             certificate_id: certificateId ? Number(certificateId) : null,
+            candidate_cod_f3: candidateCodF3 || null,
           }),
         },
         token,
@@ -504,8 +550,10 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, certificateId), {}, token);
+      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, response.id), {}, token);
       setData(refreshed);
+      navigate(quartaDetailUiPath(codOdp, { certificateId: response.id }), { replace: true });
+      setPendingWordCandidateCodF3(null);
       setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
       setWordDraftState({
@@ -596,11 +644,15 @@ export default function QuartaTaglioDetailPage() {
   }
 
   function regenerateWordFromScratch() {
+    if (!hasWord) {
+      generateWordDraft();
+      return;
+    }
     if (isManualWord) {
       setWordRegenerateDialogOpen(true);
       return;
     }
-    void performGenerateWordDraft(false, true);
+    void performGenerateWordDraft(false, true, null);
   }
 
   async function uploadEditedWord() {
@@ -679,6 +731,15 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
+  function openCodF3Candidate(candidate) {
+    setWordDraftState({ status: "idle", message: "" });
+    if (candidate.certificate_id) {
+      navigate(quartaDetailUiPath(codOdp, { certificateId: candidate.certificate_id }));
+      return;
+    }
+    navigate(quartaDetailUiPath(codOdp, { candidateCodF3: candidate.cod_f3 }));
+  }
+
   const headerRows = useMemo(() => {
     const header = data?.header || {};
     return [
@@ -689,6 +750,15 @@ export default function QuartaTaglioDetailPage() {
       ["Materiale / profilo raw", header.materiale_raw || "-"],
     ];
   }, [data]);
+  const codF3Candidates = data?.cod_f3_candidates || [];
+  const rawCodF3Candidate = codF3Candidates.find((candidate) => candidate.relation === "raw") || null;
+  const selectedCodF3Candidate =
+    codF3Candidates.find((candidate) => codF3MatchKey(candidate.cod_f3) === codF3MatchKey(selectedCandidateCodF3)) || null;
+  const activeCodF3Candidate = certificateId ? null : selectedCodF3Candidate || rawCodF3Candidate;
+  const activeCandidateCodF3 = activeCodF3Candidate?.cod_f3 || null;
+  const codF3CandidateSummary = data?.cod_f3_candidate_summary || {};
+  const visibleCodF3Candidates = codF3Candidates.filter((candidate) => candidate.confidence !== "review").slice(0, 25);
+  const hiddenCodF3CandidateCount = Math.max((codF3CandidateSummary.count || 0) - visibleCodF3Candidates.length, 0);
   const headerFlowColumns = useMemo(() => {
     const header = data?.header || {};
     return [
@@ -726,9 +796,18 @@ export default function QuartaTaglioDetailPage() {
   const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
   const canCreateWord = Boolean(data?.can_create_word);
   const wordCreationBlockers = data?.word_creation_blockers || [];
-  const wordInfo = data?.word_info || {};
+  const wordInfo = activeCodF3Candidate && !activeCodF3Candidate.certificate_id
+    ? { has_word: false, source_label: "Nessun Word per il CodF3 selezionato" }
+    : data?.word_info || {};
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
   const isManualWord = wordInfo.source === "user_uploaded" || wordInfo.source === "fields_updated";
+  const activeWordLabel = certificateId
+    ? `${data?.header?.codice_f3 || "CodF3"}${certificateNumber ? ` - ${certificateNumber}` : ""}`
+    : activeCodF3Candidate
+      ? `${activeCodF3Candidate.cod_f3}${activeCodF3Candidate.relation === "raw" ? " - Raw" : ""}`
+      : data?.header?.codice_f3 || "OL";
+  const activeWordBlockedReason = activeCodF3Candidate?.blocked_reason || "";
+  const canGenerateActiveWord = canCreateWord && !activeWordBlockedReason;
   const customerRequirement = useMemo(
     () => findCustomerRequirementForCodF3(customerRequirements, data?.header?.codice_f3),
     [customerRequirements, data?.header?.codice_f3],
@@ -815,11 +894,15 @@ export default function QuartaTaglioDetailPage() {
       <div className="flex flex-col gap-2 rounded-xl border border-border bg-white p-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
+          <p className="mt-1 text-sm font-semibold text-slate-900">Certificato attivo: {activeWordLabel}</p>
           <p className="mt-1 text-sm text-slate-600">
             {canCreateWord
               ? "Certificato creabile: standard e righe Incoming sono pronti. Se manca la data DDT, resterà come campo mancante."
               : "Serve standard confermato e righe Incoming accettate o accettate con riserva."}
           </p>
+          {activeWordBlockedReason ? (
+            <p className="mt-1 text-sm font-semibold text-amber-700">{activeWordBlockedReason}</p>
+          ) : null}
           {!canCreateWord && wordCreationBlockers.length ? (
             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <div className="font-semibold uppercase tracking-[0.14em]">Blocchi creazione Word</div>
@@ -895,11 +978,15 @@ export default function QuartaTaglioDetailPage() {
           ) : (
             <button
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={wordDraftState.status === "saving" || !canCreateWord}
-              onClick={generateWordDraft}
+              disabled={wordDraftState.status === "saving" || !canGenerateActiveWord}
+              onClick={() => generateWordDraft()}
               type="button"
             >
-              {wordDraftState.status === "saving" ? "Creazione..." : "Genera Word"}
+              {wordDraftState.status === "saving"
+                ? "Creazione..."
+                : activeCodF3Candidate
+                  ? `Genera Word ${activeCodF3Candidate.relation === "raw" ? "Raw" : activeCodF3Candidate.cod_f3}`
+                  : "Genera Word"}
             </button>
           )}
           <div className="grid grid-cols-2 gap-2">
@@ -913,7 +1000,7 @@ export default function QuartaTaglioDetailPage() {
             </button>
             <button
               className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={wordDraftState.status === "saving" || !canCreateWord}
+              disabled={wordDraftState.status === "saving" || !canGenerateActiveWord || !hasWord}
               onClick={regenerateWordFromScratch}
               type="button"
             >
@@ -1040,6 +1127,72 @@ export default function QuartaTaglioDetailPage() {
           ))}
         </div>
       </Panel>
+
+      {codF3CandidateSummary.count ? (
+        <Panel title="CodF3 da eSolver">
+          {codF3CandidateSummary.status === "review" && hiddenCodF3CandidateCount > 0 ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {codF3CandidateSummary.message || "CodF3 candidati da verificare."}
+              <span className="ml-2 font-semibold">{codF3CandidateSummary.label}</span>
+            </div>
+          ) : null}
+          {visibleCodF3Candidates.length ? (
+            <div className="grid gap-2 xl:grid-cols-2">
+              {visibleCodF3Candidates.map((candidate) => {
+                const canOpenCandidate = candidate.confidence !== "review";
+                const isActiveCandidate =
+                  (certificateId && String(candidate.certificate_id || "") === String(certificateId)) ||
+                  (!certificateId && activeCodF3Candidate && codF3MatchKey(activeCodF3Candidate.cod_f3) === codF3MatchKey(candidate.cod_f3));
+                const candidateActionLabel = candidate.certificate_id ? "Apri" : isActiveCandidate ? "Selezionato" : "Seleziona";
+                return (
+                  <div
+                    className={`rounded-xl border px-3 py-3 ${
+                      isActiveCandidate ? "border-sky-300 bg-sky-50/70" : "border-slate-200 bg-white"
+                    }`}
+                    key={candidate.cod_f3}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-slate-950">{candidate.cod_f3}</span>
+                          <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateClass(candidate.confidence)}`}>
+                            {codF3CandidateLabel(candidate)}
+                          </span>
+                          {candidate.waiting_ddt ? (
+                            <span className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                              In attesa DDT
+                            </span>
+                          ) : null}
+                          {candidate.has_word ? (
+                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              Word
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 break-words text-sm text-slate-700">{candidate.des_f3 || "-"}</p>
+                        {candidate.message ? <p className="mt-1 text-xs text-slate-500">{candidate.message}</p> : null}
+                        {candidate.reasons?.length ? (
+                          <p className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ")}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        className="w-fit shrink-0 rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={!canOpenCandidate}
+                        onClick={() => openCodF3Candidate(candidate)}
+                        type="button"
+                      >
+                        {candidateActionLabel}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">Nessun CodF3 preparabile automaticamente. Attendere DDT o verifica manuale.</p>
+          )}
+        </Panel>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
         <Panel className="h-full" title="Header Word">
@@ -1181,7 +1334,10 @@ export default function QuartaTaglioDetailPage() {
             <div className="mt-6 flex justify-end gap-3">
               <button
                 className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
-                onClick={() => setWordConformityDialogOpen(false)}
+                onClick={() => {
+                  setWordConformityDialogOpen(false);
+                  setPendingWordCandidateCodF3(null);
+                }}
                 type="button"
               >
                 Torna a controllare
@@ -1240,7 +1396,7 @@ export default function QuartaTaglioDetailPage() {
           onCancel={() => setWordRegenerateDialogOpen(false)}
           onConfirm={() => {
             setWordRegenerateDialogOpen(false);
-            void performGenerateWordDraft(false, true);
+            void performGenerateWordDraft(false, true, null);
           }}
           title="Rigenerare il Word?"
         />

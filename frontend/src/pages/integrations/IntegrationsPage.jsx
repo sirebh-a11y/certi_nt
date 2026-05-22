@@ -7,12 +7,13 @@ import StatusBadge from "../../components/common/StatusBadge";
 const FIELD_LABELS = {
   anagrafiche_view: "Vista anagrafiche",
   righe_ddt_view: "Vista righe DDT",
+  certiol_view: "Vista OL/CodF3",
   traceability_view: "Vista tracciabilita",
 };
 
 const CONNECTION_ORDER = ["esolver", "quarta"];
 const OBJECT_KEYS_BY_CODE = {
-  esolver: ["anagrafiche_view", "righe_ddt_view"],
+  esolver: ["anagrafiche_view", "righe_ddt_view", "certiol_view"],
   quarta: ["traceability_view"],
 };
 

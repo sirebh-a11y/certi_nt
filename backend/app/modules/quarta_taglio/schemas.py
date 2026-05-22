@@ -32,6 +32,33 @@ class QuartaTaglioCertificateResponse(BaseModel):
     matching_row_ids: list[int]
 
 
+class QuartaTaglioCodF3CandidateResponse(BaseModel):
+    cod_f3_odp: str | None = None
+    cod_f3: str
+    des_f3: str | None = None
+    rag_soc: str | None = None
+    cod_cli: str | None = None
+    relation: str = "candidate"
+    confidence: str = "review"
+    message: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    has_ddt: bool = False
+    certificate_id: int | None = None
+    certificate_number: str | None = None
+    has_word: bool = False
+    certificate_has_ddt: bool = False
+    waiting_ddt: bool = False
+    blocked_reason: str | None = None
+
+
+class QuartaTaglioCodF3CandidateSummaryResponse(BaseModel):
+    count: int = 0
+    visible_count: int = 0
+    status: str = "missing"
+    label: str = "Nessun CodF3"
+    message: str | None = None
+
+
 class QuartaTaglioRowResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +89,7 @@ class QuartaTaglioRowResponse(BaseModel):
     esolver_ddt: str | None = None
     esolver_qta_totale: float | None = None
     esolver_last_checked_at: datetime | None = None
+    cod_f3_candidate_summary: QuartaTaglioCodF3CandidateSummaryResponse = Field(default_factory=QuartaTaglioCodF3CandidateSummaryResponse)
     certificates: list[QuartaTaglioCertificateResponse] = Field(default_factory=list)
     seen_in_last_sync: bool
     first_seen_at: datetime
@@ -242,6 +270,8 @@ class QuartaTaglioDetailResponse(BaseModel):
     esolver_status: str = "not_checked"
     esolver_message: str | None = None
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] = Field(default_factory=list)
+    cod_f3_candidates: list[QuartaTaglioCodF3CandidateResponse] = Field(default_factory=list)
+    cod_f3_candidate_summary: QuartaTaglioCodF3CandidateSummaryResponse = Field(default_factory=QuartaTaglioCodF3CandidateSummaryResponse)
     certifiable_units: list[QuartaTaglioCertifiableUnitResponse] = Field(default_factory=list)
     second_page_placeholder: bool = True
     additional_pages: QuartaTaglioAdditionalPagesResponse | None = None
@@ -270,3 +300,4 @@ class QuartaTaglioWordDraftRequest(BaseModel):
     force_non_conforming: bool = False
     force_regenerate: bool = False
     certificate_id: int | None = None
+    candidate_cod_f3: str | None = None

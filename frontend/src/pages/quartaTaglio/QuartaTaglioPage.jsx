@@ -152,6 +152,16 @@ function formatQuantity(value) {
   return Math.round(numericValue).toLocaleString("it-IT", { maximumFractionDigits: 0 });
 }
 
+function codF3CandidateBadgeClass(status) {
+  if (status === "ready") {
+    return "border-sky-200 bg-sky-50 text-sky-800";
+  }
+  if (status === "review") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
 function statusClass(color) {
   return STATUS_CLASSES[color] || STATUS_CLASSES.red;
 }
@@ -848,6 +858,16 @@ export default function QuartaTaglioPage() {
                   <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words font-medium">{item.esolver_cod_f3 || "-"}</div>
                     {item.cod_art ? <div className="mt-1 text-xs text-slate-500">Quarta: {item.cod_art}</div> : null}
+                    {item.cod_f3_candidate_summary?.count ? (
+                      <div
+                        className={`mt-1 inline-flex rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateBadgeClass(
+                          item.cod_f3_candidate_summary.status,
+                        )}`}
+                        title={item.cod_f3_candidate_summary.message || ""}
+                      >
+                        {item.cod_f3_candidate_summary.label}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
                   <td className="px-3 py-2.5 text-slate-700">
