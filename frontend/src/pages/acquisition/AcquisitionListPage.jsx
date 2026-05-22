@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -113,6 +113,25 @@ function blockDisplayLabel(row, block) {
     return "Conf. da Cert.";
   }
   return blockActivityLabel(block, row.block_states?.[block] || "rosso");
+}
+
+function parseCertificationIncomingScope(search) {
+  const params = new URLSearchParams(search || "");
+  if (params.get("scope") !== "certificazione") {
+    return null;
+  }
+  const rowIds = (params.get("row_ids") || "")
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isInteger(item) && item > 0);
+  if (!rowIds.length) {
+    return null;
+  }
+  return {
+    rowIds: Array.from(new Set(rowIds)),
+    ol: params.get("ol") || "",
+    returnTo: params.get("returnTo") || "/quarta-taglio",
+  };
 }
 
 function compactMatchReference(row) {
@@ -596,7 +615,10 @@ function BlockCell({ label, state, secondary, onClick, onKeyDown, boxRef = null 
 export default function AcquisitionListPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
-  const initialListStateRef = useRef(loadPersistedListState());
+  const location = useLocation();
+  const certificationScope = useMemo(() => parseCertificationIncomingScope(location.search), [location.search]);
+  const isCertificationScope = Boolean(certificationScope);
+  const initialListStateRef = useRef(certificationScope ? DEFAULT_LIST_STATE : loadPersistedListState());
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -621,12 +643,29 @@ export default function AcquisitionListPage() {
   const lastDocumentCellRefs = useRef({});
 
   useEffect(() => {
+    const nextState = isCertificationScope ? DEFAULT_LIST_STATE : loadPersistedListState();
+    initialListStateRef.current = nextState;
+    setQueryOne(nextState.queryOne);
+    setQueryTwo(nextState.queryTwo);
+    setQueryThree(nextState.queryThree);
+    setOperatorOne(nextState.operatorOne);
+    setOperatorTwo(nextState.operatorTwo);
+    setRowLimit(nextState.rowLimit);
+    setShowConfirmedOnly(nextState.showConfirmedOnly);
+    setSortConfig(nextState.sortConfig);
+  }, [isCertificationScope, location.search]);
+
+  useEffect(() => {
     let ignore = false;
 
     setLoading(true);
     setError("");
 
-    apiRequest("/acquisition/rows", {}, token)
+    const endpoint = certificationScope
+      ? `/acquisition/rows?row_ids=${encodeURIComponent(certificationScope.rowIds.join(","))}`
+      : "/acquisition/rows";
+
+    apiRequest(endpoint, {}, token)
       .then((data) => {
         if (!ignore) {
           setRows(data.items || []);
@@ -646,9 +685,12 @@ export default function AcquisitionListPage() {
     return () => {
       ignore = true;
     };
-  }, [token]);
+  }, [certificationScope, token]);
 
   useEffect(() => {
+    if (isCertificationScope) {
+      return;
+    }
     const viewport = tableViewportRef.current;
     const pageScroller = getScrollablePageContainer(sectionRef.current);
     savePersistedListState({
@@ -664,11 +706,14 @@ export default function AcquisitionListPage() {
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, showConfirmedOnly, sortConfig]);
+  }, [isCertificationScope, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, showConfirmedOnly, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
     function handlePageScroll() {
+      if (isCertificationScope) {
+        return;
+      }
       const currentState = loadPersistedListState();
       savePersistedListState({
         ...currentState,
@@ -678,11 +723,13 @@ export default function AcquisitionListPage() {
 
     pageScroller?.addEventListener("scroll", handlePageScroll, { passive: true });
     return () => pageScroller?.removeEventListener("scroll", handlePageScroll);
-  }, []);
+  }, [isCertificationScope]);
 
   const visibleRows = useMemo(() => {
     let nextRows = rows;
-    nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale || isQualityEvaluated(row) : !row.validata_finale));
+    if (!isCertificationScope) {
+      nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale || isQualityEvaluated(row) : !row.validata_finale));
+    }
 
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
@@ -722,7 +769,7 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, showConfirmedOnly, sortConfig]);
+  }, [isCertificationScope, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, showConfirmedOnly, sortConfig]);
 
   const displayedRows = useMemo(() => {
     if (rowLimit === "all") {
@@ -852,20 +899,25 @@ export default function AcquisitionListPage() {
     }
     syncingScrollRef.current = true;
     target.scrollLeft = source.scrollLeft;
-    const currentState = loadPersistedListState();
-    const pageScroller = getScrollablePageContainer(sectionRef.current);
-    savePersistedListState({
-      ...currentState,
-      scrollLeft: source.scrollLeft,
-      scrollTop: tableViewportRef.current ? tableViewportRef.current.scrollTop : currentState.scrollTop,
-      windowScrollY: pageScroller?.scrollTop || currentState.windowScrollY || 0,
-    });
+    if (!isCertificationScope) {
+      const currentState = loadPersistedListState();
+      const pageScroller = getScrollablePageContainer(sectionRef.current);
+      savePersistedListState({
+        ...currentState,
+        scrollLeft: source.scrollLeft,
+        scrollTop: tableViewportRef.current ? tableViewportRef.current.scrollTop : currentState.scrollTop,
+        windowScrollY: pageScroller?.scrollTop || currentState.windowScrollY || 0,
+      });
+    }
     window.requestAnimationFrame(() => {
       syncingScrollRef.current = false;
     });
   }
 
   function persistCurrentListState() {
+    if (isCertificationScope) {
+      return;
+    }
     const viewport = tableViewportRef.current;
     const pageScroller = getScrollablePageContainer(sectionRef.current);
     savePersistedListState({
@@ -885,12 +937,12 @@ export default function AcquisitionListPage() {
 
   function openRow(rowId) {
     persistCurrentListState();
-    navigate(`/acquisition/${rowId}`);
+    navigate(`/acquisition/${rowId}${isCertificationScope ? location.search : ""}`);
   }
 
   function openSection(rowId, sectionKey) {
     persistCurrentListState();
-    navigate(`/acquisition/${rowId}/${sectionKey}`);
+    navigate(`/acquisition/${rowId}/${sectionKey}${isCertificationScope ? location.search : ""}`);
   }
 
   function handleRowKeyDown(event, rowId) {
@@ -971,6 +1023,22 @@ export default function AcquisitionListPage() {
           />
         </div>
 
+      {certificationScope ? (
+        <div className="flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <span className="font-semibold">
+              Righe Incoming collegate{certificationScope.ol ? ` a ${certificationScope.ol}` : ""}
+            </span>
+            <span className="ml-2 text-sky-700">
+              Vista temporanea: i filtri normali di Incoming non vengono modificati.
+            </span>
+          </div>
+          <Link className="w-fit rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100" to={certificationScope.returnTo}>
+            Torna al certificato
+          </Link>
+        </div>
+      ) : null}
+
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-search-1">
@@ -1047,17 +1115,20 @@ export default function AcquisitionListPage() {
                 : "border-border bg-white text-slate-700 hover:bg-slate-100"
             }`}
             id="incoming-quality-confirmed-toggle"
+            disabled={isCertificationScope}
             onClick={() => setShowConfirmedOnly((current) => !current)}
             type="button"
           >
-            {showConfirmedOnly ? "Confermati" : "Aperte"}
+            {isCertificationScope ? "Righe OL" : showConfirmedOnly ? "Confermati" : "Aperte"}
           </button>
         </div>
-        <div className="max-w-[360px] self-end pb-2 text-xs font-semibold text-rose-700">
-          {showConfirmedOnly
-            ? "Include anche certificati già valutati ma ancora in attesa DDT/match."
-            : "Aperte include anche certificati valutati ma non ancora chiusi per DDT/match mancanti."}
-        </div>
+        {!isCertificationScope ? (
+          <div className="max-w-[360px] self-end pb-2 text-xs font-semibold text-rose-700">
+            {showConfirmedOnly
+              ? "Include anche certificati già valutati ma ancora in attesa DDT/match."
+              : "Aperte include anche certificati valutati ma non ancora chiusi per DDT/match mancanti."}
+          </div>
+        ) : null}
         <div className="ml-auto min-w-[88px] max-w-[88px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="incoming-quality-row-limit">
             Righe

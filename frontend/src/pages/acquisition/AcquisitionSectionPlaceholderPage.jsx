@@ -16,6 +16,11 @@ const SECTION_TITLES = {
   notes: "Note",
 };
 
+function isCertificationIncomingContext(search) {
+  const params = new URLSearchParams(search || "");
+  return params.get("scope") === "certificazione" && Boolean(params.get("row_ids"));
+}
+
 export default function AcquisitionSectionPlaceholderPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
@@ -30,6 +35,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   const [sectionDirty, setSectionDirty] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("");
+  const returnToListPath = isCertificationIncomingContext(location.search) ? `/acquisition${location.search}` : "/acquisition";
 
   async function loadRow() {
     setLoading(true);
@@ -135,17 +141,17 @@ export default function AcquisitionSectionPlaceholderPage() {
 
   function handleBackToList() {
     if (["document-matching", "chemistry", "properties", "notes"].includes(sectionKey) && sectionDirty) {
-      setPendingPath("/acquisition");
+      setPendingPath(returnToListPath);
       setExitDialogOpen(true);
       return;
     }
-    navigate("/acquisition");
+    navigate(returnToListPath);
   }
 
   function handleLeaveWithoutConfirm() {
     setExitDialogOpen(false);
     setSectionDirty(false);
-    navigate(pendingPath || "/acquisition");
+    navigate(pendingPath || returnToListPath);
   }
 
   return (
@@ -178,9 +184,10 @@ export default function AcquisitionSectionPlaceholderPage() {
           onDirtyChange={setSectionDirty}
           onRowRelocated={(targetRowId) => {
             setSectionDirty(false);
-            navigate(`/acquisition/${targetRowId}/document-matching`, { replace: true });
+            navigate(`/acquisition/${targetRowId}/document-matching${isCertificationIncomingContext(location.search) ? location.search : ""}`, { replace: true });
           }}
           onRefreshRow={loadRow}
+          returnToListPath={returnToListPath}
           row={row}
           rowId={rowId}
           token={token}
@@ -191,6 +198,7 @@ export default function AcquisitionSectionPlaceholderPage() {
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
+          returnToListPath={returnToListPath}
           row={row}
           rowId={rowId}
           token={token}
@@ -201,6 +209,7 @@ export default function AcquisitionSectionPlaceholderPage() {
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
+          returnToListPath={returnToListPath}
           row={row}
           rowId={rowId}
           token={token}
@@ -211,6 +220,7 @@ export default function AcquisitionSectionPlaceholderPage() {
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
+          returnToListPath={returnToListPath}
           row={row}
           rowId={rowId}
           token={token}

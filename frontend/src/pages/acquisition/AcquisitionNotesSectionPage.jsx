@@ -278,7 +278,7 @@ function draftsEqual(left, right) {
   );
 }
 
-export default function AcquisitionNotesSectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
+export default function AcquisitionNotesSectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange, returnToListPath = "/acquisition" }) {
   const navigate = useNavigate();
   const [catalog, setCatalog] = useState([]);
   const [sessionInitialDraft, setSessionInitialDraft] = useState(() => buildInitialDraft(row));
@@ -463,7 +463,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
       return;
     }
     onDirtyChange?.(false);
-    navigate("/acquisition");
+    navigate(returnToListPath);
   }
 
   const workspaceStatusBar = (

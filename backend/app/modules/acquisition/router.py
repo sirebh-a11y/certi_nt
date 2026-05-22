@@ -471,7 +471,14 @@ def list_acquisition_rows_route(
     priorita_operativa: str | None = Query(default=None),
     fornitore_id: int | None = Query(default=None),
     has_certificate: bool | None = Query(default=None),
+    row_ids: str | None = Query(default=None),
 ) -> AcquisitionRowListResponse:
+    parsed_row_ids: list[int] | None = None
+    if row_ids:
+        try:
+            parsed_row_ids = sorted({int(item.strip()) for item in row_ids.split(",") if item.strip()})
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="row_ids non valido") from exc
     return AcquisitionRowListResponse(
         items=list_acquisition_rows(
             db,
@@ -480,6 +487,7 @@ def list_acquisition_rows_route(
             priorita_operativa=priorita_operativa,
             fornitore_id=fornitore_id,
             has_certificate=has_certificate,
+            row_ids=parsed_row_ids,
         )
     )
 

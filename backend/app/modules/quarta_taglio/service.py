@@ -2274,10 +2274,11 @@ def _quick_incoming_confirm_blockers(
 
 
 def _quick_incoming_confirm_applied(app_rows: list[AcquisitionRow]) -> bool:
-    return any(
-        event.azione == "conferma_rapida_certificazione"
+    if not app_rows:
+        return False
+    return all(
+        _has_quick_confirmation_event(row, "chimica") and _has_quick_confirmation_event(row, "proprieta")
         for row in app_rows
-        for event in (getattr(row, "history_events", None) or [])
     )
 
 

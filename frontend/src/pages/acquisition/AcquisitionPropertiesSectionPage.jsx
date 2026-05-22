@@ -571,7 +571,7 @@ function PropertiesPdfPanel({
   );
 }
 
-export default function AcquisitionPropertiesSectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
+export default function AcquisitionPropertiesSectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange, returnToListPath = "/acquisition" }) {
   const navigate = useNavigate();
   const propertyValues = useMemo(
     () =>
@@ -917,7 +917,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       return;
     }
     onDirtyChange?.(false);
-    navigate("/acquisition");
+    navigate(returnToListPath);
   }
 
   function handleToggleCapture(field) {

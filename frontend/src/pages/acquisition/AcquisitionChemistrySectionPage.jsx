@@ -649,7 +649,7 @@ function ChemistryPdfPanel({
   );
 }
 
-export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange }) {
+export default function AcquisitionChemistrySectionPage({ certificateDocument, row, rowId, token, onRefreshRow, onDirtyChange, returnToListPath = "/acquisition" }) {
   const navigate = useNavigate();
   const chemistryValues = useMemo(() => (row?.values || []).filter((value) => value.blocco === "chimica"), [row]);
   const fieldList = useMemo(() => buildFieldList(chemistryValues), [chemistryValues]);
@@ -1015,7 +1015,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       return;
     }
     onDirtyChange?.(false);
-    navigate("/acquisition");
+    navigate(returnToListPath);
   }
 
   function handleToggleCapture(field) {

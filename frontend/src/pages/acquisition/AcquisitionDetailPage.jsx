@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -90,6 +90,11 @@ const QUALITY_EVALUATION_OPTIONS = [
   { value: "respinto", label: "Respinto", state: "rosso" },
 ];
 const QUALITY_EVALUATION_LABELS = Object.fromEntries(QUALITY_EVALUATION_OPTIONS.map((option) => [option.value, option.label]));
+
+function isCertificationIncomingContext(search) {
+  const params = new URLSearchParams(search || "");
+  return params.get("scope") === "certificazione" && Boolean(params.get("row_ids"));
+}
 
 function stateClasses(state) {
   if (state === "verde") {
@@ -247,6 +252,8 @@ export default function AcquisitionDetailPage() {
   const { token, user } = useAuth();
   const { rowId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnToListPath = isCertificationIncomingContext(location.search) ? `/acquisition${location.search}` : "/acquisition";
   const [row, setRow] = useState(null);
   const [ddtDocument, setDdtDocument] = useState(null);
   const [certificateDocument, setCertificateDocument] = useState(null);
@@ -387,10 +394,10 @@ export default function AcquisitionDetailPage() {
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      navigate("/acquisition");
+      navigate(returnToListPath);
     }, 4000);
     return () => window.clearTimeout(timer);
-  }, [finalValidationDialog, navigate]);
+  }, [finalValidationDialog, navigate, returnToListPath]);
 
   async function refreshRow(includeDocuments = false) {
     const rowData = await apiRequest(`/acquisition/rows/${rowId}`, {}, token);
@@ -1016,7 +1023,7 @@ export default function AcquisitionDetailPage() {
       <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <button className="text-sm font-medium text-accent hover:underline" onClick={() => navigate("/acquisition")} type="button">
+            <button className="text-sm font-medium text-accent hover:underline" onClick={() => navigate(returnToListPath)} type="button">
               Torna alla griglia
             </button>
             <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Dettaglio acquisition</p>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
@@ -279,6 +279,7 @@ export default function QuartaTaglioDetailPage() {
   const certificateId = searchParams.get("certificateId");
   const selectedCandidateCodF3 = searchParams.get("candidateCodF3");
   const navigate = useNavigate();
+  const location = useLocation();
   const { clearAuth, token } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -764,6 +765,21 @@ export default function QuartaTaglioDetailPage() {
       ["Colata", header.colata || "-"],
     ];
   }, [data]);
+  const linkedIncomingRowIds = useMemo(
+    () => Array.from(new Set((data?.materials || []).flatMap((item) => item.matching_row_ids || []))).filter(Boolean),
+    [data],
+  );
+  const linkedIncomingPath = useMemo(() => {
+    if (!linkedIncomingRowIds.length) {
+      return "";
+    }
+    const query = new URLSearchParams();
+    query.set("scope", "certificazione");
+    query.set("ol", data?.cod_odp || codOdp || "");
+    query.set("row_ids", linkedIncomingRowIds.join(","));
+    query.set("returnTo", `${location.pathname}${location.search}${location.hash}`);
+    return `/acquisition?${query.toString()}`;
+  }, [codOdp, data?.cod_odp, linkedIncomingRowIds, location.hash, location.pathname, location.search]);
   const codF3Candidates = data?.cod_f3_candidates || [];
   const rawCodF3Candidate = codF3Candidates.find((candidate) => candidate.relation === "raw") || null;
   const selectedCodF3Candidate =
@@ -855,6 +871,18 @@ export default function QuartaTaglioDetailPage() {
           <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Certificato materiale</p>
           <div className="mt-1 flex flex-wrap items-baseline gap-x-5 gap-y-2">
             <h2 className="text-2xl font-semibold text-slate-950">OL {data.cod_odp}</h2>
+            {linkedIncomingPath ? (
+              <Link
+                className="inline-flex rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-semibold text-sky-800 hover:bg-sky-100"
+                to={linkedIncomingPath}
+              >
+                Apri righe Incoming
+              </Link>
+            ) : (
+              <span className="inline-flex cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-400">
+                Nessuna riga Incoming
+              </span>
+            )}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
               {headerSummaryRows.map(([label, value]) => (
                 <span className="inline-flex items-baseline gap-1.5" key={label}>

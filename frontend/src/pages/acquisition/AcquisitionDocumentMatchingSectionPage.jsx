@@ -964,6 +964,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
   rowId,
   token,
   onRefreshRow,
+  returnToListPath = "/acquisition",
 }) {
   const navigate = useNavigate();
   const isCertificateFirstRow = useMemo(() => Boolean(row?.document_certificato_id) && !row?.document_ddt_id, [row]);
@@ -1105,10 +1106,10 @@ export default function AcquisitionDocumentMatchingSectionPage({
     }
     const timer = window.setTimeout(() => {
       onDirtyChange?.(false);
-      navigate("/acquisition");
+      navigate(returnToListPath);
     }, 3500);
     return () => window.clearTimeout(timer);
-  }, [confirmGuidanceDialog, navigate, onDirtyChange]);
+  }, [confirmGuidanceDialog, navigate, onDirtyChange, returnToListPath]);
 
   function showPostDocumentConfirmDialog(refreshedRow, savedSide) {
     if (documentPairConfirmed(refreshedRow)) {

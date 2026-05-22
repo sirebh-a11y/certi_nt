@@ -7923,6 +7923,7 @@ def list_acquisition_rows(
     priorita_operativa: str | None = None,
     fornitore_id: int | None = None,
     has_certificate: bool | None = None,
+    row_ids: list[int] | None = None,
 ) -> list[AcquisitionRowListItemResponse]:
     query = (
         db.query(AcquisitionRow)
@@ -7947,6 +7948,10 @@ def list_acquisition_rows(
         query = query.filter(AcquisitionRow.document_certificato_id.is_not(None))
     if has_certificate is False:
         query = query.filter(AcquisitionRow.document_certificato_id.is_(None))
+    if row_ids is not None:
+        if not row_ids:
+            return []
+        query = query.filter(AcquisitionRow.id.in_(row_ids))
     rows = query.all()
     for row in rows:
         _ensure_row_supplier_link(db, row)
