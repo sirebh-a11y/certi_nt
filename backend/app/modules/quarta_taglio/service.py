@@ -692,7 +692,7 @@ def get_quarta_taglio_detail(
         word_info=_serialize_word_info(open_certificate),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
-        _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=False)
+        _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
         db.commit()
     return detail
 
@@ -975,6 +975,7 @@ def create_quarta_taglio_word_draft(
     certificate.certified_by_user_id = actor.id
     certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
     _apply_word_file_state(certificate, output_path, source="generated")
+    _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1057,6 +1058,7 @@ def upload_quarta_taglio_additional_pages(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source="generated")
+    _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1119,6 +1121,7 @@ def upload_quarta_taglio_word_file(
     _apply_word_file_state(certificate, output_path, source="user_uploaded", original_filename=original_name)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
+    _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1149,6 +1152,33 @@ def _apply_word_file_state(
 
 def _is_manual_word(certificate: QuartaTaglioFinalCertificate | None) -> bool:
     return _clean_text(getattr(certificate, "word_source", None)) in {"user_uploaded", "fields_updated"}
+
+
+def _propagate_shared_certificate_word(
+    db: Session,
+    *,
+    source_certificate: QuartaTaglioFinalCertificate,
+) -> None:
+    certificate_number = _clean_text(source_certificate.certificate_number)
+    if not certificate_number or not source_certificate.storage_key_docx:
+        return
+    siblings = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(
+            QuartaTaglioFinalCertificate.certificate_number == certificate_number,
+            QuartaTaglioFinalCertificate.id != source_certificate.id,
+            QuartaTaglioFinalCertificate.status != "pdf_final",
+        )
+        .all()
+    )
+    for sibling in siblings:
+        sibling.storage_key_docx = source_certificate.storage_key_docx
+        sibling.download_token = secrets.token_urlsafe(32)
+        sibling.word_source = source_certificate.word_source
+        sibling.word_original_filename = source_certificate.word_original_filename
+        sibling.word_content_controls = list(source_certificate.word_content_controls or [])
+        sibling.word_missing_content_controls = list(source_certificate.word_missing_content_controls or [])
+        db.add(sibling)
 
 
 def _word_content_control_values(detail: QuartaTaglioDetailResponse, certificate: QuartaTaglioFinalCertificate) -> dict[str, object]:
@@ -1698,15 +1728,19 @@ def _ensure_certificate_number_unique(db: Session, certificate: QuartaTaglioFina
     certificate_number = _clean_text(certificate.certificate_number)
     if not certificate_number:
         return
-    duplicate = (
-        db.query(QuartaTaglioFinalCertificate.id)
+    duplicates = (
+        db.query(QuartaTaglioFinalCertificate)
         .filter(
             QuartaTaglioFinalCertificate.certificate_number == certificate_number,
             QuartaTaglioFinalCertificate.id != certificate.id,
         )
-        .first()
+        .all()
     )
-    if duplicate is not None:
+    certificate_cod_odp = _norm(certificate.cod_odp)
+    certificate_cod_f3 = _norm(certificate.cod_f3)
+    for duplicate in duplicates:
+        if _norm(duplicate.cod_odp) == certificate_cod_odp and _norm(duplicate.cod_f3) == certificate_cod_f3:
+            continue
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Numero certificato duplicato: {certificate_number}",
@@ -1851,7 +1885,13 @@ def _certificate_storage_path(storage_key: str) -> Path:
 
 
 def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
-    return f"{_safe_file_part(certificate.draft_number)}_{_safe_file_part(certificate.cod_odp)}.docx"
+    parts = [
+        certificate.draft_number,
+        certificate.ddt,
+        certificate.cert_date.strftime("%Y%m%d") if certificate.cert_date else None,
+        certificate.cod_odp,
+    ]
+    return f"{'_'.join(_safe_file_part(part) for part in parts if _clean_text(part))}.docx"
 
 
 def _additional_pages_path_for_certificate(

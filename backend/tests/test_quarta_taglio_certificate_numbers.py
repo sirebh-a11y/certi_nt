@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.core.departments.models import Department  # noqa: F401
@@ -7,6 +8,7 @@ from app.modules.quarta_taglio.service import (
     _certificate_main_number,
     _certificate_suffix_for_ol_or_next,
     _certificate_suffix_parts,
+    _certificate_file_name,
     _cod_f3_certificate_suffix,
     _find_existing_certificate_for_unit,
     _format_certificate_suffix,
@@ -103,6 +105,27 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
         unit = SimpleNamespace(cod_f3="605000700", ddt="2526-10/12/2025")
 
         self.assertIs(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids={1}), certificates[1])
+
+    def test_existing_certificate_with_other_ddt_is_not_reused_for_same_cod_f3(self):
+        certificates = [
+            SimpleNamespace(id=1, status="draft", cod_f3="292000100", ddt="1133-22/04/2026"),
+        ]
+        unit = SimpleNamespace(cod_f3="292000100", ddt="1204-29/04/2026")
+
+        self.assertIsNone(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids={1}))
+
+    def test_certificate_file_name_distinguishes_same_number_by_ddt_and_date(self):
+        certificate = SimpleNamespace(
+            draft_number="7003_00_00/26",
+            ddt="1133-22/04/2026",
+            cert_date=datetime(2026, 4, 22, tzinfo=timezone.utc),
+            cod_odp="OL2026000285",
+        )
+
+        self.assertEqual(
+            _certificate_file_name(certificate),
+            "7003_00_00_26_1133-22_04_2026_20260422_OL2026000285.docx",
+        )
 
 
 if __name__ == "__main__":
