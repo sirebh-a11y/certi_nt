@@ -16,6 +16,7 @@ const emptyForm = {
   nazione: "",
   email: "",
   telefono: "",
+  reader_template_key: "",
   attivo: true,
   note: "",
 };
@@ -27,7 +28,7 @@ const emptyAliasForm = {
 };
 
 export default function SupplierDetailPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { supplierId } = useParams();
   const navigate = useNavigate();
   const [supplier, setSupplier] = useState(null);
@@ -40,6 +41,7 @@ export default function SupplierDetailPage() {
   const [savingSupplier, setSavingSupplier] = useState(false);
   const [savingAliasId, setSavingAliasId] = useState(null);
   const [creatingAlias, setCreatingAlias] = useState(false);
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     let ignore = false;
@@ -79,6 +81,7 @@ export default function SupplierDetailPage() {
       nazione: data.nazione || "",
       email: data.email || "",
       telefono: data.telefono || "",
+      reader_template_key: data.reader_template_key || "",
       attivo: data.attivo,
       note: data.note || "",
     });
@@ -189,11 +192,11 @@ export default function SupplierDetailPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Fornitore</p>
             <h2 className="mt-2 text-2xl font-semibold">{supplier.ragione_sociale}</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Il record è manuale: i PDF aiutano il mapping, ma non aggiornano automaticamente questa anagrafica.
+              Il record locale resta stabile. eSolver arricchisce i dati senza cambiare le regole di lettura PDF.
             </p>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <article className="rounded-2xl bg-slate-50 p-5">
               <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Città</p>
               <p className="mt-2 text-sm font-medium">{supplier.citta || "-"}</p>
@@ -210,70 +213,115 @@ export default function SupplierDetailPage() {
               <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Stato</p>
               <p className="mt-2 text-sm font-medium">{supplier.attivo ? "Attivo" : "Disattivo"}</p>
             </article>
+            <article className="rounded-2xl bg-sky-50 p-5">
+              <p className="text-xs uppercase tracking-[0.25em] text-sky-700">Lettura</p>
+              <p className="mt-2 text-sm font-medium">{supplier.reader_template_key ? "Speciale" : "Standard"}</p>
+            </article>
           </div>
+
+          {supplier.esolver_link ? (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 p-5">
+              <h3 className="text-sm font-semibold text-sky-950">Collegamento eSolver</h3>
+              <div className="mt-4 grid gap-3 text-sm md:grid-cols-4">
+                <p>
+                  <span className="block text-xs uppercase tracking-[0.22em] text-sky-700">Codice</span>
+                  {supplier.esolver_link.cod_clifor}
+                </p>
+                <p>
+                  <span className="block text-xs uppercase tracking-[0.22em] text-sky-700">Nome eSolver</span>
+                  {supplier.esolver_link.ragione_sociale_esolver || "-"}
+                </p>
+                <p>
+                  <span className="block text-xs uppercase tracking-[0.22em] text-sky-700">P.IVA eSolver</span>
+                  {supplier.esolver_link.partita_iva_esolver || "-"}
+                </p>
+                <p>
+                  <span className="block text-xs uppercase tracking-[0.22em] text-sky-700">Cod. alternativo</span>
+                  {supplier.esolver_link.cod_alternativo2 || "-"}
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           {statusMessage ? <p className="text-sm text-slate-600">{statusMessage}</p> : null}
 
           <form className="grid gap-4 rounded-2xl border border-border p-5 md:grid-cols-2" onSubmit={handleSupplierSave}>
             <div className="md:col-span-2">
-              <h3 className="text-lg font-semibold">Modifica fornitore</h3>
+              <h3 className="text-lg font-semibold">{isAdmin ? "Modifica fornitore" : "Dati fornitore"}</h3>
+              {!isAdmin ? <p className="mt-2 text-sm text-slate-500">Solo un utente admin può modificare i fornitori.</p> : null}
             </div>
             <div className="md:col-span-2">
               <label className="mb-2 block text-sm font-medium">Ragione sociale</label>
               <input
                 required
+                disabled={!isAdmin}
                 value={form.ragione_sociale}
                 onChange={(event) => setForm({ ...form, ragione_sociale: event.target.value })}
               />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Partita IVA</label>
-              <input value={form.partita_iva} onChange={(event) => setForm({ ...form, partita_iva: event.target.value })} />
+              <input disabled={!isAdmin} value={form.partita_iva} onChange={(event) => setForm({ ...form, partita_iva: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Codice fiscale</label>
               <input
                 value={form.codice_fiscale}
+                disabled={!isAdmin}
                 onChange={(event) => setForm({ ...form, codice_fiscale: event.target.value })}
               />
             </div>
             <div className="md:col-span-2">
               <label className="mb-2 block text-sm font-medium">Indirizzo</label>
-              <input value={form.indirizzo} onChange={(event) => setForm({ ...form, indirizzo: event.target.value })} />
+              <input disabled={!isAdmin} value={form.indirizzo} onChange={(event) => setForm({ ...form, indirizzo: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">CAP</label>
-              <input value={form.cap} onChange={(event) => setForm({ ...form, cap: event.target.value })} />
+              <input disabled={!isAdmin} value={form.cap} onChange={(event) => setForm({ ...form, cap: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Città</label>
-              <input value={form.citta} onChange={(event) => setForm({ ...form, citta: event.target.value })} />
+              <input disabled={!isAdmin} value={form.citta} onChange={(event) => setForm({ ...form, citta: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Provincia</label>
-              <input value={form.provincia} onChange={(event) => setForm({ ...form, provincia: event.target.value })} />
+              <input disabled={!isAdmin} value={form.provincia} onChange={(event) => setForm({ ...form, provincia: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Nazione</label>
-              <input value={form.nazione} onChange={(event) => setForm({ ...form, nazione: event.target.value })} />
+              <input disabled={!isAdmin} value={form.nazione} onChange={(event) => setForm({ ...form, nazione: event.target.value })} />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Email</label>
               <input
                 inputMode="email"
                 type="text"
+                disabled={!isAdmin}
                 value={form.email}
                 onChange={(event) => setForm({ ...form, email: event.target.value })}
               />
             </div>
             <div>
               <label className="mb-2 block text-sm font-medium">Telefono</label>
-              <input value={form.telefono} onChange={(event) => setForm({ ...form, telefono: event.target.value })} />
+              <input disabled={!isAdmin} value={form.telefono} onChange={(event) => setForm({ ...form, telefono: event.target.value })} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-2 block text-sm font-medium">Template lettura</label>
+              <input
+                value={form.reader_template_key}
+                disabled={!isAdmin}
+                onChange={(event) => setForm({ ...form, reader_template_key: event.target.value })}
+                placeholder="Vuoto per fornitore standard, es. metalba"
+              />
+              <p className="mt-2 text-xs text-slate-500">
+                Da compilare solo per fornitori speciali con parser dedicato. Lasciare vuoto per anagrafiche normali.
+              </p>
             </div>
             <div className="md:col-span-2">
               <label className="mb-2 block text-sm font-medium">Stato</label>
               <select
                 value={form.attivo ? "active" : "inactive"}
+                disabled={!isAdmin}
                 onChange={(event) => setForm({ ...form, attivo: event.target.value === "active" })}
               >
                 <option value="active">Attivo</option>
@@ -282,9 +330,9 @@ export default function SupplierDetailPage() {
             </div>
             <div className="md:col-span-2">
               <label className="mb-2 block text-sm font-medium">Note</label>
-              <textarea rows={5} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+              <textarea disabled={!isAdmin} rows={5} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
             </div>
-            <div className="md:col-span-2">
+            {isAdmin ? <div className="md:col-span-2">
               <button
                 className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
                 disabled={savingSupplier}
@@ -292,7 +340,7 @@ export default function SupplierDetailPage() {
               >
                 {savingSupplier ? "Salvataggio..." : "Salva modifiche"}
               </button>
-            </div>
+            </div> : null}
           </form>
 
           <div className="rounded-2xl border border-border p-5">
@@ -321,6 +369,7 @@ export default function SupplierDetailPage() {
                       <label className="mb-2 block text-sm font-medium">Nome alias</label>
                       <input
                         required
+                        disabled={!isAdmin}
                         value={draft?.nome_alias || ""}
                         onChange={(event) =>
                           setAliasDrafts({
@@ -333,6 +382,7 @@ export default function SupplierDetailPage() {
                     <div>
                       <label className="mb-2 block text-sm font-medium">Fonte</label>
                       <input
+                        disabled={!isAdmin}
                         value={draft?.fonte || ""}
                         onChange={(event) =>
                           setAliasDrafts({
@@ -346,6 +396,7 @@ export default function SupplierDetailPage() {
                       <label className="mb-2 block text-sm font-medium">Stato</label>
                       <select
                         value={draft?.attivo ? "active" : "inactive"}
+                        disabled={!isAdmin}
                         onChange={(event) =>
                           setAliasDrafts({
                             ...aliasDrafts,
@@ -357,7 +408,7 @@ export default function SupplierDetailPage() {
                         <option value="inactive">Disattivo</option>
                       </select>
                     </div>
-                    <div className="self-end">
+                    {isAdmin ? <div className="self-end">
                       <button
                         className="w-full rounded-xl border border-border px-4 py-3 text-sm font-semibold text-ink hover:bg-slate-50 disabled:opacity-60"
                         disabled={savingAliasId === alias.id}
@@ -365,7 +416,7 @@ export default function SupplierDetailPage() {
                       >
                         {savingAliasId === alias.id ? "Salvataggio..." : "Salva"}
                       </button>
-                    </div>
+                    </div> : null}
                   </form>
                 );
               })}
@@ -373,7 +424,7 @@ export default function SupplierDetailPage() {
               {!supplier.aliases.length ? <p className="text-sm text-slate-500">Nessun alias presente.</p> : null}
             </div>
 
-            <form className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 md:grid-cols-[2fr_1fr_160px_auto]" onSubmit={handleAliasCreate}>
+            {isAdmin ? <form className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 md:grid-cols-[2fr_1fr_160px_auto]" onSubmit={handleAliasCreate}>
               <div>
                 <label className="mb-2 block text-sm font-medium">Nuovo alias</label>
                 <input
@@ -405,7 +456,7 @@ export default function SupplierDetailPage() {
                   {creatingAlias ? "Creazione..." : "Aggiungi alias"}
                 </button>
               </div>
-            </form>
+            </form> : null}
           </div>
         </div>
       ) : null}

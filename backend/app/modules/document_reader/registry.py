@@ -112,6 +112,16 @@ TEMPLATE_REGISTRY: tuple[SupplierReaderTemplate, ...] = (
 )
 
 
+TEMPLATE_BY_KEY = {template.supplier_key: template for template in TEMPLATE_REGISTRY}
+
+
+def resolve_supplier_template_by_key(template_key: str | None) -> SupplierReaderTemplate | None:
+    normalized_key = (template_key or "").strip()
+    if not normalized_key:
+        return None
+    return TEMPLATE_BY_KEY.get(normalized_key)
+
+
 def resolve_supplier_template(*candidate_names: str | None) -> SupplierReaderTemplate | None:
     normalized_candidates = [normalize_supplier_name(name) for name in candidate_names if normalize_supplier_name(name)]
     for candidate in normalized_candidates:

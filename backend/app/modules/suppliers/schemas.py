@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.validation import normalize_and_validate_email
@@ -43,6 +45,26 @@ class SupplierAliasResponse(BaseModel):
     attivo: bool
 
 
+class SupplierEsolverLinkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cod_clifor: str
+    ragione_sociale_esolver: str | None
+    cod_alternativo2: str | None
+    partita_iva_esolver: str | None
+    codice_fiscale_esolver: str | None
+    indirizzo_esolver: str | None
+    cap_esolver: str | None
+    citta_esolver: str | None
+    provincia_esolver: str | None
+    nazione_esolver: str | None
+    email_esolver: str | None
+    telefono_esolver: str | None
+    stato_link: str
+    last_sync_at: datetime | None = None
+
+
 class SupplierBase(BaseModel):
     ragione_sociale: str = Field(min_length=1, max_length=255)
     partita_iva: str | None = Field(default=None, max_length=64)
@@ -54,6 +76,7 @@ class SupplierBase(BaseModel):
     nazione: str | None = Field(default=None, max_length=128)
     email: str | None = None
     telefono: str | None = Field(default=None, max_length=128)
+    reader_template_key: str | None = Field(default=None, max_length=64)
     attivo: bool = True
     note: str | None = None
 
@@ -66,6 +89,7 @@ class SupplierBase(BaseModel):
         "provincia",
         "nazione",
         "telefono",
+        "reader_template_key",
         "note",
     )
     @classmethod
@@ -85,10 +109,6 @@ class SupplierBase(BaseModel):
         return value.strip()
 
 
-class SupplierCreateRequest(SupplierBase):
-    pass
-
-
 class SupplierUpdateRequest(SupplierBase):
     pass
 
@@ -106,8 +126,12 @@ class SupplierListItemResponse(BaseModel):
     nazione: str | None
     email: str | None
     telefono: str | None
+    reader_template_key: str | None
     attivo: bool
     alias_count: int
+    esolver_cod_clifor: str | None = None
+    esolver_name: str | None = None
+    esolver_status: str | None = None
 
 
 class SupplierListResponse(BaseModel):
@@ -128,10 +152,43 @@ class SupplierResponse(BaseModel):
     nazione: str | None
     email: str | None
     telefono: str | None
+    reader_template_key: str | None
     attivo: bool
     note: str | None
     aliases: list[SupplierAliasResponse]
+    esolver_link: SupplierEsolverLinkResponse | None = None
 
 
 class SupplierActionResponse(BaseModel):
     message: str
+
+
+class EsolverSupplierResponse(BaseModel):
+    cod_clifor: str
+    ragione_sociale: str
+    partita_iva: str | None = None
+    codice_fiscale: str | None = None
+    indirizzo: str | None = None
+    cap: str | None = None
+    citta: str | None = None
+    provincia: str | None = None
+    nazione: str | None = None
+    email: str | None = None
+    telefono: str | None = None
+    cod_alternativo2: str | None = None
+    in_app: bool = False
+    app_supplier_id: int | None = None
+
+
+class EsolverSupplierListResponse(BaseModel):
+    items: list[EsolverSupplierResponse]
+
+
+class SupplierImportFromEsolverRequest(BaseModel):
+    cod_clifor: str = Field(min_length=1, max_length=64)
+
+
+class SupplierEsolverSyncResponse(BaseModel):
+    updated: int
+    unchanged: int
+    missing: list[str] = Field(default_factory=list)

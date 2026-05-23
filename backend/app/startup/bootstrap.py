@@ -49,7 +49,7 @@ from app.modules.standards.models import (  # noqa: F401
     NormativeStandardProperty,
 )
 from app.modules.standards.service import seed_normative_standards
-from app.modules.suppliers.models import Supplier, SupplierAlias  # noqa: F401
+from app.modules.suppliers.models import Supplier, SupplierAlias, SupplierEsolverLink  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
 
@@ -66,6 +66,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
         bootstrap_admin_user(db)
         seed_ai_configuration(db)
         seed_external_connections(db)
+        ensure_supplier_columns()
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
         seed_note_templates(db)
@@ -90,6 +91,22 @@ def ensure_document_upload_columns() -> None:
         statements.append("ALTER TABLE documenti_fornitore ADD COLUMN upload_batch_id VARCHAR(64)")
     if "scadenza_batch" not in columns:
         statements.append("ALTER TABLE documenti_fornitore ADD COLUMN scadenza_batch TIMESTAMP WITH TIME ZONE")
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def ensure_supplier_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("fornitori"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("fornitori")}
+    statements: list[str] = []
+    if "reader_template_key" not in columns:
+        statements.append("ALTER TABLE fornitori ADD COLUMN reader_template_key VARCHAR(64)")
 
     if statements:
         with engine.begin() as connection:

@@ -113,7 +113,7 @@ from app.modules.acquisition.rematch_bridge import (
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
-from app.modules.document_reader.registry import resolve_supplier_template
+from app.modules.document_reader.registry import resolve_supplier_template, resolve_supplier_template_by_key
 from app.modules.document_reader.matching import (
     aww_weights_are_compatible as reader_aww_weights_are_compatible,
     detect_ddt_core_matches as reader_detect_ddt_core_matches,
@@ -849,14 +849,7 @@ def capture_chemistry_table_from_page(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
 
     lines = _ocr_crop_lines(crop)
-    supplier_name = None
-    if page.document is not None:
-        supplier_name = (
-            page.document.supplier.ragione_sociale
-            if page.document.supplier is not None
-            else page.document.nome_file_originale
-        )
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
+    template = _resolve_document_supplier_template(page.document)
     supplier_key = template.supplier_key if template is not None else None
 
     if template is not None and template.supplier_key == "metalba":
@@ -1080,14 +1073,7 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to read document page image") from exc
 
     lines = _ocr_crop_lines(crop)
-    supplier_name = None
-    if page.document is not None:
-        supplier_name = (
-            page.document.supplier.ragione_sociale
-            if page.document.supplier is not None
-            else page.document.nome_file_originale
-        )
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
+    template = _resolve_document_supplier_template(page.document)
 
     if template is not None and template.supplier_key == "neuman":
         neuman_matches = _parse_neuman_properties_from_lines(lines, page.id)
@@ -1208,7 +1194,7 @@ def build_chemistry_overlay_preview(
     if not field_values:
         return ChemistryOverlayPreviewResponse(items=[])
 
-    template = resolve_supplier_template(_row_supplier_name(row))
+    template = _resolve_row_supplier_template(row)
     supplier_key = template.supplier_key if template is not None else None
     if supplier_key == "arconic_hannover":
         best_arconic_items: list[ChemistryOverlayPreviewItemResponse] = []
@@ -1377,7 +1363,7 @@ def build_properties_overlay_preview(
     if not field_values:
         return PropertiesOverlayPreviewResponse(items=[])
 
-    template = resolve_supplier_template(_row_supplier_name(row))
+    template = _resolve_row_supplier_template(row)
     supplier_key = template.supplier_key if template is not None else None
     best_match: tuple[DocumentPage, dict[str, object], list[str], int, int] | None = None
     best_score: tuple[int, int, int] = (0, 0, 0)
@@ -6270,6 +6256,14 @@ def _detect_document_supplier_id(db: Session, document: Document) -> int | None:
 
 
 def _find_supplier_from_template(db: Session, template: SupplierReaderTemplate) -> Supplier | None:
+    supplier = (
+        db.query(Supplier)
+        .filter(Supplier.reader_template_key == template.supplier_key, Supplier.attivo.is_(True))
+        .one_or_none()
+    )
+    if supplier is not None:
+        return supplier
+
     template_candidates = [template.display_name, template.supplier_key, *template.aliases]
     for candidate in template_candidates:
         supplier = _find_supplier_from_text(db, candidate)
@@ -9968,8 +9962,8 @@ def detect_chemistry(
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="chimica")
     supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
-    matches = _detect_chemistry_matches(certificate_document.pages, supplier_name=supplier_name)
+    template = _resolve_row_supplier_template(row)
+    matches = _detect_chemistry_matches(certificate_document.pages, supplier_name=supplier_name, supplier_template=template)
     if openai_api_key:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
@@ -10082,8 +10076,8 @@ def detect_properties(
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="proprieta")
     supplier_name = row.supplier.ragione_sociale if row.supplier is not None else row.fornitore_raw
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
-    matches = _detect_property_matches(certificate_document.pages, supplier_name=supplier_name)
+    template = _resolve_row_supplier_template(row)
+    matches = _detect_property_matches(certificate_document.pages, supplier_name=supplier_name, supplier_template=template)
     if openai_api_key:
         certificate_document = _ensure_document_page_images(db, certificate_document)
         if _document_has_image_pages(certificate_document):
@@ -14035,13 +14029,38 @@ def run_ai_intervention(
 
 
 def _resolve_row_supplier_key(row: AcquisitionRow) -> str | None:
-    template = resolve_supplier_template(
+    template = _resolve_row_supplier_template(row)
+    return template.supplier_key if template is not None else None
+
+
+def _resolve_row_supplier_template(row: AcquisitionRow):
+    template = resolve_supplier_template_by_key(row.supplier.reader_template_key if row.supplier is not None else None)
+    if template is not None:
+        return template
+    for document in (row.ddt_document, row.certificate_document):
+        if document is None or document.supplier is None:
+            continue
+        template = resolve_supplier_template_by_key(document.supplier.reader_template_key)
+        if template is not None:
+            return template
+    return resolve_supplier_template(
         row.supplier.ragione_sociale if row.supplier is not None else None,
         row.fornitore_raw,
         row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
         row.certificate_document.supplier.ragione_sociale if row.certificate_document and row.certificate_document.supplier else None,
     )
-    return template.supplier_key if template is not None else None
+
+
+def _resolve_document_supplier_template(document: Document | None):
+    if document is None:
+        return None
+    template = resolve_supplier_template_by_key(document.supplier.reader_template_key if document.supplier is not None else None)
+    if template is not None:
+        return template
+    return resolve_supplier_template(
+        document.supplier.ragione_sociale if document.supplier is not None else None,
+        document.nome_file_originale,
+    )
 
 
 def _process_certificate_side_blocks(
@@ -26166,9 +26185,10 @@ def _detect_chemistry_matches(
     pages: list[DocumentPage],
     *,
     supplier_name: str | None = None,
+    supplier_template=None,
 ) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
+    template = supplier_template or (resolve_supplier_template(supplier_name) if supplier_name else None)
     for page in pages:
         page_text = _best_page_text(page)
         if not page_text:
@@ -26201,9 +26221,10 @@ def _detect_property_matches(
     pages: list[DocumentPage],
     *,
     supplier_name: str | None = None,
+    supplier_template=None,
 ) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
-    template = resolve_supplier_template(supplier_name) if supplier_name else None
+    template = supplier_template or (resolve_supplier_template(supplier_name) if supplier_name else None)
     for page in pages:
         page_text = _best_page_text(page)
         if not page_text:

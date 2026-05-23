@@ -28,7 +28,6 @@ import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTa
 import QuartaTaglioDetailPage from "../pages/quartaTaglio/QuartaTaglioDetailPage";
 import QuartaTaglioPage from "../pages/quartaTaglio/QuartaTaglioPage";
 import StandardsPage from "../pages/standards/StandardsPage";
-import NewSupplierPage from "../pages/suppliers/NewSupplierPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
 import SuppliersListPage from "../pages/suppliers/SuppliersListPage";
 import NewUserPage from "../pages/users/NewUserPage";
@@ -167,7 +166,7 @@ export function AppRouter() {
           <Route path="/acquisition/:rowId/:sectionKey" element={<AcquisitionSectionPlaceholderPage />} />
           <Route path="/acquisition/:rowId" element={<AcquisitionDetailPage />} />
           <Route path="/suppliers" element={<SuppliersListPage />} />
-          <Route path="/suppliers/new" element={<NewSupplierPage />} />
+          <Route path="/suppliers/new" element={<Navigate to="/suppliers" replace />} />
           <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="/clients" element={<ClientsRoute />} />
           <Route path="/departments" element={<DepartmentsRoute />} />

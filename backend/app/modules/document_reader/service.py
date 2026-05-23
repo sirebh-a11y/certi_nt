@@ -9,7 +9,7 @@ from PIL import Image
 from app.core.config import settings
 from app.modules.acquisition.models import AcquisitionRow, Document
 from app.modules.document_reader.decision_engine import build_default_decision_rules
-from app.modules.document_reader.registry import resolve_supplier_template
+from app.modules.document_reader.registry import resolve_supplier_template, resolve_supplier_template_by_key
 from app.modules.document_reader.schemas import (
     ReaderDocumentPartResponse,
     DocumentRowSplitPlanResponse,
@@ -52,12 +52,7 @@ def _pdf_text_needs_ocr_fallback(value: str | None) -> bool:
 
 
 def build_reader_plan(row: AcquisitionRow) -> ReaderPlanResponse:
-    template = resolve_supplier_template(
-        row.supplier.ragione_sociale if row.supplier is not None else None,
-        row.fornitore_raw,
-        row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
-        row.certificate_document.supplier.ragione_sociale if row.certificate_document and row.certificate_document.supplier else None,
-    )
+    template = _resolve_row_template(row)
 
     ddt_insights = _build_document_table_insights(row.ddt_document, "ddt")
     certificate_insights = _build_document_table_insights(row.certificate_document, "certificato")
@@ -128,10 +123,12 @@ def build_document_row_split_plan(document: Document) -> DocumentRowSplitPlanRes
 
 
 def _resolve_document_template(document: Document):
-    template = resolve_supplier_template(
-        document.supplier.ragione_sociale if document.supplier is not None else None,
-        document.nome_file_originale,
-    )
+    template = resolve_supplier_template_by_key(document.supplier.reader_template_key if document.supplier is not None else None)
+    if template is None:
+        template = resolve_supplier_template(
+            document.supplier.ragione_sociale if document.supplier is not None else None,
+            document.nome_file_originale,
+        )
     if template is not None:
         return template
 
@@ -147,6 +144,24 @@ def _resolve_document_template(document: Document):
         return resolve_supplier_template("impol")
 
     return None
+
+
+def _resolve_row_template(row: AcquisitionRow):
+    template = resolve_supplier_template_by_key(row.supplier.reader_template_key if row.supplier is not None else None)
+    if template is not None:
+        return template
+    for document in (row.ddt_document, row.certificate_document):
+        if document is None or document.supplier is None:
+            continue
+        template = resolve_supplier_template_by_key(document.supplier.reader_template_key)
+        if template is not None:
+            return template
+    return resolve_supplier_template(
+        row.supplier.ragione_sociale if row.supplier is not None else None,
+        row.fornitore_raw,
+        row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
+        row.certificate_document.supplier.ragione_sociale if row.certificate_document and row.certificate_document.supplier else None,
+    )
 
 
 def _build_document_table_insights(document: Document | None, document_type: str) -> list[ReaderTableInsightResponse]:
