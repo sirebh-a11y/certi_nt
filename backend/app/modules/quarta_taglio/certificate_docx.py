@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import zipfile
 import zlib
+import re
 from pathlib import Path
 
 from docxcompose.composer import Composer
@@ -10,7 +11,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT, WD_R
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor, Twips
 
 from app.core.users.models import User
 from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse
@@ -21,8 +22,12 @@ ASSET_ROOT = APP_ROOT / "assets" / "certificates"
 LOGO_PATH = ASSET_ROOT / "forgialluminio_logo.png"
 QUALITY_MANAGER_SIGNATURE_PATH = ASSET_ROOT / "quality_manager_signature.png"
 HEADER_WIDTH = Inches(7.1)
-HEADER_LOGO_WIDTH = Inches(2.23)
+HEADER_LOGO_WIDTH = Inches(2.18)
+HEADER_LOGO_WIDTH_EMU = 1993392
+HEADER_LOGO_HEIGHT_EMU = 927741
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
+HEADER_FLOW_ROW_HEIGHT = Twips(395)
+HEADER_FLOW_LINE_SPACING = 220 / 240
 
 PROPERTY_HEADER_LABELS = {
     "HB": "HB",
@@ -168,6 +173,7 @@ def build_forgialluminio_draft_docx(
             certified_by=certified_by,
             quality_manager=quality_manager,
         )
+    normalize_certificate_docx_layout(output_path)
 
 
 def _set_document_sections_layout(document: Document) -> None:
@@ -215,7 +221,6 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_before = Pt(0)
         paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = 0.8
         paragraph.add_run().add_picture(str(LOGO_PATH), width=HEADER_LOGO_WIDTH)
     else:
         paragraph = center.paragraphs[0]
@@ -569,8 +574,93 @@ def update_docx_content_controls(source_path: Path, output_path: Path, values: d
                 content = text.encode("utf-8")
             target.writestr(item, content)
     tmp_path.replace(output_path)
+    normalize_certificate_docx_layout(output_path)
     present, missing = inspect_docx_content_controls(output_path)
     return [tag for tag in CONTENT_CONTROL_TAGS if tag in updated_tags], missing
+
+
+def normalize_certificate_docx_layout(path: Path) -> None:
+    """Apply the exact Word/PDF-safe header values selected in the audit tests."""
+    tmp_path = path.with_suffix(f"{path.suffix}.layout.tmp")
+    changed = False
+    try:
+        with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                content = source.read(item.filename)
+                if item.filename.startswith("word/header") and item.filename.endswith(".xml"):
+                    xml = content.decode("utf-8", errors="ignore")
+                    normalized = _normalize_certificate_header_xml(xml)
+                    if normalized != xml:
+                        content = normalized.encode("utf-8")
+                        changed = True
+                target.writestr(item, content)
+    except (OSError, zipfile.BadZipFile):
+        tmp_path.unlink(missing_ok=True)
+        return
+    if changed:
+        tmp_path.replace(path)
+    else:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _normalize_certificate_header_xml(xml: str) -> str:
+    if not _header_xml_looks_like_certificate(xml):
+        return xml
+    xml = _normalize_logo_xml(xml)
+    xml = _normalize_header_flow_xml(xml)
+    return xml
+
+
+def _header_xml_looks_like_certificate(xml: str) -> bool:
+    return (
+        "EN 10204 - 3.1" in xml
+        or "Certificate n" in xml
+        or 'w:val="CERT_NUMBER"' in xml
+        or 'w:val="COD_F3_RAW"' in xml
+    )
+
+
+def _normalize_logo_xml(xml: str) -> str:
+    xml = re.sub(
+        r'(<wp:extent\b[^>]*\bcx=")\d+("[^>]*\bcy=")\d+("[^>]*/?>)',
+        rf"\g<1>{HEADER_LOGO_WIDTH_EMU}\g<2>{HEADER_LOGO_HEIGHT_EMU}\g<3>",
+        xml,
+        count=1,
+    )
+    xml = re.sub(
+        r'(<a:ext\b[^>]*\bcx=")\d+("[^>]*\bcy=")\d+("[^>]*/?>)',
+        rf"\g<1>{HEADER_LOGO_WIDTH_EMU}\g<2>{HEADER_LOGO_HEIGHT_EMU}\g<3>",
+        xml,
+        count=1,
+    )
+    return re.sub(
+        r'<w:spacing\s+w:before="0"\s+w:after="0"\s+w:line="192"\s+w:lineRule="auto"\s*/>',
+        '<w:spacing w:before="0" w:after="0"/>',
+        xml,
+        count=1,
+    )
+
+
+def _normalize_header_flow_xml(xml: str) -> str:
+    if 'w:val="COD_F3_RAW"' not in xml and "Cod. F3 Raw:" not in xml:
+        return xml
+    xml = re.sub(
+        r'<w:tblCellMar><w:left w:w="\d+" w:type="dxa"\s*/><w:right w:w="\d+" w:type="dxa"\s*/><w:top w:w="\d+" w:type="dxa"\s*/><w:bottom w:w="\d+" w:type="dxa"\s*/></w:tblCellMar>',
+        '<w:tblCellMar><w:left w:w="26" w:type="dxa"/><w:right w:w="26" w:type="dxa"/><w:top w:w="7" w:type="dxa"/><w:bottom w:w="7" w:type="dxa"/></w:tblCellMar>',
+        xml,
+        count=1,
+    )
+    xml = re.sub(
+        r'<w:trHeight w:val="\d+" w:hRule="atLeast"\s*/>',
+        '<w:trHeight w:val="395" w:hRule="atLeast"/>',
+        xml,
+        count=4,
+    )
+    return re.sub(
+        r'(<w:spacing w:after="0" w:line=")\d+(" w:lineRule="auto"\s*/>)',
+        r'\g<1>220\g<2>',
+        xml,
+    )
 
 
 def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, bool]:
@@ -706,7 +796,7 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
     table = container.add_table(rows=0, cols=3, width=HEADER_WIDTH)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    _set_table_cell_margins(table, left=35, right=35, top=15, bottom=15)
+    _set_table_cell_margins(table, left=26, right=26, top=7, bottom=7)
     _set_column_widths(table, HEADER_FLOW_COLUMN_WIDTHS)
     rows = [
         (
@@ -732,7 +822,7 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
     ]
     for cells_data in rows:
         row = table.add_row()
-        row.height = Inches(0.30)
+        row.height = HEADER_FLOW_ROW_HEIGHT
         row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
         cells = row.cells
         for cell, (english_label, italian_label, value, control_tag) in zip(cells, cells_data):
@@ -746,7 +836,7 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
     paragraph = cell.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph.paragraph_format.space_after = Pt(0)
-    paragraph.paragraph_format.line_spacing = 1
+    paragraph.paragraph_format.line_spacing = HEADER_FLOW_LINE_SPACING
     if english_label:
         label_run = paragraph.add_run(english_label)
         label_run.bold = True
@@ -756,7 +846,7 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         italian = cell.add_paragraph()
         italian.alignment = WD_ALIGN_PARAGRAPH.CENTER
         italian.paragraph_format.space_after = Pt(0)
-        italian.paragraph_format.line_spacing = 1
+        italian.paragraph_format.line_spacing = HEADER_FLOW_LINE_SPACING
         run = italian.add_run(italian_label)
         run.font.name = "Arial"
         run.font.size = Pt(6.5)
@@ -765,7 +855,7 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         value_paragraph = cell.add_paragraph()
         value_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         value_paragraph.paragraph_format.space_after = Pt(0)
-        value_paragraph.paragraph_format.line_spacing = 1
+        value_paragraph.paragraph_format.line_spacing = HEADER_FLOW_LINE_SPACING
         if control_tag:
             _add_content_control_run(
                 value_paragraph,
