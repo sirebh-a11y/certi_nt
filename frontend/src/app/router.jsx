@@ -15,8 +15,8 @@ import AcquisitionManualDdtPage, { AcquisitionManualCertificatePage } from "../p
 import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionSectionPlaceholderPage";
 import AcquisitionUploadPage from "../pages/acquisition/AcquisitionUploadPage";
 import AIConfigPage from "../pages/ai/AIConfigPage";
+import ClientsPage from "../pages/clients/ClientsPage";
 import DashboardPage from "../pages/core/DashboardPage";
-import PlaceholderPage from "../pages/core/PlaceholderPage";
 import CustomerRequirementsPage from "../pages/customerRequirements/CustomerRequirementsPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
@@ -130,13 +130,7 @@ function KpiRoute() {
 }
 
 function ClientsRoute() {
-  return (
-    <PlaceholderPage
-      eyebrow="Anagrafica"
-      title="Clienti"
-      description="Area futura per gestire l'anagrafica clienti e i dati collegati ai flussi di certificazione."
-    />
-  );
+  return <ClientsPage />;
 }
 
 function CustomerRequirementsRoute() {
