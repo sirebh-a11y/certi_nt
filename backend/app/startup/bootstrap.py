@@ -57,6 +57,7 @@ from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_s
 def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
+    ensure_acquisition_upload_batch_columns()
     ensure_acquisition_processing_run_columns()
     ensure_acquisition_quality_columns()
     ensure_external_connection_columns()
@@ -135,6 +136,29 @@ def ensure_acquisition_processing_run_columns() -> None:
         statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN admin_notification_email VARCHAR(255)")
     if "expected_upload_document_count" not in columns:
         statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN expected_upload_document_count INTEGER NOT NULL DEFAULT 0")
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def ensure_acquisition_upload_batch_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("acquisition_upload_batches"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("acquisition_upload_batches")}
+    statements: list[str] = []
+
+    if "requested_count" not in columns:
+        statements.append("ALTER TABLE acquisition_upload_batches ADD COLUMN requested_count INTEGER NOT NULL DEFAULT 0")
+    if "uploaded_count" not in columns:
+        statements.append("ALTER TABLE acquisition_upload_batches ADD COLUMN uploaded_count INTEGER NOT NULL DEFAULT 0")
+    if "failed_count" not in columns:
+        statements.append("ALTER TABLE acquisition_upload_batches ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0")
+    if "failed_items_json" not in columns:
+        statements.append("ALTER TABLE acquisition_upload_batches ADD COLUMN failed_items_json TEXT")
 
     if statements:
         with engine.begin() as connection:

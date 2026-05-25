@@ -74,6 +74,10 @@ class AcquisitionUploadBatch(Base):
     actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="aperto", nullable=False, index=True)
     active_uploads: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requested_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uploaded_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_items_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

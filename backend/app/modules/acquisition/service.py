@@ -551,6 +551,58 @@ def _finish_upload_batch(db: Session, *, upload_batch_id: str, error_message: st
     db.commit()
 
 
+def _upload_batch_failed_items(batch: AcquisitionUploadBatch | None) -> list[dict[str, str]]:
+    if batch is None or not batch.failed_items_json:
+        return []
+    try:
+        payload = json.loads(batch.failed_items_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    items: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        file_name = _string_or_none(item.get("file_name"))
+        reason = _string_or_none(item.get("reason"))
+        if file_name or reason:
+            items.append(
+                {
+                    "file_name": file_name or "Documento senza nome",
+                    "reason": reason or "Errore non specificato",
+                }
+            )
+    return items
+
+
+def _record_upload_batch_result(
+    db: Session,
+    *,
+    upload_batch_id: str,
+    requested_count: int,
+    uploaded_count: int,
+    failed: list[DocumentBatchErrorResponse],
+) -> None:
+    batch = db.get(AcquisitionUploadBatch, upload_batch_id)
+    if batch is None:
+        return
+    batch.requested_count = max(0, int(batch.requested_count or 0)) + max(0, requested_count)
+    batch.uploaded_count = max(0, int(batch.uploaded_count or 0)) + max(0, uploaded_count)
+    batch.failed_count = max(0, int(batch.failed_count or 0)) + len(failed)
+    failed_items = _upload_batch_failed_items(batch)
+    for item in failed:
+        normalized = {
+            "file_name": _string_or_none(item.file_name) or "Documento senza nome",
+            "reason": _string_or_none(item.detail) or "Errore non specificato",
+        }
+        if normalized not in failed_items:
+            failed_items.append(normalized)
+    batch.failed_items_json = json.dumps(failed_items, ensure_ascii=False) if failed_items else None
+    db.add(batch)
+    db.commit()
+
+
 def get_document(db: Session, document_id: int) -> Document:
     document = (
         db.query(Document)
@@ -5952,6 +6004,13 @@ def upload_documents_batch(
                 failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc.detail)))
             except Exception as exc:  # pragma: no cover - defensive fallback
                 failed.append(DocumentBatchErrorResponse(file_name=file_name, detail=str(exc)))
+        _record_upload_batch_result(
+            db,
+            upload_batch_id=resolved_upload_batch_id,
+            requested_count=len(uploaded_files),
+            uploaded_count=len(uploaded),
+            failed=failed,
+        )
         return DocumentBatchUploadResponse(
             requested_count=len(uploaded_files),
             uploaded_count=len(uploaded),
@@ -7258,9 +7317,12 @@ def _wait_for_upload_batch_documents(
     while True:
         batch = db.get(AcquisitionUploadBatch, upload_batch_id)
         ddt_ids, certificate_ids = _documents_for_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
-        uploaded_count = len(ddt_ids) + len(certificate_ids)
+        accepted_document_count = len(ddt_ids) + len(certificate_ids)
         active_uploads = batch.active_uploads if batch is not None else 0
-        has_expected_documents = expected_upload_document_count <= 0 or uploaded_count >= expected_upload_document_count
+        stored_uploaded_count = max(0, int(batch.uploaded_count or 0)) if batch is not None else 0
+        stored_failed_count = max(0, int(batch.failed_count or 0)) if batch is not None else 0
+        resolved_upload_count = max(accepted_document_count, stored_uploaded_count) + stored_failed_count
+        has_expected_documents = expected_upload_document_count <= 0 or resolved_upload_count >= expected_upload_document_count
         if active_uploads <= 0 and has_expected_documents and (ddt_ids or certificate_ids):
             if batch is not None:
                 batch.status = "in_elaborazione"
@@ -7268,7 +7330,27 @@ def _wait_for_upload_batch_documents(
                 db.add(batch)
                 db.commit()
             return ddt_ids, certificate_ids
+        if active_uploads <= 0 and has_expected_documents and expected_upload_document_count > 0:
+            if batch is not None:
+                batch.status = "errore"
+                batch.message = "Nessun documento valido nel batch: tutti i file sono stati rifiutati"
+                db.add(batch)
+                db.commit()
+            raise RuntimeError("Nessun documento valido nel batch: tutti i file sono stati rifiutati o duplicati")
         if time.monotonic() >= deadline:
+            if expected_upload_document_count > 0 and resolved_upload_count < expected_upload_document_count:
+                if batch is not None:
+                    batch.status = "errore"
+                    batch.message = (
+                        "Caricamento incompleto: "
+                        f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
+                    )
+                    db.add(batch)
+                    db.commit()
+                raise RuntimeError(
+                    "Caricamento incompleto: "
+                    f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
+                )
             if ddt_ids or certificate_ids:
                 return ddt_ids, certificate_ids
             return fallback_ddt_document_ids, fallback_certificate_document_ids
@@ -7280,7 +7362,9 @@ def _wait_for_upload_batch_documents(
                 fase_corrente="attesa_upload",
                 messaggio_corrente=(
                     "Caricamento ancora in corso: "
-                    f"{uploaded_count}/{expected_upload_document_count} documenti ricevuti"
+                    f"{max(accepted_document_count, stored_uploaded_count)} accettati, "
+                    f"{stored_failed_count} rifiutati, "
+                    f"{resolved_upload_count}/{expected_upload_document_count} risolti"
                     if expected_upload_document_count
                     else "Caricamento ancora in corso: l'Assistente AI partira appena il batch e pronto"
                 ),
@@ -7488,6 +7572,13 @@ def run_autonomous_processing(
                 fallback_ddt_document_ids=_normalize_document_id_list(ddt_document_ids),
                 fallback_certificate_document_ids=_normalize_document_id_list(certificate_document_ids),
             )
+            batch = db.get(AcquisitionUploadBatch, resolved_upload_batch_id)
+            for item in _upload_batch_failed_items(batch):
+                _add_failed_notification_item(
+                    failed_notification_items,
+                    file_name=item["file_name"],
+                    reason=item["reason"],
+                )
             run = _save_run(
                 db,
                 run,
@@ -7881,6 +7972,15 @@ def run_autonomous_processing(
         if run is not None:
             failed_ddt_ids = _run_document_ids_from_storage(run.ddt_document_ids) or failed_ddt_ids
             failed_certificate_ids = _run_document_ids_from_storage(run.certificate_document_ids) or failed_certificate_ids
+            failed_batch_id_for_items = _normalize_upload_batch_id(run.upload_batch_id) or _normalize_upload_batch_id(upload_batch_id)
+            if failed_batch_id_for_items is not None:
+                batch = db.get(AcquisitionUploadBatch, failed_batch_id_for_items)
+                for item in _upload_batch_failed_items(batch):
+                    _add_failed_notification_item(
+                        failed_notification_items,
+                        file_name=item["file_name"],
+                        reason=item["reason"],
+                    )
         _set_documents_processing_state(
             db,
             [*failed_ddt_ids, *failed_certificate_ids],

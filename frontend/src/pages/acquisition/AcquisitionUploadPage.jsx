@@ -251,16 +251,10 @@ export default function AcquisitionUploadPage() {
   }
 
   async function startAutomationRun() {
-    if (processingDdt || processingCertificates) {
-      setPendingAiStart(true);
-      setError("");
-      setNotice("Caricamento ancora in corso. L'Assistente AI partira appena tutti i file saranno caricati. Puoi continuare a usare l'app.");
-      return;
-    }
     let nextDdtDocuments = sessionDdtDocuments;
     let nextCertificateDocuments = sessionCertificateDocuments;
     let runBatchId = uploadBatchId || "";
-    const hasPendingFiles = ddtFiles.length > 0 || certificateFiles.length > 0;
+    const hasPendingFiles = ddtFiles.length > 0 || certificateFiles.length > 0 || processingDdt || processingCertificates;
 
     if (hasPendingFiles) {
       runBatchId = runBatchId || createUploadBatchId();
@@ -305,7 +299,7 @@ export default function AcquisitionUploadPage() {
       }
     }
 
-    if (ddtFiles.length) {
+    if (ddtFiles.length && !processingDdt) {
       setStartingAiRun(true);
       setNotice(hasPendingFiles ? "Carico i DDT selezionati. Assistente AI gia prenotato." : "Carico i DDT selezionati, poi avvio l'Assistente AI.");
       const uploadResult = await uploadSelectedFiles("ddt", runBatchId || null);
@@ -316,9 +310,11 @@ export default function AcquisitionUploadPage() {
       runBatchId = uploadResult.batchId || runBatchId;
       nextDdtDocuments = mergeUploadedDocuments(nextDdtDocuments, uploadResult.detectedDdt);
       nextCertificateDocuments = mergeUploadedDocuments(nextCertificateDocuments, uploadResult.detectedCertificates);
+    } else if (processingDdt) {
+      setNotice("Assistente AI prenotato. Aspetto che i DDT gia in caricamento arrivino al server.");
     }
 
-    if (certificateFiles.length) {
+    if (certificateFiles.length && !processingCertificates) {
       setStartingAiRun(true);
       setNotice(hasPendingFiles ? "Carico i certificati selezionati. Assistente AI gia prenotato." : "Carico i certificati selezionati, poi avvio l'Assistente AI.");
       const uploadResult = await uploadSelectedFiles("certificato", runBatchId || null);
@@ -329,6 +325,8 @@ export default function AcquisitionUploadPage() {
       runBatchId = uploadResult.batchId || runBatchId;
       nextDdtDocuments = mergeUploadedDocuments(nextDdtDocuments, uploadResult.detectedDdt);
       nextCertificateDocuments = mergeUploadedDocuments(nextCertificateDocuments, uploadResult.detectedCertificates);
+    } else if (processingCertificates) {
+      setNotice("Assistente AI prenotato. Aspetto che i certificati gia in caricamento arrivino al server.");
     }
 
     if (hasPendingFiles) {
