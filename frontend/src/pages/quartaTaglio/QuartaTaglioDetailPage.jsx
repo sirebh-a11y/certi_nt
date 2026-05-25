@@ -974,6 +974,94 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
+      <div className="grid gap-4">
+        <Panel className="mx-auto w-full xl:w-1/2 border-2 border-slate-950" title="Selezione Standard" titleClassName="text-xl font-semibold text-slate-900">
+          <div className="mb-3 text-sm text-slate-700">
+            {standardDefinitionRows.map(([label, value], index) => (
+              <span key={label}>
+                {index > 0 ? " · " : ""}
+                <span>{label}:</span> <span className="font-semibold text-slate-900">{value}</span>
+              </span>
+            ))}
+          </div>
+          {data.selected_standard ? (
+            <div
+              className={`rounded-lg border px-3 py-2 text-sm ${
+                data.selected_standard_confirmed
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}
+            >
+              <div className="font-semibold">{data.selected_standard.label}</div>
+              <div className="mt-1 text-xs">
+                {data.selected_standard_confirmed ? "Standard confermato per questo OL." : "Scelta proposta: confermare prima della generazione."}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Standard non scelto automaticamente: serve conferma utente.
+            </div>
+          )}
+          {standardError ? <div className="mt-2 text-sm text-rose-600">{standardError}</div> : null}
+          {data.quick_incoming_confirm_warning ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              {data.quick_incoming_confirm_warning}
+            </div>
+          ) : null}
+          <div className="mt-3 space-y-2">
+            {(data.standard_candidates || []).map((candidate) => (
+              <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm" key={candidate.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-slate-900">{candidate.label}</span>
+                  <span className="text-xs font-semibold uppercase text-slate-500">{candidate.confidence}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ") || candidate.code}</div>
+                <button
+                  className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={savingStandardId !== null || (data.selected_standard_confirmed && data.selected_standard?.id === candidate.id)}
+                  onClick={() => confirmStandard(candidate.id)}
+                  type="button"
+                >
+                  {data.selected_standard_confirmed && data.selected_standard?.id === candidate.id
+                    ? "Confermato"
+                    : savingStandardId === candidate.id
+                      ? "Salvataggio..."
+                      : "Conferma standard"}
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="manual-standard">
+              Conferma manuale
+            </label>
+            <div className="mt-2 flex flex-col gap-2 md:flex-row">
+              <select
+                className="min-w-0 flex-1 rounded-lg border border-border bg-white px-3 py-2 text-sm text-slate-700"
+                id="manual-standard"
+                onChange={(event) => setManualStandardId(event.target.value)}
+                value={manualStandardId}
+              >
+                <option value="">Scegli standard</option>
+                {standards.map((standard) => (
+                  <option key={standard.id} value={standard.id}>
+                    {standardLabel(standard)}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!manualStandardId || savingStandardId !== null}
+                onClick={() => confirmStandard(Number(manualStandardId))}
+                type="button"
+              >
+                {savingStandardId === Number(manualStandardId) ? "Salvataggio..." : "Conferma"}
+              </button>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
       <div className="rounded-xl border-2 border-slate-950 bg-white p-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
@@ -1237,14 +1325,17 @@ export default function QuartaTaglioDetailPage() {
       ) : null}
 
       {!data.ready ? (
-        <Panel title="Dati ancora mancanti">
+        <Panel title="Blocchi / dati mancanti">
           <Table
-            columns={["CDQ", "Colata", "Stato", "Cosa manca"]}
+            columns={["Ambito", "Riferimento", "Stato", "Cosa manca"]}
             rows={(data.missing_items || []).map((item) => {
               const resolvePath = resolveIncomingPathForMissingItem(item);
+              const isEsolverBlock = String(item.cdq || "").toLowerCase().includes("esolver");
+              const ambito = isEsolverBlock ? "eSolver/DDT" : "Incoming/CDQ";
+              const riferimento = isEsolverBlock ? data.cod_odp || codOdp || "-" : [item.cdq, item.colata ? `colata ${item.colata}` : ""].filter(Boolean).join(" - ");
               return [
-                item.cdq,
-                item.colata || "-",
+                <span className="font-semibold text-slate-800" key="scope">{ambito}</span>,
+                riferimento || "-",
                 <StatusPill key="status" status={item.status_color} />,
                 <div className="space-y-2" key="details">
                   <div className="font-medium">{item.message}</div>
@@ -1268,94 +1359,6 @@ export default function QuartaTaglioDetailPage() {
           />
         </Panel>
       ) : null}
-
-      <div className="grid gap-4">
-        <Panel className="mx-auto w-full xl:w-1/2 border-2 border-slate-950" title="Selezione Standard" titleClassName="text-xl font-semibold text-slate-900">
-          <div className="mb-3 text-sm text-slate-700">
-            {standardDefinitionRows.map(([label, value], index) => (
-              <span key={label}>
-                {index > 0 ? " · " : ""}
-                <span>{label}:</span> <span className="font-semibold text-slate-900">{value}</span>
-              </span>
-            ))}
-          </div>
-          {data.selected_standard ? (
-            <div
-              className={`rounded-lg border px-3 py-2 text-sm ${
-                data.selected_standard_confirmed
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : "border-amber-200 bg-amber-50 text-amber-800"
-              }`}
-            >
-              <div className="font-semibold">{data.selected_standard.label}</div>
-              <div className="mt-1 text-xs">
-                {data.selected_standard_confirmed ? "Standard confermato per questo OL." : "Scelta proposta: confermare prima della generazione."}
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Standard non scelto automaticamente: serve conferma utente.
-            </div>
-          )}
-          {standardError ? <div className="mt-2 text-sm text-rose-600">{standardError}</div> : null}
-          {data.quick_incoming_confirm_warning ? (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
-              {data.quick_incoming_confirm_warning}
-            </div>
-          ) : null}
-          <div className="mt-3 space-y-2">
-            {(data.standard_candidates || []).map((candidate) => (
-              <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm" key={candidate.id}>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-semibold text-slate-900">{candidate.label}</span>
-                  <span className="text-xs font-semibold uppercase text-slate-500">{candidate.confidence}</span>
-                </div>
-                <div className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ") || candidate.code}</div>
-                <button
-                  className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={savingStandardId !== null || (data.selected_standard_confirmed && data.selected_standard?.id === candidate.id)}
-                  onClick={() => confirmStandard(candidate.id)}
-                  type="button"
-                >
-                  {data.selected_standard_confirmed && data.selected_standard?.id === candidate.id
-                    ? "Confermato"
-                    : savingStandardId === candidate.id
-                      ? "Salvataggio..."
-                      : "Conferma standard"}
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-            <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="manual-standard">
-              Conferma manuale
-            </label>
-            <div className="mt-2 flex flex-col gap-2 md:flex-row">
-              <select
-                className="min-w-0 flex-1 rounded-lg border border-border bg-white px-3 py-2 text-sm text-slate-700"
-                id="manual-standard"
-                onChange={(event) => setManualStandardId(event.target.value)}
-                value={manualStandardId}
-              >
-                <option value="">Scegli standard</option>
-                {standards.map((standard) => (
-                  <option key={standard.id} value={standard.id}>
-                    {standardLabel(standard)}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!manualStandardId || savingStandardId !== null}
-                onClick={() => confirmStandard(Number(manualStandardId))}
-                type="button"
-              >
-                {savingStandardId === Number(manualStandardId) ? "Salvataggio..." : "Conferma"}
-              </button>
-            </div>
-          </div>
-        </Panel>
-      </div>
 
       <section className="rounded-2xl border-2 border-slate-950 bg-white p-4 shadow-sm">
         <h2 className="text-xl font-semibold text-slate-900">Certificato Materiale</h2>
