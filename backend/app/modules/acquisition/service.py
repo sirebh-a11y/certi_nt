@@ -866,6 +866,53 @@ def _serialize_chemistry_capture_values(matches: dict[str, dict[str, str | int]]
     return serialized
 
 
+def _row_chemistry_values(row: AcquisitionRow | None) -> dict[str, str]:
+    if row is None:
+        return {}
+    values: dict[str, str] = {}
+    for value in row.values or []:
+        if value.blocco != "chimica":
+            continue
+        raw_value = _string_or_none(value.valore_finale) or _string_or_none(value.valore_standardizzato)
+        normalized = _normalize_chemistry_capture_value(raw_value)
+        if normalized is None:
+            continue
+        values[value.campo] = normalized
+    return values
+
+
+def _chemistry_capture_values_conflict(candidate: str | None, existing: str | None) -> bool:
+    candidate_numeric = _safe_chemistry_float(candidate)
+    existing_numeric = _safe_chemistry_float(existing)
+    if candidate_numeric is None or existing_numeric is None:
+        return False
+    tolerance = max(0.002, abs(existing_numeric) * 0.03)
+    return abs(candidate_numeric - existing_numeric) > tolerance
+
+
+def _prefer_existing_chemistry_values_when_capture_is_weaker(
+    *,
+    captured_values: dict[str, str],
+    row: AcquisitionRow | None,
+) -> dict[str, str]:
+    existing_values = _row_chemistry_values(row)
+    if not existing_values:
+        return captured_values
+    if not captured_values:
+        return existing_values
+
+    shared_fields = set(captured_values) & set(existing_values)
+    conflicts = [
+        field_name
+        for field_name in shared_fields
+        if _chemistry_capture_values_conflict(captured_values.get(field_name), existing_values.get(field_name))
+    ]
+    capture_is_poorer = len(captured_values) < max(4, len(existing_values) - 1)
+    if conflicts or capture_is_poorer:
+        return existing_values
+    return captured_values
+
+
 def _serialize_properties_capture_values(matches: dict[str, dict[str, str | int]]) -> dict[str, str]:
     serialized: dict[str, str] = {}
     for field_name in PROPERTY_CAPTURE_FIELD_ORDER:
@@ -922,6 +969,65 @@ def capture_chemistry_table_from_page(
                     raw_lines_for_response = page_lines
         if metalba_matches:
             values = _serialize_chemistry_capture_values(metalba_matches)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=values,
+                items=_build_chemistry_overlay_preview_items_for_page(
+                    page=page,
+                    field_values=values,
+                    supplier_key=supplier_key,
+                    row=row,
+                ),
+            )
+
+    if template is not None and template.supplier_key == "grupa_kety":
+        grupa_matches = _parse_grupa_kety_chemistry_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if len(grupa_matches) < 5:
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_grupa_kety_chemistry_from_lines(page_lines, page.id)
+                if len(page_matches) > len(grupa_matches):
+                    grupa_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if grupa_matches:
+            values = _serialize_chemistry_capture_values(grupa_matches)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
+            return ChemistryTableCaptureResponse(
+                page_id=page.id,
+                page_number=page.numero_pagina,
+                orientation="horizontal",
+                bbox=f"{left},{top},{right},{bottom}",
+                raw_lines=raw_lines_for_response,
+                values=values,
+                items=_build_chemistry_overlay_preview_items_for_page(
+                    page=page,
+                    field_values=values,
+                    supplier_key=supplier_key,
+                    row=row,
+                ),
+            )
+
+    if template is not None and template.supplier_key == "aluminium_bozen":
+        bozen_matches = _parse_aluminium_bozen_chemistry_from_lines(lines, page.id)
+        raw_lines_for_response = lines
+        if len(bozen_matches) < 5:
+            page_text = _best_page_text(page)
+            if page_text:
+                page_lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+                page_matches = _parse_aluminium_bozen_chemistry_from_lines(page_lines, page.id)
+                if len(page_matches) > len(bozen_matches):
+                    bozen_matches = page_matches
+                    raw_lines_for_response = page_lines
+        if bozen_matches:
+            values = _serialize_chemistry_capture_values(bozen_matches)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
@@ -950,6 +1056,7 @@ def capture_chemistry_table_from_page(
                     raw_lines_for_response = page_lines
         if neuman_matches:
             values = _serialize_chemistry_capture_values(neuman_matches)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
@@ -978,6 +1085,7 @@ def capture_chemistry_table_from_page(
                     raw_lines_for_response = page_lines
         if aww_matches:
             values = _serialize_chemistry_capture_values(aww_matches)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
@@ -1000,6 +1108,8 @@ def capture_chemistry_table_from_page(
         )
         if arconic_matches:
             values = _serialize_chemistry_capture_values(arconic_matches)
+            parsed_values = dict(values)
+            values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
             return ChemistryTableCaptureResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
@@ -1007,7 +1117,14 @@ def capture_chemistry_table_from_page(
                 bbox=f"{left},{top},{right},{bottom}",
                 raw_lines=arconic_raw_lines or lines,
                 values=values,
-                items=arconic_items,
+                items=arconic_items
+                if values == parsed_values
+                else _build_chemistry_overlay_preview_items_for_page(
+                    page=page,
+                    field_values=values,
+                    supplier_key=supplier_key,
+                    row=row,
+                ),
             )
 
     horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
@@ -1040,6 +1157,8 @@ def capture_chemistry_table_from_page(
     )
 
     values = _serialize_chemistry_capture_values(chosen)
+    if values:
+        values = _prefer_existing_chemistry_values_when_capture_is_weaker(captured_values=values, row=row)
 
     return ChemistryTableCaptureResponse(
         page_id=page.id,
@@ -26316,6 +26435,10 @@ def _detect_chemistry_matches(
             page_matches = _parse_metalba_chemistry_from_lines(lines, page.id)
             if not page_matches:
                 page_matches = _parse_chemistry_from_lines(lines, page.id)
+        elif template is not None and template.supplier_key == "grupa_kety":
+            page_matches = _parse_grupa_kety_chemistry_from_lines(lines, page.id)
+            if not page_matches:
+                page_matches = _parse_chemistry_from_lines(lines, page.id)
         elif template is not None and template.supplier_key == "neuman":
             page_matches = _parse_neuman_chemistry_from_lines(lines, page.id)
             if not page_matches:
@@ -26652,6 +26775,7 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
         max_numeric = _safe_chemistry_float(max_value)
         ceiling = chemistry_field_ceiling.get(field_name, 2.0)
         raw_has_separator = any(separator in cleaned for separator in (",", "."))
+        suspicious_leading_zero_decimal = re.fullmatch(r"0{2,}[.,]\d+", cleaned) is not None
 
         best_candidate = direct
         best_score = -10_000.0
@@ -26697,6 +26821,10 @@ def _parse_aww_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str,
                 score += 4
             if raw_has_separator and normalized_candidate == direct:
                 score += 3
+            if suspicious_leading_zero_decimal and normalized_candidate == direct:
+                score -= 20
+            if re.fullmatch(r"0{2,},\d+", normalized_candidate):
+                score -= 100
 
             if score > best_score:
                 best_score = score
@@ -27213,31 +27341,31 @@ def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[
     window = normalized_lines[anchor_index + 1 : min(anchor_index + 36, len(normalized_lines))]
     fixed_slots: list[str | None] = ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr"]
     header_slots = _find_chemistry_header_slots_in_lines(window, min_real_fields=6)
+    real_header_slots = [slot for slot in header_slots if slot is not None]
+    if header_slots and "Si" not in real_header_slots and all(field_name in real_header_slots for field_name in ("Fe", "Cu", "Mn", "Mg")):
+        header_slots = ["Si", *header_slots]
     chemistry_slots = header_slots or fixed_slots
     for line in window:
         lowered = line.lower()
-        if any(marker in lowered for marker in ("min ", "max ", "each", "total", "remain")):
-            pass
-        if lowered.startswith("max") or lowered.startswith("min"):
+        if re.search(r"\b(?:min|max)\b", lowered):
             continue
-        if not re.match(r"^[A-Z0-9./ -]{2,}\s+[A-Z]?\d{4,}[A-Z]?", line, re.IGNORECASE):
-            continue
-
         number_tokens = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
-        if header_slots:
-            decimal_tokens = re.findall(r"(?:<=|<|≤)?\d+[.,]\d+", line)
-            if len(decimal_tokens) < len(chemistry_slots):
-                continue
-            value_tokens = decimal_tokens[-len(chemistry_slots) :]
-        else:
-            if len(number_tokens) < len(chemistry_slots) + 2:
-                continue
-            value_tokens = number_tokens[2 : 2 + len(chemistry_slots)]
-        if len(value_tokens) < len(chemistry_slots):
+        metalba_slots = chemistry_slots
+        alloy_token = _string_or_none(line.split(maxsplit=1)[0] if line.split() else None)
+        if alloy_token and alloy_token.startswith("6082"):
+            metalba_slots = fixed_slots
+        elif alloy_token and alloy_token.startswith("7003"):
+            metalba_slots = ["Si", "Fe", "Cu", "Mn", "Mg", "Zn", "Ti", "Cr", "Zr"]
+        if len(number_tokens) < len(metalba_slots):
+            continue
+        row_has_alloy_and_cast = re.match(r"^[A-Z0-9./ -]{2,}\s+[A-Z]?\d{4,}[A-Z]?", line, re.IGNORECASE) is not None
+        value_start = 2 if row_has_alloy_and_cast and len(number_tokens) >= len(metalba_slots) + 2 else 0
+        value_tokens = number_tokens[value_start : value_start + len(metalba_slots)]
+        if len(value_tokens) < len(metalba_slots):
             continue
 
         matches: dict[str, dict[str, str | int]] = {}
-        for field_name, raw_value in zip(chemistry_slots, value_tokens):
+        for field_name, raw_value in zip(metalba_slots, value_tokens):
             if field_name is None:
                 continue
             standardized = _normalize_numeric_value(raw_value) or raw_value
@@ -27255,6 +27383,169 @@ def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[
             return matches
 
     return {}
+
+
+def _parse_grupa_kety_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    normalized_lines = [_normalize_mojibake_numeric_text(line).strip() for line in lines if line.strip()]
+    if not normalized_lines:
+        return {}
+
+    anchor_index = None
+    for index, line in enumerate(normalized_lines):
+        lowered = line.lower()
+        if "chemical composition" in lowered or "sklad chemiczny" in lowered or "skład chemiczny" in lowered:
+            anchor_index = index
+            break
+    if anchor_index is None:
+        vertical_elements = [
+            element
+            for line in normalized_lines
+            if (element := _extract_vertical_chemistry_element(line)) is not None
+        ]
+        header_slots = _find_chemistry_header_slots_in_lines(normalized_lines, min_real_fields=6)
+        if len(vertical_elements) < 6 and len([slot for slot in header_slots if slot is not None]) < 6:
+            return {}
+        anchor_index = -1
+
+    window = normalized_lines[anchor_index + 1 : min(anchor_index + 70, len(normalized_lines))]
+    stop_index = len(window)
+    for index, line in enumerate(window):
+        lowered = line.lower()
+        if "mechanical" in lowered or "wlasnosci" in lowered or "właściwości" in lowered:
+            stop_index = index
+            break
+    window = window[:stop_index]
+    if not window:
+        return {}
+
+    elements: list[str] = []
+    for line in window:
+        lowered = line.lower()
+        if re.search(r"\ben\s*aw\b", lowered, flags=re.IGNORECASE):
+            break
+        if "-" in line or re.search(r"\d", line):
+            continue
+        element = _extract_vertical_chemistry_element(line)
+        if element is not None and element not in elements:
+            elements.append(element)
+
+    if len(elements) < 6:
+        header_slots = _find_chemistry_header_slots_in_lines(window, min_real_fields=6)
+        elements = [slot for slot in header_slots if slot is not None]
+
+    if len(elements) < 6:
+        elements = ["Si", "Fe", "Cu", "Mn", "Mg", "Cr", "Zn", "Ti", "Zr"]
+
+    def _normalize_grupa_value(raw_value: str, field_name: str) -> str:
+        cleaned = _string_or_none(raw_value) or raw_value
+        if any(separator in cleaned for separator in (",", ".")):
+            return _normalize_numeric_value(cleaned) or cleaned
+        digits = "".join(char for char in cleaned if char.isdigit())
+        if len(digits) >= 3:
+            if digits.startswith("0"):
+                return f"0,{digits[1:]}"
+            return f"{digits[:-2]},{digits[-2:]}"
+        return _normalize_numeric_value(cleaned) or cleaned
+
+    alloy_index = None
+    for index, line in enumerate(window):
+        lowered = line.lower()
+        if re.search(r"\ben\s*aw\b", lowered, flags=re.IGNORECASE) or re.fullmatch(r"\d{4,}[A-Z]?", line.strip(), flags=re.IGNORECASE):
+            alloy_index = index
+            break
+
+    measured_values: list[str] = []
+    snippet_parts: list[str] = []
+    if alloy_index is not None:
+        snippet_parts.append(window[alloy_index])
+        inline_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", window[alloy_index])
+        if len(inline_values) >= len(elements) + 2:
+            measured_values = inline_values[2 : 2 + len(elements)]
+        else:
+            for line in window[alloy_index + 1 :]:
+                lowered = line.lower()
+                if "mechanical" in lowered or "wlasnosci" in lowered or "właściwości" in lowered:
+                    break
+                if "-" in line:
+                    continue
+                if re.fullmatch(r"[A-Z]?\d{3,}[A-Z0-9./-]*", line.strip(), flags=re.IGNORECASE):
+                    snippet_parts.append(line)
+                    continue
+                token = _string_or_none(line)
+                if token is None:
+                    continue
+                if not re.fullmatch(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", token):
+                    continue
+                measured_values.append(token)
+                snippet_parts.append(token)
+                if len(measured_values) >= len(elements):
+                    break
+
+    if len(measured_values) < min(6, len(elements)):
+        best_numeric_block: tuple[int, list[str], list[str]] | None = None
+        for start_index in range(len(window)):
+            block_values: list[str] = []
+            block_lines: list[str] = []
+            for line in window[start_index:]:
+                lowered = line.lower()
+                if "mechanical" in lowered or "wlasnosci" in lowered or "właściwości" in lowered:
+                    break
+                if "min" in lowered or "max" in lowered or "-" in line:
+                    if block_values:
+                        break
+                    continue
+                token = _string_or_none(line)
+                if token is None:
+                    if block_values:
+                        break
+                    continue
+                if not re.fullmatch(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", token):
+                    if block_values:
+                        break
+                    continue
+                block_values.append(token)
+                block_lines.append(line)
+                if len(block_values) >= len(elements):
+                    break
+            if len(block_values) >= min(6, len(elements)):
+                best_numeric_block = (start_index, block_values[: len(elements)], block_lines[: len(elements)])
+                break
+        if best_numeric_block is not None:
+            _, measured_values, snippet_parts = best_numeric_block
+
+    if len(measured_values) < min(6, len(elements)):
+        for line in choose_measured_lines(window):
+            lowered = line.lower()
+            if "min" in lowered or "max" in lowered or "-" in line:
+                continue
+            raw_values = re.findall(r"(?:<=|<|≤)?\d+(?:[.,]\d+)?", line)
+            if len(raw_values) >= len(elements) + 2 and re.search(r"\ben\s*aw|enaw", lowered, flags=re.IGNORECASE):
+                raw_values = raw_values[2:]
+            if len(raw_values) >= len(elements):
+                measured_values = raw_values[: len(elements)]
+                snippet_parts = [line]
+                break
+
+    if len(measured_values) < min(6, len(elements)):
+        return {}
+
+    matches: dict[str, dict[str, str | int]] = {}
+    snippet = " | ".join(snippet_parts[: max(3, len(elements) + 2)])
+    for field_name, raw_value in zip(elements, measured_values):
+        if field_name not in CHEMISTRY_FIELD_SET:
+            continue
+        standardized = _normalize_grupa_value(raw_value, field_name)
+        matches.setdefault(
+            field_name,
+            {
+                "page_id": page_id,
+                "snippet": snippet,
+                "raw": raw_value,
+                "standardized": standardized,
+                "final": standardized,
+            },
+        )
+    return matches
 
 
 def _extract_aluminium_bozen_mechanical_crop_lines(page: DocumentPage) -> list[str]:
