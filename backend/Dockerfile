@@ -7,6 +7,10 @@ ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        fontconfig \
+        fonts-dejavu \
+        fonts-liberation \
+        libreoffice-writer \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-ita \
