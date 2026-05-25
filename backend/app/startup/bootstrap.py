@@ -365,6 +365,69 @@ def ensure_quarta_taglio_columns() -> None:
             with engine.begin() as connection:
                 for statement in certificate_statements:
                     connection.execute(text(statement))
+        ensure_quarta_taglio_certificate_unit_key_uniqueness()
+
+
+def ensure_quarta_taglio_certificate_unit_key_uniqueness() -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                WITH ranked AS (
+                    SELECT
+                        certificate.id,
+                        row_number() OVER (
+                            PARTITION BY certificate.unit_key
+                            ORDER BY
+                                CASE WHEN certificate.status = 'pdf_final' THEN 0 ELSE 1 END,
+                                CASE WHEN certificate.storage_key_pdf IS NOT NULL THEN 0 ELSE 1 END,
+                                CASE WHEN certificate.word_source IN ('uploaded', 'manual') THEN 0 ELSE 1 END,
+                                CASE WHEN certificate.created_by_user_id IS NOT NULL THEN 0 ELSE 1 END,
+                                CASE WHEN certificate.storage_key_docx IS NOT NULL THEN 0 ELSE 1 END,
+                                certificate.updated_at DESC NULLS LAST,
+                                certificate.id ASC
+                        ) AS rn
+                    FROM quarta_taglio_final_certificates AS certificate
+                    WHERE certificate.unit_key IS NOT NULL AND btrim(certificate.unit_key) <> ''
+                )
+                DELETE FROM quarta_taglio_final_certificates AS certificate
+                USING ranked
+                WHERE certificate.id = ranked.id
+                    AND ranked.rn > 1
+                    AND certificate.status <> 'pdf_final'
+                    AND certificate.storage_key_pdf IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM quarta_taglio_certificate_pdf_versions AS pdf_version
+                        WHERE pdf_version.certificate_id = certificate.id
+                    )
+                """
+            )
+        )
+        duplicate_groups = connection.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM (
+                    SELECT unit_key
+                    FROM quarta_taglio_final_certificates
+                    WHERE unit_key IS NOT NULL AND btrim(unit_key) <> ''
+                    GROUP BY unit_key
+                    HAVING count(*) > 1
+                ) AS duplicates
+                """
+            )
+        ).scalar_one()
+        if duplicate_groups == 0:
+            connection.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_quarta_taglio_final_certificates_unit_key_not_null
+                    ON quarta_taglio_final_certificates (unit_key)
+                    WHERE unit_key IS NOT NULL AND btrim(unit_key) <> ''
+                    """
+                )
+            )
 
 
 def bootstrap_admin_user(db: Session) -> None:

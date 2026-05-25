@@ -13,6 +13,7 @@ from xml.sax.saxutils import escape
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -521,12 +522,13 @@ def get_quarta_taglio_detail(
         properties=properties,
         selected_standard_confirmed=selected_standard_confirmed,
     )
+    quick_confirm_rows = _quick_incoming_confirm_eligible_rows(app_rows)
     quick_confirm_blockers = _quick_incoming_confirm_blockers(
-        app_rows=app_rows,
+        app_rows=quick_confirm_rows,
         selected_standard_confirmed=selected_standard_confirmed,
         conformity_status=conformity_status,
     )
-    quick_confirm_applied = _quick_incoming_confirm_applied(app_rows)
+    quick_confirm_applied = _quick_incoming_confirm_applied(quick_confirm_rows)
     quick_confirm_warning = (
         "Standard modificato: controlla in Incoming chimica e proprietà dei CDQ collegati."
         if quick_confirm_applied and selected_standard_confirmed and conformity_status != "conforme"
@@ -569,10 +571,13 @@ def get_quarta_taglio_detail(
     certifiable_units = _build_certifiable_units(cod_odp=group.cod_odp, esolver_rows=esolver_rows, quarta_rows=rows)
     selected_certificate = _get_certificate_context(db, cod_odp=group.cod_odp, certificate_id=certificate_id)
     primary_unit = _select_unit_for_certificate(certifiable_units, selected_certificate) or _primary_certifiable_unit(certifiable_units)
+    raw_candidate = next((candidate for candidate in cod_f3_candidates if candidate.relation == "raw"), None)
     selected_candidate = _candidate_by_cod_f3(
         cod_f3_candidates,
         selected_certificate.cod_f3 if selected_certificate else candidate_cod_f3,
     )
+    if selected_certificate is None and not candidate_cod_f3 and raw_candidate is not None:
+        selected_candidate = raw_candidate
     if selected_candidate is not None and (
         primary_unit is None or _norm(primary_unit.cod_f3) != _norm(selected_candidate.cod_f3)
     ):
@@ -763,20 +768,22 @@ def apply_quick_incoming_confirmation(
 
     _refresh_quarta_rows_from_incoming(db, rows=rows)
     app_rows = _load_matching_app_rows(db, rows)
-    if _ensure_derived_incoming_values(db, app_rows=app_rows, actor_id=actor_id):
+    eligible_rows = _quick_incoming_confirm_eligible_rows(app_rows)
+    if _ensure_derived_incoming_values(db, app_rows=eligible_rows, actor_id=actor_id):
         _refresh_quarta_rows_from_incoming(db, rows=rows)
         db.commit()
         app_rows = _load_matching_app_rows(db, rows)
+        eligible_rows = _quick_incoming_confirm_eligible_rows(app_rows)
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     blockers = _quick_incoming_confirm_blockers(
-        app_rows=app_rows,
+        app_rows=eligible_rows,
         selected_standard_confirmed=detail.selected_standard_confirmed,
         conformity_status=detail.conformity_status,
     )
     if blockers:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(blockers))
 
-    for row in app_rows:
+    for row in eligible_rows:
         for block in ("chimica", "proprieta"):
             block_values = [
                 value
@@ -1533,6 +1540,7 @@ def _sync_certifiable_unit_register(
     actor: User | None,
     create_missing: bool,
 ) -> list[QuartaTaglioFinalCertificate]:
+    _lock_certificate_register_for_ol(db, cod_odp=detail.cod_odp)
     units = [unit for unit in detail.certifiable_units if unit.status == "ready"]
     if not units:
         return []
@@ -1608,6 +1616,13 @@ def _sync_certifiable_unit_register(
         synced.append(certificate)
     db.flush()
     return synced
+
+
+def _lock_certificate_register_for_ol(db: Session, *, cod_odp: str) -> None:
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    key = f"quarta_taglio_final_certificates:{_clean_text(cod_odp) or ''}"
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"), {"lock_key": key})
 
 
 def _find_existing_certificate_for_unit(
@@ -2665,10 +2680,14 @@ def _quick_incoming_confirm_blockers(
     if not selected_standard_confirmed:
         blockers.append("Standard non confermato")
     if not app_rows:
-        blockers.append("Nessuna riga Incoming collegata")
+        blockers.append("Nessuna riga Incoming con certificato collegato")
     if conformity_status != "conforme":
         blockers.append("Conformità standard non OK")
     return blockers
+
+
+def _quick_incoming_confirm_eligible_rows(app_rows: list[AcquisitionRow]) -> list[AcquisitionRow]:
+    return [row for row in app_rows if row.document_certificato_id is not None]
 
 
 def _quick_incoming_confirm_applied(app_rows: list[AcquisitionRow]) -> bool:

@@ -432,6 +432,8 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
 
 def _quick_confirmed_blocks_from_row(row: AcquisitionRow) -> dict[str, bool]:
     result = {"chimica": False, "proprieta": False}
+    if row.document_certificato_id is None:
+        return result
     for event in getattr(row, "history_events", None) or []:
         if event.azione != "conferma_rapida_certificazione":
             continue
@@ -17704,7 +17706,11 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
     for value in row.values:
         values_by_block.setdefault(value.blocco, []).append(value)
     supplier_key = _resolve_row_supplier_key(row)
-    quick_confirmed_blocks = _quick_confirmed_blocks_from_events(getattr(row, "history_events", None) or [])
+    quick_confirmed_blocks = (
+        _quick_confirmed_blocks_from_events(getattr(row, "history_events", None) or [])
+        if row.document_certificato_id is not None
+        else set()
+    )
 
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
@@ -17743,7 +17749,11 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
     for value in values:
         values_by_block.setdefault(value.blocco, []).append(value)
     supplier_key = _resolve_row_supplier_key(row)
-    quick_confirmed_blocks = _quick_confirmed_blocks_from_db(db, row.id)
+    quick_confirmed_blocks = (
+        _quick_confirmed_blocks_from_db(db, row.id)
+        if row.document_certificato_id is not None
+        else set()
+    )
 
     match = (
         db.query(CertificateMatch)
