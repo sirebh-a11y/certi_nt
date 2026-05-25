@@ -639,12 +639,6 @@ export default function QuartaTaglioCertificatesRegisterPage() {
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-        Placeholder sviluppo: chiusura PDF finale, impaginazione Word ricaricato, archivio PDF ed esportazione eSolver sono descritti in
-        {" "}
-        <span className="font-semibold text-slate-700">docs/modules/quarta_taglio_final_certificate_flow_placeholder.md</span>.
-      </div>
-
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento registro certificati...</p> : null}
       {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
 

@@ -790,9 +790,6 @@ export default function QuartaTaglioPage() {
                 <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="qta_totale" label="Qta" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="lotti_count" label="Lotti" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="codice_registro" label="Registro" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="data_registro" label="Data registro" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_status" label="eSolver" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_ddt" label="DDT" onSort={toggleSort} sortConfig={sortConfig} />
@@ -870,14 +867,6 @@ export default function QuartaTaglioPage() {
                     ) : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
-                  <td className="px-3 py-2.5 text-slate-700">
-                    <div className="font-medium">{item.lotti_count}</div>
-                    <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500" title={(item.cod_lotti || []).join(", ")}>
-                      {(item.cod_lotti || []).join(", ") || "-"}
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-700">{item.codice_registro}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatDateTime(item.data_registro)}</td>
                   <td className="min-w-[160px] px-3 py-2.5">
                     <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.esolver_status || "not_checked")}`}>
                       {STATUS_LABELS[item.esolver_status] || item.esolver_status || "Non controllato"}

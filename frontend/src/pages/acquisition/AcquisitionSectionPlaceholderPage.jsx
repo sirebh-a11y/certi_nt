@@ -35,7 +35,9 @@ export default function AcquisitionSectionPlaceholderPage() {
   const [sectionDirty, setSectionDirty] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("");
-  const returnToListPath = isCertificationIncomingContext(location.search) ? `/acquisition${location.search}` : "/acquisition";
+  const isCertificationScope = isCertificationIncomingContext(location.search);
+  const returnToListPath = isCertificationScope ? `/acquisition${location.search}` : "/acquisition";
+  const backToListLabel = isCertificationScope ? "Torna alle righe Incoming OL" : "Torna alla griglia";
 
   async function loadRow() {
     setLoading(true);
@@ -156,6 +158,11 @@ export default function AcquisitionSectionPlaceholderPage() {
 
   return (
     <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button className="text-sm font-medium text-accent hover:underline" onClick={handleBackToList} type="button">
+          {backToListLabel}
+        </button>
+      </div>
       {loading ? <p className="text-sm text-slate-500">Caricamento riga...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
       {row ? (

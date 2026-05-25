@@ -253,7 +253,9 @@ export default function AcquisitionDetailPage() {
   const { rowId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const returnToListPath = isCertificationIncomingContext(location.search) ? `/acquisition${location.search}` : "/acquisition";
+  const isCertificationScope = isCertificationIncomingContext(location.search);
+  const returnToListPath = isCertificationScope ? `/acquisition${location.search}` : "/acquisition";
+  const backToListLabel = isCertificationScope ? "Torna alle righe Incoming OL" : "Torna alla griglia";
   const [row, setRow] = useState(null);
   const [ddtDocument, setDdtDocument] = useState(null);
   const [certificateDocument, setCertificateDocument] = useState(null);
@@ -1024,7 +1026,7 @@ export default function AcquisitionDetailPage() {
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <button className="text-sm font-medium text-accent hover:underline" onClick={() => navigate(returnToListPath)} type="button">
-              Torna alla griglia
+              {backToListLabel}
             </button>
             <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Dettaglio acquisition</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">Riga #{rowId}</h2>
