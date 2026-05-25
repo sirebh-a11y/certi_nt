@@ -974,9 +974,10 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
-      <div className="flex flex-col gap-2 rounded-xl border border-border bg-white p-4 md:flex-row md:items-center md:justify-between">
+      <div className="rounded-xl border-2 border-slate-950 bg-white p-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
+          <h3 className="text-xl font-semibold text-slate-900">Certificati Word per Lavorazione</h3>
           <p className="mt-1 text-sm font-semibold text-slate-900">Certificato attivo: {activeWordLabel}</p>
           <p className="mt-1 text-sm text-slate-600">
             {isPdfFinal
@@ -1155,6 +1156,63 @@ export default function QuartaTaglioDetailPage() {
             {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci le pagine in Word e ricarica il file.</p> : null}
           </div>
         </div>
+        </div>
+        {codF3CandidateSummary.count ? (
+          <div className="mt-4 border-t border-slate-200 pt-4">
+            <h3 className="text-xl font-semibold text-slate-900">Seleziona Lavorazioni - finitura: CODF3</h3>
+            {codF3CandidateSummary.status === "review" && hiddenCodF3CandidateCount > 0 ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {codF3CandidateSummary.message || "CodF3 candidati da verificare."}
+                <span className="ml-2 font-semibold">{codF3CandidateSummary.label}</span>
+              </div>
+            ) : null}
+            {visibleCodF3Candidates.length ? (
+              <div className="mt-3 grid gap-2 xl:grid-cols-2">
+                {visibleCodF3Candidates.map((candidate) => {
+                  const canOpenCandidate = candidate.confidence !== "review";
+                  const isActiveCandidate =
+                    (certificateId && String(candidate.certificate_id || "") === String(certificateId)) ||
+                    (!certificateId && activeCodF3Candidate && codF3ExactKey(activeCodF3Candidate.cod_f3) === codF3ExactKey(candidate.cod_f3));
+                  const candidateActionLabel = candidate.certificate_id ? "Apri" : isActiveCandidate ? "Selezionato" : "Seleziona";
+                  return (
+                    <div
+                      className={`rounded-xl border px-3 py-3 ${
+                        isActiveCandidate ? "border-sky-300 bg-sky-50/70" : "border-slate-200 bg-white"
+                      }`}
+                      key={candidate.cod_f3}
+                    >
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-slate-950">{candidate.cod_f3}</span>
+                            <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateStatusClass(candidate)}`}>
+                              {codF3CandidateLabel(candidate)}
+                            </span>
+                          </div>
+                          <p className="mt-1 break-words text-sm text-slate-700">{candidate.des_f3 || "-"}</p>
+                          {candidate.message ? <p className="mt-1 text-xs text-slate-500">{candidate.message}</p> : null}
+                          {candidate.reasons?.length ? (
+                            <p className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ")}</p>
+                          ) : null}
+                        </div>
+                        <button
+                          className="w-fit shrink-0 rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!canOpenCandidate}
+                          onClick={() => openCodF3Candidate(candidate)}
+                          type="button"
+                        >
+                          {candidateActionLabel}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">Nessun CodF3 preparabile automaticamente. Attendere DDT o verifica manuale.</p>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {hasConformityIssues ? (
@@ -1211,84 +1269,8 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
-      {codF3CandidateSummary.count ? (
-        <Panel title="CodF3 da eSolver">
-          {codF3CandidateSummary.status === "review" && hiddenCodF3CandidateCount > 0 ? (
-            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              {codF3CandidateSummary.message || "CodF3 candidati da verificare."}
-              <span className="ml-2 font-semibold">{codF3CandidateSummary.label}</span>
-            </div>
-          ) : null}
-          {visibleCodF3Candidates.length ? (
-            <div className="grid gap-2 xl:grid-cols-2">
-              {visibleCodF3Candidates.map((candidate) => {
-                const canOpenCandidate = candidate.confidence !== "review";
-                const isActiveCandidate =
-                  (certificateId && String(candidate.certificate_id || "") === String(certificateId)) ||
-                  (!certificateId && activeCodF3Candidate && codF3ExactKey(activeCodF3Candidate.cod_f3) === codF3ExactKey(candidate.cod_f3));
-                const candidateActionLabel = candidate.certificate_id ? "Apri" : isActiveCandidate ? "Selezionato" : "Seleziona";
-                return (
-                  <div
-                    className={`rounded-xl border px-3 py-3 ${
-                      isActiveCandidate ? "border-sky-300 bg-sky-50/70" : "border-slate-200 bg-white"
-                    }`}
-                    key={candidate.cod_f3}
-                  >
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-slate-950">{candidate.cod_f3}</span>
-                          <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${codF3CandidateStatusClass(candidate)}`}>
-                            {codF3CandidateLabel(candidate)}
-                          </span>
-                        </div>
-                        <p className="mt-1 break-words text-sm text-slate-700">{candidate.des_f3 || "-"}</p>
-                        {candidate.message ? <p className="mt-1 text-xs text-slate-500">{candidate.message}</p> : null}
-                        {candidate.reasons?.length ? (
-                          <p className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ")}</p>
-                        ) : null}
-                      </div>
-                      <button
-                        className="w-fit shrink-0 rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={!canOpenCandidate}
-                        onClick={() => openCodF3Candidate(candidate)}
-                        type="button"
-                      >
-                        {candidateActionLabel}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">Nessun CodF3 preparabile automaticamente. Attendere DDT o verifica manuale.</p>
-          )}
-        </Panel>
-      ) : null}
-
-      <div className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
-        <Panel className="h-full" title="Header Word">
-          <div className="rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
-            <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
-              {headerFlowColumns.map((column) => (
-                <div className="min-w-0" key={column.title}>
-                  <div className="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{column.title}</div>
-                  <div className="divide-y divide-slate-100">
-                    {column.rows.map(([label, value]) => (
-                      <div className="px-3 py-2" key={label}>
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
-                        <div className="mt-1 min-h-[18px] break-words font-medium text-sky-700">{value || ""}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Panel>
-
-        <Panel className="h-full" title="Standard">
+      <div className="grid gap-4">
+        <Panel className="mx-auto w-full xl:w-1/2 border-2 border-slate-950" title="Selezione Standard" titleClassName="text-xl font-semibold text-slate-900">
           <div className="mb-3 text-sm text-slate-700">
             {standardDefinitionRows.map(([label, value], index) => (
               <span key={label}>
@@ -1375,23 +1357,48 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Chimica">
-          <ValueTable numberDigits={3} values={data.chemistry || []} />
-        </Panel>
-
-        <div className="space-y-4">
-        <Panel title="Proprietà">
-            <ValueTable numberDigits={2} values={data.properties || []} />
-        </Panel>
-          <Panel title="Note">
-            <Table
-              columns={["Nota", "Valore", "Stato", "Messaggio"]}
-              rows={(data.notes || []).map((item) => [item.label, item.value || "-", <StatusPill key="status" status={item.status} />, item.message])}
-            />
+      <section className="rounded-2xl border-2 border-slate-950 bg-white p-4 shadow-sm">
+        <h2 className="text-xl font-semibold text-slate-900">Certificato Materiale</h2>
+        <div className="mt-4 space-y-4">
+          <Panel title="Header Certificato" titleClassName="text-xl font-semibold text-slate-900">
+            <div className="rounded-lg border border-slate-200 bg-white text-sm text-slate-800">
+              <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
+                {headerFlowColumns.map((column) => (
+                  <div className="min-w-0" key={column.title}>
+                    <div className="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{column.title}</div>
+                    <div className="divide-y divide-slate-100">
+                      {column.rows.map(([label, value]) => (
+                        <div className="px-3 py-2" key={label}>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
+                          <div className="mt-1 min-h-[18px] break-words font-medium text-sky-700">{value || ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </Panel>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Panel title="Chimica">
+              <ValueTable numberDigits={3} values={data.chemistry || []} />
+            </Panel>
+
+            <div className="space-y-4">
+              <Panel title="Proprietà">
+                <ValueTable numberDigits={2} values={data.properties || []} />
+              </Panel>
+              <Panel title="Note">
+                <Table
+                  columns={["Nota", "Valore", "Stato", "Messaggio"]}
+                  rows={(data.notes || []).map((item) => [item.label, item.value || "-", <StatusPill key="status" status={item.status} />, item.message])}
+                />
+              </Panel>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       {wordConformityDialogOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
@@ -1520,10 +1527,10 @@ function ConfirmActionDialog({ confirmLabel, message, onCancel, onConfirm, title
   );
 }
 
-function Panel({ title, children, className = "" }) {
+function Panel({ title, children, className = "", titleClassName = "text-sm font-semibold uppercase tracking-[0.16em] text-slate-500" }) {
   return (
     <div className={`rounded-xl border border-border bg-white p-4 ${className}`}>
-      <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</h3>
+      <h3 className={titleClassName}>{title}</h3>
       <div className="mt-3">{children}</div>
     </div>
   );
