@@ -36,7 +36,7 @@ class NormativeStandard(Base):
         "NormativeStandardChemistry",
         back_populates="standard",
         cascade="all, delete-orphan",
-        order_by="NormativeStandardChemistry.elemento",
+        order_by="NormativeStandardChemistry.id",
     )
     property_limits: Mapped[list["NormativeStandardProperty"]] = relationship(
         "NormativeStandardProperty",
