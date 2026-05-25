@@ -125,6 +125,7 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     has_word: bool = False
     has_pdf: bool = False
     word_download_url: str | None = None
+    pdf_download_url: str | None = None
     conformity_status: str = "da_verificare"
     conformity_issues: list["QuartaTaglioConformityIssueResponse"] = Field(default_factory=list)
     created_at: datetime
@@ -307,3 +308,7 @@ class QuartaTaglioWordDraftRequest(BaseModel):
     force_regenerate: bool = False
     certificate_id: int | None = None
     candidate_cod_f3: str | None = None
+
+
+class QuartaTaglioPdfReopenRequest(BaseModel):
+    reason: str

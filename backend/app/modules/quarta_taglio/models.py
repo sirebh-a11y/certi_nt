@@ -147,6 +147,23 @@ class QuartaTaglioFinalCertificate(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class QuartaTaglioCertificatePdfVersion(Base):
+    __tablename__ = "quarta_taglio_certificate_pdf_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    certificate_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_final_certificates.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    storage_key_pdf: Mapped[str] = mapped_column(String(512), nullable=False)
+    generated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    annulled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    annulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    annulment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    certificate = relationship("QuartaTaglioFinalCertificate")
+
+
 class QuartaTaglioCertificateExtraPages(Base):
     __tablename__ = "quarta_taglio_certificate_extra_pages"
 

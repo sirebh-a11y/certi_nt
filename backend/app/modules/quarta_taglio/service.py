@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
 from app.core.integrations.models import ExternalConnection
+from app.core.pdf.converter import PDFConversionError, convert_docx_to_pdf
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
@@ -31,6 +32,7 @@ from app.modules.quarta_taglio.certificate_docx import (
 from app.modules.quarta_taglio.models import (
     QuartaTaglioArticleOverride,
     QuartaTaglioCertificateExtraPages,
+    QuartaTaglioCertificatePdfVersion,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
     QuartaTaglioIncomingRowOverride,
@@ -1825,6 +1827,122 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
     return path, _certificate_file_name(certificate)
 
 
+def generate_quarta_taglio_certificate_pdf(
+    db: Session,
+    *,
+    certificate_id: int,
+    actor: User,
+) -> QuartaTaglioFinalCertificateRegisterItem:
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
+    if certificate.status == "pdf_final" and certificate.storage_key_pdf:
+        return _serialize_final_certificate_register_item(certificate)
+    if not certificate.storage_key_docx:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word non presente")
+    if not _clean_text(certificate.ddt):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT mancante: il PDF finale richiede DDT collegato")
+    if not certificate.cert_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data certificato mancante")
+    if _certificate_conformity_status(certificate) != "conforme":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Conformità standard non confermata")
+
+    word_path = _certificate_storage_path(certificate.storage_key_docx)
+    if not word_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
+    _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
+    db.refresh(certificate)
+    if not _clean_text(certificate.ddt):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT mancante dopo aggiornamento Word")
+    if not certificate.cert_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data certificato mancante dopo aggiornamento Word")
+    if _certificate_conformity_status(certificate) != "conforme":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Conformità standard non confermata dopo aggiornamento Word")
+
+    storage_key = _certificate_pdf_storage_key(certificate)
+    pdf_path = _certificate_storage_path(storage_key)
+    try:
+        convert_docx_to_pdf(word_path, pdf_path)
+    except PDFConversionError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Generazione PDF fallita: {exc}") from exc
+
+    now = datetime.now(timezone.utc)
+    version = _next_pdf_version(db, certificate_id=certificate.id)
+    db.add(
+        QuartaTaglioCertificatePdfVersion(
+            certificate_id=certificate.id,
+            version=version,
+            status="active",
+            storage_key_pdf=storage_key,
+            generated_by_user_id=actor.id,
+            generated_at=now,
+        )
+    )
+    certificate.storage_key_pdf = storage_key
+    certificate.status = "pdf_final"
+    certificate.closed_at = now
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+    return _serialize_final_certificate_register_item(certificate)
+
+
+def reopen_quarta_taglio_certificate_pdf(
+    db: Session,
+    *,
+    certificate_id: int,
+    reason: str,
+    actor: User,
+) -> QuartaTaglioFinalCertificateRegisterItem:
+    if actor.role not in {ROLE_MANAGER, ROLE_ADMIN}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo manager o admin possono riaprire un certificato PDF")
+    clean_reason = _clean_text(reason)
+    if not clean_reason:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Motivo riapertura obbligatorio")
+
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
+    if certificate.status != "pdf_final" or not certificate.storage_key_pdf:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il certificato non è chiuso PDF")
+
+    now = datetime.now(timezone.utc)
+    active_versions = (
+        db.query(QuartaTaglioCertificatePdfVersion)
+        .filter(
+            QuartaTaglioCertificatePdfVersion.certificate_id == certificate.id,
+            QuartaTaglioCertificatePdfVersion.status == "active",
+        )
+        .all()
+    )
+    for version in active_versions:
+        version.status = "reopened"
+        version.annulled_by_user_id = actor.id
+        version.annulled_at = now
+        version.annulment_reason = clean_reason
+        db.add(version)
+
+    certificate.status = "draft"
+    certificate.closed_at = None
+    certificate.storage_key_pdf = None
+    db.add(certificate)
+    db.commit()
+    db.refresh(certificate)
+    return _serialize_final_certificate_register_item(certificate)
+
+
+def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, download_token: str | None) -> tuple[Path, str]:
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None or not certificate.storage_key_pdf:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF certificato non trovato")
+    if not certificate.download_token or not download_token or not secrets.compare_digest(certificate.download_token, download_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Download non autorizzato")
+    path = _certificate_storage_path(certificate.storage_key_pdf)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File PDF non trovato")
+    return path, _certificate_pdf_file_name(certificate)
+
+
 def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> None:
     if certificate.status == "pdf_final":
         return
@@ -1864,6 +1982,12 @@ def _certificate_docx_storage_key(cod_odp: str) -> str:
     return f"certificati_finali/{now:%Y/%m}/{filename}"
 
 
+def _certificate_pdf_storage_key(certificate: QuartaTaglioFinalCertificate) -> str:
+    now = datetime.now(timezone.utc)
+    filename = f"{uuid4().hex}_{_safe_file_part(certificate.draft_number or certificate.certificate_number or certificate.cod_odp)}.pdf"
+    return f"certificati_finali/{now:%Y/%m}/pdf/{filename}"
+
+
 def _certificate_uploaded_docx_storage_key(cod_odp: str, *, original_name: str) -> str:
     now = datetime.now(timezone.utc)
     filename = f"{uuid4().hex}_{_safe_file_part(cod_odp)}_{_safe_file_part(original_name)}"
@@ -1892,6 +2016,26 @@ def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
         certificate.cod_odp,
     ]
     return f"{'_'.join(_safe_file_part(part) for part in parts if _clean_text(part))}.docx"
+
+
+def _certificate_pdf_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
+    parts = [
+        certificate.draft_number,
+        certificate.ddt,
+        certificate.cert_date.strftime("%Y%m%d") if certificate.cert_date else None,
+        certificate.cod_odp,
+    ]
+    return f"{'_'.join(_safe_file_part(part) for part in parts if _clean_text(part))}.pdf"
+
+
+def _next_pdf_version(db: Session, *, certificate_id: int) -> int:
+    latest = (
+        db.query(QuartaTaglioCertificatePdfVersion.version)
+        .filter(QuartaTaglioCertificatePdfVersion.certificate_id == certificate_id)
+        .order_by(QuartaTaglioCertificatePdfVersion.version.desc())
+        .first()
+    )
+    return int(latest[0]) + 1 if latest else 1
 
 
 def _additional_pages_path_for_certificate(
@@ -3684,6 +3828,9 @@ def _serialize_final_certificate_register_item(
     word_download_url = None
     if certificate.storage_key_docx and certificate.download_token:
         word_download_url = f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}"
+    pdf_download_url = None
+    if certificate.storage_key_pdf and certificate.download_token:
+        pdf_download_url = f"/api/quarta-taglio/certificates/{certificate.id}/pdf-file?download_token={certificate.download_token}"
     return QuartaTaglioFinalCertificateRegisterItem(
         id=certificate.id,
         cod_odp=certificate.cod_odp,
@@ -3703,6 +3850,7 @@ def _serialize_final_certificate_register_item(
         has_word=bool(certificate.storage_key_docx),
         has_pdf=bool(certificate.storage_key_pdf),
         word_download_url=word_download_url,
+        pdf_download_url=pdf_download_url,
         conformity_status=conformity_status,
         conformity_issues=conformity_issues,
         created_at=certificate.created_at,

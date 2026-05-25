@@ -36,6 +36,7 @@ from app.modules.notes.service import seed_note_templates
 from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioArticleOverride,
     QuartaTaglioCertificateExtraPages,
+    QuartaTaglioCertificatePdfVersion,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
     QuartaTaglioIncomingRowOverride,
@@ -318,6 +319,22 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_content_controls JSON DEFAULT '[]' NOT NULL")
         if "word_missing_content_controls" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_missing_content_controls JSON DEFAULT '[]' NOT NULL")
+        if "storage_key_pdf" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN storage_key_pdf VARCHAR(512)")
+        if "certified_by_user_id" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN certified_by_user_id INTEGER")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_certified_by_user_id "
+                "ON quarta_taglio_final_certificates (certified_by_user_id)"
+            )
+        if "quality_manager_user_id" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN quality_manager_user_id INTEGER")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_quality_manager_user_id "
+                "ON quarta_taglio_final_certificates (quality_manager_user_id)"
+            )
+        if "closed_at" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN closed_at TIMESTAMP WITH TIME ZONE")
         if certificate_statements:
             with engine.begin() as connection:
                 for statement in certificate_statements:

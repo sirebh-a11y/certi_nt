@@ -220,6 +220,9 @@ function registerStatusLabel(item) {
   if (item.status === "pdf_final") {
     return STATUS_LABELS.pdf_final;
   }
+  if (item.ddt && item.has_word && !item.has_pdf) {
+    return "PDF da generare";
+  }
   if (!item.ddt) {
     return "In attesa DDT";
   }
@@ -229,6 +232,9 @@ function registerStatusLabel(item) {
 function statusClass(item) {
   if (item.status === "pdf_final") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (item.ddt && item.has_word && !item.has_pdf) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
   }
   if (!item.ddt) {
     return "border-sky-200 bg-sky-50 text-sky-800";
@@ -260,7 +266,7 @@ function conformityTitle(item) {
 }
 
 export default function QuartaTaglioCertificatesRegisterPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const initialListStateRef = useRef(loadPersistedListState());
   const [items, setItems] = useState([]);
   const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
@@ -272,6 +278,11 @@ export default function QuartaTaglioCertificatesRegisterPage() {
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const [pdfDialogItem, setPdfDialogItem] = useState(null);
+  const [reopenDialogItem, setReopenDialogItem] = useState(null);
+  const [reopenReason, setReopenReason] = useState("");
+  const [actionState, setActionState] = useState({ status: "idle", message: "" });
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 0, viewportWidth: 0 });
   const sectionRef = useRef(null);
   const topScrollRef = useRef(null);
@@ -476,6 +487,55 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     });
   }
 
+  function updateRegisterItem(updatedItem) {
+    setItems((currentItems) => currentItems.map((item) => (item.id === updatedItem.id ? updatedItem : item)));
+  }
+
+  async function handleGeneratePdf(item) {
+    setActionState({ status: "saving", message: "" });
+    setActionMessage("");
+    try {
+      const updatedItem = await apiRequest(`/quarta-taglio/certificates/${item.id}/pdf`, { method: "POST" }, token);
+      updateRegisterItem(updatedItem);
+      setPdfDialogItem(null);
+      setActionMessage(`PDF generato per il certificato ${updatedItem.certificate_number}.`);
+    } catch (requestError) {
+      setActionState({ status: "error", message: requestError.message });
+      return;
+    }
+    setActionState({ status: "idle", message: "" });
+  }
+
+  async function handleReopenPdf(item) {
+    const reason = reopenReason.trim();
+    if (!reason) {
+      setActionState({ status: "error", message: "Inserisci il motivo della riapertura." });
+      return;
+    }
+    setActionState({ status: "saving", message: "" });
+    setActionMessage("");
+    try {
+      const updatedItem = await apiRequest(
+        `/quarta-taglio/certificates/${item.id}/reopen`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason }),
+        },
+        token,
+      );
+      updateRegisterItem(updatedItem);
+      setReopenDialogItem(null);
+      setReopenReason("");
+      setActionMessage(`Certificato ${updatedItem.certificate_number} riaperto.`);
+    } catch (requestError) {
+      setActionState({ status: "error", message: requestError.message });
+      return;
+    }
+    setActionState({ status: "idle", message: "" });
+  }
+
+  const canReopenPdf = user?.role === "manager" || user?.role === "admin";
+
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8" ref={sectionRef}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
@@ -609,7 +669,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-          <table className="min-w-[1420px] w-full border-collapse text-sm" ref={tableRef}>
+          <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="certificate_number" label="Cert. Nr." onSort={toggleSort} sortConfig={sortConfig} />
@@ -625,6 +685,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                 <SortableHeader field="conformity" label="Conformità" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="file" label="File" onSort={toggleSort} sortConfig={sortConfig} />
+                <th className="px-4 py-3">Azioni</th>
               </tr>
             </thead>
             <tbody>
@@ -676,7 +737,47 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                     ) : (
                       <span className="text-slate-400">-</span>
                     )}
-                    {item.has_pdf ? <span className="ml-3 font-semibold text-emerald-700">PDF</span> : null}
+                    {item.pdf_download_url ? (
+                      <a
+                        className="ml-3 font-semibold text-emerald-700 hover:underline"
+                        href={resolveApiAssetUrl(item.pdf_download_url)}
+                        onClick={persistCurrentListState}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        PDF
+                      </a>
+                    ) : item.ddt && item.has_word && !item.has_pdf ? (
+                      <button
+                        className="ml-3 font-semibold text-accent hover:underline"
+                        onClick={() => {
+                          persistCurrentListState();
+                          setActionState({ status: "idle", message: "" });
+                          setPdfDialogItem(item);
+                        }}
+                        type="button"
+                      >
+                        PDF
+                      </button>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3">
+                    {canReopenPdf && item.status === "pdf_final" && item.has_pdf ? (
+                      <button
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:border-amber-300"
+                        onClick={() => {
+                          persistCurrentListState();
+                          setActionState({ status: "idle", message: "" });
+                          setReopenReason("");
+                          setReopenDialogItem(item);
+                        }}
+                        type="button"
+                      >
+                        Riapri
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -685,6 +786,128 @@ export default function QuartaTaglioCertificatesRegisterPage() {
         </div>
         {!loading && !visibleItems.length && !error ? <p className="px-5 py-8 text-sm text-slate-500">Nessun certificato numerato trovato.</p> : null}
       </div>
+      {actionMessage ? <p className="mt-4 text-sm font-semibold text-emerald-700">{actionMessage}</p> : null}
+
+      {pdfDialogItem ? (
+        <ConfirmPdfDialog
+          busy={actionState.status === "saving"}
+          error={actionState.status === "error" ? actionState.message : ""}
+          item={pdfDialogItem}
+          onCancel={() => {
+            setPdfDialogItem(null);
+            setActionState({ status: "idle", message: "" });
+          }}
+          onConfirm={() => handleGeneratePdf(pdfDialogItem)}
+        />
+      ) : null}
+
+      {reopenDialogItem ? (
+        <ReopenPdfDialog
+          busy={actionState.status === "saving"}
+          error={actionState.status === "error" ? actionState.message : ""}
+          item={reopenDialogItem}
+          onCancel={() => {
+            setReopenDialogItem(null);
+            setReopenReason("");
+            setActionState({ status: "idle", message: "" });
+          }}
+          onChangeReason={setReopenReason}
+          onConfirm={() => handleReopenPdf(reopenDialogItem)}
+          reason={reopenReason}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ConfirmPdfDialog({ busy, error, item, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <div className="w-full max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xl font-black text-amber-700">
+            !
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Generare PDF finale?</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Il PDF finale chiude il certificato{" "}
+              <span className="font-semibold text-slate-900">{item.certificate_number}</span> e sarà il documento usabile da amministrazione e qualità.
+              Se hai dubbi sul contenuto, o se servono modifiche amministrative da riportare nel documento, scarica prima il Word e confrontati con
+              l'ufficio qualità.
+            </p>
+            {error ? <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p> : null}
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+            disabled={busy}
+            onClick={onCancel}
+            type="button"
+          >
+            Esci senza generare
+          </button>
+          <button
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+          >
+            {busy ? "Generazione..." : "Genera PDF"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReopenPdfDialog({ busy, error, item, onCancel, onChangeReason, onConfirm, reason }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <div className="w-full max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xl font-black text-amber-700">
+            !
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-bold text-slate-950">Riaprire certificato PDF?</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Il PDF finale del certificato <span className="font-semibold text-slate-900">{item.certificate_number}</span> verrà mantenuto nello storico
+              come riaperto e il certificato tornerà modificabile. Dopo la correzione dovrà essere generato un nuovo PDF.
+            </p>
+            <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="pdf-reopen-reason">
+              Motivo riapertura
+            </label>
+            <textarea
+              className="mt-1 min-h-[90px] w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700"
+              id="pdf-reopen-reason"
+              onChange={(event) => onChangeReason(event.target.value)}
+              placeholder="Descrivi la correzione richiesta da qualità."
+              value={reason}
+            />
+            {error ? <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p> : null}
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+            disabled={busy}
+            onClick={onCancel}
+            type="button"
+          >
+            Annulla
+          </button>
+          <button
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+          >
+            {busy ? "Riapertura..." : "Riapri certificato"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

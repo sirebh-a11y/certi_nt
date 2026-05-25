@@ -5,9 +5,11 @@ from app.core.deps import CurrentUser, DbSession
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioArticleDataRequest,
     QuartaTaglioDetailResponse,
+    QuartaTaglioFinalCertificateRegisterItem,
     QuartaTaglioFinalCertificateRegisterResponse,
     QuartaTaglioIncomingRowOverrideRequest,
     QuartaTaglioListResponse,
+    QuartaTaglioPdfReopenRequest,
     QuartaTaglioStandardSelectionRequest,
     QuartaTaglioWordDraftRequest,
     QuartaTaglioWordDraftResponse,
@@ -16,10 +18,13 @@ from app.modules.quarta_taglio.service import (
     apply_quick_incoming_confirmation,
     confirm_quarta_taglio_standard,
     create_quarta_taglio_word_draft,
+    generate_quarta_taglio_certificate_pdf,
     get_quarta_taglio_additional_page_template_file,
+    get_quarta_taglio_certificate_pdf_file,
     get_quarta_taglio_detail,
     get_quarta_taglio_word_draft_file,
     list_quarta_taglio_final_certificates,
+    reopen_quarta_taglio_certificate_pdf,
     set_quarta_taglio_incoming_row_override,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
@@ -71,6 +76,39 @@ def list_quarta_taglio_final_certificates_route(
     db: DbSession,
 ) -> QuartaTaglioFinalCertificateRegisterResponse:
     return list_quarta_taglio_final_certificates(db)
+
+
+@router.post("/certificates/{certificate_id}/pdf", response_model=QuartaTaglioFinalCertificateRegisterItem)
+def generate_quarta_taglio_certificate_pdf_route(
+    certificate_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioFinalCertificateRegisterItem:
+    return generate_quarta_taglio_certificate_pdf(db, certificate_id=certificate_id, actor=current_user)
+
+
+@router.post("/certificates/{certificate_id}/reopen", response_model=QuartaTaglioFinalCertificateRegisterItem)
+def reopen_quarta_taglio_certificate_pdf_route(
+    certificate_id: int,
+    payload: QuartaTaglioPdfReopenRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> QuartaTaglioFinalCertificateRegisterItem:
+    return reopen_quarta_taglio_certificate_pdf(db, certificate_id=certificate_id, reason=payload.reason, actor=current_user)
+
+
+@router.get("/certificates/{certificate_id}/pdf-file")
+def get_quarta_taglio_certificate_pdf_file_route(
+    certificate_id: int,
+    db: DbSession,
+    download_token: str | None = Query(default=None),
+) -> FileResponse:
+    path, file_name = get_quarta_taglio_certificate_pdf_file(db, certificate_id=certificate_id, download_token=download_token)
+    return FileResponse(
+        path=path,
+        media_type="application/pdf",
+        filename=file_name,
+    )
 
 
 @router.get("/additional-pages/template")
