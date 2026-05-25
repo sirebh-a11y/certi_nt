@@ -622,12 +622,14 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
     [effectiveDraft, fieldList, sessionSourceOverrides, valueMap],
   );
   const hasUnsavedChanges = useMemo(() => {
-    const valuesChanged = !draftsEqual(sessionInitialDraft, effectiveDraft, fieldList);
+    const valuesChanged = !draftsEqual(sessionInitialDraft, draft, fieldList);
     if (valuesChanged) {
       return true;
     }
-    return fieldList.some((field) => initialSources[field] !== currentSources[field]);
-  }, [currentSources, effectiveDraft, fieldList, initialSources, sessionInitialDraft]);
+    return Object.keys(sessionSourceOverrides).some(
+      (field) => fieldList.includes(field) && initialSources[field] !== sessionSourceOverrides[field],
+    );
+  }, [draft, fieldList, initialSources, sessionInitialDraft, sessionSourceOverrides]);
 
   useEffect(() => {
     onDirtyChange?.(hasUnsavedChanges);
