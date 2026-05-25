@@ -239,6 +239,11 @@ class QuartaTaglioWordInfoResponse(BaseModel):
     source: str | None = None
     source_label: str = "Nessun Word"
     original_filename: str | None = None
+    certificate_status: str | None = None
+    is_pdf_final: bool = False
+    has_pdf: bool = False
+    pdf_download_url: str | None = None
+    closed_at: datetime | None = None
     content_controls_present: list[str] = Field(default_factory=list)
     content_controls_missing: list[str] = Field(default_factory=list)
     content_controls_ok: bool = False

@@ -858,6 +858,7 @@ export default function QuartaTaglioDetailPage() {
   const wordInfo = activeCodF3Candidate && !activeCodF3Candidate.certificate_id
     ? { has_word: false, source_label: "Nessun Word per il CodF3 selezionato" }
     : data?.word_info || {};
+  const isPdfFinal = Boolean(wordInfo.is_pdf_final || wordInfo.certificate_status === "pdf_final");
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
   const activeCertificateId = certificateId || data?.header?.certificate_id || "";
   const isManualWord = wordInfo.source === "user_uploaded" || wordInfo.source === "fields_updated";
@@ -867,7 +868,7 @@ export default function QuartaTaglioDetailPage() {
       ? `${activeCodF3Candidate.cod_f3}${activeCodF3Candidate.relation === "raw" ? " - Raw" : ""}`
       : data?.header?.codice_f3 || "OL";
   const activeWordBlockedReason = activeCodF3Candidate?.blocked_reason || "";
-  const canGenerateActiveWord = canCreateWord && !activeWordBlockedReason;
+  const canGenerateActiveWord = canCreateWord && !activeWordBlockedReason && !isPdfFinal;
   const customerRequirement = useMemo(
     () => findCustomerRequirementForCodF3(customerRequirements, data?.header?.codice_f3),
     [customerRequirements, data?.header?.codice_f3],
@@ -978,10 +979,17 @@ export default function QuartaTaglioDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Word certificato</h3>
           <p className="mt-1 text-sm font-semibold text-slate-900">Certificato attivo: {activeWordLabel}</p>
           <p className="mt-1 text-sm text-slate-600">
-            {canCreateWord
+            {isPdfFinal
+              ? "Certificato PDF chiuso. Il Word resta consultabile, ma non modificabile da questa pagina."
+              : canCreateWord
               ? "Certificato creabile: standard e righe Incoming sono pronti. Se manca la data DDT, resterà come campo mancante."
               : "Serve standard confermato e righe Incoming accettate o accettate con riserva."}
           </p>
+          {isPdfFinal ? (
+            <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900">
+              Per correzioni riaprire il certificato dal Registro certificazione.
+            </div>
+          ) : null}
           {activeWordBlockedReason ? (
             <p className="mt-1 text-sm font-semibold text-amber-700">{activeWordBlockedReason}</p>
           ) : null}
@@ -1024,6 +1032,7 @@ export default function QuartaTaglioDetailPage() {
                 Content controls: {wordInfo.content_controls_ok ? "OK" : `mancano ${(wordInfo.content_controls_missing || []).join(", ")}`}
               </p>
             ) : null}
+            {isPdfFinal ? <p className="mt-1 font-semibold text-sky-700">PDF chiuso</p> : null}
           </div>
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
             <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Pagine aggiuntive</div>
@@ -1066,10 +1075,18 @@ export default function QuartaTaglioDetailPage() {
                   : "Genera Word"}
             </button>
           )}
+          {isPdfFinal && wordInfo.pdf_download_url ? (
+            <a
+              className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-center text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100"
+              href={wordInfo.pdf_download_url}
+            >
+              Scarica PDF chiuso
+            </a>
+          ) : null}
           <div className="grid grid-cols-1 gap-2">
             <button
               className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={wordDraftState.status === "saving" || !canGenerateActiveWord || !hasWord}
+              disabled={isPdfFinal || wordDraftState.status === "saving" || !canGenerateActiveWord || !hasWord}
               onClick={regenerateWordFromScratch}
               type="button"
             >
@@ -1084,14 +1101,14 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={!hasWord || !activeCertificateId}
+                disabled={isPdfFinal || !hasWord || !activeCertificateId}
                 id="quarta-word-upload"
                 onChange={(event) => setWordUploadFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={wordUploadState.status === "saving" || !wordUploadFile || !hasWord || !activeCertificateId}
+                disabled={isPdfFinal || wordUploadState.status === "saving" || !wordUploadFile || !hasWord || !activeCertificateId}
                 onClick={uploadEditedWord}
                 type="button"
               >
@@ -1119,20 +1136,21 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={!hasCertificateNumber || !activeCertificateId || isManualWord}
+                disabled={isPdfFinal || !hasCertificateNumber || !activeCertificateId || isManualWord}
                 id="quarta-additional-pages-upload"
                 onChange={(event) => setAdditionalPagesFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:border-sky-500 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber || !activeCertificateId || isManualWord}
+                disabled={isPdfFinal || additionalPagesState.status === "saving" || !additionalPagesFile || !hasCertificateNumber || !activeCertificateId || isManualWord}
                 onClick={uploadAdditionalPages}
                 type="button"
               >
                 {additionalPagesState.status === "saving" ? "Carico..." : "Carica"}
               </button>
             </div>
+            {isPdfFinal ? <p className="text-xs text-sky-700">PDF chiuso: le modifiche Word sono bloccate.</p> : null}
             {!hasCertificateNumber ? <p className="text-xs text-amber-700">Genera prima il Word numerato.</p> : null}
             {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci le pagine in Word e ricarica il file.</p> : null}
           </div>

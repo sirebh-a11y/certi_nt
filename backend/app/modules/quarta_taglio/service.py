@@ -901,6 +901,8 @@ def create_quarta_taglio_word_draft(
     candidate_cod_f3: str | None = None,
 ) -> QuartaTaglioWordDraftResponse:
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    if certificate_id is not None:
+        _ensure_certificate_word_is_editable(_get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
     candidate = _candidate_by_cod_f3(detail.cod_f3_candidates, candidate_cod_f3)
     candidate_unit: QuartaTaglioCertifiableUnitResponse | None = None
     if candidate_cod_f3 and candidate is None:
@@ -1015,6 +1017,7 @@ def upload_quarta_taglio_additional_pages(
     certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None or not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    _ensure_certificate_word_is_editable(certificate)
     if _is_manual_word(certificate):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1101,6 +1104,8 @@ def upload_quarta_taglio_word_file(
     if not file_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il file Word caricato è vuoto")
 
+    if certificate_id is not None:
+        _ensure_certificate_word_is_editable(_get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
     certificate = _find_open_certificate_for_detail(
         db,
@@ -1110,6 +1115,7 @@ def upload_quarta_taglio_word_file(
     )
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    _ensure_certificate_word_is_editable(certificate)
 
     storage_key = _certificate_uploaded_docx_storage_key(cod_odp, original_name=original_name)
     output_path = _certificate_storage_path(storage_key)
@@ -1154,6 +1160,14 @@ def _apply_word_file_state(
 
 def _is_manual_word(certificate: QuartaTaglioFinalCertificate | None) -> bool:
     return _clean_text(getattr(certificate, "word_source", None)) in {"user_uploaded", "fields_updated"}
+
+
+def _ensure_certificate_word_is_editable(certificate: QuartaTaglioFinalCertificate | None) -> None:
+    if certificate is not None and certificate.status == "pdf_final":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Certificato PDF chiuso: riaprire dal Registro certificazione prima di modificare il Word.",
+        )
 
 
 def _propagate_shared_certificate_word(
@@ -2192,6 +2206,11 @@ def _serialize_word_info(certificate: QuartaTaglioFinalCertificate | None) -> Qu
         if certificate.download_token
         else None
     )
+    pdf_download_url = (
+        f"/api/quarta-taglio/certificates/{certificate.id}/pdf-file?download_token={certificate.download_token}"
+        if certificate.storage_key_pdf and certificate.download_token
+        else None
+    )
     present = certificate.word_content_controls or []
     missing = certificate.word_missing_content_controls or []
     source = certificate.word_source or "generated"
@@ -2204,6 +2223,11 @@ def _serialize_word_info(certificate: QuartaTaglioFinalCertificate | None) -> Qu
         source=source,
         source_label=_word_source_label(source),
         original_filename=certificate.word_original_filename,
+        certificate_status=certificate.status,
+        is_pdf_final=certificate.status == "pdf_final",
+        has_pdf=bool(certificate.storage_key_pdf),
+        pdf_download_url=pdf_download_url,
+        closed_at=certificate.closed_at,
         content_controls_present=present,
         content_controls_missing=missing,
         content_controls_ok=not missing,
