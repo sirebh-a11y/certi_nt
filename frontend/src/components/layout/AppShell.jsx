@@ -13,6 +13,7 @@ export default function AppShell() {
     location.pathname.startsWith("/supplier-kpi") ||
     location.pathname.startsWith("/quarta-taglio") ||
     location.pathname.startsWith("/customer-requirements") ||
+    location.pathname.startsWith("/clients") ||
     location.pathname.startsWith("/notes") ||
     location.pathname.startsWith("/ai");
 
