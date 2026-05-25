@@ -133,6 +133,8 @@ def ensure_acquisition_processing_run_columns() -> None:
         statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN notification_email VARCHAR(255)")
     if "admin_notification_email" not in columns:
         statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN admin_notification_email VARCHAR(255)")
+    if "expected_upload_document_count" not in columns:
+        statements.append("ALTER TABLE acquisition_processing_runs ADD COLUMN expected_upload_document_count INTEGER NOT NULL DEFAULT 0")
 
     if statements:
         with engine.begin() as connection:

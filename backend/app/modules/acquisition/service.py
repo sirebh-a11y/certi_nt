@@ -516,12 +516,17 @@ def _begin_upload_batch(db: Session, *, upload_batch_id: str, actor_id: int) -> 
     batch = _get_or_create_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
     if batch.actor_id is not None and batch.actor_id != actor_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Batch non autorizzato")
-    if batch.status in {"in_elaborazione", "completato"} or (batch.status == "avvio_ai_prenotato" and batch.active_uploads <= 0):
+    if batch.status in {"in_elaborazione", "completato"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch gia chiuso: crea un nuovo batch per altri file")
+    ai_reserved = batch.status == "avvio_ai_prenotato"
     batch.actor_id = actor_id
     batch.active_uploads = max(0, batch.active_uploads) + 1
-    batch.status = "uploading"
-    batch.message = "Caricamento documenti in corso"
+    batch.status = "avvio_ai_prenotato" if ai_reserved else "uploading"
+    batch.message = (
+        "Caricamento documenti in corso, Assistente AI gia prenotato"
+        if ai_reserved
+        else "Caricamento documenti in corso"
+    )
     db.add(batch)
     db.commit()
     db.refresh(batch)
@@ -7203,6 +7208,7 @@ def start_autonomous_run(
         certificate_document_ids=json.dumps(certificate_document_ids),
         notification_email=actor_email,
         admin_notification_email=_string_or_none(settings.acquisition_notification_admin_email),
+        expected_upload_document_count=payload.expected_upload_document_count,
         stato="in_coda",
         fase_corrente="in_attesa",
         messaggio_corrente=(
@@ -7248,11 +7254,14 @@ def _wait_for_upload_batch_documents(
 ) -> tuple[list[int], list[int]]:
     deadline = time.monotonic() + 300
     last_message_at = 0.0
+    expected_upload_document_count = max(int(run.expected_upload_document_count or 0), 0)
     while True:
         batch = db.get(AcquisitionUploadBatch, upload_batch_id)
         ddt_ids, certificate_ids = _documents_for_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
+        uploaded_count = len(ddt_ids) + len(certificate_ids)
         active_uploads = batch.active_uploads if batch is not None else 0
-        if active_uploads <= 0 and (ddt_ids or certificate_ids):
+        has_expected_documents = expected_upload_document_count <= 0 or uploaded_count >= expected_upload_document_count
+        if active_uploads <= 0 and has_expected_documents and (ddt_ids or certificate_ids):
             if batch is not None:
                 batch.status = "in_elaborazione"
                 batch.message = "Assistente AI in lavorazione"
@@ -7269,7 +7278,12 @@ def _wait_for_upload_batch_documents(
                 db,
                 run,
                 fase_corrente="attesa_upload",
-                messaggio_corrente="Caricamento ancora in corso: l'Assistente AI partira appena il batch e pronto",
+                messaggio_corrente=(
+                    "Caricamento ancora in corso: "
+                    f"{uploaded_count}/{expected_upload_document_count} documenti ricevuti"
+                    if expected_upload_document_count
+                    else "Caricamento ancora in corso: l'Assistente AI partira appena il batch e pronto"
+                ),
             )
             last_message_at = now
         time.sleep(1)

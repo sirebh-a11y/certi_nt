@@ -317,6 +317,7 @@ class AutonomousRunStartRequest(BaseModel):
     ddt_document_ids: list[int] = Field(default_factory=list)
     certificate_document_ids: list[int] = Field(default_factory=list)
     upload_batch_id: str | None = Field(default=None, max_length=64)
+    expected_upload_document_count: int = Field(default=0, ge=0)
     usa_ddt_vision: bool = True
     usa_intervento_ai: bool = False
 

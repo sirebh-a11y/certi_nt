@@ -366,6 +366,7 @@ class AutonomousProcessingRun(Base):
     certificate_document_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     admin_notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expected_upload_document_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     stato: Mapped[str] = mapped_column(String(32), default="in_coda", nullable=False, index=True)
     fase_corrente: Mapped[str] = mapped_column(String(64), default="in_attesa", nullable=False)
     messaggio_corrente: Mapped[str | None] = mapped_column(String(255), nullable=True)
