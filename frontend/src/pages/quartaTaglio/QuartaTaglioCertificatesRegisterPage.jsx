@@ -112,12 +112,17 @@ function searchableValues(item) {
     item.fornitore_cliente,
     item.status,
     statusLabel,
+    item.word_source_label,
     item.conformity_status,
     CONFORMITY_LABELS[item.conformity_status],
     ...(item.conformity_issues || []).map((issue) => `${issue.block} ${issue.field} ${issue.message || ""}`),
   ]
     .filter(Boolean)
     .map((value) => String(value).toLowerCase());
+}
+
+function hasInheritedWord(item) {
+  return item.has_word && item.word_source === "inherited";
 }
 
 function evaluateProgressiveFilter(values, query) {
@@ -220,6 +225,12 @@ function registerStatusLabel(item) {
   if (item.status === "pdf_final") {
     return STATUS_LABELS.pdf_final;
   }
+  if (item.ddt && hasInheritedWord(item) && !item.has_pdf) {
+    return "PDF da generare - Word ereditato";
+  }
+  if (!item.ddt && hasInheritedWord(item)) {
+    return "Word ereditato - attesa DDT";
+  }
   if (item.ddt && item.has_word && !item.has_pdf) {
     return "PDF da generare";
   }
@@ -232,6 +243,9 @@ function registerStatusLabel(item) {
 function statusClass(item) {
   if (item.status === "pdf_final") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (hasInheritedWord(item)) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
   }
   if (item.ddt && item.has_word && !item.has_pdf) {
     return "border-amber-200 bg-amber-50 text-amber-800";
@@ -815,6 +829,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
 }
 
 function ConfirmPdfDialog({ busy, error, item, onCancel, onConfirm }) {
+  const inheritedWord = hasInheritedWord(item);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
       <div className="w-full max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
@@ -824,12 +839,20 @@ function ConfirmPdfDialog({ busy, error, item, onCancel, onConfirm }) {
           </div>
           <div>
             <h3 className="text-lg font-bold text-slate-950">Generare PDF finale?</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Il PDF finale chiude il certificato{" "}
-              <span className="font-semibold text-slate-900">{item.certificate_number}</span> e sarà il documento usabile da amministrazione e qualità.
-              Se hai dubbi sul contenuto, o se servono modifiche amministrative da riportare nel documento, scarica prima il Word e confrontati con
-              l'ufficio qualità.
-            </p>
+            {inheritedWord ? (
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                Il certificato <span className="font-semibold text-slate-900">{item.certificate_number}</span> usa un Word ereditato, creato
+                automaticamente senza conferma definitiva della Qualità per questa lavorazione. Puoi generare il PDF, ma consigliamo di contattare
+                la Qualità prima di chiudere il certificato.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Il PDF finale chiude il certificato{" "}
+                <span className="font-semibold text-slate-900">{item.certificate_number}</span> e sarà il documento usabile da amministrazione e qualità.
+                Se hai dubbi sul contenuto, o se servono modifiche amministrative da riportare nel documento, scarica prima il Word e confrontati con
+                l'ufficio qualità.
+              </p>
+            )}
             {error ? <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p> : null}
           </div>
         </div>

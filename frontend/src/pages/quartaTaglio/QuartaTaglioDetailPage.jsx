@@ -210,8 +210,11 @@ function codF3CandidateClass(confidence) {
 }
 
 function codF3CandidateStatusClass(candidate) {
-  if (candidate.has_word && candidate.waiting_ddt) {
+  if (candidate.has_word && candidate.word_source === "inherited") {
     return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated"].includes(candidate.word_source)) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
   if (candidate.has_word) {
     return "border-slate-200 bg-slate-50 text-slate-700";
@@ -220,11 +223,8 @@ function codF3CandidateStatusClass(candidate) {
 }
 
 function codF3CandidateLabel(candidate) {
-  if (candidate.has_word && candidate.waiting_ddt) {
-    return "Word aperto - attesa DDT";
-  }
   if (candidate.has_word) {
-    return "Word aperto";
+    return candidate.word_source_label || "Word aperto";
   }
   if (candidate.confidence === "ddt") {
     return "Candidato";
@@ -239,6 +239,34 @@ function codF3CandidateLabel(candidate) {
     return "Candidato";
   }
   return "Da verificare";
+}
+
+function wordInfoPanelClass(wordInfo) {
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function wordSourceBadgeClass(source) {
+  if (source === "inherited") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  if (["generated", "user_uploaded", "fields_updated"].includes(source)) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function codF3CandidateCardClass(candidate, isActive) {
+  const activeClass = isActive ? "ring-2 ring-sky-300" : "";
+  if (candidate.has_word && candidate.word_source === "inherited") {
+    return `border-amber-300 bg-amber-50 ${activeClass}`;
+  }
+  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated"].includes(candidate.word_source)) {
+    return `border-emerald-300 bg-emerald-50 ${activeClass}`;
+  }
+  if (isActive) {
+    return "border-sky-300 bg-sky-50/70";
+  }
+  return "border-slate-200 bg-white";
 }
 
 function quickIncomingConfirmEnabled() {
@@ -1110,8 +1138,8 @@ export default function QuartaTaglioDetailPage() {
           <span className={`mt-3 inline-flex w-fit rounded-lg border px-3 py-1 text-xs font-semibold ${conformityClass(data.conformity_status)}`}>
             Conformità standard: {conformityLabel(data.conformity_status)}
           </span>
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            <div className="font-semibold uppercase tracking-[0.16em] text-slate-500">Word corrente</div>
+          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${wordInfoPanelClass(wordInfo)}`}>
+            <div className="font-semibold uppercase tracking-[0.16em] text-current opacity-70">Word corrente</div>
             <p className="mt-1">
               {wordInfo.source_label || "Nessun Word"}
               {wordInfo.original_filename ? `: ${wordInfo.original_filename}` : ""}
@@ -1167,7 +1195,9 @@ export default function QuartaTaglioDetailPage() {
           {isPdfFinal && wordInfo.pdf_download_url ? (
             <a
               className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-center text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100"
-              href={wordInfo.pdf_download_url}
+              href={resolveApiAssetUrl(wordInfo.pdf_download_url)}
+              rel="noreferrer"
+              target="_blank"
             >
               Scarica PDF chiuso
             </a>
@@ -1264,9 +1294,7 @@ export default function QuartaTaglioDetailPage() {
                   const candidateActionLabel = candidate.certificate_id ? "Apri" : isActiveCandidate ? "Selezionato" : "Seleziona";
                   return (
                     <div
-                      className={`rounded-xl border px-3 py-3 ${
-                        isActiveCandidate ? "border-sky-300 bg-sky-50/70" : "border-slate-200 bg-white"
-                      }`}
+                      className={`rounded-xl border px-3 py-3 ${codF3CandidateCardClass(candidate, isActiveCandidate)}`}
                       key={candidate.cod_f3}
                     >
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">

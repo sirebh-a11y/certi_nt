@@ -46,6 +46,8 @@ class QuartaTaglioCodF3CandidateResponse(BaseModel):
     certificate_id: int | None = None
     certificate_number: str | None = None
     has_word: bool = False
+    word_source: str | None = None
+    word_source_label: str | None = None
     certificate_has_ddt: bool = False
     waiting_ddt: bool = False
     blocked_reason: str | None = None
@@ -123,6 +125,8 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     cdo_lega: str | None = None
     fornitore_cliente: str | None = None
     has_word: bool = False
+    word_source: str | None = None
+    word_source_label: str | None = None
     has_pdf: bool = False
     word_download_url: str | None = None
     pdf_download_url: str | None = None

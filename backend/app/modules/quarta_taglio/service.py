@@ -2257,9 +2257,9 @@ def _word_source_label(source: str | None) -> str:
     if source == "fields_updated":
         return "Aggiornato nei campi"
     if source == "inherited":
-        return "Ereditato e aggiornato"
+        return "Word ereditato"
     if source == "generated":
-        return "Generato dal sistema"
+        return "Word generato"
     return "Word corrente"
 
 
@@ -3891,6 +3891,8 @@ def _serialize_final_certificate_register_item(
         cdo_lega=certificate.cdo_lega,
         fornitore_cliente=certificate.fornitore_cliente,
         has_word=bool(certificate.storage_key_docx),
+        word_source=certificate.word_source,
+        word_source_label=_word_source_label(certificate.word_source) if certificate.storage_key_docx else None,
         has_pdf=bool(certificate.storage_key_pdf),
         word_download_url=word_download_url,
         pdf_download_url=pdf_download_url,
@@ -4213,6 +4215,7 @@ def _enrich_certiol_candidates_with_certificates(
             message = blocked_reason
         certificate_has_ddt = bool(certificate and _clean_text(certificate.ddt))
         waiting_ddt = bool(certificate and certificate.certificate_number and not certificate_has_ddt)
+        word_source = _clean_text(certificate.word_source) if certificate and certificate.storage_key_docx else None
         enriched.append(
             candidate.model_copy(
                 update={
@@ -4220,6 +4223,8 @@ def _enrich_certiol_candidates_with_certificates(
                     "certificate_id": certificate.id if certificate else None,
                     "certificate_number": certificate.certificate_number if certificate else None,
                     "has_word": bool(certificate and certificate.storage_key_docx),
+                    "word_source": word_source,
+                    "word_source_label": _word_source_label(word_source) if word_source else None,
                     "certificate_has_ddt": certificate_has_ddt,
                     "waiting_ddt": waiting_ddt,
                     "blocked_reason": blocked_reason,
