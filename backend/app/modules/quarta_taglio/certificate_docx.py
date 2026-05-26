@@ -28,6 +28,8 @@ HEADER_LOGO_HEIGHT_EMU = 927741
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
 HEADER_FLOW_ROW_HEIGHT = Twips(395)
 HEADER_FLOW_LINE_SPACING = 220 / 240
+CHEMISTRY_TABLE_WIDTH_INCHES = 7.1
+CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES = 0.70
 
 PROPERTY_HEADER_LABELS = {
     "HB": "HB",
@@ -338,12 +340,16 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
         max_row[index].text = _format_chemistry_value(item.standard_max)
         value_row[index].text = _format_chemistry_value(item.value)
     _set_table_font(table, size=10)
-    _set_table_cell_margins(table, left=35, right=35)
+    _set_table_cell_margins(table, left=25, right=25)
     for row in table.rows:
         for cell in row.cells:
             _set_cell_no_wrap(cell)
     _bold_row(value_row)
-    _set_table_width_with_first_column(table, total_inches=7.1, first_column_inches=0.62)
+    _set_table_width_with_first_column(
+        table,
+        total_inches=CHEMISTRY_TABLE_WIDTH_INCHES,
+        first_column_inches=CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES,
+    )
 
 
 def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
