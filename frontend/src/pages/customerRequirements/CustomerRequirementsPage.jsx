@@ -650,7 +650,7 @@ export default function CustomerRequirementsPage() {
               <col className="w-[616px]" />
               <col className="w-[150px]" />
             </colgroup>
-            <thead>
+            <thead className="sticky-list-head">
               <tr className="border-b border-slate-200 bg-slate-50">
                 <SortableHeader field="cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />

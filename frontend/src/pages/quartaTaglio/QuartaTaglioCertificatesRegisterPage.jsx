@@ -678,7 +678,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
           ref={tableViewportRef}
         >
           <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
-            <thead>
+            <thead className="sticky-list-head">
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="certificate_number" label="Cert. Nr." onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cert_date" label="Data" onSort={toggleSort} sortConfig={sortConfig} />

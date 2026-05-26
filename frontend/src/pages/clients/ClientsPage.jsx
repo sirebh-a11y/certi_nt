@@ -282,7 +282,7 @@ export default function ClientsPage() {
                 <col className="w-[230px]" />
                 <col className="w-[150px]" />
               </colgroup>
-              <thead className="bg-slate-50">
+              <thead className="sticky-list-head bg-slate-50">
                 <tr className="border-b border-slate-200">
                   <SortableHeader field="cod_clifor" label="Codice" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="ragione_sociale" label="Ragione sociale" onSort={toggleSort} sortConfig={sortConfig} />

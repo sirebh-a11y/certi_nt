@@ -47,6 +47,8 @@ button {
 
 .incoming-grid-scroll {
   scrollbar-color: #94a3b8 #e2e8f0;
+  max-height: clamp(340px, 56vh, 620px);
+  overflow-y: auto !important;
 }
 
 .incoming-grid-scroll::-webkit-scrollbar:horizontal {
@@ -56,4 +58,29 @@ button {
 
 .incoming-grid-scroll::-webkit-scrollbar:vertical {
   width: 12px;
+}
+
+.incoming-grid-scroll > table {
+  width: 100%;
+}
+
+.sticky-list-head th {
+  position: sticky;
+  top: 0;
+  z-index: 18;
+  background: #f8fafc;
+  box-shadow:
+    inset 0 -1px 0 #cbd5e1,
+    0 1px 2px rgba(15, 23, 42, 0.06);
+  padding-top: 0.65rem !important;
+  padding-bottom: 0.65rem !important;
+  vertical-align: bottom;
+}
+
+.sticky-list-head tr {
+  background: #f8fafc;
+}
+
+.sticky-list-head button {
+  line-height: 1.15;
 }

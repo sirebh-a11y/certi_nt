@@ -817,7 +817,7 @@ export default function QualityEvaluationPage() {
           ref={tableViewportRef}
         >
         <table className="min-w-[1360px] w-full border-collapse text-sm" ref={tableRef}>
-          <thead>
+          <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="data_ricezione" label="Data ricezione" onSort={toggleSort} sortConfig={sortConfig} />

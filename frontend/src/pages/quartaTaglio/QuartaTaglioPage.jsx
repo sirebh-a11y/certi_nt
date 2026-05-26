@@ -761,7 +761,7 @@ export default function QuartaTaglioPage() {
           ref={tableViewportRef}
         >
           <table className="min-w-[1680px] divide-y divide-slate-200 text-sm" ref={tableRef}>
-            <thead className="bg-slate-50">
+            <thead className="sticky-list-head bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="taglio_attivo" label="Taglio" onSort={toggleSort} sortConfig={sortConfig} />
