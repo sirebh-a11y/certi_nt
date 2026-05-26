@@ -6725,6 +6725,9 @@ def create_rows_from_document_split_plan(
             db.commit()
             db.refresh(certificate_first_row)
             _persist_split_candidate_values(db=db, row=certificate_first_row, candidate=candidate, actor_id=actor_id)
+            refreshed = get_acquisition_row(db, certificate_first_row.id)
+            _ensure_proposed_match_for_coupled_row(db=db, row=refreshed, actor_id=actor_id)
+            db.commit()
             existing_signatures[candidate_signature] = certificate_first_row
             created_rows.append(serialize_acquisition_row_detail(get_acquisition_row(db, certificate_first_row.id)))
             continue
@@ -9356,6 +9359,58 @@ def _mark_match_conflicted(*, db: Session, row: AcquisitionRow, actor_id: int, r
         user_id=actor_id,
         nota_breve=match.motivo_breve,
     )
+
+
+def _ensure_proposed_match_for_coupled_row(*, db: Session, row: AcquisitionRow, actor_id: int) -> bool:
+    if row.document_ddt_id is None or row.document_certificato_id is None:
+        return False
+    if row.validata_finale or row.certificate_match is not None:
+        return False
+    if _manual_match_block_exists(
+        db,
+        ddt_document_id=row.document_ddt_id,
+        certificate_document_id=row.document_certificato_id,
+        ddt_row_id=row.id,
+        certificate_row_id=None,
+    ):
+        return False
+
+    refreshed = get_acquisition_row(db, row.id)
+    score = score_bridge_match(_build_row_ddt_bridge(refreshed), _build_row_certificate_bridge(refreshed))
+    if score.decision != RematchDecision.STRONG:
+        return False
+
+    match = CertificateMatch(
+        acquisition_row_id=refreshed.id,
+        document_certificato_id=refreshed.document_certificato_id,
+        stato="proposto",
+        motivo_breve=_cross_run_candidate_reason(score),
+        fonte_proposta="sistema",
+        timestamp=datetime.now(UTC),
+    )
+    db.add(match)
+    db.flush()
+    db.add(
+        CertificateMatchCandidate(
+            match_certificato_id=match.id,
+            document_certificato_id=refreshed.document_certificato_id,
+            rank=1,
+            motivo_breve=match.motivo_breve,
+            fonte_proposta="sistema",
+            stato="scelto",
+        )
+    )
+    _record_history_event(
+        db=db,
+        acquisition_row_id=refreshed.id,
+        blocco="match",
+        azione="match_proposto_da_documenti_collegati",
+        user_id=actor_id,
+        nota_breve=match.motivo_breve,
+    )
+    _sync_row_statuses(db, refreshed)
+    db.flush()
+    return True
 
 
 def _combined_document_match_fields_are_confirmed(db: Session, *, row: AcquisitionRow) -> bool:
@@ -14909,6 +14964,8 @@ def _ensure_autonomous_rows_with_ai(
                 actor_id=actor_id,
                 document_id=ddt_document.id,
             )
+            refreshed = get_acquisition_row(db, certificate_first_row.id)
+            _ensure_proposed_match_for_coupled_row(db=db, row=refreshed, actor_id=actor_id)
             db.commit()
             refreshed = get_acquisition_row(db, certificate_first_row.id)
             existing_signatures[candidate_signature] = refreshed

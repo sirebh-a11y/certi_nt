@@ -25,6 +25,7 @@ from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
+    _ensure_proposed_match_for_coupled_row,
     _manual_match_block_exists,
     _merge_certificate_only_row_into_ddt_row,
     _plan_cross_run_auto_rematch,
@@ -989,6 +990,72 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(merged.cdq, "EEP66506-43440412")
         self.assertIsNotNone(merged.certificate_match)
         self.assertEqual(merged.certificate_match.document_certificato_id, certificate_document.id)
+
+    def test_coupled_row_without_match_record_gets_system_proposal(self):
+        supplier = Supplier(ragione_sociale="Metalba S.p.A.")
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="26-00961.pdf", storage_key="ddt-metalba.pdf")
+        certificate_document = Document(tipo_documento="certificato", nome_file_originale="CQF_26-0747.pdf", storage_key="cert-metalba.pdf")
+        self.db.add_all([supplier, ddt_document, certificate_document])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+
+        row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="26-0747",
+            lega_base="6082F F",
+            diametro="90",
+            colata="25350C",
+            ddt="26-00961",
+            peso="2334",
+            ordine="86/26",
+        )
+        self.db.add(row)
+        self.db.flush()
+
+        for block, field, value, source in [
+            ("ddt", "numero_certificato_ddt", "26-0747", "ddt"),
+            ("ddt", "colata", "25350C", "ddt"),
+            ("ddt", "diametro", "90", "ddt"),
+            ("ddt", "peso", "2334", "ddt"),
+            ("ddt", "ddt", "26-00961", "ddt"),
+            ("ddt", "customer_order_no", "86/26", "ddt"),
+            ("match", "numero_certificato_certificato", "26-0747", "certificato"),
+            ("match", "colata_certificato", "25350C", "certificato"),
+            ("match", "diametro_certificato", "90", "certificato"),
+            ("match", "peso_certificato", "2334", "certificato"),
+            ("match", "ddt_certificato", "26-00961", "certificato"),
+            ("match", "ordine_cliente_certificato", "86/26", "certificato"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="proposto",
+                    metodo_lettura="chatgpt" if source == "certificato" else "sistema",
+                    fonte_documentale=source,
+                )
+            )
+        self.db.commit()
+
+        created = _ensure_proposed_match_for_coupled_row(db=self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
+
+        self.assertTrue(created)
+        self.db.expire_all()
+        matched_row = get_acquisition_row(self.db, row.id)
+        self.assertIsNotNone(matched_row.certificate_match)
+        self.assertEqual(matched_row.certificate_match.stato, "proposto")
+        self.assertEqual(matched_row.certificate_match.fonte_proposta, "sistema")
+        self.assertEqual(matched_row.certificate_match.document_certificato_id, certificate_document.id)
+        self.assertEqual(len(matched_row.certificate_match.candidates), 1)
+        self.assertEqual(matched_row.certificate_match.candidates[0].stato, "scelto")
 
 
 if __name__ == "__main__":
