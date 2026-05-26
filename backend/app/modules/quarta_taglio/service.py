@@ -390,6 +390,23 @@ def _latest_quarta_sync_run(db: Session) -> QuartaTaglioSyncRun | None:
     return db.query(QuartaTaglioSyncRun).order_by(QuartaTaglioSyncRun.started_at.desc(), QuartaTaglioSyncRun.id.desc()).first()
 
 
+def _load_quarta_rows_for_detail(db: Session, *, cod_odp: str) -> list[QuartaTaglioRow]:
+    rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cod_odp == cod_odp, QuartaTaglioRow.seen_in_last_sync.is_(True))
+        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
+        .all()
+    )
+    if rows:
+        return rows
+    return (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cod_odp == cod_odp)
+        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
+        .all()
+    )
+
+
 def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCertificateRegisterResponse:
     _refresh_final_certificate_register_from_external_data(db)
     certificates = (
@@ -463,12 +480,7 @@ def get_quarta_taglio_detail(
     certificate_id: int | None = None,
     candidate_cod_f3: str | None = None,
 ) -> QuartaTaglioDetailResponse:
-    rows = (
-        db.query(QuartaTaglioRow)
-        .filter(QuartaTaglioRow.cod_odp == cod_odp)
-        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
-        .all()
-    )
+    rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
@@ -732,8 +744,8 @@ def confirm_quarta_taglio_standard(
     standard_id: int,
     actor_id: int | None,
 ) -> QuartaTaglioDetailResponse:
-    exists = db.query(QuartaTaglioRow.id).filter(QuartaTaglioRow.cod_odp == cod_odp).first()
-    if exists is None:
+    rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
+    if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
     standard = (
@@ -755,12 +767,6 @@ def confirm_quarta_taglio_standard(
     selection.selected_by_user_id = actor_id
     db.add(selection)
     db.commit()
-    rows = (
-        db.query(QuartaTaglioRow)
-        .filter(QuartaTaglioRow.cod_odp == cod_odp)
-        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
-        .all()
-    )
     _refresh_quarta_rows_from_incoming(db, rows=rows)
     app_rows = _load_matching_app_rows(db, rows)
     if _ensure_derived_incoming_values(db, app_rows=app_rows, actor_id=actor_id):
@@ -778,12 +784,7 @@ def apply_quick_incoming_confirmation(
     certificate_id: int | None,
     actor_id: int | None,
 ) -> QuartaTaglioDetailResponse:
-    rows = (
-        db.query(QuartaTaglioRow)
-        .filter(QuartaTaglioRow.cod_odp == cod_odp)
-        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
-        .all()
-    )
+    rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
@@ -845,8 +846,7 @@ def update_quarta_taglio_article_data(
     fields_set: set[str],
     actor_id: int | None,
 ) -> QuartaTaglioDetailResponse:
-    exists = db.query(QuartaTaglioRow.id).filter(QuartaTaglioRow.cod_odp == cod_odp).first()
-    if exists is None:
+    if not _load_quarta_rows_for_detail(db, cod_odp=cod_odp):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
     override = db.query(QuartaTaglioArticleOverride).filter(QuartaTaglioArticleOverride.cod_odp == cod_odp).one_or_none()
@@ -875,12 +875,7 @@ def set_quarta_taglio_incoming_row_override(
     if not cdq:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CDQ mancante")
 
-    rows = (
-        db.query(QuartaTaglioRow)
-        .filter(QuartaTaglioRow.cod_odp == cod_odp)
-        .order_by(QuartaTaglioRow.cdq.asc(), QuartaTaglioRow.colata.asc())
-        .all()
-    )
+    rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
