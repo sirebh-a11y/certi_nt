@@ -146,6 +146,10 @@ function safeText(value) {
   return String(value);
 }
 
+function readValuePlainText(value) {
+  return safeText(value?.valore_finale || value?.valore_standardizzato || value?.valore_grezzo).trim();
+}
+
 function workflowStepState(row, step) {
   if (step === "validazione_finale") {
     if (row?.qualita_valutazione) {
@@ -373,6 +377,13 @@ export default function AcquisitionDetailPage() {
       groups[value.blocco].push(value);
     });
     return groups;
+  }, [row]);
+
+  const mechanicalRequirementText = useMemo(() => {
+    const value = (row?.values || []).find(
+      (item) => item.blocco === "requisiti" && item.campo === "customer_requirement_quote",
+    );
+    return readValuePlainText(value);
   }, [row]);
 
   const canValidateFinal = useMemo(() => {
@@ -1081,6 +1092,23 @@ export default function AcquisitionDetailPage() {
                   <p className="mt-2 text-sm text-slate-600">
                     I dati tecnici restano confermati. Inserisci prima un giudizio nella nota valutazione: non è necessario se tutto è conforme, ma è obbligatorio per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
                   </p>
+                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Richiamo requisiti meccanici
+                    </div>
+                    {mechanicalRequirementText ? (
+                      <>
+                        <div className="mt-1 text-xs font-semibold text-slate-700">
+                          Frase rilevata dal certificato:
+                        </div>
+                        <div className="mt-1 text-sm leading-5 text-slate-900">{mechanicalRequirementText}</div>
+                      </>
+                    ) : (
+                      <div className="mt-1 text-sm text-slate-500">
+                        Nessun richiamo specifico a requisiti meccanici cliente rilevato nel certificato.
+                      </div>
+                    )}
+                  </div>
                   {row.qualita_valutazione ? (
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${stateClasses(row.qualita_valutazione === "respinto" ? "rosso" : row.qualita_valutazione === "accettato" ? "verde" : "giallo")}`}>

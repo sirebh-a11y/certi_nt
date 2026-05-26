@@ -13024,7 +13024,10 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "Chimica: estrai solo la riga misurata del lotto/Heat, non i limiti min/max. "
                 "Proprieta: estrai le righe misurate Sample No. Txxx, non i limiti minimi; se piu righe, restituiscile tutte. "
                 "Note: cerca U.S./AMS ultrasonic class, RoHS, radioactive/free. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "Item and specification solo se collegato a requisito cliente/ordine/specifica; T62 o T42 solo se collegati a requisito cliente, ordine, specifica o valori concordati"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"certificate_number\":\"string|null\",\"packing_slip_raw\":\"string|null\",\"order_no_raw\":\"string|null\","
                 "\"customer_part_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"heat_raw\":\"string|null\","
                 "\"kg_raw\":\"string|null\",\"pieces_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
@@ -13035,7 +13038,8 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
                 "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -13101,6 +13105,10 @@ def _normalize_grupa_kety_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     packing_slip = _string_or_none(core_payload.get("packing_slip_raw"))
     certificate_number = _normalize_grupa_kety_certificate_number(_string_or_none(core_payload.get("certificate_number")))
@@ -13123,6 +13131,7 @@ def _normalize_grupa_kety_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -13600,7 +13609,10 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
                 "Chimica: leggi solo la riga Composition Results in %, escludendo limiti. "
                 "Proprieta: se ci sono piu righe misurate, restituiscile in measured_rows; il sistema usera il minimo per campo. "
                 "Non inserire valori SPECLIMITS/limiti come misurati. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "WITH PROOF OF TEMPER T62, WITH PROOF OF TEMPER T42, VALUES SPECIALLY AGREED, Exception to N° LST 00, TOL. FOLLOWING EN 603-3"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"cert_number\":\"string|null\",\"sales_order_number\":\"string|null\",\"customer_po\":\"string|null\","
                 "\"delivery_note_no\":\"string|null\",\"line_no\":\"string|null\",\"customer_item_number\":\"string|null\","
                 "\"arconic_item_number\":\"string|null\",\"item_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
@@ -13612,7 +13624,8 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\","
                 "\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -13681,6 +13694,10 @@ def _normalize_arconic_hannover_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     cast_job_raw = _string_or_none(core_payload.get("cast_job_number"))
     cast_number = _normalize_arconic_cast_number(cast_job_raw)
@@ -13707,6 +13724,7 @@ def _normalize_arconic_hannover_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -13909,7 +13927,10 @@ def _extract_metalba_certificate_payload_from_openai(
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "Materiale secondo specifica LST00, Prove meccaniche su stato fisico T62, Prove meccaniche su stato fisico T42, richiami a specifica cliente o ordine"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"commessa_raw\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
@@ -13920,7 +13941,8 @@ def _extract_metalba_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -13988,6 +14010,10 @@ def _normalize_metalba_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     commessa_raw = _string_or_none(core_payload.get("commessa_raw"))
     product_description_raw = _string_or_none(core_payload.get("product_description_raw"))
@@ -14017,6 +14043,7 @@ def _normalize_metalba_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -20698,7 +20725,10 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
                 "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "supplied in compliance with the requirements of the order, fornito in conformita ai requisiti dell'ordine, Materiale secondo Spec. N. LST 00, Collaudo stato T62, Collaudo stato T42"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
@@ -20708,7 +20738,8 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -20827,6 +20858,10 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     return {
         "match_values": {
@@ -20842,6 +20877,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -20959,7 +20995,10 @@ def _extract_impol_certificate_payload_from_openai(
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "BARS EXTRUDED ON TECHNICAL SPECIFICATION N° LST00, requirements in the order, in accordance with the requirements in the order, T62 o T42 collegati a specifica/ordine/prove meccaniche"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"packing_list_no\":\"string|null\",\"supplier_order_no\":\"string|null\",\"product_description_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
@@ -20970,7 +21009,8 @@ def _extract_impol_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -21046,6 +21086,10 @@ def _normalize_impol_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     packing_list_raw = _string_or_none(core_payload.get("packing_list_no"))
     customer_order_raw = _string_or_none(core_payload.get("ordine_cliente"))
@@ -21075,6 +21119,7 @@ def _normalize_impol_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -22802,7 +22847,10 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "Customer Special Requirements, Customer Specification, specifications and agreements of the order, T62 o T42 collegati a specifica cliente/ordine/proprieta meccaniche"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"po_no\":\"string|null\",\"charge_cast_no\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\"},"
@@ -22813,7 +22861,8 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -22889,6 +22938,10 @@ def _normalize_leichtmetall_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     po_no_raw = _string_or_none(core_payload.get("po_no")) or _string_or_none(core_payload.get("ordine_cliente"))
     charge_cast_raw = _string_or_none(core_payload.get("charge_cast_no")) or _string_or_none(core_payload.get("colata"))
@@ -22913,6 +22966,7 @@ def _normalize_leichtmetall_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -23022,7 +23076,10 @@ def _extract_aww_certificate_payload_from_openai(
                 "Per il blocco simulated heat treatment, estrai simulated_measured_row solo se esiste una vera riga misurata di Charge No.. "
                 "Usa solo testo realmente visibile nel documento. Non inventare, non inferire e non normalizzare. "
                 "Se un campo non e chiaramente leggibile, restituisci null. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "customer order, customer specification, customer requirement, T62 o T42 solo se collegati a requisito cliente/ordine/specifica o valori concordati"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"profile_code\":\"string|null\",\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\","
                 "\"colata\":\"string|null\",\"peso_netto\":\"string|null\",\"customer_material_number_raw\":\"string|null\","
@@ -23036,7 +23093,8 @@ def _extract_aww_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"standard_measured_row\":{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"},"
                 "\"simulated_measured_row\":{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\",\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -23112,6 +23170,10 @@ def _normalize_aww_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     customer_material_raw = _string_or_none(core_payload.get("customer_material_number_raw")) or _string_or_none(core_payload.get("articolo"))
     part_number_raw = _string_or_none(core_payload.get("article_number_raw")) or _string_or_none(core_payload.get("profile_code"))
@@ -23141,6 +23203,7 @@ def _normalize_aww_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -23360,7 +23423,10 @@ def _extract_neuman_certificate_payload_from_openai(
                 "non trattare i limiti min/max come valori misurati. "
                 "Se non esiste una vera riga o un vero blocco misurato, restituisci measured_rows vuoto. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "after simulated heat treatment acc. customer requirements, in accordance with the contracted terms of order, T62 o T42 collegati a trattamento/requisiti cliente/prove meccaniche"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
                 "\"delivery_note_raw\":\"string|null\",\"lot_number_raw\":\"string|null\",\"customer_material_number_raw\":\"string|null\","
@@ -23373,7 +23439,8 @@ def _extract_neuman_certificate_payload_from_openai(
                 "\"mechanical_raw\":{\"measured_rows\":[{\"Rm\":\"string|null\",\"Rp0.2\":\"string|null\",\"A%\":\"string|null\",\"HB\":\"string|null\","
                 "\"IACS%\":\"string|null\",\"Rp0.2/Rm\":\"string|null\"}]},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -23449,6 +23516,10 @@ def _normalize_neuman_certificate_ai_payload(
             }
         },
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
 
     delivery_note_raw = _string_or_none(core_payload.get("delivery_note_raw"))
     lot_raw = _string_or_none(core_payload.get("lot_number_raw")) or _string_or_none(core_payload.get("colata")) or _string_or_none(core_payload.get("numero_certificato"))
@@ -23478,6 +23549,7 @@ def _normalize_neuman_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": property_matches,
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -23603,6 +23675,36 @@ def _apply_aluminium_bozen_certificate_ai_payload(
                 actor_id=actor_id,
             )
 
+    requirement_matches = cast(dict[str, dict[str, str | int]], payload.get("mechanical_requirement") or {})
+    for field_name, match in requirement_matches.items():
+        snippet = _string_or_none(cast(dict[str, object], match).get("snippet")) or _string_or_none(cast(dict[str, object], match).get("final")) or ""
+        page_id = cast(dict[str, object], match).get("page_id")
+        evidence = _create_text_evidence(
+            db=db,
+            row_id=row.id,
+            document_id=certificate_document.id,
+            document_page_id=int(page_id) if page_id else None,
+            blocco="requisiti",
+            snippet=snippet,
+            actor_id=actor_id,
+            confidence=0.74,
+        )
+        _upsert_read_value_model(
+            db=db,
+            acquisition_row_id=row.id,
+            blocco="requisiti",
+            campo=field_name,
+            valore_grezzo=_string_or_none(cast(dict[str, object], match).get("raw")) or snippet,
+            valore_standardizzato=_string_or_none(cast(dict[str, object], match).get("standardized")) or snippet,
+            valore_finale=_string_or_none(cast(dict[str, object], match).get("final")) or snippet,
+            stato="proposto",
+            document_evidence_id=evidence.id,
+            metodo_lettura="chatgpt",
+            fonte_documentale="certificato",
+            confidenza=0.74,
+            actor_id=actor_id,
+        )
+
     _sync_row_from_match_values(db, row)
     _sync_row_statuses(db, row)
     db.add(row)
@@ -23624,6 +23726,22 @@ def _supplier_supports_certificate_first(supplier_key: str | None) -> bool:
         "grupa_kety",
         "zalco",
     }
+
+
+def _mechanical_requirement_prompt(example_patterns: str) -> str:
+    return (
+        "Richiamo requisiti meccanici: oltre a notes_raw estrai mechanical_requirement_raw.customer_requirement_quote_raw. "
+        "Questo campo e' separato da notes_raw: notes_raw resta dedicato alle note tecniche gia richieste. "
+        "customer_requirement_quote_raw deve contenere solo testo realmente visibile nel certificato che colleghi prove o proprieta meccaniche, "
+        "temper/stato fisico, valori concordati, specifica, ordine o requisiti cliente. "
+        "Non basta trovare una tabella di proprieta meccaniche, limiti min/max, una norma generica o solo T62/T42: "
+        "serve un richiamo esplicito a ordine, requisito cliente, specifica cliente, LST, valori concordati o accordi d'ordine. "
+        "Cerca anche formulazioni equivalenti o simili, ma restituisci solo testo realmente presente nel documento. "
+        "Regole: copia il testo visibile nella lingua originale; non tradurre; non riassumere; non inventare; "
+        "non usare esempi o pattern come risposta se non sono visibili; se piu frasi vicine sono collegate, riportale separate da ' | '; "
+        "considera sia T62 sia T42 quando presenti; se non trovi evidenza chiara, restituisci null. "
+        f"Esempi o pattern da riconoscere se visibili: {example_patterns}. "
+    )
 
 
 def _supplier_certificate_first_keeps_row_order(supplier_key: str | None) -> bool:
@@ -24264,21 +24382,25 @@ def _extract_zalco_certificate_payload_from_openai(
             "type": "input_text",
             "text": (
                 "Leggi questo certificato origine Zalco / Zeeland Aluminium Company. "
-                "Non usare certificati Forgialluminio derivati e non usare nome file. "
+                "Non usare certificati derivati e non usare nome file. "
                 "Campi core: tally_sheet_raw e' No. AVIS / TALLY SHEET; order_raw e' No. ORDRE / ORDER Nr.; "
                 "symbol_raw e' SYMBOLE/CUSTOMER ALLOY CODE; code_art_raw e' CODE/CODE ART; "
                 "diameter_raw e' DIAMETER OR SIZES/FORMAT; weight_raw e' NET; cast_raw e' No. COULEE/CAST Nr. completo; "
                 "alloy_raw e' lega/stato visibile come 6082 HO. "
                 "Chimica: leggi solo riga valori misurati, non limiti e non testo legale. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_b, nota_rohs, nota_radioactive_free; se compaiono sia Class A sia Class B restituisci entrambe. "
-                "Restituisci solo JSON con questa struttura: "
+                + _mechanical_requirement_prompt(
+                    "customer requirement, customer order, customer specification, T62 o T42 collegati a proprieta meccaniche o stato fisico"
+                )
+                + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"tally_sheet_raw\":\"string|null\",\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\","
                 "\"code_art_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\","
                 "\"cast_raw\":\"string|null\",\"alloy_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\","
                 "\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
-                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"}}"
+                "\"nota_rohs_raw\":\"string|null\",\"nota_radioactive_free_raw\":\"string|null\"},"
+                "\"mechanical_requirement_raw\":{\"customer_requirement_quote_raw\":\"string|null\"}}"
             ),
         }
     ]
@@ -24326,6 +24448,10 @@ def _normalize_zalco_certificate_ai_payload(
         _build_vision_note_extracted_payload(notes_payload, notes_source_crop),
         {notes_source_crop or "page1": {"page_id": last_page_id, "page_number": last_page_crop.get("page_number") if last_page_crop else 1}},
     )
+    mechanical_requirement_match = _normalize_mechanical_requirement_raw_payload(
+        raw_payload,
+        page_id=last_page_id,
+    )
     tally = _normalize_zalco_tally_number(_string_or_none(core_payload.get("tally_sheet_raw")))
     cast_no = _normalize_zalco_cast_number(_string_or_none(core_payload.get("cast_raw")))
     symbol = _normalize_zalco_symbol(_string_or_none(core_payload.get("symbol_raw")))
@@ -24342,6 +24468,7 @@ def _normalize_zalco_certificate_ai_payload(
         "chemistry": chemistry_matches,
         "properties": {},
         "notes": note_matches,
+        "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
 
@@ -27826,6 +27953,27 @@ def _normalize_vision_note_matches(
             "method": "chatgpt",
         }
     return normalized
+
+
+def _normalize_mechanical_requirement_raw_payload(
+    raw_payload: dict[str, object],
+    *,
+    page_id: int,
+) -> dict[str, dict[str, str | int]]:
+    requirement_payload = cast(dict[str, object], raw_payload.get("mechanical_requirement_raw") or {})
+    quote = _string_or_none(requirement_payload.get("customer_requirement_quote_raw"))
+    if quote is None:
+        return {}
+    return {
+        "customer_requirement_quote": {
+            "page_id": page_id,
+            "snippet": quote,
+            "raw": quote,
+            "standardized": quote,
+            "final": quote,
+            "method": "chatgpt",
+        }
+    }
 
 
 def _build_vision_note_extracted_payload(
