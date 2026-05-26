@@ -517,10 +517,6 @@ export default function CustomerRequirementsPage() {
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Strumenti qualità</p>
             <h1 className="mt-2 text-2xl font-semibold text-ink">Requisiti Cliente</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              Tabella dei requisiti per Cod. F3: modifica le spunte, aggiungi o rimuovi righe. Questi dati saranno la base
-              per i controlli cliente futuri.
-            </p>
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
