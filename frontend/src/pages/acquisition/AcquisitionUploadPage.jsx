@@ -484,7 +484,7 @@ export default function AcquisitionUploadPage() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
+      <div className="rounded-3xl border-2 border-slate-950 bg-white p-6 shadow-lg shadow-slate-200/40">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
@@ -509,30 +509,47 @@ export default function AcquisitionUploadPage() {
         {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
         {notice ? <p className="mt-2 text-sm text-amber-700">{notice}</p> : null}
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          <UploadSection
-            buttonLabel={processingDdt ? "Carico DDT..." : "Carica DDT"}
-            count={ddtCount}
-            files={ddtFiles}
-            helperText="Puoi caricare molti DDT insieme."
-            onAddFiles={addDdtFiles}
-            onSubmit={() => handleBatchUpload("ddt")}
-            processing={processingDdt}
-            result={ddtResult}
-            title="1. DDT"
-          />
-          <UploadSection
-            buttonLabel={processingCertificates ? "Carico certificati..." : "Carica certificati"}
-            count={certificateCount}
-            files={certificateFiles}
-            helperText="Puoi caricare molti certificati insieme."
-            onAddFiles={addCertificateFiles}
-            onSubmit={() => handleBatchUpload("certificato")}
-            processing={processingCertificates}
-            result={certificateResult}
-            title="2. Certificati"
-          />
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <UploadSection
+              count={ddtCount}
+              files={ddtFiles}
+              helperText="Puoi caricare molti DDT insieme."
+              onAddFiles={addDdtFiles}
+              result={ddtResult}
+              title="DDT"
+            />
+            <UploadSection
+              count={certificateCount}
+              files={certificateFiles}
+              helperText="Puoi caricare molti certificati insieme."
+              onAddFiles={addCertificateFiles}
+              result={certificateResult}
+              title="Certificati"
+            />
         </div>
+        <div className="mt-5 flex justify-center">
+            <button
+              className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
+              disabled={
+                startingAiRun ||
+                pendingAiStart ||
+                !canRequestAi ||
+                hasDocumentsWithoutSupplier ||
+                (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))
+              }
+              onClick={startAutomationRun}
+              type="button"
+            >
+              <MaskedAiIcon />
+              <span className="flex flex-col">
+                <span className="text-base font-semibold leading-tight">
+                  {pendingAiStart ? "Assistente AI prenotato..." : startingAiRun ? "Avvio lettura intelligente..." : "Avvia lettura intelligente AI"}
+                </span>
+                <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
+              </span>
+            </button>
+        </div>
+      </div>
 
         <div className="mt-4 rounded-2xl border border-border bg-white p-4">
           <div className="flex items-center justify-between gap-3">
@@ -584,38 +601,6 @@ export default function AcquisitionUploadPage() {
         </div>
 
         <div className="mt-4 rounded-2xl border border-border bg-white p-4">
-          <div>
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">3. Lavorazione automatica</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Usa i documenti pronti del batch corrente che vedi qui sopra.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              className="flex min-h-[78px] items-center gap-4 rounded-2xl bg-accent px-6 py-3.5 text-left text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-60"
-              disabled={
-                startingAiRun ||
-                pendingAiStart ||
-                !canRequestAi ||
-                hasDocumentsWithoutSupplier ||
-                (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato))
-              }
-              onClick={startAutomationRun}
-              type="button"
-            >
-              <MaskedAiIcon />
-              <span className="flex flex-col">
-                <span className="text-base font-semibold leading-tight">
-                  {pendingAiStart ? "Assistente AI prenotato..." : startingAiRun ? "Avvio lettura intelligente..." : "Avvia lettura intelligente dei documenti"}
-                </span>
-                <span className="text-sm font-medium text-white/80">Sensitive data masked</span>
-              </span>
-            </button>
-          </div>
-
           <div className={`mt-4 rounded-2xl border p-4 ${runStateClasses(currentRun)}`}>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -646,7 +631,6 @@ export default function AcquisitionUploadPage() {
             {currentRun?.ultimo_errore ? <div className="mt-2 text-sm text-rose-700">Errore: {currentRun.ultimo_errore}</div> : null}
           </div>
         </div>
-      </div>
     </section>
   );
 }
@@ -656,10 +640,7 @@ function UploadSection({
   helperText,
   files,
   count,
-  processing,
-  buttonLabel,
   onAddFiles,
-  onSubmit,
   result,
 }) {
   const inputId = `${title}-files`;
@@ -712,17 +693,6 @@ function UploadSection({
             {files.length > 10 ? <li>… e altri {files.length - 10}</li> : null}
           </ul>
         ) : null}
-      </div>
-
-      <div className="mt-3">
-        <button
-          className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-          disabled={processing || !count}
-          onClick={onSubmit}
-          type="button"
-        >
-          {buttonLabel}
-        </button>
       </div>
 
       {result ? (
