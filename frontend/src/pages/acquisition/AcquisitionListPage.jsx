@@ -224,6 +224,12 @@ function stateSurfaceClasses(state) {
   if (state === "neutro") {
     return "border-slate-200 bg-white text-slate-700";
   }
+  if (state === "certificato") {
+    return "border-sky-200 bg-sky-50 text-sky-800";
+  }
+  if (state === "ddt") {
+    return "border-stone-200 bg-stone-50 text-stone-800";
+  }
   if (state === "accettato") {
     return "border-slate-300 bg-slate-100 text-slate-700";
   }
@@ -255,6 +261,18 @@ function qualityEvaluationTone(value) {
 
 function isQualityEvaluated(row) {
   return Boolean(row.qualita_valutazione);
+}
+
+function hasLinkedDdtAndCertificate(row) {
+  return Boolean(row.document_ddt_id && row.document_certificato_id);
+}
+
+function isQualityBlocksConfirmed(row) {
+  return ["chimica", "proprieta", "note"].every((block) => row.block_states?.[block] === "verde");
+}
+
+function isConfirmedListRow(row) {
+  return Boolean(row.validata_finale || (isQualityEvaluated(row) && isQualityBlocksConfirmed(row) && hasLinkedDdtAndCertificate(row)));
 }
 
 function isWaitingForDdt(row) {
@@ -399,13 +417,12 @@ function rowActivityState(row) {
 }
 
 function documentMatchVisualState(row) {
-  if (documentMatchingClosed(row)) {
-    return "documento_chiuso";
-  }
   const hasDdt = Boolean(row.document_ddt_id);
   const hasCertificate = Boolean(row.document_certificato_id);
-  const hasActualMatch = Boolean(hasCertificate && row.match_state && row.match_state !== "mancante");
-  if (hasDdt && hasActualMatch) {
+  if (hasDdt && hasCertificate && row.match_state === "confermato") {
+    return "documento_chiuso";
+  }
+  if (hasDdt && hasCertificate) {
     return "verde";
   }
   if (hasDdt) {
@@ -738,7 +755,7 @@ export default function AcquisitionListPage() {
   const visibleRows = useMemo(() => {
     let nextRows = rows;
     if (!isCertificationScope) {
-      nextRows = nextRows.filter((row) => (showConfirmedOnly ? row.validata_finale || isQualityEvaluated(row) : !row.validata_finale));
+      nextRows = nextRows.filter((row) => (showConfirmedOnly ? isConfirmedListRow(row) : !isConfirmedListRow(row)));
     }
 
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
@@ -1331,7 +1348,7 @@ export default function AcquisitionListPage() {
                         onClick={() => openSection(row.id, "document-matching")}
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         secondary={compactMatchReference(row)}
-                        state="neutro"
+                        state={documentMatchVisualState(row)}
                       />
                     </td>
                       <td className="px-0 py-0">
