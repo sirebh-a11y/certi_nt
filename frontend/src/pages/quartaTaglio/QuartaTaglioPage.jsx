@@ -477,18 +477,6 @@ export default function QuartaTaglioPage() {
     return visibleItems;
   }, [visibleItems]);
 
-  const summary = useMemo(() => {
-    const ol = new Set(items.map((item) => item.cod_odp));
-    return {
-      total: items.length,
-      ol: ol.size,
-      cdq: items.reduce((total, item) => total + (item.certificates?.length || splitDisplayList(item.cdq).length), 0),
-      green: items.filter((item) => item.status_color === "green").length,
-      yellow: items.filter((item) => item.status_color === "yellow").length,
-      red: items.filter((item) => item.status_color === "red").length,
-    };
-  }, [items]);
-
   useEffect(() => {
     function updateScrollMetrics() {
       const viewport = tableViewportRef.current;
@@ -614,14 +602,6 @@ export default function QuartaTaglioPage() {
             <span className="ml-2 text-slate-500">su {totalItems}</span>
           </div>
         </div>
-      </div>
-
-      <div className="grid gap-2 md:grid-cols-5">
-        <SummaryCell label="OL" value={summary.ol} />
-        <SummaryCell label="CDQ" value={summary.cdq} />
-        <SummaryCell label="Verdi" value={summary.green} />
-        <SummaryCell label="Gialli" value={summary.yellow} />
-        <SummaryCell label="Rossi" value={summary.red} />
       </div>
 
       <div className="grid gap-2 md:grid-cols-3">
@@ -780,7 +760,7 @@ export default function QuartaTaglioPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-          <table className="min-w-[2320px] divide-y divide-slate-200 text-sm" ref={tableRef}>
+          <table className="min-w-[1680px] divide-y divide-slate-200 text-sm" ref={tableRef}>
             <thead className="bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
@@ -794,7 +774,6 @@ export default function QuartaTaglioPage() {
                 <SortableHeader field="esolver_ddt" label="DDT" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_qta_totale" label="Qta DDT" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="status_message" label="Motivo" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="matching_rows" label="Righe app" onSort={toggleSort} sortConfig={sortConfig} />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -869,7 +848,7 @@ export default function QuartaTaglioPage() {
                   <td className="min-w-[220px] max-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_cliente || "-"}</div>
                   </td>
-                  <td className="min-w-[150px] max-w-[220px] px-3 py-2.5 text-slate-700">
+                  <td className="min-w-[110px] max-w-[150px] px-2 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_ddt || "-"}</div>
                     {item.esolver_ordine_cliente ? <div className="mt-1 text-xs text-slate-500">Ord. {item.esolver_ordine_cliente}</div> : null}
                   </td>
@@ -883,23 +862,6 @@ export default function QuartaTaglioPage() {
                         ))}
                       </div>
                     ) : null}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">
-                    {item.matching_row_ids?.length
-                      ? item.matching_row_ids.map((rowId) => (
-                          <Link
-                            className="mr-2 font-semibold text-accent hover:underline"
-                            key={rowId}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              persistCurrentListState();
-                            }}
-                            to={`/acquisition/${rowId}`}
-                          >
-                            #{rowId}
-                          </Link>
-                        ))
-                      : "-"}
                   </td>
                 </tr>
               ))}
@@ -921,15 +883,6 @@ export default function QuartaTaglioPage() {
         </div>
       ) : null}
     </section>
-  );
-}
-
-function SummaryCell({ label, value }) {
-  return (
-    <div className="rounded-lg border border-border bg-white px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold text-slate-900">{value}</div>
-    </div>
   );
 }
 
