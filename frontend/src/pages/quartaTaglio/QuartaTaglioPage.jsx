@@ -644,13 +644,13 @@ export default function QuartaTaglioPage() {
         <button
           className={`min-w-[190px] rounded-xl border px-3 py-2 text-sm font-semibold ${
             hideCertified
-              ? "border-sky-300 bg-sky-50 text-sky-800"
+              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
               : "border-border bg-white text-slate-700 hover:bg-slate-50"
           }`}
           onClick={() => setHideCertified((current) => !current)}
           type="button"
         >
-          Nascondi certificati
+          {hideCertified ? "Completati nascosti" : "Nascondi completati"}
         </button>
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-taglio-search-1">
@@ -855,6 +855,16 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.esolver_qta_totale)}</td>
                   <td className="min-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="font-medium">{item.status_message}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`inline-flex rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${statusClass(
+                          item.certification_progress_color,
+                        )}`}
+                        title={item.certification_progress_message || ""}
+                      >
+                        Certificazione: {item.certification_progress_label || "Da fare"}
+                      </span>
+                    </div>
                     {item.status_details?.length ? (
                       <div className="mt-1 space-y-0.5 text-xs text-slate-500">
                         {item.status_details.map((detail) => (

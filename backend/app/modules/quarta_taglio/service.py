@@ -87,6 +87,14 @@ class _CertiOlRow:
     cod_f3: str | None
     des_f3: str | None
 
+
+@dataclass(frozen=True)
+class _OlCertificationProgress:
+    status: str = "todo"
+    label: str = "Da fare"
+    color: str = "not_checked"
+    message: str | None = None
+
 STATUS_SEVERITY = {
     "green": 1,
     "yellow": 2,
@@ -280,13 +288,6 @@ def sync_and_list_quarta_taglio(
     rows_query = db.query(QuartaTaglioRow).filter(QuartaTaglioRow.seen_in_last_sync.is_(True))
     if only_taglio_active:
         rows_query = rows_query.filter(QuartaTaglioRow.taglio_attivo.is_(True))
-    if hide_certified:
-        certified_cod_odps = (
-            db.query(QuartaTaglioFinalCertificate.cod_odp)
-            .filter(QuartaTaglioFinalCertificate.certificate_number.isnot(None))
-            .distinct()
-        )
-        rows_query = rows_query.filter(QuartaTaglioRow.cod_odp.not_in(certified_cod_odps))
     rows = rows_query.order_by(QuartaTaglioRow.data_registro.desc(), QuartaTaglioRow.cod_odp.desc(), QuartaTaglioRow.cdq.asc()).all()
 
     grouped_rows = _group_quarta_rows(rows)
@@ -303,6 +304,18 @@ def sync_and_list_quarta_taglio(
         operator_one=operator_one,
         operator_two=operator_two,
     )
+    progress_by_odp: dict[str, _OlCertificationProgress] = {}
+    if hide_certified and filtered_groups:
+        progress_by_odp = _build_certification_progress_by_odp(
+            db,
+            groups=[group_rows for _summary, group_rows in filtered_groups],
+            esolver_links=cached_esolver_links,
+        )
+        filtered_groups = [
+            (summary, group_rows)
+            for summary, group_rows in filtered_groups
+            if progress_by_odp.get(summary.cod_odp, _OlCertificationProgress()).status != "completed"
+        ]
     filtered_groups.sort(
         key=lambda item: _quarta_group_sort_key(item[0], sort_field=sort_field),
         reverse=True if not sort_field else (sort_direction == "desc"),
@@ -314,10 +327,18 @@ def sync_and_list_quarta_taglio(
     page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
     esolver_links = _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
     certiol_rows_by_odp = _fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _group_rows in page_groups])
+    page_progress_by_odp = _build_certification_progress_by_odp(
+        db,
+        groups=[group_rows for _summary, group_rows in page_groups],
+        esolver_links=esolver_links,
+        certiol_rows_by_odp=certiol_rows_by_odp,
+        existing_progress=progress_by_odp,
+    )
     page_items = [
         _serialize_ol_group(
             group_rows,
             esolver_link=esolver_links.get(summary.cod_odp),
+            certification_progress=page_progress_by_odp.get(summary.cod_odp),
             cod_f3_candidates=_build_certiol_candidates(
                 certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
                 quarta_rows=group_rows,
@@ -3948,6 +3969,157 @@ def _certificate_cod_f3_display(certificate: QuartaTaglioFinalCertificate) -> st
     return _join_unique(codice_f3_values) or _join_unique(cod_art_values) or None
 
 
+def _build_certification_progress_by_odp(
+    db: Session,
+    *,
+    groups: list[list[QuartaTaglioRow]],
+    esolver_links: dict[str, QuartaTaglioEsolverLink],
+    certiol_rows_by_odp: dict[str, list[_CertiOlRow]] | None = None,
+    existing_progress: dict[str, _OlCertificationProgress] | None = None,
+) -> dict[str, _OlCertificationProgress]:
+    cod_odps = [group_rows[0].cod_odp for group_rows in groups if group_rows]
+    progress: dict[str, _OlCertificationProgress] = dict(existing_progress or {})
+    missing_odps = [cod_odp for cod_odp in cod_odps if cod_odp not in progress]
+    if not missing_odps:
+        return {cod_odp: progress[cod_odp] for cod_odp in cod_odps if cod_odp in progress}
+
+    certificates_by_odp = _load_final_certificates_by_odp(db, missing_odps)
+    needs_candidate_check: list[str] = []
+    for cod_odp in missing_odps:
+        certificates = certificates_by_odp.get(cod_odp, [])
+        if not certificates:
+            progress[cod_odp] = _OlCertificationProgress()
+        elif any(not _certificate_is_pdf_final(certificate) for certificate in certificates):
+            progress[cod_odp] = _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
+            )
+        else:
+            needs_candidate_check.append(cod_odp)
+
+    certiol_rows_by_odp = dict(certiol_rows_by_odp or {})
+    missing_certiol_odps = [cod_odp for cod_odp in needs_candidate_check if cod_odp not in certiol_rows_by_odp]
+    if missing_certiol_odps:
+        certiol_rows_by_odp.update(_fetch_certiol_rows_batch(db, missing_certiol_odps))
+
+    groups_by_odp = {group_rows[0].cod_odp: group_rows for group_rows in groups if group_rows}
+    for cod_odp in needs_candidate_check:
+        progress[cod_odp] = _certification_progress_for_group(
+            group_rows=groups_by_odp.get(cod_odp) or [],
+            certiol_rows=certiol_rows_by_odp.get(cod_odp, []),
+            esolver_link=esolver_links.get(cod_odp),
+            certificates=certificates_by_odp.get(cod_odp, []),
+        )
+    return {cod_odp: progress[cod_odp] for cod_odp in cod_odps if cod_odp in progress}
+
+
+def _load_final_certificates_by_odp(
+    db: Session,
+    cod_odps: list[str],
+) -> dict[str, list[QuartaTaglioFinalCertificate]]:
+    cleaned_odps = _unique_clean(cod_odps)
+    if not cleaned_odps:
+        return {}
+    result: dict[str, list[QuartaTaglioFinalCertificate]] = defaultdict(list)
+    chunk_size = 900
+    for index in range(0, len(cleaned_odps), chunk_size):
+        chunk = cleaned_odps[index : index + chunk_size]
+        certificates = (
+            db.query(QuartaTaglioFinalCertificate)
+            .filter(
+                QuartaTaglioFinalCertificate.cod_odp.in_(chunk),
+                QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+            )
+            .all()
+        )
+        for certificate in certificates:
+            result[certificate.cod_odp].append(certificate)
+    return dict(result)
+
+
+def _certification_progress_for_group(
+    *,
+    group_rows: list[QuartaTaglioRow],
+    certiol_rows: list[_CertiOlRow],
+    esolver_link: QuartaTaglioEsolverLink | None,
+    certificates: list[QuartaTaglioFinalCertificate],
+) -> _OlCertificationProgress:
+    cod_odp = group_rows[0].cod_odp if group_rows else ""
+    esolver_rows = _esolver_rows_from_link(esolver_link)
+    ready_units = [
+        unit
+        for unit in _build_certifiable_units(cod_odp=cod_odp, esolver_rows=esolver_rows, quarta_rows=group_rows)
+        if unit.source == "esolver" and unit.status == "ready" and _clean_text(unit.unit_key)
+    ]
+    if ready_units:
+        relevant_unit_keys = {_clean_text(unit.unit_key) for unit in ready_units if _clean_text(unit.unit_key)}
+        completed_unit_keys = {
+            _clean_text(certificate.unit_key)
+            for certificate in certificates
+            if _certificate_is_pdf_final(certificate) and _clean_text(certificate.unit_key) in relevant_unit_keys
+        }
+        if relevant_unit_keys and relevant_unit_keys.issubset(completed_unit_keys):
+            return _OlCertificationProgress(
+                status="completed",
+                label="Completato",
+                color="green",
+                message="Tutte le righe DDT utili hanno PDF chiuso",
+            )
+        if certificates:
+            return _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
+            )
+        return _OlCertificationProgress()
+
+    candidates = _build_certiol_candidates(
+        certiol_rows=certiol_rows,
+        quarta_rows=group_rows,
+        esolver_rows=esolver_rows,
+    )
+    relevant_cod_f3_keys = {
+        _norm(candidate.cod_f3)
+        for candidate in candidates
+        if candidate.confidence != "review" and not candidate.blocked_reason and _norm(candidate.cod_f3)
+    }
+    if not relevant_cod_f3_keys:
+        return _OlCertificationProgress(
+            status="partial",
+            label="Parziale",
+            color="yellow",
+            message="Certificazione avviata, ma CodF3 utili non abbastanza chiari per chiudere automaticamente",
+        )
+
+    completed_cod_f3_keys = {
+        _norm(certificate.cod_f3)
+        for certificate in certificates
+        if _certificate_is_pdf_final(certificate) and _norm(certificate.cod_f3)
+    }
+    if relevant_cod_f3_keys and relevant_cod_f3_keys.issubset(completed_cod_f3_keys):
+        return _OlCertificationProgress(
+            status="completed",
+            label="Completato",
+            color="green",
+            message="Tutte le lavorazioni utili hanno PDF chiuso",
+        )
+    if certificates:
+        return _OlCertificationProgress(
+            status="partial",
+            label="Parziale",
+            color="yellow",
+            message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
+        )
+    return _OlCertificationProgress()
+
+
+def _certificate_is_pdf_final(certificate: QuartaTaglioFinalCertificate) -> bool:
+    return certificate.status == "pdf_final" and bool(certificate.storage_key_pdf)
+
+
 def _serialize_row(row: QuartaTaglioRow) -> QuartaTaglioRowResponse:
     return QuartaTaglioRowResponse.model_validate(row)
 
@@ -4005,6 +4177,8 @@ def _quarta_searchable_values(item: QuartaTaglioRowResponse) -> list[str]:
         item.data_registro,
         item.status_color,
         item.status_message,
+        item.certification_progress_label,
+        item.certification_progress_message,
         item.esolver_status,
         item.esolver_message,
         item.esolver_cliente,
@@ -4105,10 +4279,12 @@ def _serialize_ol_group(
     *,
     esolver_link: QuartaTaglioEsolverLink | None = None,
     cod_f3_candidates: list[QuartaTaglioCodF3CandidateResponse] | None = None,
+    certification_progress: _OlCertificationProgress | None = None,
 ) -> QuartaTaglioRowResponse:
     primary = rows[0]
     worst_color = max((row.status_color for row in rows), key=lambda color: STATUS_SEVERITY.get(color, 0))
     status_details = _group_status_details(rows)
+    progress = certification_progress or _OlCertificationProgress()
     return QuartaTaglioRowResponse(
         id=primary.id,
         codice_registro=primary.codice_registro,
@@ -4138,6 +4314,10 @@ def _serialize_ol_group(
         esolver_qta_totale=esolver_link.qta_totale if esolver_link else None,
         esolver_last_checked_at=esolver_link.last_checked_at if esolver_link else None,
         cod_f3_candidate_summary=_certiol_candidate_summary(cod_f3_candidates or []),
+        certification_progress_status=progress.status,
+        certification_progress_label=progress.label,
+        certification_progress_color=progress.color,
+        certification_progress_message=progress.message,
         certificates=[_serialize_certificate(row) for row in rows],
         seen_in_last_sync=all(row.seen_in_last_sync for row in rows),
         first_seen_at=min(row.first_seen_at for row in rows),

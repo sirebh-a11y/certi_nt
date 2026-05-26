@@ -92,6 +92,10 @@ class QuartaTaglioRowResponse(BaseModel):
     esolver_qta_totale: float | None = None
     esolver_last_checked_at: datetime | None = None
     cod_f3_candidate_summary: QuartaTaglioCodF3CandidateSummaryResponse = Field(default_factory=QuartaTaglioCodF3CandidateSummaryResponse)
+    certification_progress_status: str = "todo"
+    certification_progress_label: str = "Da fare"
+    certification_progress_color: str = "not_checked"
+    certification_progress_message: str | None = None
     certificates: list[QuartaTaglioCertificateResponse] = Field(default_factory=list)
     seen_in_last_sync: bool
     first_seen_at: datetime
