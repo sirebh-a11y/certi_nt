@@ -49,6 +49,7 @@ PROPERTY_WORD_FIELDS = ["HB", "diametro", "S", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm"
 CONTENT_CONTROL_TAGS = (
     "CERT_NUMBER",
     "CERT_DATE",
+    "SUPPLIER_REF",
     "PURCHASER",
     "ORDER_CLIENT",
     "CONFIRM_ORDER",
@@ -302,10 +303,18 @@ def _add_chemistry_intro(document: Document, *, detail: QuartaTaglioDetailRespon
     _clear_table_borders(info_table)
     info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _set_table_width(info_table, Inches(6.7))
+    _set_column_widths(info_table, [Inches(2.3), Inches(2.5), Inches(1.9)])
     alloy_cell, charge_cell, ref_cell = info_table.rows[0].cells
     _add_inline_label_value(alloy_cell.paragraphs[0], "Alloy:", _alloy_label(detail))
     _add_inline_label_value(charge_cell.paragraphs[0], "Charge:", detail.cod_odp)
-    _add_inline_label_value(ref_cell.paragraphs[0], "Ref.:", "-")
+    _add_inline_label_value(
+        ref_cell.paragraphs[0],
+        "Ref.:",
+        (detail.header or {}).get("supplier_ref") or "-",
+        control_tag="SUPPLIER_REF",
+    )
+    for cell in (alloy_cell, charge_cell, ref_cell):
+        _set_cell_no_wrap(cell)
     document.add_paragraph().paragraph_format.space_after = Pt(4)
 
 
@@ -902,12 +911,21 @@ def _fill_header_data_cell(cell, english_label: str, italian_label: str, value: 
     run.font.size = Pt(8)
 
 
-def _add_inline_label_value(paragraph, label: str, value: object) -> None:
+def _add_inline_label_value(paragraph, label: str, value: object, *, control_tag: str | None = None) -> None:
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     label_run = paragraph.add_run(f"{label} ")
     label_run.bold = True
     label_run.font.name = "Times New Roman"
     label_run.font.size = Pt(12)
+    if control_tag:
+        _add_content_control_run(
+            paragraph,
+            tag=control_tag,
+            text=_empty_dash(value),
+            font_name="Times New Roman",
+            size=11 if len(_empty_dash(value)) > 8 else 12,
+        )
+        return
     value_run = paragraph.add_run(_empty_dash(value))
     value_run.font.name = "Times New Roman"
     value_run.font.size = Pt(12)

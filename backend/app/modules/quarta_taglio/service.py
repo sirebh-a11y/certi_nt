@@ -68,6 +68,8 @@ from app.modules.quarta_taglio.schemas import (
 
 from app.modules.standards.models import NormativeStandard
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
+from app.modules.supplier_codes.models import SupplierInstallationCode
+from app.modules.suppliers.models import Supplier
 
 
 @dataclass(frozen=True)
@@ -696,6 +698,7 @@ def get_quarta_taglio_detail(
             "disegno_diverso_da_quarta": "true" if disegno_override and _norm(disegno_override) != _norm(disegno_proposta) else None,
             "disegno_confidenza": disegno_confidenza,
             "colata": group.colata,
+            "supplier_ref": _supplier_ref_from_app_rows(db, app_rows),
             "materiale_fornito": _join_unique(_materiale_fornito_from_app_row(row) for row in app_rows) or None,
             "diametro": _join_unique(row.diametro for row in app_rows) or None,
             "materiale_raw": _join_unique((_materiale_raw_from_app_row(row) for row in app_rows), separator=" | ") or None,
@@ -728,6 +731,7 @@ def get_quarta_taglio_detail(
             certificate_number=open_certificate_number,
             cod_odp=group.cod_odp,
             cod_f3=_clean_text(open_certificate.cod_f3) if open_certificate else primary_unit.cod_f3 if primary_unit else None,
+            raw_cod_f3=header_flow["raw_cod_f3"],
         ),
         word_info=_serialize_word_info(open_certificate),
     )
@@ -987,6 +991,7 @@ def create_quarta_taglio_word_draft(
         certificate_number=certificate_number,
         cod_odp=certificate.cod_odp,
         cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
+        raw_cod_f3=(detail.header or {}).get("codice_f3_raw"),
     )
     build_forgialluminio_draft_docx(
         detail=detail,
@@ -1229,6 +1234,7 @@ def _word_content_control_values_from_header(header: dict[str, object], certific
     return {
         "CERT_NUMBER": certificate.certificate_number or certificate.draft_number or header.get("numero_certificato") or "",
         "CERT_DATE": header.get("data_certificato") or "",
+        "SUPPLIER_REF": header.get("supplier_ref") or "",
         "PURCHASER": header.get("cliente") or "",
         "ORDER_CLIENT": header.get("ordine_cliente") or "",
         "CONFIRM_ORDER": header.get("conferma_ordine") or "",
@@ -2089,12 +2095,14 @@ def _additional_pages_path_for_certificate(
     certificate_number: str | None,
     cod_odp: str | None = None,
     cod_f3: str | None = None,
+    raw_cod_f3: str | None = None,
 ) -> Path | None:
     resolution = _resolve_additional_pages_for_certificate(
         db,
         certificate_number=certificate_number,
         cod_odp=cod_odp,
         cod_f3=cod_f3,
+        raw_cod_f3=raw_cod_f3,
     )
     if resolution is None:
         return None
@@ -2123,6 +2131,7 @@ def _resolve_additional_pages_for_certificate(
     certificate_number: str | None,
     cod_odp: str | None = None,
     cod_f3: str | None = None,
+    raw_cod_f3: str | None = None,
 ) -> _AdditionalPagesResolution | None:
     cleaned_number = _clean_text(certificate_number)
     exact_pages = _additional_pages_for_certificate(db, certificate_number=cleaned_number)
@@ -2145,15 +2154,13 @@ def _resolve_additional_pages_for_certificate(
         .all()
     )
     visited_numbers = {cleaned_number} if cleaned_number else set()
-    for _ in range(len(certificates) + 1):
-        previous = _previous_cod_f3_certificate(
-            certificates,
-            cod_odp=cod_odp,
-            current_cod_f3=current_cod_f3,
-            visited_numbers=visited_numbers,
-        )
-        if previous is None or not previous.certificate_number:
-            return None
+    for previous in _ordered_inheritance_source_certificates(
+        certificates,
+        cod_odp=cod_odp,
+        current_cod_f3=_clean_text(cod_f3),
+        raw_cod_f3=raw_cod_f3,
+        visited_numbers=visited_numbers,
+    ):
         previous_number = _clean_text(previous.certificate_number)
         visited_numbers.add(previous_number)
         previous_pages = _additional_pages_for_certificate(db, certificate_number=previous_number)
@@ -2164,10 +2171,6 @@ def _resolve_additional_pages_for_certificate(
                 inherited_from_certificate_number=previous_number,
                 inherited_from_cod_f3=_clean_text(previous.cod_f3),
             )
-        previous_cod_f3 = _cod_f3_sort_value(previous.cod_f3)
-        if previous_cod_f3 is None or previous_cod_f3 >= current_cod_f3:
-            return None
-        current_cod_f3 = previous_cod_f3
     return None
 
 
@@ -2207,12 +2210,14 @@ def _serialize_additional_pages(
     certificate_number: str | None,
     cod_odp: str | None = None,
     cod_f3: str | None = None,
+    raw_cod_f3: str | None = None,
 ) -> QuartaTaglioAdditionalPagesResponse | None:
     resolution = _resolve_additional_pages_for_certificate(
         db,
         certificate_number=certificate_number,
         cod_odp=cod_odp,
         cod_f3=cod_f3,
+        raw_cod_f3=raw_cod_f3,
     )
     if resolution is None:
         return None
@@ -2323,7 +2328,11 @@ def _certificate_word_source_path_for_auto_update(
     if certificate.storage_key_docx:
         return None
 
-    source_certificate = _previous_word_certificate_for_inheritance(db, certificate=certificate)
+    source_certificate = _previous_word_certificate_for_inheritance(
+        db,
+        certificate=certificate,
+        raw_cod_f3=_clean_text(values.get("COD_F3_RAW")),
+    )
     if source_certificate is None or not source_certificate.storage_key_docx:
         return None
     source_path = _certificate_storage_path(source_certificate.storage_key_docx)
@@ -2337,6 +2346,7 @@ def _previous_word_certificate_for_inheritance(
     db: Session,
     *,
     certificate: QuartaTaglioFinalCertificate,
+    raw_cod_f3: str | None = None,
 ) -> QuartaTaglioFinalCertificate | None:
     current_cod_f3 = _cod_f3_sort_value(certificate.cod_f3)
     if current_cod_f3 is None:
@@ -2353,12 +2363,100 @@ def _previous_word_certificate_for_inheritance(
         .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
-    return _previous_cod_f3_certificate(
+    return next(iter(_ordered_inheritance_source_certificates(
         candidates,
         cod_odp=certificate.cod_odp,
-        current_cod_f3=current_cod_f3,
+        current_cod_f3=certificate.cod_f3,
+        raw_cod_f3=raw_cod_f3,
         visited_numbers={_clean_text(certificate.certificate_number) or ""},
-    )
+    )), None)
+
+
+def _ordered_inheritance_source_certificates(
+    certificates: list[QuartaTaglioFinalCertificate],
+    *,
+    cod_odp: str | None,
+    current_cod_f3: str | None,
+    raw_cod_f3: str | None,
+    visited_numbers: set[str],
+) -> list[QuartaTaglioFinalCertificate]:
+    current_ol = _norm(cod_odp)
+    current_sort = _cod_f3_sort_value(current_cod_f3)
+    if current_sort is None:
+        return []
+
+    usable: list[QuartaTaglioFinalCertificate] = []
+    for certificate in certificates:
+        certificate_number = _clean_text(certificate.certificate_number)
+        if not certificate_number or certificate_number in visited_numbers:
+            continue
+        if _norm(certificate.cod_odp) != current_ol:
+            continue
+        if _cod_f3_sort_value(certificate.cod_f3) is None:
+            continue
+        usable.append(certificate)
+
+    ordered: list[QuartaTaglioFinalCertificate] = []
+    used_ids: set[int] = set()
+
+    def add(certificate: QuartaTaglioFinalCertificate | None) -> None:
+        if certificate is None:
+            return
+        certificate_id = int(certificate.id or 0)
+        if certificate_id in used_ids:
+            return
+        used_ids.add(certificate_id)
+        ordered.append(certificate)
+
+    raw_key = _norm(raw_cod_f3)
+    if raw_key and _cod_f3_in_inheritance_family(raw_cod_f3, current_cod_f3):
+        add(next((certificate for certificate in usable if _norm(certificate.cod_f3) == raw_key), None))
+
+        raw_variants = [
+            certificate
+            for certificate in usable
+            if _norm(certificate.cod_f3) != raw_key and _cod_f3_is_raw_variant(raw_cod_f3, certificate.cod_f3)
+        ]
+        raw_variants.sort(
+            key=lambda certificate: (
+                abs((_cod_f3_sort_value(certificate.cod_f3) or current_sort) - current_sort),
+                -(_cod_f3_sort_value(certificate.cod_f3) or 0),
+            )
+        )
+        for certificate in raw_variants:
+            add(certificate)
+
+    previous_numeric = [
+        certificate
+        for certificate in usable
+        if (_cod_f3_sort_value(certificate.cod_f3) or 0) < current_sort
+    ]
+    previous_numeric.sort(key=lambda certificate: _cod_f3_sort_value(certificate.cod_f3) or 0, reverse=True)
+    for certificate in previous_numeric:
+        add(certificate)
+    return ordered
+
+
+def _cod_f3_in_inheritance_family(raw_cod_f3: str | None, cod_f3: str | None) -> bool:
+    raw_key = _norm(raw_cod_f3)
+    cod_key = _norm(cod_f3)
+    if not raw_key or not cod_key:
+        return False
+    if raw_key == cod_key:
+        return True
+    if _is_old_certiol_codification(raw_cod_f3):
+        return _is_old_certiol_child(raw_cod_f3, cod_f3)
+    return bool(_cod_f3_prefix(raw_cod_f3) and _cod_f3_prefix(raw_cod_f3) == _cod_f3_prefix(cod_f3))
+
+
+def _cod_f3_is_raw_variant(raw_cod_f3: str | None, cod_f3: str | None) -> bool:
+    if _is_old_certiol_codification(raw_cod_f3):
+        return _norm(raw_cod_f3) == _norm(cod_f3)
+    if not _cod_f3_in_inheritance_family(raw_cod_f3, cod_f3):
+        return False
+    raw_suffix = _cod_f3_last_two(raw_cod_f3)
+    cod_suffix = _cod_f3_last_two(cod_f3)
+    return raw_suffix in {"00", "01", "02"} and cod_suffix in {"00", "01", "02"}
 
 
 def _docx_needs_content_control_update(path: Path, values: dict[str, object]) -> bool:
@@ -2405,6 +2503,7 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
             selectinload(AcquisitionRow.values),
             selectinload(AcquisitionRow.history_events),
             selectinload(AcquisitionRow.certificate_match),
+            selectinload(AcquisitionRow.supplier).selectinload(Supplier.esolver_link),
             selectinload(AcquisitionRow.custom_note_links).joinedload(AcquisitionRowNoteTemplate.note_template),
         )
         .filter(AcquisitionRow.id.in_(row_ids))
@@ -2737,6 +2836,7 @@ def _word_creation_blockers(
     if not selected_standard_confirmed:
         blockers.append("Standard non confermato")
 
+    supplier_ref_by_row_id, supplier_ref_missing_by_row_id = _supplier_ref_lookup_for_rows(db, app_rows)
     app_rows_by_key: dict[tuple[str, str], list[AcquisitionRow]] = defaultdict(list)
     for row in app_rows:
         app_rows_by_key[(_norm(row.cdq), _norm(row.colata))].append(row)
@@ -2779,6 +2879,10 @@ def _word_creation_blockers(
             continue
 
         row = exact_rows[0]
+        if row.id not in supplier_ref_by_row_id:
+            blockers.append(
+                f"{label}: codice Ref. fornitore mancante per {supplier_ref_missing_by_row_id.get(row.id) or 'fornitore'}"
+            )
         block_states = _compute_block_states_from_db(db, row)
         for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
             if block_states.get(block) != "verde":
@@ -2793,6 +2897,63 @@ def _word_creation_blockers(
 
 def _certificate_material_label(row: QuartaTaglioRow) -> str:
     return f"CDQ {_clean_text(row.cdq) or '-'}, colata {_clean_text(row.colata) or '-'}"
+
+
+def _supplier_ref_lookup_for_rows(db: Session, app_rows: list[AcquisitionRow]) -> tuple[dict[int, str], dict[int, str]]:
+    supplier_ids = sorted({row.fornitore_id for row in app_rows if row.fornitore_id is not None})
+    esolver_codes = sorted(
+        {
+            _clean_text(row.supplier.esolver_link.cod_clifor)
+            for row in app_rows
+            if row.supplier is not None and row.supplier.esolver_link is not None
+        }
+        - {None, ""}
+    )
+    codes_by_supplier_id = {
+        item.fornitore_id: item.codice
+        for item in db.query(SupplierInstallationCode)
+        .filter(SupplierInstallationCode.fornitore_id.in_(supplier_ids))
+        .order_by(SupplierInstallationCode.id.asc())
+        .all()
+        if item.fornitore_id is not None and _clean_text(item.codice)
+    }
+    codes_by_esolver = {
+        _clean_text(item.esolver_cod_clifor): item.codice
+        for item in db.query(SupplierInstallationCode)
+        .filter(SupplierInstallationCode.esolver_cod_clifor.in_(esolver_codes))
+        .order_by(SupplierInstallationCode.id.asc())
+        .all()
+        if _clean_text(item.esolver_cod_clifor) and _clean_text(item.codice)
+    }
+
+    found: dict[int, str] = {}
+    missing: dict[int, str] = {}
+    for row in app_rows:
+        code = codes_by_supplier_id.get(row.fornitore_id) if row.fornitore_id is not None else None
+        if not code and row.supplier is not None and row.supplier.esolver_link is not None:
+            code = codes_by_esolver.get(_clean_text(row.supplier.esolver_link.cod_clifor))
+        if code:
+            found[row.id] = code
+            continue
+        missing[row.id] = (
+            row.supplier.ragione_sociale
+            if row.supplier is not None
+            else _clean_text(row.fornitore_raw) or f"riga Incoming #{row.id}"
+        )
+    return found, missing
+
+
+def _supplier_ref_from_app_rows(db: Session, app_rows: list[AcquisitionRow]) -> str | None:
+    codes_by_row_id, _missing = _supplier_ref_lookup_for_rows(db, app_rows)
+    codes: list[str] = []
+    seen: set[str] = set()
+    for row in app_rows:
+        code = codes_by_row_id.get(row.id)
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return "".join(codes) or None
 
 
 def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> QuartaTaglioStandardCandidateResponse | None:
