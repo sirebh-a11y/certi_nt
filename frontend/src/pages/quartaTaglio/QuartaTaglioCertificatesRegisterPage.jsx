@@ -169,6 +169,38 @@ function compareValues(left, right, direction) {
   return String(left).localeCompare(String(right), "it", { numeric: true, sensitivity: "base" }) * multiplier;
 }
 
+function registerStatusSortValue(item) {
+  if (item.status === "pdf_final" && item.has_pdf) {
+    return 10;
+  }
+  if (item.ddt && hasInheritedWord(item) && !item.has_pdf) {
+    return 30;
+  }
+  if (item.ddt && item.has_word && !item.has_pdf) {
+    return 20;
+  }
+  if (!item.ddt) {
+    return 40;
+  }
+  return 90;
+}
+
+function registerFileSortValue(item) {
+  if (item.has_word && item.has_pdf && item.status === "pdf_final") {
+    return 10;
+  }
+  if (item.has_word && item.ddt && !item.has_pdf && !hasInheritedWord(item)) {
+    return 20;
+  }
+  if (hasInheritedWord(item)) {
+    return 30;
+  }
+  if (item.has_word) {
+    return 40;
+  }
+  return 90;
+}
+
 function certificateSortValue(item, field) {
   switch (field) {
     case "certificate_number":
@@ -192,11 +224,11 @@ function certificateSortValue(item, field) {
     case "fornitore_cliente":
       return item.fornitore_cliente || "";
     case "status":
-      return item.status || "";
+      return registerStatusSortValue(item);
     case "conformity":
       return normalizedConformityStatus(item.conformity_status);
     case "file":
-      return `${item.has_word ? "1" : "0"}-${item.has_pdf ? "1" : "0"}`;
+      return registerFileSortValue(item);
     default:
       return null;
   }
