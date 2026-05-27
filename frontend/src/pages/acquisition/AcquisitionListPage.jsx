@@ -106,7 +106,7 @@ function activityLabelFromState(state) {
 
 function blockDisplayLabel(row, block) {
   if (
-    (block === "chimica" || block === "proprieta") &&
+    (block === "chimica" || block === "proprieta" || block === "note") &&
     row.block_states?.[block] === "verde" &&
     row.quick_confirmed_blocks?.[block]
   ) {
@@ -280,6 +280,9 @@ function isWaitingForDdt(row) {
 }
 
 function compactNoteReference(row) {
+  if (row.block_states?.note === "verde" && row.quick_confirmed_blocks?.note) {
+    return "Conf. da Cert.";
+  }
   const noteValue = row.note_documento?.trim();
   if (noteValue) {
     return noteValue.length > 18 ? `${noteValue.slice(0, 18)}...` : noteValue;

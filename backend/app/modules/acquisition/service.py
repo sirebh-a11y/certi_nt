@@ -431,7 +431,7 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
 
 
 def _quick_confirmed_blocks_from_row(row: AcquisitionRow) -> dict[str, bool]:
-    result = {"chimica": False, "proprieta": False}
+    result = {"chimica": False, "proprieta": False, "note": False}
     if row.document_certificato_id is None:
         return result
     for event in getattr(row, "history_events", None) or []:
@@ -17847,7 +17847,9 @@ def _compute_block_states(row: AcquisitionRow) -> dict[str, str]:
                 blocco="note",
                 actions=("note_rilevate", "note_non_rilevate"),
             ),
-        ),
+        )
+        if "note" not in quick_confirmed_blocks
+        else "verde",
     }
 
 
@@ -17898,7 +17900,9 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
                 blocco="note",
                 actions=("note_rilevate", "note_non_rilevate"),
             ),
-        ),
+        )
+        if "note" not in quick_confirmed_blocks
+        else "verde",
     }
 
 
@@ -17906,7 +17910,7 @@ def _quick_confirmed_blocks_from_events(events: list[AcquisitionHistoryEvent]) -
     return {
         event.blocco
         for event in events
-        if event.azione == "conferma_rapida_certificazione" and event.blocco in {"chimica", "proprieta"}
+        if event.azione == "conferma_rapida_certificazione" and event.blocco in {"chimica", "proprieta", "note"}
     }
 
 
@@ -17918,7 +17922,7 @@ def _quick_confirmed_blocks_from_db(db: Session, acquisition_row_id: int) -> set
             .filter(
                 AcquisitionHistoryEvent.acquisition_row_id == acquisition_row_id,
                 AcquisitionHistoryEvent.azione == "conferma_rapida_certificazione",
-                AcquisitionHistoryEvent.blocco.in_(("chimica", "proprieta")),
+                AcquisitionHistoryEvent.blocco.in_(("chimica", "proprieta", "note")),
             )
             .all()
         )

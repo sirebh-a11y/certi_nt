@@ -558,17 +558,6 @@ def get_quarta_taglio_detail(
         selected_standard_confirmed=selected_standard_confirmed,
     )
     quick_confirm_rows = _quick_incoming_confirm_eligible_rows(app_rows)
-    quick_confirm_blockers = _quick_incoming_confirm_blockers(
-        app_rows=quick_confirm_rows,
-        selected_standard_confirmed=selected_standard_confirmed,
-        conformity_status=conformity_status,
-    )
-    quick_confirm_applied = _quick_incoming_confirm_applied(quick_confirm_rows)
-    quick_confirm_warning = (
-        "Standard modificato: controlla in Incoming chimica e proprietà dei CDQ collegati."
-        if quick_confirm_applied and selected_standard_confirmed and conformity_status != "conforme"
-        else None
-    )
     esolver_rows = _esolver_rows_from_link(esolver_link)
     esolver_status = esolver_link.status if esolver_link else "not_checked"
     esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
@@ -593,6 +582,21 @@ def get_quarta_taglio_detail(
             )
         )
     notes = _evaluate_notes(app_rows, system_note_texts=_system_note_texts(db))
+    quick_confirm_blockers = _quick_incoming_confirm_blockers(
+        app_rows=quick_confirm_rows,
+        selected_standard_confirmed=selected_standard_confirmed,
+        conformity_status=conformity_status,
+    )
+    quick_confirm_core_applied = _quick_incoming_confirm_core_applied(quick_confirm_rows)
+    quick_confirm_applied = _quick_incoming_confirm_applied(quick_confirm_rows)
+    quick_confirm_notes_applied = _quick_incoming_blocks_applied(quick_confirm_rows, ("note",))
+    quick_confirm_warning = None
+    if quick_confirm_core_applied and selected_standard_confirmed and conformity_status != "conforme":
+        quick_confirm_warning = (
+            "Standard modificato: controlla in Incoming chimica, proprietà e note dei CDQ collegati."
+            if quick_confirm_notes_applied
+            else "Standard modificato: controlla in Incoming chimica e proprietà dei CDQ collegati."
+        )
     ready = group.status_color == "green" and esolver_status == "ok"
     detail_status_color = group.status_color if esolver_status == "ok" else _max_status_color(group.status_color, _esolver_block_color(esolver_status))
     des_art = _join_unique((row.des_art for row in rows), separator=" | ")
@@ -810,7 +814,7 @@ def apply_quick_incoming_confirmation(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(blockers))
 
     for row in eligible_rows:
-        for block in ("chimica", "proprieta"):
+        for block in ("chimica", "proprieta", "note"):
             block_values = [
                 value
                 for value in row.values
@@ -2806,10 +2810,18 @@ def _quick_incoming_confirm_eligible_rows(app_rows: list[AcquisitionRow]) -> lis
 
 
 def _quick_incoming_confirm_applied(app_rows: list[AcquisitionRow]) -> bool:
+    return _quick_incoming_blocks_applied(app_rows, ("chimica", "proprieta", "note"))
+
+
+def _quick_incoming_confirm_core_applied(app_rows: list[AcquisitionRow]) -> bool:
+    return _quick_incoming_blocks_applied(app_rows, ("chimica", "proprieta"))
+
+
+def _quick_incoming_blocks_applied(app_rows: list[AcquisitionRow], blocks: tuple[str, ...]) -> bool:
     if not app_rows:
         return False
     return all(
-        _has_quick_confirmation_event(row, "chimica") and _has_quick_confirmation_event(row, "proprieta")
+        all(_has_quick_confirmation_event(row, block) for block in blocks)
         for row in app_rows
     )
 

@@ -637,7 +637,10 @@ export default function QuartaTaglioDetailPage() {
         token,
       );
       setData(response);
-      setQuickConfirmState({ status: "saved", message: "Incoming aggiornato: chimica e proprietà confermate." });
+      setQuickConfirmState({
+        status: "saved",
+        message: "Incoming aggiornato: chimica, proprietà e note confermate.",
+      });
     } catch (requestError) {
       setQuickConfirmState({
         status: "error",
@@ -1002,6 +1005,27 @@ export default function QuartaTaglioDetailPage() {
         </Panel>
       ) : null}
 
+      {hasConformityIssues ? (
+        <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 px-5 py-4 text-rose-900 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xl font-black text-rose-700">
+              !
+            </div>
+            <div>
+              <h3 className="text-base font-bold">Non conformità standard</h3>
+              <p className="mt-1 text-sm text-rose-800">
+                Uno o più valori di chimica o proprietà non rispettano lo standard confermato.
+              </p>
+              <ul className="mt-3 space-y-1 text-sm font-semibold">
+                {conformityIssues.map((issue) => (
+                  <li key={`${issue.block}-${issue.field}`}>{formatConformityIssue(issue)}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid gap-4">
         <Panel className="mx-auto w-full xl:w-1/2 border-2 border-slate-950" title="Selezione Standard" titleClassName="text-xl font-semibold text-slate-900">
           <div className="mb-3 text-sm text-slate-700">
@@ -1330,27 +1354,6 @@ export default function QuartaTaglioDetailPage() {
           </div>
         ) : null}
       </div>
-
-      {hasConformityIssues ? (
-        <div className="rounded-2xl border-2 border-rose-300 bg-rose-50 px-5 py-4 text-rose-900 shadow-sm">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xl font-black text-rose-700">
-              !
-            </div>
-            <div>
-              <h3 className="text-base font-bold">Non conformità standard</h3>
-              <p className="mt-1 text-sm text-rose-800">
-                Uno o più valori di chimica o proprietà non rispettano lo standard confermato.
-              </p>
-              <ul className="mt-3 space-y-1 text-sm font-semibold">
-                {conformityIssues.map((issue) => (
-                  <li key={`${issue.block}-${issue.field}`}>{formatConformityIssue(issue)}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {!data.ready ? (
         <Panel title="Blocchi / dati mancanti">
