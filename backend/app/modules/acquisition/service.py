@@ -7435,7 +7435,11 @@ def _wait_for_upload_batch_documents(
     fallback_ddt_document_ids: list[int],
     fallback_certificate_document_ids: list[int],
 ) -> tuple[list[int], list[int]]:
-    deadline = time.monotonic() + 300
+    stall_timeout_seconds = 15 * 60
+    absolute_timeout_seconds = 2 * 60 * 60
+    started_waiting_at = time.monotonic()
+    last_progress_at = started_waiting_at
+    last_resolved_upload_count = -1
     last_message_at = 0.0
     expected_upload_document_count = max(int(run.expected_upload_document_count or 0), 0)
     while True:
@@ -7446,6 +7450,9 @@ def _wait_for_upload_batch_documents(
         stored_uploaded_count = max(0, int(batch.uploaded_count or 0)) if batch is not None else 0
         stored_failed_count = max(0, int(batch.failed_count or 0)) if batch is not None else 0
         resolved_upload_count = max(accepted_document_count, stored_uploaded_count) + stored_failed_count
+        if resolved_upload_count != last_resolved_upload_count:
+            last_resolved_upload_count = resolved_upload_count
+            last_progress_at = time.monotonic()
         has_expected_documents = expected_upload_document_count <= 0 or resolved_upload_count >= expected_upload_document_count
         if active_uploads <= 0 and has_expected_documents and (ddt_ids or certificate_ids):
             if batch is not None:
@@ -7461,22 +7468,39 @@ def _wait_for_upload_batch_documents(
                 db.add(batch)
                 db.commit()
             raise RuntimeError("Nessun documento valido nel batch: tutti i file sono stati rifiutati o duplicati")
-        if time.monotonic() >= deadline:
-            if expected_upload_document_count > 0 and resolved_upload_count < expected_upload_document_count:
-                if batch is not None:
-                    batch.status = "errore"
-                    batch.message = (
-                        "Caricamento incompleto: "
-                        f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
-                    )
-                    db.add(batch)
-                    db.commit()
-                raise RuntimeError(
-                    "Caricamento incompleto: "
+        waited_seconds = time.monotonic() - started_waiting_at
+        stalled_seconds = time.monotonic() - last_progress_at
+        if (
+            expected_upload_document_count > 0
+            and resolved_upload_count < expected_upload_document_count
+            and stalled_seconds >= stall_timeout_seconds
+        ):
+            if batch is not None:
+                batch.status = "errore"
+                batch.message = (
+                    "Caricamento fermo: "
                     f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
                 )
-            if ddt_ids or certificate_ids:
-                return ddt_ids, certificate_ids
+                db.add(batch)
+                db.commit()
+            raise RuntimeError(
+                "Caricamento fermo: "
+                f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
+            )
+        if waited_seconds >= absolute_timeout_seconds:
+            if batch is not None:
+                batch.status = "errore"
+                batch.message = (
+                    "Caricamento troppo lungo: "
+                    f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
+                )
+                db.add(batch)
+                db.commit()
+            raise RuntimeError(
+                "Caricamento troppo lungo: "
+                f"{resolved_upload_count}/{expected_upload_document_count} documenti risolti"
+            )
+        if expected_upload_document_count <= 0 and not (ddt_ids or certificate_ids) and stalled_seconds >= stall_timeout_seconds:
             return fallback_ddt_document_ids, fallback_certificate_document_ids
         now = time.monotonic()
         if now - last_message_at >= 5:
