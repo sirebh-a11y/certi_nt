@@ -123,6 +123,7 @@ class AcquisitionRow(Base):
     cdq: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     fornitore_id: Mapped[int | None] = mapped_column(ForeignKey("fornitori.id"), nullable=True, index=True)
     fornitore_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    fornitore_esolver_cod_clifor: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     lega_base: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lega_designazione: Mapped[str | None] = mapped_column(String(128), nullable=True)
     variante_lega: Mapped[str | None] = mapped_column(String(128), nullable=True)

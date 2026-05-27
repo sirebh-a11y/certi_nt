@@ -179,6 +179,17 @@ CHEMISTRY_CAPTURE_FIELD_ORDER = [
 PROPERTY_CAPTURE_FIELD_ORDER = ["Rm", "Rp0.2", "A%", "HB", "IACS%", "Rp0.2 / Rm"]
 
 
+@dataclass(frozen=True)
+class ManualSupplierSelection:
+    supplier: Supplier | None
+    raw_name: str | None
+    esolver_cod_clifor: str | None
+
+    @property
+    def is_external_esolver(self) -> bool:
+        return self.supplier is None and self.esolver_cod_clifor is not None
+
+
 def parse_property_number(value: str | None) -> float | None:
     if value is None:
         return None
@@ -375,6 +386,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         fornitore_id=row.fornitore_id,
         fornitore_nome=row.supplier.ragione_sociale if row.supplier is not None else None,
         fornitore_raw=row.fornitore_raw,
+        fornitore_esolver_cod_clifor=row.fornitore_esolver_cod_clifor,
         lega_base=row.lega_base,
         lega_designazione=row.lega_designazione,
         variante_lega=row.variante_lega,
@@ -6151,9 +6163,16 @@ def upload_or_reuse_manual_document(
     uploaded_file: UploadFile,
     actor_id: int,
     actor_email: str,
-    fornitore_id: int,
+    fornitore_id: int | None,
+    fornitore_raw: str | None = None,
+    fornitore_esolver_cod_clifor: str | None = None,
 ) -> ManualDocumentUploadResponse:
-    supplier = _get_supplier(db, fornitore_id)
+    supplier_selection = _resolve_manual_supplier_selection(
+        db,
+        fornitore_id=fornitore_id,
+        fornitore_raw=fornitore_raw,
+        fornitore_esolver_cod_clifor=fornitore_esolver_cod_clifor,
+    )
     if uploaded_file.filename is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file must have a filename")
 
@@ -6181,13 +6200,24 @@ def upload_or_reuse_manual_document(
             )
         document = _detach_manual_document_from_upload_batch(db, document)
         rows = _manual_document_linked_rows(db, document=document, side=tipo_documento)
-        if document.fornitore_id is None or (document.fornitore_id != supplier.id and not rows):
-            document.fornitore_id = supplier.id
+        if not _manual_document_rows_match_supplier(rows, supplier_selection):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Documento gia presente con righe di un fornitore diverso.",
+            )
+        if document.fornitore_id is None and supplier_selection.supplier is not None:
+            document.fornitore_id = supplier_selection.supplier.id
             db.add(document)
             db.commit()
             document = get_document(db, document.id)
-        elif document.fornitore_id != supplier.id:
+        elif document.fornitore_id is not None and supplier_selection.supplier is not None and document.fornitore_id != supplier_selection.supplier.id:
             message = "Documento gia presente con un fornitore diverso: uso il fornitore gia salvato e non modifico le righe esistenti."
+        elif document.fornitore_id is not None and supplier_selection.is_external_esolver:
+            document.fornitore_id = None
+            db.add(document)
+            db.commit()
+            document = get_document(db, document.id)
+            message = "Documento gia presente: uso il fornitore eSolver scelto per le nuove righe manuali."
         else:
             message = "Documento gia presente: mostro il PDF e le righe gia create."
         document = prepare_document_for_reader(db, document)
@@ -6205,7 +6235,7 @@ def upload_or_reuse_manual_document(
         uploaded_file=uploaded_file,
         actor_id=actor_id,
         actor_email=actor_email,
-        fornitore_id=supplier.id,
+        fornitore_id=supplier_selection.supplier.id if supplier_selection.supplier is not None else None,
         origine_upload="utente",
     )
     document = get_document(db, uploaded.id)
@@ -6217,6 +6247,11 @@ def upload_or_reuse_manual_document(
             detail=f"Il file caricato risulta {document.tipo_documento}, non {tipo_documento}",
         )
     document = _detach_manual_document_from_upload_batch(db, document)
+    if supplier_selection.is_external_esolver and document.fornitore_id is not None:
+        document.fornitore_id = None
+        db.add(document)
+        db.commit()
+        document = get_document(db, document.id)
     return ManualDocumentUploadResponse(
         document=serialize_document_detail(document),
         reused_existing=False,
@@ -6299,6 +6334,53 @@ def _manual_document_linked_rows(
     else:
         return []
     return [serialize_acquisition_row_list_item(row) for row in query.all()]
+
+
+def _normalize_esolver_supplier_code(value: str | None) -> str | None:
+    normalized = _string_or_none(value)
+    return normalized[:64] if normalized else None
+
+
+def _resolve_manual_supplier_selection(
+    db: Session,
+    *,
+    fornitore_id: int | None,
+    fornitore_raw: str | None,
+    fornitore_esolver_cod_clifor: str | None,
+) -> ManualSupplierSelection:
+    if fornitore_id is not None:
+        supplier = _get_supplier(db, fornitore_id)
+        return ManualSupplierSelection(
+            supplier=supplier,
+            raw_name=supplier.ragione_sociale,
+            esolver_cod_clifor=None,
+        )
+
+    raw_name = _string_or_none(fornitore_raw)
+    esolver_code = _normalize_esolver_supplier_code(fornitore_esolver_cod_clifor)
+    if raw_name is None or esolver_code is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Seleziona un fornitore app oppure un fornitore eSolver valido.",
+        )
+    return ManualSupplierSelection(supplier=None, raw_name=raw_name[:255], esolver_cod_clifor=esolver_code)
+
+
+def _manual_document_rows_match_supplier(
+    rows: list[AcquisitionRowListItemResponse],
+    supplier_selection: ManualSupplierSelection,
+) -> bool:
+    if not rows:
+        return True
+    if supplier_selection.supplier is not None:
+        return all(row.fornitore_id == supplier_selection.supplier.id for row in rows)
+
+    expected_code = supplier_selection.esolver_cod_clifor
+    return all(
+        row.fornitore_id is None
+        and _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor) == expected_code
+        for row in rows
+    )
 
 
 def _apply_document_identity_detection(db: Session, document: Document) -> Document:
@@ -6620,6 +6702,8 @@ def _find_supplier_from_text(db: Session, raw_text: str | None) -> Supplier | No
 def _ensure_row_supplier_link(db: Session, row: AcquisitionRow) -> None:
     if row.supplier is not None and row.fornitore_id is not None:
         return
+    if row.fornitore_id is None and _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor):
+        return
 
     resolved_supplier = None
     if row.ddt_document is not None and row.ddt_document.supplier is not None:
@@ -6634,6 +6718,24 @@ def _ensure_row_supplier_link(db: Session, row: AcquisitionRow) -> None:
 
     row.fornitore_id = resolved_supplier.id
     row.supplier = resolved_supplier
+
+
+def _row_supplier_identity(row: AcquisitionRow) -> tuple[str, str] | None:
+    if row.fornitore_id is not None:
+        return ("local", str(row.fornitore_id))
+    esolver_code = _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor)
+    if esolver_code:
+        return ("esolver", esolver_code.casefold())
+    raw_name = _normalize_identity_text(_string_or_none(row.fornitore_raw) or "")
+    if raw_name:
+        return ("raw", raw_name)
+    return None
+
+
+def _rows_have_same_supplier_identity(left: AcquisitionRow, right: AcquisitionRow) -> bool:
+    left_identity = _row_supplier_identity(left)
+    right_identity = _row_supplier_identity(right)
+    return left_identity is not None and left_identity == right_identity
 
 
 def index_document(db: Session, document: Document, actor_email: str | None = None) -> DocumentDetailResponse:
@@ -8323,6 +8425,7 @@ def create_acquisition_row(
         cdq=payload.cdq,
         fornitore_id=supplier_id,
         fornitore_raw=payload.fornitore_raw,
+        fornitore_esolver_cod_clifor=payload.fornitore_esolver_cod_clifor,
         lega_base=payload.lega_base,
         lega_designazione=payload.lega_designazione,
         variante_lega=payload.variante_lega,
@@ -8515,15 +8618,21 @@ def create_manual_document_row(
             detail=f"Document {document.id} is not of type {payload.side}",
         )
 
-    supplier = _get_supplier(db, payload.fornitore_id)
+    supplier_selection = _resolve_manual_supplier_selection(
+        db,
+        fornitore_id=payload.fornitore_id,
+        fornitore_raw=payload.fornitore_raw,
+        fornitore_esolver_cod_clifor=payload.fornitore_esolver_cod_clifor,
+    )
     existing_rows = list(document.rows_as_ddt if payload.side == "ddt" else document.rows_as_certificate)
-    if document.fornitore_id is not None and document.fornitore_id != supplier.id and existing_rows:
+    existing_serialized_rows = [serialize_acquisition_row_list_item(row) for row in existing_rows]
+    if not _manual_document_rows_match_supplier(existing_serialized_rows, supplier_selection):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Documento gia usato con un fornitore diverso",
         )
 
-    document.fornitore_id = supplier.id
+    document.fornitore_id = supplier_selection.supplier.id if supplier_selection.supplier is not None else None
     document.stato_upload = "persistente"
     document.upload_batch_id = None
     document.scadenza_batch = None
@@ -8537,8 +8646,9 @@ def create_manual_document_row(
     row = AcquisitionRow(
         document_ddt_id=document.id if payload.side == "ddt" else None,
         document_certificato_id=document.id if payload.side == "certificato" else None,
-        fornitore_id=supplier.id,
-        fornitore_raw=supplier.ragione_sociale,
+        fornitore_id=supplier_selection.supplier.id if supplier_selection.supplier is not None else None,
+        fornitore_raw=supplier_selection.raw_name,
+        fornitore_esolver_cod_clifor=supplier_selection.esolver_cod_clifor,
         cdq=normalized_fields.get("cdq"),
         lega_base=normalized_fields.get("lega_base"),
         diametro=normalized_fields.get("diametro"),
@@ -8818,6 +8928,8 @@ def link_document_match_candidate(
     candidate_row = get_acquisition_row(db, payload.candidate_row_id)
     if current_row.id == candidate_row.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row must be different from current row")
+    if not _rows_have_same_supplier_identity(current_row, candidate_row):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Fornitore diverso: non posso collegare queste due righe")
 
     if current_row.document_ddt_id is not None and current_row.document_certificato_id is None:
         return _link_certificate_candidate_to_ddt_row(
@@ -9052,6 +9164,7 @@ def _create_ddt_clone_row_for_manual_link(
         cdq=source_row.cdq,
         fornitore_id=source_row.fornitore_id,
         fornitore_raw=source_row.fornitore_raw,
+        fornitore_esolver_cod_clifor=source_row.fornitore_esolver_cod_clifor,
         lega_base=source_row.lega_base,
         lega_designazione=source_row.lega_designazione,
         variante_lega=source_row.variante_lega,
@@ -9644,7 +9757,7 @@ def build_ddt_link_preview_from_certificate_row(
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
-    if current_row.fornitore_id is None:
+    if _row_supplier_identity(current_row) is None:
         return DdtLinkPreviewResponse(current_row_id=current_row.id, items=[])
 
     certificate_bridge = _build_row_certificate_bridge(current_row)
@@ -9681,7 +9794,7 @@ def build_certificate_link_preview_from_ddt_row(
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_ddt_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
-    if current_row.fornitore_id is None:
+    if _row_supplier_identity(current_row) is None:
         return CertificateLinkPreviewResponse(current_row_id=current_row.id, items=[])
 
     ddt_bridge = _build_row_ddt_bridge(current_row)
@@ -9711,7 +9824,7 @@ def build_certificate_link_preview_from_ddt_row(
 
 
 def _rows_with_ddt_for_link_preview(db: Session, current_row: AcquisitionRow) -> list[AcquisitionRow]:
-    return (
+    query = (
         db.query(AcquisitionRow)
         .options(
             joinedload(AcquisitionRow.supplier),
@@ -9720,17 +9833,17 @@ def _rows_with_ddt_for_link_preview(db: Session, current_row: AcquisitionRow) ->
             selectinload(AcquisitionRow.values),
         )
         .filter(
-            AcquisitionRow.fornitore_id == current_row.fornitore_id,
             AcquisitionRow.id != current_row.id,
             AcquisitionRow.document_ddt_id.is_not(None),
         )
-        .order_by(AcquisitionRow.id.asc())
-        .all()
     )
+    query = _filter_query_by_row_supplier_identity(query, current_row)
+    rows = query.order_by(AcquisitionRow.id.asc()).all()
+    return [row for row in rows if _rows_have_same_supplier_identity(current_row, row)]
 
 
 def _rows_with_certificate_for_link_preview(db: Session, current_row: AcquisitionRow) -> list[AcquisitionRow]:
-    return (
+    query = (
         db.query(AcquisitionRow)
         .options(
             joinedload(AcquisitionRow.supplier),
@@ -9739,13 +9852,25 @@ def _rows_with_certificate_for_link_preview(db: Session, current_row: Acquisitio
             selectinload(AcquisitionRow.values),
         )
         .filter(
-            AcquisitionRow.fornitore_id == current_row.fornitore_id,
             AcquisitionRow.id != current_row.id,
             AcquisitionRow.document_certificato_id.is_not(None),
         )
-        .order_by(AcquisitionRow.id.asc())
-        .all()
     )
+    query = _filter_query_by_row_supplier_identity(query, current_row)
+    rows = query.order_by(AcquisitionRow.id.asc()).all()
+    return [row for row in rows if _rows_have_same_supplier_identity(current_row, row)]
+
+
+def _filter_query_by_row_supplier_identity(query, row: AcquisitionRow):
+    if row.fornitore_id is not None:
+        return query.filter(AcquisitionRow.fornitore_id == row.fornitore_id)
+    esolver_code = _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor)
+    if esolver_code:
+        return query.filter(
+            AcquisitionRow.fornitore_id.is_(None),
+            AcquisitionRow.fornitore_esolver_cod_clifor == esolver_code,
+        )
+    return query.filter(AcquisitionRow.fornitore_id.is_(None), AcquisitionRow.fornitore_raw.is_not(None))
 
 
 def _auto_match_preview_row_id(
@@ -10075,6 +10200,20 @@ def upsert_match(
     certificate_document = _get_document_of_type(db, payload.document_certificato_id, "certificato")
     if row.fornitore_id is not None and certificate_document.fornitore_id is not None:
         if row.fornitore_id != certificate_document.fornitore_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificate supplier mismatch for row")
+    if row.fornitore_id is None and _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor):
+        if certificate_document.fornitore_id is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificate supplier mismatch for row")
+        certificate_row = (
+            db.query(AcquisitionRow)
+            .filter(
+                AcquisitionRow.document_certificato_id == certificate_document.id,
+                AcquisitionRow.id != row.id,
+            )
+            .order_by(AcquisitionRow.id.asc())
+            .first()
+        )
+        if certificate_row is not None and not _rows_have_same_supplier_identity(row, certificate_row):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificate supplier mismatch for row")
 
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="match")
@@ -14375,6 +14514,8 @@ def _resolve_row_supplier_key(row: AcquisitionRow) -> str | None:
 
 
 def _resolve_row_supplier_template(row: AcquisitionRow):
+    if row.fornitore_id is None and _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor):
+        return None
     template = resolve_supplier_template_by_key(row.supplier.reader_template_key if row.supplier is not None else None)
     if template is not None:
         return template

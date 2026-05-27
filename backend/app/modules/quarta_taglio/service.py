@@ -2919,6 +2919,11 @@ def _supplier_ref_lookup_for_rows(db: Session, app_rows: list[AcquisitionRow]) -
             for row in app_rows
             if row.supplier is not None and row.supplier.esolver_link is not None
         }
+        | {
+            _clean_text(row.fornitore_esolver_cod_clifor)
+            for row in app_rows
+            if _clean_text(row.fornitore_esolver_cod_clifor)
+        }
         - {None, ""}
     )
     codes_by_supplier_id = {
@@ -2944,6 +2949,8 @@ def _supplier_ref_lookup_for_rows(db: Session, app_rows: list[AcquisitionRow]) -
         code = codes_by_supplier_id.get(row.fornitore_id) if row.fornitore_id is not None else None
         if not code and row.supplier is not None and row.supplier.esolver_link is not None:
             code = codes_by_esolver.get(_clean_text(row.supplier.esolver_link.cod_clifor))
+        if not code:
+            code = codes_by_esolver.get(_clean_text(row.fornitore_esolver_cod_clifor))
         if code:
             found[row.id] = code
             continue

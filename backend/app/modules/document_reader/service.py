@@ -147,6 +147,8 @@ def _resolve_document_template(document: Document):
 
 
 def _resolve_row_template(row: AcquisitionRow):
+    if row.fornitore_id is None and row.fornitore_esolver_cod_clifor:
+        return None
     template = resolve_supplier_template_by_key(row.supplier.reader_template_key if row.supplier is not None else None)
     if template is not None:
         return template

@@ -227,7 +227,9 @@ def upload_or_reuse_manual_ddt_document_route(
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
-    fornitore_id: int = Form(...),
+    fornitore_id: int | None = Form(default=None),
+    fornitore_raw: str | None = Form(default=None),
+    fornitore_esolver_cod_clifor: str | None = Form(default=None),
 ) -> ManualDocumentUploadResponse:
     return upload_or_reuse_manual_document(
         db=db,
@@ -236,6 +238,8 @@ def upload_or_reuse_manual_ddt_document_route(
         actor_id=current_user.id,
         actor_email=current_user.email,
         fornitore_id=fornitore_id,
+        fornitore_raw=fornitore_raw,
+        fornitore_esolver_cod_clifor=fornitore_esolver_cod_clifor,
     )
 
 
@@ -244,7 +248,9 @@ def upload_or_reuse_manual_certificate_document_route(
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
-    fornitore_id: int = Form(...),
+    fornitore_id: int | None = Form(default=None),
+    fornitore_raw: str | None = Form(default=None),
+    fornitore_esolver_cod_clifor: str | None = Form(default=None),
 ) -> ManualDocumentUploadResponse:
     return upload_or_reuse_manual_document(
         db=db,
@@ -253,6 +259,8 @@ def upload_or_reuse_manual_certificate_document_route(
         actor_id=current_user.id,
         actor_email=current_user.email,
         fornitore_id=fornitore_id,
+        fornitore_raw=fornitore_raw,
+        fornitore_esolver_cod_clifor=fornitore_esolver_cod_clifor,
     )
 
 

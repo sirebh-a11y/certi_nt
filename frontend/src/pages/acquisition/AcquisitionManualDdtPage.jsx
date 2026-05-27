@@ -79,6 +79,7 @@ export default function AcquisitionManualDdtPage() {
 function AcquisitionManualDocumentPage({ config }) {
   const { token } = useAuth();
   const [suppliers, setSuppliers] = useState([]);
+  const [esolverSuppliers, setEsolverSuppliers] = useState([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [selectedDocument, setSelectedDocument] = useState(null);
@@ -94,8 +95,12 @@ function AcquisitionManualDocumentPage({ config }) {
   async function loadInitialData() {
     setError("");
     try {
-      const supplierResponse = await apiRequest("/suppliers", {}, token);
+      const [supplierResponse, esolverResponse] = await Promise.all([
+        apiRequest("/suppliers", {}, token),
+        apiRequest("/suppliers/esolver?limit=1000", {}, token).catch(() => ({ items: [] })),
+      ]);
       setSuppliers((supplierResponse.items || []).filter((supplier) => supplier.attivo));
+      setEsolverSuppliers((esolverResponse.items || []).filter((supplier) => !supplier.in_app));
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -137,6 +142,27 @@ function AcquisitionManualDocumentPage({ config }) {
     setError("");
   }
 
+  function selectedSupplierPayload() {
+    if (!selectedSupplierId) {
+      return null;
+    }
+    if (selectedSupplierId.startsWith("local:")) {
+      return { fornitore_id: Number(selectedSupplierId.replace("local:", "")) };
+    }
+    if (selectedSupplierId.startsWith("esolver:")) {
+      const codClifor = selectedSupplierId.replace("esolver:", "");
+      const supplier = esolverSuppliers.find((item) => item.cod_clifor === codClifor);
+      if (!supplier) {
+        return null;
+      }
+      return {
+        fornitore_raw: supplier.ragione_sociale,
+        fornitore_esolver_cod_clifor: supplier.cod_clifor,
+      };
+    }
+    return { fornitore_id: Number(selectedSupplierId) };
+  }
+
   async function handleUpload(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -150,7 +176,17 @@ function AcquisitionManualDocumentPage({ config }) {
 
     const formData = new FormData();
     formData.append("tipo_documento", config.side);
-    formData.append("fornitore_id", selectedSupplierId);
+    const supplierPayload = selectedSupplierPayload();
+    if (!supplierPayload) {
+      setError("Seleziona prima il fornitore.");
+      return;
+    }
+    if (supplierPayload.fornitore_id) {
+      formData.append("fornitore_id", String(supplierPayload.fornitore_id));
+    } else {
+      formData.append("fornitore_raw", supplierPayload.fornitore_raw || "");
+      formData.append("fornitore_esolver_cod_clifor", supplierPayload.fornitore_esolver_cod_clifor || "");
+    }
     formData.append("file", file);
     formData.append("origine_upload", "utente");
 
@@ -170,7 +206,7 @@ function AcquisitionManualDocumentPage({ config }) {
       setSelectedDocumentId(String(uploaded.document.id));
       setLinkedRows(uploaded.rows || []);
       if (uploaded.document.fornitore_id) {
-        setSelectedSupplierId(String(uploaded.document.fornitore_id));
+        setSelectedSupplierId(`local:${uploaded.document.fornitore_id}`);
       }
       setNotice(uploaded.message || config.readyMessage);
     } catch (requestError) {
@@ -189,6 +225,11 @@ function AcquisitionManualDocumentPage({ config }) {
       setError(`Seleziona o carica un PDF ${config.documentLabel}.`);
       return;
     }
+    const supplierPayload = selectedSupplierPayload();
+    if (!supplierPayload) {
+      setError("Seleziona il fornitore.");
+      return;
+    }
     const hasAnyField = FIELD_DEFS.some((field) => fields[field.key]?.trim());
     if (!hasAnyField) {
       setError("Compila almeno un campo prima di creare la riga.");
@@ -205,7 +246,7 @@ function AcquisitionManualDocumentPage({ config }) {
           method: "POST",
           body: JSON.stringify({
             side: config.side,
-            fornitore_id: Number(selectedSupplierId),
+            ...supplierPayload,
             fields,
           }),
         },
@@ -262,11 +303,20 @@ function AcquisitionManualDocumentPage({ config }) {
                 value={selectedSupplierId}
               >
                 <option value="">Seleziona fornitore</option>
-                {suppliers.map((supplier) => (
-                  <option key={supplier.id} value={supplier.id}>
-                    {supplier.ragione_sociale}
-                  </option>
-                ))}
+                <optgroup label="Fornitori speciali app">
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={`local:${supplier.id}`}>
+                      {supplier.ragione_sociale}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Fornitori eSolver">
+                  {esolverSuppliers.map((supplier) => (
+                    <option key={supplier.cod_clifor} value={`esolver:${supplier.cod_clifor}`}>
+                      {supplier.cod_clifor} - {supplier.ragione_sociale}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
 
               <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">

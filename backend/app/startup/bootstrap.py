@@ -62,6 +62,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_upload_batch_columns()
     ensure_acquisition_processing_run_columns()
     ensure_acquisition_quality_columns()
+    ensure_acquisition_supplier_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
     ensure_supplier_installation_code_columns()
@@ -276,6 +277,23 @@ def ensure_acquisition_quality_columns() -> None:
         statements.append(
             "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"
         )
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def ensure_acquisition_supplier_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("datimaterialeincoming"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("datimaterialeincoming")}
+    statements: list[str] = []
+    if "fornitore_esolver_cod_clifor" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN fornitore_esolver_cod_clifor VARCHAR(64)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_datimaterialeincoming_fornitore_esolver_cod_clifor ON datimaterialeincoming (fornitore_esolver_cod_clifor)")
 
     if statements:
         with engine.begin() as connection:

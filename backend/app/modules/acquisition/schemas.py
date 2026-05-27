@@ -360,6 +360,7 @@ class AcquisitionRowCreateRequest(BaseModel):
     cdq: str | None = Field(default=None, max_length=128)
     fornitore_id: int | None = None
     fornitore_raw: str | None = Field(default=None, max_length=255)
+    fornitore_esolver_cod_clifor: str | None = Field(default=None, max_length=64)
     lega_base: str | None = Field(default=None, max_length=128)
     lega_designazione: str | None = Field(default=None, max_length=128)
     variante_lega: str | None = Field(default=None, max_length=128)
@@ -378,6 +379,7 @@ class AcquisitionRowCreateRequest(BaseModel):
     @field_validator(
         "cdq",
         "fornitore_raw",
+        "fornitore_esolver_cod_clifor",
         "lega_base",
         "lega_designazione",
         "variante_lega",
@@ -398,6 +400,7 @@ class AcquisitionRowUpdateRequest(BaseModel):
     cdq: str | None = Field(default=None, max_length=128)
     fornitore_id: int | None = None
     fornitore_raw: str | None = Field(default=None, max_length=255)
+    fornitore_esolver_cod_clifor: str | None = Field(default=None, max_length=64)
     lega_base: str | None = Field(default=None, max_length=128)
     lega_designazione: str | None = Field(default=None, max_length=128)
     variante_lega: str | None = Field(default=None, max_length=128)
@@ -416,6 +419,7 @@ class AcquisitionRowUpdateRequest(BaseModel):
     @field_validator(
         "cdq",
         "fornitore_raw",
+        "fornitore_esolver_cod_clifor",
         "lega_base",
         "lega_designazione",
         "variante_lega",
@@ -508,8 +512,15 @@ class DocumentSideFieldsConfirmRequest(BaseModel):
 
 class ManualDocumentRowCreateRequest(BaseModel):
     side: DocumentSide
-    fornitore_id: int = Field(gt=0)
+    fornitore_id: int | None = Field(default=None, gt=0)
+    fornitore_raw: str | None = Field(default=None, max_length=255)
+    fornitore_esolver_cod_clifor: str | None = Field(default=None, max_length=64)
     fields: dict[str, str | None] = Field(default_factory=dict)
+
+    @field_validator("fornitore_raw", "fornitore_esolver_cod_clifor")
+    @classmethod
+    def normalize_supplier_fields(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
 
     @field_validator("fields")
     @classmethod
@@ -645,6 +656,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     fornitore_id: int | None
     fornitore_nome: str | None
     fornitore_raw: str | None
+    fornitore_esolver_cod_clifor: str | None
     lega_base: str | None
     lega_designazione: str | None
     variante_lega: str | None
