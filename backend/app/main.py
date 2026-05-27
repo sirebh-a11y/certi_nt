@@ -14,6 +14,7 @@ from app.core.users.router import router as users_router
 from app.modules.acquisition.router import router as acquisition_router
 from app.modules.clients.router import router as clients_router
 from app.modules.customer_requirements.router import router as customer_requirements_router
+from app.modules.esolver_export.router import router as esolver_export_router
 from app.modules.notes.router import router as notes_router
 from app.modules.quarta_taglio.router import router as quarta_taglio_router
 from app.modules.quarta_taglio.scheduler import quarta_taglio_periodic_sync_loop
@@ -63,6 +64,7 @@ app.include_router(supplier_codes_router, prefix="/api/supplier-codes", tags=["s
 app.include_router(supplier_kpi_router, prefix="/api/supplier-kpi", tags=["supplier-kpi"])
 app.include_router(acquisition_router, prefix="/api/acquisition", tags=["acquisition"])
 app.include_router(quarta_taglio_router, prefix="/api/quarta-taglio", tags=["quarta-taglio"])
+app.include_router(esolver_export_router, prefix="/api/export/esolver", tags=["esolver-export"])
 
 
 @app.get("/api/health")

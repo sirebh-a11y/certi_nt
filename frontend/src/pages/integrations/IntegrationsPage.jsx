@@ -316,6 +316,53 @@ export default function IntegrationsPage() {
     );
   }
 
+  function renderCertiExport() {
+    const fields = ["OL", "DDT", "CodF3", "NumeroCertificato", "DataCertificato", "PdfUrl", "Stato", "UpdatedAt"];
+    return (
+      <section className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="border-b border-slate-100 pb-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">certi export</p>
+          <h3 className="mt-1 text-xl font-semibold text-slate-950">Certi verso eSolver</h3>
+          <p className="mt-1 text-sm text-slate-500">PDF chiusi esposti in lettura per Nemesi/eSolver.</p>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Utente</div>
+            <div className="mt-1 font-semibold text-slate-950">Certi</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Password</div>
+            <div className="mt-1 font-semibold text-slate-950">Certi</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-1 2xl:col-span-2">
+            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Endpoint</div>
+            <div className="mt-1 break-all font-mono text-sm text-slate-950">/api/export/esolver/certificati-pdf</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-1 2xl:col-span-2">
+            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Regola</div>
+            <div className="mt-1 text-sm text-slate-700">Escono solo certificati con PDF chiuso. Se un PDF viene riaperto, non risulta piu valido nell'export.</div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Campi esposti</h4>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {fields.map((field) => (
+              <span key={field} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                {field}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 flex-1 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+          Modalita PDF attiva: URL. Alternativa non adottata ora: cartella condivisa UNC, se Nemesi la richiedera.
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -334,8 +381,9 @@ export default function IntegrationsPage() {
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento integrazioni...</p> : null}
       {message ? <p className="mt-6 text-sm text-slate-600">{message}</p> : null}
 
-      <div className="mt-8 grid items-stretch gap-6 xl:grid-cols-2">
+      <div className="mt-8 grid items-stretch gap-6 xl:grid-cols-3">
         {[...items].sort((left, right) => CONNECTION_ORDER.indexOf(left.code) - CONNECTION_ORDER.indexOf(right.code)).map(renderConnection)}
+        {renderCertiExport()}
       </div>
     </section>
   );
