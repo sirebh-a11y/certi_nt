@@ -50,6 +50,8 @@ from app.modules.standards.models import (  # noqa: F401
     NormativeStandardProperty,
 )
 from app.modules.standards.service import seed_normative_standards
+from app.modules.supplier_codes.models import SupplierInstallationCode  # noqa: F401
+from app.modules.supplier_codes.service import seed_supplier_installation_codes
 from app.modules.suppliers.models import Supplier, SupplierAlias, SupplierEsolverLink  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 
@@ -62,6 +64,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_quality_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
+    ensure_supplier_installation_code_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
@@ -71,6 +74,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
         ensure_supplier_columns()
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)
+        seed_supplier_installation_codes(db)
         seed_note_templates(db)
         seed_normative_standards(db)
         seed_customer_requirements(db)
@@ -109,6 +113,25 @@ def ensure_supplier_columns() -> None:
     statements: list[str] = []
     if "reader_template_key" not in columns:
         statements.append("ALTER TABLE fornitori ADD COLUMN reader_template_key VARCHAR(64)")
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def ensure_supplier_installation_code_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("fornitori_codici_installazione"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("fornitori_codici_installazione")}
+    statements: list[str] = []
+    if "esolver_cod_clifor" not in columns:
+        statements.append("ALTER TABLE fornitori_codici_installazione ADD COLUMN esolver_cod_clifor VARCHAR(64)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_fornitori_codici_installazione_esolver_cod_clifor ON fornitori_codici_installazione (esolver_cod_clifor)")
+    if "esolver_ragione_sociale" not in columns:
+        statements.append("ALTER TABLE fornitori_codici_installazione ADD COLUMN esolver_ragione_sociale VARCHAR(255)")
 
     if statements:
         with engine.begin() as connection:

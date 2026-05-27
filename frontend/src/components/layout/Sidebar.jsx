@@ -16,6 +16,7 @@ const navItems = [
   { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"], icon: "standards" },
   { label: "Requisiti Cliente", to: "/customer-requirements", roles: ["user", "manager", "admin"], icon: "requirements" },
   { label: "Note", to: "/notes", roles: ["user", "manager", "admin"], icon: "note" },
+  { label: "Codici fornitori", to: "/supplier-codes", roles: ["user", "manager", "admin"], icon: "requirements" },
   { type: "section", label: "Anagrafica", key: "master-data" },
   { label: "Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"], icon: "factory" },
   { label: "Clienti", to: "/clients", roles: ["user", "manager", "admin"], icon: "clients" },

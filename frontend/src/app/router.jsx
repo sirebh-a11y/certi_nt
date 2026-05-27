@@ -28,6 +28,7 @@ import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTa
 import QuartaTaglioDetailPage from "../pages/quartaTaglio/QuartaTaglioDetailPage";
 import QuartaTaglioPage from "../pages/quartaTaglio/QuartaTaglioPage";
 import StandardsPage from "../pages/standards/StandardsPage";
+import SupplierCodesPage from "../pages/supplierCodes/SupplierCodesPage";
 import SupplierDetailPage from "../pages/suppliers/SupplierDetailPage";
 import SuppliersListPage from "../pages/suppliers/SuppliersListPage";
 import NewUserPage from "../pages/users/NewUserPage";
@@ -137,6 +138,10 @@ function CustomerRequirementsRoute() {
   return <CustomerRequirementsPage />;
 }
 
+function SupplierCodesRoute() {
+  return <SupplierCodesPage />;
+}
+
 export function AppRouter() {
   return (
     <Routes>
@@ -168,6 +173,7 @@ export function AppRouter() {
           <Route path="/ai" element={<AIConfigRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/customer-requirements" element={<CustomerRequirementsRoute />} />
+          <Route path="/supplier-codes" element={<SupplierCodesRoute />} />
           <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
           <Route path="/supplier-kpi" element={<KpiRoute />} />
           <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />

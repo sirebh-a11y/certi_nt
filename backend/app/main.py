@@ -19,6 +19,7 @@ from app.modules.quarta_taglio.router import router as quarta_taglio_router
 from app.modules.quarta_taglio.scheduler import quarta_taglio_periodic_sync_loop
 from app.modules.standards.router import router as standards_router
 from app.modules.supplier_kpi.router import router as supplier_kpi_router
+from app.modules.supplier_codes.router import router as supplier_codes_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.startup.bootstrap import initialize_application
 
@@ -58,6 +59,7 @@ app.include_router(customer_requirements_router, prefix="/api/customer-requireme
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(clients_router, prefix="/api/clients", tags=["clients"])
 app.include_router(suppliers_router, prefix="/api/suppliers", tags=["suppliers"])
+app.include_router(supplier_codes_router, prefix="/api/supplier-codes", tags=["supplier-codes"])
 app.include_router(supplier_kpi_router, prefix="/api/supplier-kpi", tags=["supplier-kpi"])
 app.include_router(acquisition_router, prefix="/api/acquisition", tags=["acquisition"])
 app.include_router(quarta_taglio_router, prefix="/api/quarta-taglio", tags=["quarta-taglio"])
