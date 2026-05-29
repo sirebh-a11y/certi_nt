@@ -3,8 +3,19 @@ from datetime import datetime, timezone
 
 from app.core.departments.models import Department  # noqa: F401
 from app.modules.quarta_taglio.models import QuartaTaglioEsolverLink, QuartaTaglioRow
-from app.modules.quarta_taglio.schemas import QuartaTaglioEsolverDdtRowResponse
-from app.modules.quarta_taglio.service import _codice_f3_from_esolver_or_quarta, _esolver_status_for_rows, _serialize_ol_group
+from app.modules.quarta_taglio.schemas import (
+    QuartaTaglioCodF3CandidateResponse,
+    QuartaTaglioCertifiableUnitResponse,
+    QuartaTaglioDetailResponse,
+    QuartaTaglioEsolverDdtRowResponse,
+)
+from app.modules.quarta_taglio.service import (
+    _certificate_header_flow,
+    _codice_f3_from_esolver_or_quarta,
+    _detail_for_certiol_candidate,
+    _esolver_status_for_rows,
+    _serialize_ol_group,
+)
 
 
 class QuartaTaglioEsolverTest(unittest.TestCase):
@@ -129,6 +140,73 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
 
         self.assertEqual(result["value"], "QUARTA-F3")
         self.assertEqual(result["origin"], "quarta_fallback")
+
+    def test_header_flow_treats_new_codification_raw_variants_as_raw_column(self):
+        unit = QuartaTaglioCertifiableUnitResponse(
+            unit_key="OL-1137000400",
+            cod_odp="OL2025001353",
+            cod_f3="1137000400",
+            ddt="1365-19/05/2026",
+            quantita=199,
+            is_primary=True,
+        )
+
+        result = _certificate_header_flow(
+            current_unit=unit,
+            certifiable_units=[unit],
+            quarta_rows=[],
+            raw_description="WS-PRIMER DR. FORG. GUN BODY 630470A0",
+            raw_cod_f3_override="1137000401",
+            finished_description_override="WS-PRIMER DR. FORG. GUN BODY 630470A0",
+        )
+
+        self.assertEqual(result["raw_cod_f3"], "1137000400")
+        self.assertEqual(result["raw_ddt"], "1365-19/05/2026")
+        self.assertEqual(result["raw_quantita"], "199")
+        self.assertIsNone(result["finished_cod_f3"])
+        self.assertIsNone(result["finished_ddt"])
+
+    def test_certiol_candidate_raw_variant_updates_raw_fields_not_finished_fields(self):
+        detail = QuartaTaglioDetailResponse(
+            cod_odp="OL2025001353",
+            ready=True,
+            status_color="green",
+            status_message="ok",
+            header={
+                "codice_f3_raw": "1137000401",
+                "descrizione_raw": "RAW 401",
+                "codice_f3_finished": "",
+                "descrizione_finished": "",
+            },
+            materials=[],
+            missing_items=[],
+            standard_candidates=[],
+            selected_standard=None,
+            chemistry=[],
+            properties=[],
+            notes=[],
+            esolver_rows=[],
+            certifiable_units=[],
+        )
+        candidate = QuartaTaglioCodF3CandidateResponse(
+            cod_f3_odp="1137000401",
+            cod_f3="1137000400",
+            des_f3="RAW 400",
+            relation="candidate",
+        )
+        unit = QuartaTaglioCertifiableUnitResponse(
+            unit_key="OL2025001353-1137000400",
+            cod_odp="OL2025001353",
+            cod_f3="1137000400",
+            is_primary=True,
+        )
+
+        result = _detail_for_certiol_candidate(detail=detail, candidate=candidate, unit=unit)
+
+        self.assertEqual(result.header["codice_f3_raw"], "1137000400")
+        self.assertEqual(result.header["descrizione_raw"], "RAW 400")
+        self.assertEqual(result.header["codice_f3_finished"], "")
+        self.assertEqual(result.header["descrizione_finished"], "")
 
 
 if __name__ == "__main__":

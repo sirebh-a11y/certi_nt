@@ -1534,8 +1534,10 @@ def _word_content_control_values_for_unit(
 ) -> dict[str, object]:
     header = dict(detail.header or {})
     raw_cod_f3 = _clean_text(header.get("codice_f3_raw")) or _join_unique(item.cod_art for item in detail.materials) or None
-    raw_unit = unit if _norm(unit.cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(detail.certifiable_units, raw_cod_f3)
-    finished_unit = unit if _norm(unit.cod_f3) and _norm(unit.cod_f3) != _norm(raw_cod_f3) else None
+    unit_is_raw_variant = _cod_f3_is_raw_variant(raw_cod_f3, unit.cod_f3)
+    effective_raw_cod_f3 = _clean_text(unit.cod_f3) if unit_is_raw_variant else raw_cod_f3
+    raw_unit = unit if unit_is_raw_variant or _norm(unit.cod_f3) == _norm(effective_raw_cod_f3) else _unit_for_cod_f3(detail.certifiable_units, effective_raw_cod_f3)
+    finished_unit = unit if _norm(unit.cod_f3) and not unit_is_raw_variant and _norm(unit.cod_f3) != _norm(effective_raw_cod_f3) else None
     unit_date = _certificate_datetime_from_ddt(unit.ddt)
     header.update(
         {
@@ -1544,7 +1546,7 @@ def _word_content_control_values_for_unit(
             "cliente": unit.cliente or header.get("cliente") or "",
             "ordine_cliente": unit.ordine_cliente or header.get("ordine_cliente") or "",
             "conferma_ordine": unit.conferma_ordine or header.get("conferma_ordine") or "",
-            "codice_f3_raw": raw_cod_f3 or "",
+            "codice_f3_raw": effective_raw_cod_f3 or "",
             "descrizione_raw": header.get("descrizione_raw") or _join_unique((item.des_art for item in detail.materials), separator=" | ") or "",
             "ddt_raw": raw_unit.ddt if raw_unit and raw_unit.ddt else "",
             "quantita_raw": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else "",
@@ -1586,7 +1588,8 @@ def _detail_for_certiol_candidate(
 ) -> QuartaTaglioDetailResponse:
     raw_cod_f3 = candidate.cod_f3_odp or _join_unique(item.cod_art for item in detail.materials) or None
     raw_description = (detail.header or {}).get("descrizione_raw") or _join_unique((item.des_art for item in detail.materials), separator=" | ") or ""
-    is_raw = _norm(candidate.cod_f3) == _norm(raw_cod_f3)
+    is_raw = _cod_f3_is_raw_variant(raw_cod_f3, candidate.cod_f3)
+    effective_raw_cod_f3 = candidate.cod_f3 if is_raw else raw_cod_f3
     units = [item.model_copy(update={"is_primary": False}) for item in detail.certifiable_units if item.unit_key != unit.unit_key]
     units.insert(0, unit)
     header = dict(detail.header or {})
@@ -1598,7 +1601,7 @@ def _detail_for_certiol_candidate(
             "codice_f3_origine": "certiol",
             "codice_f3_esolver": candidate.cod_f3,
             "codice_f3_warning": None,
-            "codice_f3_raw": raw_cod_f3,
+            "codice_f3_raw": effective_raw_cod_f3,
             "descrizione_raw": candidate.des_f3 if is_raw and candidate.des_f3 else raw_description,
             "ddt_raw": header.get("ddt_raw") if is_raw else "",
             "quantita_raw": header.get("quantita_raw") if is_raw else "",
@@ -5189,11 +5192,26 @@ def _certificate_header_flow(
 ) -> dict[str, str | None]:
     raw_cod_f3 = _clean_text(raw_cod_f3_override) or _join_unique(row.cod_art for row in quarta_rows) or None
     current_cod_f3 = _clean_text(current_unit.cod_f3) if current_unit else None
-    raw_unit = current_unit if _norm(current_cod_f3) == _norm(raw_cod_f3) else _unit_for_cod_f3(certifiable_units, raw_cod_f3)
-    finished_unit = current_unit if _norm(current_cod_f3) and _norm(current_cod_f3) != _norm(raw_cod_f3) else None
+    current_is_raw_variant = _cod_f3_is_raw_variant(raw_cod_f3, current_cod_f3)
+    effective_raw_cod_f3 = current_cod_f3 if current_is_raw_variant else raw_cod_f3
+    raw_unit = (
+        current_unit
+        if current_is_raw_variant or _norm(current_cod_f3) == _norm(effective_raw_cod_f3)
+        else _unit_for_cod_f3(certifiable_units, effective_raw_cod_f3)
+    )
+    finished_unit = (
+        current_unit
+        if _norm(current_cod_f3) and not current_is_raw_variant and _norm(current_cod_f3) != _norm(effective_raw_cod_f3)
+        else None
+    )
+    raw_description_value = (
+        _clean_text(finished_description_override)
+        if current_is_raw_variant and finished_description_override
+        else _clean_text(raw_description)
+    )
     return {
-        "raw_cod_f3": raw_cod_f3,
-        "raw_description": _clean_text(raw_description),
+        "raw_cod_f3": effective_raw_cod_f3,
+        "raw_description": raw_description_value,
         "raw_ddt": _clean_text(raw_unit.ddt) if raw_unit and raw_unit.ddt else None,
         "raw_quantita": _format_quantity(raw_unit.quantita) if raw_unit and raw_unit.ddt and raw_unit.quantita is not None else None,
         "finished_cod_f3": _clean_text(finished_unit.cod_f3) if finished_unit else None,
