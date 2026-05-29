@@ -4499,13 +4499,6 @@ def _build_certification_progress_by_odp(
         certificates = certificates_by_odp.get(cod_odp, [])
         if not certificates:
             progress[cod_odp] = _OlCertificationProgress()
-        elif any(not _certificate_is_pdf_final(certificate) for certificate in certificates):
-            progress[cod_odp] = _OlCertificationProgress(
-                status="partial",
-                label="Parziale",
-                color="yellow",
-                message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
-            )
         else:
             needs_candidate_check.append(cod_odp)
 
@@ -4558,6 +4551,10 @@ def _certification_progress_for_group(
 ) -> _OlCertificationProgress:
     cod_odp = group_rows[0].cod_odp if group_rows else ""
     esolver_rows = _esolver_rows_from_link(esolver_link)
+    pdf_final_certificates = [certificate for certificate in certificates if _certificate_is_pdf_final(certificate)]
+    open_certificates = [certificate for certificate in certificates if not _certificate_is_pdf_final(certificate)]
+    open_without_ddt = [certificate for certificate in open_certificates if not _clean_text(certificate.ddt)]
+    open_with_ddt = [certificate for certificate in open_certificates if _clean_text(certificate.ddt)]
     ready_units = [
         unit
         for unit in _build_certifiable_units(cod_odp=cod_odp, esolver_rows=esolver_rows, quarta_rows=group_rows)
@@ -4570,19 +4567,48 @@ def _certification_progress_for_group(
             for certificate in certificates
             if _certificate_is_pdf_final(certificate) and _clean_text(certificate.unit_key) in relevant_unit_keys
         }
+        open_ready_unit_keys = {
+            _clean_text(certificate.unit_key)
+            for certificate in certificates
+            if not _certificate_is_pdf_final(certificate) and _clean_text(certificate.unit_key) in relevant_unit_keys
+        }
         if relevant_unit_keys and relevant_unit_keys.issubset(completed_unit_keys):
+            if open_without_ddt:
+                return _OlCertificationProgress(
+                    status="partial",
+                    label="Parziale",
+                    color="yellow",
+                    message="PDF chiuso per i DDT disponibili; restano Word/raw senza DDT.",
+                )
             return _OlCertificationProgress(
                 status="completed",
                 label="Completato",
                 color="green",
-                message="Tutte le righe DDT utili hanno PDF chiuso",
+                message="Tutti i DDT certificati hanno PDF chiuso.",
+            )
+        if completed_unit_keys:
+            return _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message=(
+                    f"PDF chiuso per {len(completed_unit_keys)} di {len(relevant_unit_keys)} DDT; "
+                    "resta da generare il PDF per altri DDT."
+                ),
+            )
+        if open_ready_unit_keys or open_with_ddt:
+            return _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message="DDT presente: resta da generare il PDF.",
             )
         if certificates:
             return _OlCertificationProgress(
                 status="partial",
                 label="Parziale",
                 color="yellow",
-                message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
+                message="DDT presente: resta da generare il PDF. Restano Word/raw senza DDT.",
             )
         return _OlCertificationProgress()
 
@@ -4597,6 +4623,13 @@ def _certification_progress_for_group(
         if candidate.confidence != "review" and not candidate.blocked_reason and _norm(candidate.cod_f3)
     }
     if not relevant_cod_f3_keys:
+        if open_without_ddt and not open_with_ddt and not pdf_final_certificates:
+            return _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message="Word preparato in anticipo; in attesa DDT.",
+            )
         return _OlCertificationProgress(
             status="partial",
             label="Parziale",
@@ -4610,18 +4643,39 @@ def _certification_progress_for_group(
         if _certificate_is_pdf_final(certificate) and _norm(certificate.cod_f3)
     }
     if relevant_cod_f3_keys and relevant_cod_f3_keys.issubset(completed_cod_f3_keys):
+        if open_without_ddt:
+            return _OlCertificationProgress(
+                status="partial",
+                label="Parziale",
+                color="yellow",
+                message="PDF chiuso per alcune lavorazioni; restano Word/raw senza DDT.",
+            )
         return _OlCertificationProgress(
             status="completed",
             label="Completato",
             color="green",
-            message="Tutte le lavorazioni utili hanno PDF chiuso",
+            message="Tutte le lavorazioni utili hanno PDF chiuso.",
+        )
+    if completed_cod_f3_keys:
+        return _OlCertificationProgress(
+            status="partial",
+            label="Parziale",
+            color="yellow",
+            message="PDF chiuso per alcune lavorazioni; restano lavorazioni da chiudere.",
+        )
+    if open_without_ddt and not open_with_ddt:
+        return _OlCertificationProgress(
+            status="partial",
+            label="Parziale",
+            color="yellow",
+            message="Word preparato in anticipo; in attesa DDT.",
         )
     if certificates:
         return _OlCertificationProgress(
             status="partial",
             label="Parziale",
             color="yellow",
-            message="Almeno una lavorazione e' avviata, ma non tutto e' chiuso PDF",
+            message="Certificazione avviata: resta da chiudere il PDF.",
         )
     return _OlCertificationProgress()
 
