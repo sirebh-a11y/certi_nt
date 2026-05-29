@@ -14478,22 +14478,28 @@ def _resolve_row_supplier_key(row: AcquisitionRow) -> str | None:
 
 
 def _resolve_row_supplier_template(row: AcquisitionRow):
-    if row.fornitore_id is None and _normalize_esolver_supplier_code(row.fornitore_esolver_cod_clifor):
+    supplier = getattr(row, "supplier", None)
+    ddt_document = getattr(row, "ddt_document", None)
+    certificate_document = getattr(row, "certificate_document", None)
+
+    if getattr(row, "fornitore_id", None) is None and _normalize_esolver_supplier_code(
+        getattr(row, "fornitore_esolver_cod_clifor", None)
+    ):
         return None
-    template = resolve_supplier_template_by_key(row.supplier.reader_template_key if row.supplier is not None else None)
+    template = resolve_supplier_template_by_key(supplier.reader_template_key if supplier is not None else None)
     if template is not None:
         return template
-    for document in (row.ddt_document, row.certificate_document):
+    for document in (ddt_document, certificate_document):
         if document is None or document.supplier is None:
             continue
         template = resolve_supplier_template_by_key(document.supplier.reader_template_key)
         if template is not None:
             return template
     return resolve_supplier_template(
-        row.supplier.ragione_sociale if row.supplier is not None else None,
-        row.fornitore_raw,
-        row.ddt_document.supplier.ragione_sociale if row.ddt_document and row.ddt_document.supplier else None,
-        row.certificate_document.supplier.ragione_sociale if row.certificate_document and row.certificate_document.supplier else None,
+        supplier.ragione_sociale if supplier is not None else None,
+        getattr(row, "fornitore_raw", None),
+        ddt_document.supplier.ragione_sociale if ddt_document and ddt_document.supplier else None,
+        certificate_document.supplier.ragione_sociale if certificate_document and certificate_document.supplier else None,
     )
 
 
