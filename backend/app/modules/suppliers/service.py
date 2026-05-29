@@ -677,7 +677,7 @@ def _fetch_esolver_supplier_rows(
         where.append("(RagSoc1 LIKE %s OR CodCliFor LIKE %s OR PartitaIva LIKE %s OR CodAlternativo2 LIKE %s)")
         params.extend([like, like, like, like])
 
-    max_rows = max(1, min(limit, 1000))
+    max_rows = max(1, min(limit, 5000))
     query = (
         f"SELECT TOP {max_rows} CodCliFor, RagSoc1, RagSoc2, Indirizzo, Indirizzo2, Localita, "
         f"Localita2, Provincia, Cap, CodStato, IndirEmail, NumTel, NumTel2, CodFiscale, PartitaIva, CodAlternativo2 "

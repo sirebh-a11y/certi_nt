@@ -1070,14 +1070,6 @@ export default function AcquisitionListPage() {
           <SummaryCell label="Righe" value={summary.total} />
           <SummaryCell label="Aperte" value={summary.open} />
           <SummaryCell label="Attesa DDT" value={summary.waitingDdt} />
-          <SummaryCell label="Logica attività" value="Placeholder" />
-          <SummaryCell label="Masking e nuovo OCR icone" value="Placeholder" />
-          <SummaryCell label="Aggiungi nuovo elemento chimico" value="Placeholder" />
-          <SummaryCell
-            label="Import fornitori DB terzo"
-            value="Placeholder"
-            note="Tema aperto: vedi docs/modules/supplier_third_party_import_placeholder.md"
-          />
         </div>
 
       {certificationScope ? (

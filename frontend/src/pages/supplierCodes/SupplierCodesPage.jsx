@@ -122,7 +122,7 @@ export default function SupplierCodesPage() {
   async function loadEsolverSuppliers() {
     setLoadingEsolver(true);
     try {
-      const params = new URLSearchParams({ limit: "200" });
+      const params = new URLSearchParams({ limit: "5000" });
       if (esolverSearch.trim()) {
         params.set("search", esolverSearch.trim());
       }
