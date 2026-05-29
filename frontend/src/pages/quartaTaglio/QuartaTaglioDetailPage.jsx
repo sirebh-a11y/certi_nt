@@ -329,6 +329,7 @@ export default function QuartaTaglioDetailPage() {
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
   const [pendingWordCandidateCodF3, setPendingWordCandidateCodF3] = useState(null);
   const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
+  const [incomingRefreshNonce, setIncomingRefreshNonce] = useState("");
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -468,10 +469,22 @@ export default function QuartaTaglioDetailPage() {
       token,
     )
       .then(async (response) => {
-        const nextResponse =
+        let nextResponse =
           certificateId || selectedCandidateCodF3
             ? await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
             : response;
+        if (
+          quickIncomingConfirmEnabled() &&
+          nextResponse.quick_incoming_confirm_available &&
+          !nextResponse.quick_incoming_confirm_applied
+        ) {
+          setQuickConfirmState({ status: "saving", message: "Aggiornamento Incoming in corso..." });
+          nextResponse = await applyQuickIncomingConfirmationRequest(nextResponse.header?.certificate_id || activeCertificateId);
+          setQuickConfirmState({
+            status: "saved",
+            message: "Incoming aggiornato: chimica, proprietà e note confermate.",
+          });
+        }
         setData(nextResponse);
         if ((response.conformity_issues || []).length > 0) {
           setStandardConformityDialogOpen(true);
@@ -625,17 +638,23 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
+  async function applyQuickIncomingConfirmationRequest(targetCertificateId = activeCertificateId) {
+    const response = await apiRequest(
+      targetCertificateId
+        ? `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm?certificate_id=${encodeURIComponent(targetCertificateId)}`
+        : `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm`,
+      { method: "POST" },
+      token,
+    );
+    setIncomingRefreshNonce(String(Date.now()));
+    return response;
+  }
+
   async function applyQuickIncomingConfirmation() {
     setQuickConfirmState({ status: "saving", message: "" });
     setError("");
     try {
-      const response = await apiRequest(
-        activeCertificateId
-          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm?certificate_id=${encodeURIComponent(activeCertificateId)}`
-          : `/quarta-taglio/${encodeURIComponent(codOdp)}/quick-incoming-confirm`,
-        { method: "POST" },
-        token,
-      );
+      const response = await applyQuickIncomingConfirmationRequest();
       setData(response);
       setQuickConfirmState({
         status: "saved",
@@ -808,9 +827,12 @@ export default function QuartaTaglioDetailPage() {
     query.set("scope", "certificazione");
     query.set("ol", data?.cod_odp || codOdp || "");
     query.set("row_ids", linkedIncomingRowIds.join(","));
+    if (incomingRefreshNonce) {
+      query.set("refresh", incomingRefreshNonce);
+    }
     query.set("returnTo", `${location.pathname}${location.search}${location.hash}`);
     return `/acquisition?${query.toString()}`;
-  }, [codOdp, data?.cod_odp, linkedIncomingRowIds, location.hash, location.pathname, location.search]);
+  }, [codOdp, data?.cod_odp, incomingRefreshNonce, linkedIncomingRowIds, location.hash, location.pathname, location.search]);
   const materialByCdqColata = useMemo(() => {
     const map = new Map();
     (data?.materials || []).forEach((item) => {

@@ -80,6 +80,8 @@ function AcquisitionManualDocumentPage({ config }) {
   const { token } = useAuth();
   const [suppliers, setSuppliers] = useState([]);
   const [esolverSuppliers, setEsolverSuppliers] = useState([]);
+  const [esolverSupplierSearch, setEsolverSupplierSearch] = useState("");
+  const [selectedEsolverSupplier, setSelectedEsolverSupplier] = useState(null);
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [selectedDocument, setSelectedDocument] = useState(null);
@@ -90,19 +92,40 @@ function AcquisitionManualDocumentPage({ config }) {
   const [loadingDocument, setLoadingDocument] = useState(false);
   const [createdRows, setCreatedRows] = useState([]);
   const [error, setError] = useState("");
+  const [esolverSupplierWarning, setEsolverSupplierWarning] = useState("");
+  const [loadingEsolverSuppliers, setLoadingEsolverSuppliers] = useState(false);
   const [notice, setNotice] = useState("");
 
   async function loadInitialData() {
     setError("");
+    setEsolverSupplierWarning("");
     try {
-      const [supplierResponse, esolverResponse] = await Promise.all([
-        apiRequest("/suppliers", {}, token),
-        apiRequest("/suppliers/esolver?limit=1000", {}, token).catch(() => ({ items: [] })),
-      ]);
+      const supplierResponse = await apiRequest("/suppliers", {}, token);
       setSuppliers((supplierResponse.items || []).filter((supplier) => supplier.attivo));
-      setEsolverSuppliers((esolverResponse.items || []).filter((supplier) => !supplier.in_app));
     } catch (requestError) {
       setError(requestError.message);
+    }
+
+    await loadEsolverSuppliers("");
+  }
+
+  async function loadEsolverSuppliers(search) {
+    setLoadingEsolverSuppliers(true);
+    setEsolverSupplierWarning("");
+    try {
+      const query = new URLSearchParams({ limit: "50" });
+      const cleanSearch = search.trim();
+      if (cleanSearch) {
+        query.set("search", cleanSearch);
+      }
+      const esolverResponse = await apiRequest(`/suppliers/esolver?${query.toString()}`, {}, token);
+      const items = (esolverResponse.items || []).filter((supplier) => !supplier.in_app);
+      setEsolverSuppliers(items);
+    } catch (requestError) {
+      setEsolverSuppliers([]);
+      setEsolverSupplierWarning(requestError.message || "Fornitori eSolver non disponibili.");
+    } finally {
+      setLoadingEsolverSuppliers(false);
     }
   }
 
@@ -128,6 +151,13 @@ function AcquisitionManualDocumentPage({ config }) {
     void loadInitialData();
   }, [token]);
 
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadEsolverSuppliers(esolverSupplierSearch);
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [esolverSupplierSearch, token]);
+
   function updateField(field, value) {
     setFields((current) => ({ ...current, [field]: value }));
   }
@@ -151,7 +181,9 @@ function AcquisitionManualDocumentPage({ config }) {
     }
     if (selectedSupplierId.startsWith("esolver:")) {
       const codClifor = selectedSupplierId.replace("esolver:", "");
-      const supplier = esolverSuppliers.find((item) => item.cod_clifor === codClifor);
+      const supplier =
+        esolverSuppliers.find((item) => item.cod_clifor === codClifor)
+        || (selectedEsolverSupplier?.cod_clifor === codClifor ? selectedEsolverSupplier : null);
       if (!supplier) {
         return null;
       }
@@ -264,6 +296,11 @@ function AcquisitionManualDocumentPage({ config }) {
     }
   }
 
+  const listedEsolverSuppliers =
+    selectedEsolverSupplier && !esolverSuppliers.some((supplier) => supplier.cod_clifor === selectedEsolverSupplier.cod_clifor)
+      ? [selectedEsolverSupplier, ...esolverSuppliers]
+      : esolverSuppliers;
+
   return (
     <section className="space-y-4">
       <div className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40">
@@ -298,7 +335,17 @@ function AcquisitionManualDocumentPage({ config }) {
               <select
                 className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-accent"
                 id={`manual-${config.side}-supplier`}
-                onChange={(event) => setSelectedSupplierId(event.target.value)}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setSelectedSupplierId(nextValue);
+                  if (nextValue.startsWith("esolver:")) {
+                    const codClifor = nextValue.replace("esolver:", "");
+                    const supplier = listedEsolverSuppliers.find((item) => item.cod_clifor === codClifor) || null;
+                    setSelectedEsolverSupplier(supplier);
+                  } else {
+                    setSelectedEsolverSupplier(null);
+                  }
+                }}
                 disabled={Boolean(selectedDocument)}
                 value={selectedSupplierId}
               >
@@ -311,13 +358,33 @@ function AcquisitionManualDocumentPage({ config }) {
                   ))}
                 </optgroup>
                 <optgroup label="Fornitori eSolver">
-                  {esolverSuppliers.map((supplier) => (
+                  {listedEsolverSuppliers.map((supplier) => (
                     <option key={supplier.cod_clifor} value={`esolver:${supplier.cod_clifor}`}>
                       {supplier.cod_clifor} - {supplier.ragione_sociale}
                     </option>
                   ))}
                 </optgroup>
               </select>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500" htmlFor={`manual-${config.side}-esolver-search`}>
+                Cerca eSolver
+              </label>
+              <input
+                className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-accent"
+                disabled={Boolean(selectedDocument)}
+                id={`manual-${config.side}-esolver-search`}
+                onChange={(event) => setEsolverSupplierSearch(event.target.value)}
+                placeholder="Nome, codice eSolver, P.IVA"
+                type="search"
+                value={esolverSupplierSearch}
+              />
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                {loadingEsolverSuppliers ? "Ricerca fornitori eSolver..." : "Scrivi per trovare fornitori non presenti nella lista iniziale."}
+              </p>
+              {esolverSupplierWarning ? (
+                <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  Fornitori eSolver non caricati: {esolverSupplierWarning}
+                </p>
+              ) : null}
 
               <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
                 <p className="text-sm font-medium text-slate-700">Carica PDF {config.documentLabel}</p>

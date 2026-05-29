@@ -1141,31 +1141,20 @@ def capture_chemistry_table_from_page(
                 ),
             )
 
-    horizontal_matches = _parse_chemistry_from_lines(lines, page.id)
-    vertical_matches = _parse_vertical_chemistry_from_lines(lines, page.id)
-    horizontal_count = len(horizontal_matches)
-    vertical_count = len(vertical_matches)
-
-    if horizontal_count > vertical_count:
-        orientation = "horizontal"
-        chosen = horizontal_matches
-    elif vertical_count > horizontal_count:
-        orientation = "vertical"
-        chosen = vertical_matches
-    else:
-        orientation = "unknown" if horizontal_count == 0 else "horizontal"
-        chosen = horizontal_matches or vertical_matches
+    generic_choice = _parse_generic_chemistry_table_capture(lines, page.id)
+    chosen = generic_choice.matches
+    orientation = generic_choice.orientation
 
     logger.warning(
-        "chemistry_table_capture_debug page_id=%s bbox=%s,%s,%s,%s horizontal=%s vertical=%s orientation=%s raw_lines=%s values=%s",
+        "chemistry_table_capture_debug page_id=%s bbox=%s,%s,%s,%s orientation=%s generic_reason=%s generic_score=%s raw_lines=%s values=%s",
         page.id,
         left,
         top,
         right,
         bottom,
-        horizontal_count,
-        vertical_count,
         orientation,
+        generic_choice.reason,
+        generic_choice.score,
         lines,
         list(_serialize_chemistry_capture_values(chosen).keys()),
     )
@@ -1311,37 +1300,9 @@ def capture_properties_table_from_page(*, page: DocumentPage, payload: Propertie
                 items=_build_properties_overlay_preview_items_for_page(page=page, field_values=values),
             )
 
-    horizontal_matches: dict[str, dict[str, str | int]] = {}
-    for field_name, payload_match in _parse_properties_from_numeric_cluster(lines, page.id).items():
-        normalized_field_name = _normalize_property_field_name(field_name)
-        if normalized_field_name is not None:
-            horizontal_matches.setdefault(normalized_field_name, payload_match)
-    for field_name, payload_match in _parse_properties_from_compact_lines(lines, page.id).items():
-        normalized_field_name = _normalize_property_field_name(field_name)
-        if normalized_field_name is not None:
-            horizontal_matches.setdefault(normalized_field_name, payload_match)
-    for field_name, payload_match in _parse_properties_from_spec_lines(lines, page.id).items():
-        normalized_field_name = _normalize_property_field_name(field_name)
-        if normalized_field_name is not None:
-            horizontal_matches.setdefault(normalized_field_name, payload_match)
-
-    vertical_matches = {
-        normalized_field_name: payload_match
-        for field_name, payload_match in _parse_vertical_properties_from_lines(lines, page.id).items()
-        if (normalized_field_name := _normalize_property_field_name(field_name)) is not None
-    }
-    horizontal_count = len(horizontal_matches)
-    vertical_count = len(vertical_matches)
-
-    if horizontal_count > vertical_count:
-        orientation = "horizontal"
-        chosen = horizontal_matches
-    elif vertical_count > horizontal_count:
-        orientation = "vertical"
-        chosen = vertical_matches
-    else:
-        orientation = "unknown" if horizontal_count == 0 else "horizontal"
-        chosen = horizontal_matches or vertical_matches
+    generic_choice = _parse_generic_properties_table_capture(lines, page.id)
+    orientation = generic_choice.orientation
+    chosen = generic_choice.matches
 
     values = _serialize_properties_capture_values(chosen)
 
@@ -8784,6 +8745,9 @@ def _sync_row_core_from_document_side_values(db: Session, row: AcquisitionRow) -
     _apply_document_side_fields_to_row(row, fields)
 
 
+CERTIFICATE_SIDE_COPY_BLOCKS = {"match", "chimica", "proprieta", "note", "requisiti"}
+
+
 def detach_document_match(
     db: Session,
     *,
@@ -8825,7 +8789,7 @@ def detach_document_match(
     db.add(certificate_row)
     db.flush()
 
-    moved_blocks = ("match", "chimica", "proprieta", "note")
+    moved_blocks = tuple(CERTIFICATE_SIDE_COPY_BLOCKS)
     moved_values = [
         value
         for value in current_row.values
@@ -16775,7 +16739,7 @@ def _merge_certificate_only_row_into_ddt_row(
     source_values = [
         value
         for value in source_row.values
-        if value.blocco in {"match", "chimica", "proprieta", "note"}
+        if value.blocco in CERTIFICATE_SIDE_COPY_BLOCKS
     ]
     db.query(DocumentEvidence).filter(DocumentEvidence.acquisition_row_id == source_row.id).update(
         {DocumentEvidence.acquisition_row_id: target_row.id},
@@ -16879,7 +16843,7 @@ def _find_certificate_side_source_row_id(
         useful_values = [
             value
             for value in candidate_row.values
-            if value.blocco in {"match", "chimica", "proprieta", "note"} and _read_value_has_payload(value)
+            if value.blocco in CERTIFICATE_SIDE_COPY_BLOCKS and _read_value_has_payload(value)
         ]
         if not useful_values:
             continue
@@ -16913,12 +16877,12 @@ def _copy_certificate_side_blocks_between_rows(
     existing_target_values = {
         (value.blocco, value.campo): value
         for value in target_row.values
-        if value.blocco in {"match", "chimica", "proprieta", "note"}
+        if value.blocco in CERTIFICATE_SIDE_COPY_BLOCKS
     }
     evidence_id_map: dict[int, int | None] = {}
     copied = 0
     for source_value in source_row.values:
-        if source_value.blocco not in {"match", "chimica", "proprieta", "note"}:
+        if source_value.blocco not in CERTIFICATE_SIDE_COPY_BLOCKS:
             continue
         if not _read_value_has_payload(source_value):
             continue
@@ -27722,7 +27686,13 @@ def _parse_metalba_chemistry_from_lines(lines: list[str], page_id: int) -> dict[
         if len(number_tokens) < len(metalba_slots):
             continue
         row_has_alloy_and_cast = re.match(r"^[A-Z0-9./ -]{2,}\s+[A-Z]?\d{4,}[A-Z]?", line, re.IGNORECASE) is not None
-        value_start = 2 if row_has_alloy_and_cast and len(number_tokens) >= len(metalba_slots) + 2 else 0
+        first_token = line.split(maxsplit=1)[0] if line.split() else ""
+        if row_has_alloy_and_cast and len(number_tokens) >= len(metalba_slots) + 2:
+            value_start = 2
+        elif row_has_alloy_and_cast and not re.search(r"\d", first_token) and len(number_tokens) >= len(metalba_slots) + 1:
+            value_start = 1
+        else:
+            value_start = 0
         value_tokens = number_tokens[value_start : value_start + len(metalba_slots)]
         if len(value_tokens) < len(metalba_slots):
             continue
@@ -28536,6 +28506,142 @@ def _parse_properties_from_numeric_cluster(lines: list[str], page_id: int) -> di
     return {}
 
 
+@dataclass(frozen=True)
+class _GenericPropertiesTableChoice:
+    orientation: str
+    matches: dict[str, dict[str, str | int]]
+    score: int
+    reason: str
+
+
+def _parse_generic_properties_table_capture(lines: list[str], page_id: int) -> _GenericPropertiesTableChoice:
+    candidates: list[_GenericPropertiesTableChoice] = []
+
+    for reason, orientation, parser in (
+        ("generic-measured-rows", "horizontal", _parse_generic_measured_property_rows),
+        ("numeric-cluster", "horizontal", _parse_properties_from_numeric_cluster),
+        ("compact", "horizontal", _parse_properties_from_compact_lines),
+        ("spec", "horizontal", _parse_properties_from_spec_lines),
+        ("vertical", "vertical", _parse_vertical_properties_from_lines),
+        ("layout-aluminium-bozen", "horizontal", _parse_aluminium_bozen_properties_from_lines),
+        ("layout-neuman", "horizontal", _parse_neuman_properties_from_lines),
+        ("layout-aww", "horizontal", _parse_aww_properties_from_lines),
+    ):
+        raw_matches = parser(lines, page_id)
+        matches = _normalize_property_match_keys(raw_matches)
+        if not matches:
+            continue
+        candidates.append(
+            _GenericPropertiesTableChoice(
+                orientation=orientation,
+                matches=matches,
+                score=_score_generic_properties_matches(matches, reason=reason),
+                reason=reason,
+            )
+        )
+
+    if not candidates:
+        return _GenericPropertiesTableChoice(orientation="unknown", matches={}, score=0, reason="none")
+
+    return max(candidates, key=lambda item: (item.score, len(item.matches)))
+
+
+def _normalize_property_match_keys(
+    matches: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    normalized: dict[str, dict[str, str | int]] = {}
+    for field_name, payload in matches.items():
+        normalized_field_name = _normalize_property_field_name(field_name)
+        if normalized_field_name is None:
+            continue
+        final_value = _normalize_property_capture_value(
+            _string_or_none(cast(str | None, payload.get("final")))
+            or _string_or_none(cast(str | None, payload.get("raw")))
+        )
+        if final_value is None:
+            continue
+        normalized_payload = dict(payload)
+        normalized_payload["standardized"] = final_value
+        normalized_payload["final"] = final_value
+        normalized[normalized_field_name] = normalized_payload
+    return normalized
+
+
+def _parse_generic_measured_property_rows(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    measured_candidates: list[tuple[str, dict[str, dict[str, str | int]]]] = []
+    for line in lines:
+        lowered = line.casefold()
+        if any(
+            marker in lowered
+            for marker in (
+                "min",
+                "max",
+                "spec",
+                "norm",
+                "limit",
+                "minimum",
+                "maximum",
+                "chemical",
+                "composition",
+            )
+        ):
+            continue
+        numbers = re.findall(r"\d+(?:[.,]\d+)?", _normalize_mojibake_numeric_text(line))
+        if len(numbers) < 4:
+            continue
+        include_iacs = "iacs" in lowered or "ms/m" in lowered
+        candidate_values = _extract_property_candidate_values(numbers, allow_iacs=include_iacs)
+        if candidate_values is None:
+            continue
+        candidate_match = _build_property_match_from_candidate_values(
+            candidate_values,
+            page_id,
+            include_iacs=include_iacs,
+        )
+        if not candidate_match:
+            continue
+        for payload in candidate_match.values():
+            payload["snippet"] = line
+        measured_candidates.append((line, candidate_match))
+
+    return _aggregate_measured_property_candidates(measured_candidates, page_id)
+
+
+def _score_generic_properties_matches(
+    matches: dict[str, dict[str, str | int]],
+    *,
+    reason: str,
+) -> int:
+    if not matches:
+        return -999
+    score = len(matches) * 10
+    if all(field_name in matches for field_name in ("Rm", "Rp0.2", "A%", "HB")):
+        score += 20
+    if reason == "generic-measured-rows":
+        score += 8
+    if reason.startswith("layout-"):
+        score += 4
+
+    rm = _safe_float(cast(str | None, matches.get("Rm", {}).get("final")) if "Rm" in matches else None)
+    rp02 = _safe_float(cast(str | None, matches.get("Rp0.2", {}).get("final")) if "Rp0.2" in matches else None)
+    a_pct = _safe_float(cast(str | None, matches.get("A%", {}).get("final")) if "A%" in matches else None)
+    hb = _safe_float(cast(str | None, matches.get("HB", {}).get("final")) if "HB" in matches else None)
+    if rm is not None and rp02 is not None:
+        score += 8 if rp02 <= rm else -30
+    if a_pct is not None:
+        score += 4 if 0 < a_pct <= 60 else -20
+    if hb is not None:
+        score += 4 if 20 <= hb <= 250 else -20
+
+    for payload in matches.values():
+        snippet = (_string_or_none(cast(str | None, payload.get("snippet"))) or "").casefold()
+        if any(marker in snippet for marker in ("chemical", "composition", "note", "remark")):
+            score -= 20
+        if any(marker in snippet for marker in ("min", "max", "spec", "norm", "limit")) and reason != "spec":
+            score -= 12
+    return score
+
+
 def _extract_property_candidate_values(raw_values: list[str], *, allow_iacs: bool = False) -> list[str] | None:
     normalized_values = [_normalize_numeric_value(value) or value for value in raw_values]
     best_candidate: list[str] | None = None
@@ -28613,6 +28719,284 @@ def _build_property_match_from_candidate_values(
             },
         )
     return matches
+
+
+@dataclass(frozen=True)
+class _GenericChemistryTableChoice:
+    orientation: str
+    matches: dict[str, dict[str, str | int]]
+    score: int
+    reason: str
+
+
+GENERIC_CHEMISTRY_TABLE_PLACEHOLDERS = (
+    "impol",
+    "leichtmetall",
+    "zalco",
+)
+
+
+def _parse_generic_chemistry_table_capture(lines: list[str], page_id: int) -> _GenericChemistryTableChoice:
+    candidates: list[_GenericChemistryTableChoice] = []
+
+    generic_horizontal = _parse_chemistry_from_lines(lines, page_id)
+    if generic_horizontal:
+        candidates.append(
+            _build_generic_chemistry_choice(
+                orientation="horizontal",
+                matches=generic_horizontal,
+                lines=lines,
+                reason="generic-horizontal",
+            )
+        )
+
+    generic_minmax = _parse_generic_minmax_chemistry_from_lines(lines, page_id)
+    if generic_minmax:
+        candidates.append(
+            _build_generic_chemistry_choice(
+                orientation="horizontal",
+                matches=generic_minmax,
+                lines=lines,
+                reason="generic-minmax",
+            )
+        )
+
+    generic_vertical = _parse_vertical_chemistry_from_lines(lines, page_id)
+    if generic_vertical:
+        candidates.append(
+            _build_generic_chemistry_choice(
+                orientation="vertical",
+                matches=generic_vertical,
+                lines=lines,
+                reason="generic-vertical",
+            )
+        )
+
+    for reason, parser in (
+        ("layout-metalba", _parse_metalba_chemistry_from_lines),
+        ("layout-grupa-kety", _parse_grupa_kety_chemistry_from_lines),
+        ("layout-aluminium-bozen", _parse_aluminium_bozen_chemistry_from_lines),
+        ("layout-neuman", _parse_neuman_chemistry_from_lines),
+        ("layout-aww", _parse_aww_chemistry_from_lines),
+    ):
+        layout_matches = parser(lines, page_id)
+        if layout_matches:
+            candidates.append(
+                _build_generic_chemistry_choice(
+                    orientation="horizontal",
+                    matches=layout_matches,
+                    lines=lines,
+                    reason=reason,
+                )
+            )
+
+    # Placeholder intenzionali: Impol, Leichtmetall e Zalco restano punti di
+    # rafforzamento del generico, senza introdurre stati o flussi paralleli.
+    _ = GENERIC_CHEMISTRY_TABLE_PLACEHOLDERS
+
+    if not candidates:
+        return _GenericChemistryTableChoice(orientation="unknown", matches={}, score=0, reason="none")
+
+    return max(candidates, key=lambda item: (item.score, len(item.matches)))
+
+
+def _build_generic_chemistry_choice(
+    *,
+    orientation: str,
+    matches: dict[str, dict[str, str | int]],
+    lines: list[str],
+    reason: str,
+) -> _GenericChemistryTableChoice:
+    normalized_matches = _normalize_generic_chemistry_matches(matches)
+    score = _score_generic_chemistry_matches(normalized_matches, lines=lines, reason=reason)
+    return _GenericChemistryTableChoice(
+        orientation=orientation,
+        matches=normalized_matches,
+        score=score,
+        reason=reason,
+    )
+
+
+def _normalize_generic_chemistry_matches(
+    matches: dict[str, dict[str, str | int]],
+) -> dict[str, dict[str, str | int]]:
+    normalized_matches: dict[str, dict[str, str | int]] = {}
+    for field_name, payload in matches.items():
+        raw_value = _string_or_none(cast(str | None, payload.get("raw"))) or _string_or_none(
+            cast(str | None, payload.get("final"))
+        )
+        normalized_value = _normalize_generic_chemistry_table_value(raw_value)
+        if normalized_value is None:
+            continue
+        normalized_payload = dict(payload)
+        normalized_payload["standardized"] = normalized_value
+        normalized_payload["final"] = normalized_value
+        normalized_matches[field_name] = normalized_payload
+    return normalized_matches
+
+
+def _normalize_generic_chemistry_table_value(value: str | None) -> str | None:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return None
+    compact = cleaned.replace(" ", "").replace("≤", "<=")
+    prefix = ""
+    for candidate_prefix in ("<=", "<"):
+        if compact.startswith(candidate_prefix):
+            prefix = candidate_prefix
+            compact = compact[len(candidate_prefix) :]
+            break
+
+    if "," in compact or "." in compact:
+        normalized = _normalize_numeric_value(compact)
+        return f"{prefix}{normalized}" if normalized is not None else None
+
+    if re.fullmatch(r"\d{5}", compact) and compact[0] in {"0", "1", "2"}:
+        if compact[0] == "0":
+            return f"{prefix}0.{compact[1:]}"
+        return f"{prefix}{compact[0]}.{compact[1:]}"
+
+    if re.fullmatch(r"\d{4}", compact):
+        return f"{prefix}0.{compact}"
+
+    normalized = _normalize_chemistry_capture_value(f"{prefix}{compact}")
+    if normalized is None:
+        return None
+    return normalized.replace(",", ".")
+
+
+def _score_generic_chemistry_matches(
+    matches: dict[str, dict[str, str | int]],
+    *,
+    lines: list[str],
+    reason: str,
+) -> int:
+    if len(matches) < 3:
+        return -999
+
+    score = len(matches) * 10
+    all_text = " | ".join(lines).casefold()
+    if "min" in all_text and "max" in all_text:
+        score += 6
+    if reason == "generic-minmax":
+        score += 8
+    if reason.startswith("layout-"):
+        score += 4
+
+    for payload in matches.values():
+        raw_value = _string_or_none(cast(str | None, payload.get("final")))
+        numeric = _safe_chemistry_float(raw_value)
+        if numeric is None:
+            score -= 10
+            continue
+        if 0 <= numeric <= 10:
+            score += 5
+        elif 10 < numeric <= 100:
+            score -= 2
+        else:
+            score -= 40
+        snippet = (_string_or_none(cast(str | None, payload.get("snippet"))) or "").casefold()
+        if any(marker in snippet for marker in ("mechanical", "propriet", "notes", "remark")):
+            score -= 20
+        if re.search(r"\b(?:spec|norm|limit)\b", snippet):
+            score -= 8
+        if _line_has_chemistry_range(snippet):
+            score -= 10
+    return score
+
+
+def _parse_generic_minmax_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
+    best_matches: dict[str, dict[str, str | int]] = {}
+    best_score = -999
+    for index, line in enumerate(lines):
+        slots = _extract_chemistry_header_slots(line)
+        if len([slot for slot in slots if slot is not None]) < 3:
+            continue
+        window = lines[index + 1 : min(index + 14, len(lines))]
+        min_values, max_values = _find_explicit_chemistry_limit_rows(window, len(slots))
+
+        for candidate in window:
+            lowered = candidate.casefold()
+            if not re.search(r"\d", candidate):
+                continue
+            if _extract_chemistry_header(candidate):
+                continue
+            if any(marker in lowered for marker in ("min", "max", "spec", "norm", "limit", "mechanical", "notes")):
+                continue
+            if _line_has_chemistry_range(candidate):
+                continue
+
+            values = _extract_horizontal_chemistry_values(candidate, len(slots))
+            if len(values) < len(slots):
+                continue
+            matches = _build_chemistry_matches_from_slots_and_values(
+                slots=slots,
+                values=values,
+                page_id=page_id,
+                snippet=f"{line} | {candidate}",
+            )
+            if len(matches) < 3:
+                continue
+            score = _score_chemistry_candidate_against_limits(
+                values,
+                min_values=min_values,
+                max_values=max_values,
+            )
+            score += _score_generic_chemistry_matches(
+                _normalize_generic_chemistry_matches(matches),
+                lines=[line, *window],
+                reason="generic-minmax",
+            )
+            if score > best_score:
+                best_score = score
+                best_matches = matches
+    return best_matches
+
+
+def _find_explicit_chemistry_limit_rows(
+    lines: list[str],
+    expected_count: int,
+) -> tuple[list[str] | None, list[str] | None]:
+    min_values: list[str] | None = None
+    max_values: list[str] | None = None
+    for line in lines:
+        lowered = line.casefold()
+        if min_values is None and re.search(r"\bmin\b|soll min|set value min|valeur min", lowered):
+            min_values = _extract_horizontal_chemistry_values(line, expected_count)
+        if max_values is None and re.search(r"\bmax\b|soll max|set value max|valeur max", lowered):
+            max_values = _extract_horizontal_chemistry_values(line, expected_count)
+    return min_values, max_values
+
+
+def _build_chemistry_matches_from_slots_and_values(
+    *,
+    slots: list[str | None],
+    values: list[str],
+    page_id: int,
+    snippet: str,
+) -> dict[str, dict[str, str | int]]:
+    matches: dict[str, dict[str, str | int]] = {}
+    for element, raw_value in zip(slots, values):
+        if element is None or raw_value in {"/", "Other", "other"}:
+            continue
+        standardized = _normalize_generic_chemistry_table_value(raw_value)
+        if standardized is None:
+            continue
+        matches.setdefault(
+            element,
+            {
+                "page_id": page_id,
+                "snippet": snippet,
+                "raw": raw_value,
+                "standardized": standardized,
+                "final": standardized,
+            },
+        )
+    return matches
+
+
+def _line_has_chemistry_range(line: str) -> bool:
+    return bool(re.search(r"\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?", line))
 
 
 def _parse_chemistry_from_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:

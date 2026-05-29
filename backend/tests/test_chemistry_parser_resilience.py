@@ -5,6 +5,7 @@ from app.modules.acquisition.service import (
     _detect_chemistry_matches,
     _parse_aww_chemistry_from_lines,
     _parse_chemistry_from_lines,
+    _parse_generic_chemistry_table_capture,
     _parse_metalba_chemistry_from_lines,
     _parse_neuman_chemistry_from_lines,
 )
@@ -116,6 +117,34 @@ class ChemistryParserResilienceTest(unittest.TestCase):
         self.assertEqual(matches["Cr"]["final"], "0.67")
         self.assertEqual(matches["Pb"]["final"], "0.10")
         self.assertNotIn("Ga", matches)
+
+    def test_generic_table_capture_repairs_missing_decimal_separator(self):
+        lines = [
+            "ANALISI CHIMICA / CHEMICAL COMPOSITION",
+            "Lega Colata Nr. Si % Fe % Cu % Mn % Mg % Zn % Ti % Cr %",
+            "6082F 25350C 1,0849 3032 0,0851 0,7487 0,8495 0,0977 0,0385 0,1286",
+        ]
+
+        choice = _parse_generic_chemistry_table_capture(lines, page_id=1)
+
+        self.assertEqual(choice.matches["Si"]["final"], "1.0849")
+        self.assertEqual(choice.matches["Fe"]["final"], "0.3032")
+        self.assertEqual(choice.matches["Cr"]["final"], "0.1286")
+
+    def test_generic_table_capture_prefers_measured_row_over_min_max_ranges(self):
+        lines = [
+            "1. SKLAD CHEMICZNY - CHEMICAL COMPOSITION",
+            "Si [%] Fe [%] Cu [%] Mn [%] Mg [%] Cr [%] Zn [%] Ti [%] Zr [%]",
+            "0 - 0.15 0 - 0.25 1.8 - 2.6 0 - 0.10 1.9 - 2.7 0 - 0.04 5.9 - 6.9 0 - 0.06 0.08 - 0.15",
+            "EN AW-7150 H6244 0.08 0.08 2.13 0.08 2.28 0.00 6.28 0.05 0.12",
+            "2. WLASNOSCI MECHANICZNE - MECHANICAL PROPERTIES",
+        ]
+
+        choice = _parse_generic_chemistry_table_capture(lines, page_id=1)
+
+        self.assertEqual(choice.matches["Si"]["final"], "0.08")
+        self.assertEqual(choice.matches["Cu"]["final"], "2.13")
+        self.assertEqual(choice.matches["Zn"]["final"], "6.28")
 
 
 if __name__ == "__main__":

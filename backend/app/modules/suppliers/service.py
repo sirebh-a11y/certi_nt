@@ -686,19 +686,25 @@ def _fetch_esolver_supplier_rows(
         f"ORDER BY RagSoc1 ASC, CodCliFor ASC"
     )
     password = decrypt_secret(connection.password_encrypted)
-    with pymssql.connect(
-        server=connection.server_host,
-        port=connection.port,
-        user=connection.username,
-        password=password,
-        database=connection.database_name,
-        login_timeout=connection.connection_timeout,
-        timeout=connection.query_timeout,
-        as_dict=True,
-    ) as sql_connection:
-        with sql_connection.cursor() as cursor:
-            cursor.execute(query, tuple(params))
-            return [_serialize_esolver_supplier_row(row) for row in cursor.fetchall()]
+    try:
+        with pymssql.connect(
+            server=connection.server_host,
+            port=connection.port,
+            user=connection.username,
+            password=password,
+            database=connection.database_name,
+            login_timeout=connection.connection_timeout,
+            timeout=connection.query_timeout,
+            as_dict=True,
+        ) as sql_connection:
+            with sql_connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                return [_serialize_esolver_supplier_row(row) for row in cursor.fetchall()]
+    except pymssql.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="eSolver non raggiungibile: verifica connessione, VPN/rete server o parametri del connettore.",
+        ) from exc
 
 
 def _serialize_esolver_supplier_row(row: dict[str, Any]) -> dict[str, str | None]:

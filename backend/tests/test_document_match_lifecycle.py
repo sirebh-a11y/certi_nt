@@ -811,6 +811,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             ("chimica", "Si", "0,9"),
             ("proprieta", "Rm", "350"),
             ("note", "nota_radioactive_free", "true"),
+            ("requisiti", "customer_requirement_quote", "WITH PROOF OF TEMPER T62; VALUES SPECIALLY AGREED"),
         ]:
             self.db.add(
                 ReadValue(
@@ -872,6 +873,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             ("chimica", "Si", "0,9"),
             ("proprieta", "Rm", "350"),
             ("note", "nota_radioactive_free", "true"),
+            ("requisiti", "customer_requirement_quote", "WITH PROOF OF TEMPER T62; VALUES SPECIALLY AGREED"),
         ]:
             self.db.add(
                 ReadValue(
@@ -897,6 +899,12 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
 
         self.assertTrue(merged)
         merged_row = get_acquisition_row(self.db, target.id)
+        requirement_value = next(
+            value
+            for value in merged_row.values
+            if value.blocco == "requisiti" and value.campo == "customer_requirement_quote"
+        )
+        self.assertEqual(requirement_value.valore_finale, "WITH PROOF OF TEMPER T62; VALUES SPECIALLY AGREED")
         self.assertEqual(merged_row.qualita_valutazione, "accettato_con_riserva")
         self.assertEqual(merged_row.qualita_note, "Da usare con riserva")
 
