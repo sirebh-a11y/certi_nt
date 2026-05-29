@@ -324,6 +324,8 @@ export default function QuartaTaglioDetailPage() {
   const [wordUploadState, setWordUploadState] = useState({ status: "idle", message: "" });
   const [additionalPagesFile, setAdditionalPagesFile] = useState(null);
   const [additionalPagesState, setAdditionalPagesState] = useState({ status: "idle", message: "" });
+  const [pdfAttachmentFile, setPdfAttachmentFile] = useState(null);
+  const [pdfAttachmentState, setPdfAttachmentState] = useState({ status: "idle", message: "" });
   const [wordConformityDialogOpen, setWordConformityDialogOpen] = useState(false);
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
@@ -789,6 +791,62 @@ export default function QuartaTaglioDetailPage() {
     }
   }
 
+  async function uploadPdfAttachment() {
+    if (!pdfAttachmentFile) {
+      setPdfAttachmentState({ status: "error", message: "Seleziona un PDF da allegare." });
+      return;
+    }
+    setPdfAttachmentState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", pdfAttachmentFile);
+      const response = await apiRequest(
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/pdf-attachments?certificate_id=${encodeURIComponent(activeCertificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/pdf-attachments`,
+        {
+          method: "POST",
+          body: formData,
+        },
+        token,
+      );
+      setPdfAttachmentFile(null);
+      const fileInput = document.getElementById("quarta-pdf-attachment-upload");
+      if (fileInput) {
+        fileInput.value = "";
+      }
+      setData(response);
+      setPdfAttachmentState({ status: "saved", message: "PDF allegato e Word aggiornato." });
+    } catch (requestError) {
+      setPdfAttachmentState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore caricamento allegato PDF"),
+      });
+    }
+  }
+
+  async function deletePdfAttachment(attachmentId) {
+    setPdfAttachmentState({ status: "saving", message: "" });
+    setError("");
+    try {
+      const response = await apiRequest(
+        activeCertificateId
+          ? `/quarta-taglio/${encodeURIComponent(codOdp)}/pdf-attachments/${encodeURIComponent(attachmentId)}?certificate_id=${encodeURIComponent(activeCertificateId)}`
+          : `/quarta-taglio/${encodeURIComponent(codOdp)}/pdf-attachments/${encodeURIComponent(attachmentId)}`,
+        { method: "DELETE" },
+        token,
+      );
+      setData(response);
+      setPdfAttachmentState({ status: "saved", message: "Allegato PDF rimosso e Word aggiornato." });
+    } catch (requestError) {
+      setPdfAttachmentState({
+        status: "error",
+        message: handleRequestError(requestError, "Errore rimozione allegato PDF"),
+      });
+    }
+  }
+
   function openCodF3Candidate(candidate) {
     setWordDraftState({ status: "idle", message: "" });
     if (candidate.certificate_id) {
@@ -908,9 +966,13 @@ export default function QuartaTaglioDetailPage() {
   const hasCertificateNumber = Boolean(certificateNumber && certificateNumber !== "Da assegnare");
   const canCreateWord = Boolean(data?.can_create_word);
   const wordCreationBlockers = data?.word_creation_blockers || [];
+  const standardConfirmationBlockers = data?.standard_confirmation_blockers || [];
+  const canConfirmStandard = Boolean(data?.can_confirm_standard);
+  const standardConfirmationBlockedMessage = standardConfirmationBlockers.join("; ");
   const wordInfo = activeCodF3Candidate && !activeCodF3Candidate.certificate_id
     ? { has_word: false, source_label: "Nessun Word per il CodF3 selezionato" }
     : data?.word_info || {};
+  const pdfAttachments = data?.pdf_attachments || [];
   const isPdfFinal = Boolean(wordInfo.is_pdf_final || wordInfo.certificate_status === "pdf_final");
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
   const activeCertificateId = certificateId || data?.header?.certificate_id || "";
@@ -1077,6 +1139,11 @@ export default function QuartaTaglioDetailPage() {
             </div>
           )}
           {standardError ? <div className="mt-2 text-sm text-rose-600">{standardError}</div> : null}
+          {!canConfirmStandard && standardConfirmationBlockers.length ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+              Standard non confermabile: {standardConfirmationBlockedMessage}
+            </div>
+          ) : null}
           {data.quick_incoming_confirm_warning ? (
             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
               {data.quick_incoming_confirm_warning}
@@ -1092,8 +1159,13 @@ export default function QuartaTaglioDetailPage() {
                 <div className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ") || candidate.code}</div>
                 <button
                   className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={savingStandardId !== null || (data.selected_standard_confirmed && data.selected_standard?.id === candidate.id)}
+                  disabled={
+                    savingStandardId !== null ||
+                    !canConfirmStandard ||
+                    (data.selected_standard_confirmed && data.selected_standard?.id === candidate.id)
+                  }
                   onClick={() => confirmStandard(candidate.id)}
+                  title={!canConfirmStandard ? standardConfirmationBlockedMessage : undefined}
                   type="button"
                 >
                   {data.selected_standard_confirmed && data.selected_standard?.id === candidate.id
@@ -1125,8 +1197,9 @@ export default function QuartaTaglioDetailPage() {
               </select>
               <button
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!manualStandardId || savingStandardId !== null}
+                disabled={!manualStandardId || savingStandardId !== null || !canConfirmStandard}
                 onClick={() => confirmStandard(Number(manualStandardId))}
+                title={!canConfirmStandard ? standardConfirmationBlockedMessage : undefined}
                 type="button"
               >
                 {savingStandardId === Number(manualStandardId) ? "Salvataggio..." : "Conferma"}
@@ -1179,6 +1252,11 @@ export default function QuartaTaglioDetailPage() {
           {additionalPagesState.message ? (
             <p className={`mt-1 text-sm ${additionalPagesState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
               {additionalPagesState.message}
+            </p>
+          ) : null}
+          {pdfAttachmentState.message ? (
+            <p className={`mt-1 text-sm ${pdfAttachmentState.status === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+              {pdfAttachmentState.message}
             </p>
           ) : null}
           <span className={`mt-3 inline-flex w-fit rounded-lg border px-3 py-1 text-xs font-semibold ${conformityClass(data.conformity_status)}`}>
@@ -1318,6 +1396,53 @@ export default function QuartaTaglioDetailPage() {
             {isPdfFinal ? <p className="text-xs text-sky-700">PDF chiuso: le modifiche Word sono bloccate.</p> : null}
             {!hasCertificateNumber ? <p className="text-xs text-amber-700">Genera prima il Word numerato.</p> : null}
             {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci le pagine in Word e ricarica il file.</p> : null}
+          </div>
+          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-pdf-attachment-upload">
+              Allegati PDF
+            </label>
+            <p className="text-xs text-slate-500">Ogni PDF viene inserito intero in coda al Word.</p>
+            <div className="flex gap-2">
+              <input
+                accept=".pdf,application/pdf"
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+                disabled={isPdfFinal || !hasCertificateNumber || !activeCertificateId || isManualWord}
+                id="quarta-pdf-attachment-upload"
+                onChange={(event) => setPdfAttachmentFile(event.target.files?.[0] || null)}
+                type="file"
+              />
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isPdfFinal || pdfAttachmentState.status === "saving" || !pdfAttachmentFile || !hasCertificateNumber || !activeCertificateId || isManualWord}
+                onClick={uploadPdfAttachment}
+                type="button"
+              >
+                {pdfAttachmentState.status === "saving" ? "Carico..." : "Carica"}
+              </button>
+            </div>
+            {pdfAttachments.length ? (
+              <div className="space-y-1">
+                {pdfAttachments.map((attachment) => (
+                  <div
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700"
+                    key={attachment.id}
+                  >
+                    <span className="min-w-0 truncate font-semibold">{attachment.original_filename}</span>
+                    <button
+                      className="shrink-0 rounded-lg border border-rose-200 bg-white px-2 py-1 font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isPdfFinal || pdfAttachmentState.status === "saving" || isManualWord}
+                      onClick={() => deletePdfAttachment(attachment.id)}
+                      type="button"
+                    >
+                      Rimuovi
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">Nessun allegato PDF.</p>
+            )}
+            {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci gli allegati in Word e ricarica il file.</p> : null}
           </div>
         </div>
         </div>

@@ -242,6 +242,14 @@ class QuartaTaglioAdditionalPagesResponse(BaseModel):
     inherited_from_cod_f3: str | None = None
 
 
+class QuartaTaglioPdfAttachmentResponse(BaseModel):
+    id: int
+    original_filename: str
+    sort_order: int = 0
+    uploaded_at: datetime | None = None
+    uploaded_by: str | None = None
+
+
 class QuartaTaglioWordInfoResponse(BaseModel):
     has_word: bool = False
     source: str | None = None
@@ -272,6 +280,8 @@ class QuartaTaglioDetailResponse(BaseModel):
     standard_candidates: list[QuartaTaglioStandardCandidateResponse]
     selected_standard: QuartaTaglioStandardCandidateResponse | None = None
     selected_standard_confirmed: bool = False
+    can_confirm_standard: bool = False
+    standard_confirmation_blockers: list[str] = Field(default_factory=list)
     chemistry: list[QuartaTaglioAggregateValueResponse]
     properties: list[QuartaTaglioAggregateValueResponse]
     notes: list[QuartaTaglioNoteResponse]
@@ -289,6 +299,7 @@ class QuartaTaglioDetailResponse(BaseModel):
     certifiable_units: list[QuartaTaglioCertifiableUnitResponse] = Field(default_factory=list)
     second_page_placeholder: bool = True
     additional_pages: QuartaTaglioAdditionalPagesResponse | None = None
+    pdf_attachments: list[QuartaTaglioPdfAttachmentResponse] = Field(default_factory=list)
     word_info: QuartaTaglioWordInfoResponse = Field(default_factory=QuartaTaglioWordInfoResponse)
 
 

@@ -29,7 +29,9 @@ from app.modules.quarta_taglio.service import (
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
     upload_quarta_taglio_additional_pages,
+    upload_quarta_taglio_pdf_attachment,
     upload_quarta_taglio_word_file,
+    delete_quarta_taglio_pdf_attachment,
 )
 
 router = APIRouter()
@@ -222,6 +224,40 @@ def upload_quarta_taglio_additional_pages_route(
         db,
         cod_odp=cod_odp,
         uploaded_file=file,
+        actor=current_user,
+        certificate_id=certificate_id,
+    )
+
+
+@router.post("/{cod_odp}/pdf-attachments", response_model=QuartaTaglioDetailResponse)
+def upload_quarta_taglio_pdf_attachment_route(
+    cod_odp: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_id: int | None = Query(default=None),
+    file: UploadFile = File(...),
+) -> QuartaTaglioDetailResponse:
+    return upload_quarta_taglio_pdf_attachment(
+        db,
+        cod_odp=cod_odp,
+        uploaded_file=file,
+        actor=current_user,
+        certificate_id=certificate_id,
+    )
+
+
+@router.delete("/{cod_odp}/pdf-attachments/{attachment_id}", response_model=QuartaTaglioDetailResponse)
+def delete_quarta_taglio_pdf_attachment_route(
+    cod_odp: str,
+    attachment_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_id: int | None = Query(default=None),
+) -> QuartaTaglioDetailResponse:
+    return delete_quarta_taglio_pdf_attachment(
+        db,
+        cod_odp=cod_odp,
+        attachment_id=attachment_id,
         actor=current_user,
         certificate_id=certificate_id,
     )

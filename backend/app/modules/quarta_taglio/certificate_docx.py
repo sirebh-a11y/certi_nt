@@ -3,10 +3,15 @@ from __future__ import annotations
 import zipfile
 import zlib
 import re
+import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
+import fitz
+from PIL import Image
 from docxcompose.composer import Composer
 from docx import Document
+from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
@@ -151,6 +156,7 @@ def build_forgialluminio_draft_docx(
     certified_by: User,
     quality_manager: User | None,
     additional_pages_path: Path | None = None,
+    pdf_attachments: Sequence[tuple[Path, str]] | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -173,6 +179,13 @@ def build_forgialluminio_draft_docx(
             additional_pages_path,
             detail=detail,
             draft_number=draft_number,
+            certified_by=certified_by,
+            quality_manager=quality_manager,
+        )
+    if pdf_attachments:
+        _append_pdf_attachments(
+            output_path,
+            pdf_attachments,
             certified_by=certified_by,
             quality_manager=quality_manager,
         )
@@ -483,6 +496,81 @@ def _append_docx_body(
         quality_manager=quality_manager,
     )
     merged.save(str(base_docx_path))
+
+
+def _append_pdf_attachments(
+    base_docx_path: Path,
+    pdf_attachments: Sequence[tuple[Path, str]],
+    *,
+    certified_by: User,
+    quality_manager: User | None,
+) -> None:
+    document = Document(str(base_docx_path))
+    with tempfile.TemporaryDirectory(prefix="certi_pdf_attachment_") as tmp_root:
+        tmp_dir = Path(tmp_root)
+        attachment_section = None
+        for pdf_path, original_filename in pdf_attachments:
+            if not pdf_path.exists():
+                continue
+            pdf_document = fitz.open(str(pdf_path))
+            for page_index, page in enumerate(pdf_document, start=1):
+                if attachment_section is None:
+                    attachment_section = document.add_section(WD_SECTION.NEW_PAGE)
+                    attachment_section.top_margin = Inches(0.45)
+                    attachment_section.bottom_margin = Inches(0.65)
+                    attachment_section.left_margin = Inches(0.45)
+                    attachment_section.right_margin = Inches(0.45)
+                    attachment_section.header_distance = Inches(0.12)
+                    attachment_section.footer_distance = Inches(0.12)
+                    attachment_section.different_first_page_header_footer = False
+                    attachment_section.header.is_linked_to_previous = False
+                    attachment_section.footer.is_linked_to_previous = False
+                    _clear_header_footer(attachment_section.header)
+                    _fill_signature_footer(attachment_section.footer, certified_by=certified_by, quality_manager=quality_manager, include_operator=True)
+                else:
+                    document.add_page_break()
+
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                image_path = tmp_dir / f"{_safe_attachment_name(original_filename)}_{page_index}.png"
+                pixmap.save(image_path)
+                _add_pdf_attachment_page(document, image_path=image_path, original_filename=original_filename, section=attachment_section)
+            pdf_document.close()
+    document.save(str(base_docx_path))
+
+
+def _add_pdf_attachment_page(document: Document, *, image_path: Path, original_filename: str, section) -> None:
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    title.paragraph_format.space_before = Pt(0)
+    title.paragraph_format.space_after = Pt(3)
+    run = title.add_run(f"Attachment: {original_filename}")
+    run.bold = True
+    run.font.name = "Arial"
+    run.font.size = Pt(9)
+
+    with Image.open(image_path) as image:
+        width_px, height_px = image.size
+    if width_px <= 0 or height_px <= 0:
+        return
+
+    usable_width = max(1.0, (int(section.page_width) - int(section.left_margin) - int(section.right_margin)) / 914400)
+    usable_height = max(1.0, (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.35)
+    aspect_ratio = width_px / height_px
+    target_width = usable_width
+    target_height = target_width / aspect_ratio
+    if target_height > usable_height:
+        target_height = usable_height
+        target_width = target_height * aspect_ratio
+
+    paragraph = document.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.add_run().add_picture(str(image_path), width=Inches(target_width), height=Inches(target_height))
+
+
+def _safe_attachment_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")[:80] or "attachment"
 
 
 def _clear_header_footer(container) -> None:

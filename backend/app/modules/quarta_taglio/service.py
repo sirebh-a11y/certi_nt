@@ -33,6 +33,7 @@ from app.modules.quarta_taglio.certificate_docx import (
 from app.modules.quarta_taglio.models import (
     QuartaTaglioArticleOverride,
     QuartaTaglioCertificateExtraPages,
+    QuartaTaglioCertificatePdfAttachment,
     QuartaTaglioCertificatePdfVersion,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
@@ -57,6 +58,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioMaterialResponse,
     QuartaTaglioMissingItemResponse,
     QuartaTaglioNoteResponse,
+    QuartaTaglioPdfAttachmentResponse,
     QuartaTaglioConformityIssueResponse,
     QuartaTaglioRowResponse,
     QuartaTaglioStandardCandidateResponse,
@@ -582,6 +584,11 @@ def get_quarta_taglio_detail(
             )
         )
     notes = _evaluate_notes(app_rows, system_note_texts=_system_note_texts(db))
+    standard_confirmation_blockers = _standard_confirmation_blockers(
+        db,
+        quarta_rows=rows,
+        app_rows=app_rows,
+    )
     quick_confirm_blockers = _quick_incoming_confirm_blockers(
         app_rows=quick_confirm_rows,
         selected_standard_confirmed=selected_standard_confirmed,
@@ -715,6 +722,8 @@ def get_quarta_taglio_detail(
         standard_candidates=standard_candidates,
         selected_standard=selected_standard,
         selected_standard_confirmed=selected_standard_confirmed,
+        can_confirm_standard=not standard_confirmation_blockers,
+        standard_confirmation_blockers=standard_confirmation_blockers,
         chemistry=chemistry,
         properties=properties,
         notes=notes,
@@ -737,6 +746,7 @@ def get_quarta_taglio_detail(
             cod_f3=_clean_text(open_certificate.cod_f3) if open_certificate else primary_unit.cod_f3 if primary_unit else None,
             raw_cod_f3=header_flow["raw_cod_f3"],
         ),
+        pdf_attachments=_serialize_pdf_attachments(db, open_certificate),
         word_info=_serialize_word_info(open_certificate),
     )
     if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
@@ -764,6 +774,12 @@ def confirm_quarta_taglio_standard(
     if standard is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Standard non trovato o non attivo")
 
+    _refresh_quarta_rows_from_incoming(db, rows=rows)
+    app_rows = _load_matching_app_rows(db, rows)
+    standard_blockers = _standard_confirmation_blockers(db, quarta_rows=rows, app_rows=app_rows)
+    if standard_blockers:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(standard_blockers))
+
     selection = (
         db.query(QuartaTaglioStandardSelection)
         .filter(QuartaTaglioStandardSelection.cod_odp == cod_odp)
@@ -775,8 +791,6 @@ def confirm_quarta_taglio_standard(
     selection.selected_by_user_id = actor_id
     db.add(selection)
     db.commit()
-    _refresh_quarta_rows_from_incoming(db, rows=rows)
-    app_rows = _load_matching_app_rows(db, rows)
     if _ensure_derived_incoming_values(db, app_rows=app_rows, actor_id=actor_id):
         _refresh_quarta_rows_from_incoming(db, rows=rows)
         db.commit()
@@ -986,6 +1000,7 @@ def create_quarta_taglio_word_draft(
     certificate.cdq_values = _cdq_values_from_detail(detail)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
+    _ensure_pdf_attachments_initialized(db, certificate=certificate, raw_cod_f3=(detail.header or {}).get("codice_f3_raw"))
 
     storage_key = _certificate_docx_storage_key(cod_odp)
     output_path = _certificate_storage_path(storage_key)
@@ -1004,6 +1019,7 @@ def create_quarta_taglio_word_draft(
         certified_by=actor,
         quality_manager=quality_manager,
         additional_pages_path=additional_pages_path,
+        pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
     )
 
     certificate.storage_key_docx = storage_key
@@ -1086,6 +1102,7 @@ def upload_quarta_taglio_additional_pages(
         certified_by=actor,
         quality_manager=quality_manager,
         additional_pages_path=extra_path,
+        pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
     )
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
@@ -1108,6 +1125,263 @@ def upload_quarta_taglio_additional_pages(
         download_url=f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}",
         created_at=certificate.created_at,
     )
+
+
+def upload_quarta_taglio_pdf_attachment(
+    db: Session,
+    *,
+    cod_odp: str,
+    uploaded_file: UploadFile,
+    actor: User,
+    certificate_id: int | None = None,
+) -> QuartaTaglioDetailResponse:
+    if uploaded_file.filename is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il PDF allegato deve avere un nome")
+
+    original_name = Path(uploaded_file.filename).name
+    if Path(original_name).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Caricare un file PDF")
+
+    file_bytes = uploaded_file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il PDF caricato è vuoto")
+
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
+    if certificate is None or not certificate.certificate_number:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    _ensure_certificate_word_is_editable(certificate)
+    if _is_manual_word(certificate):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
+        )
+
+    _ensure_pdf_attachments_initialized(db, certificate=certificate, raw_cod_f3=(detail.header or {}).get("codice_f3_raw"))
+    attachment_storage_key = _certificate_pdf_attachment_storage_key(certificate, original_name=original_name)
+    attachment_path = _certificate_storage_path(attachment_storage_key)
+    attachment_path.parent.mkdir(parents=True, exist_ok=True)
+    attachment_path.write_bytes(file_bytes)
+
+    next_order = _next_pdf_attachment_sort_order(db, certificate_id=certificate.id)
+    attachment = QuartaTaglioCertificatePdfAttachment(
+        certificate_id=certificate.id,
+        certificate_number=certificate.certificate_number,
+        cod_odp=certificate.cod_odp,
+        storage_key_pdf=attachment_storage_key,
+        original_filename=original_name,
+        sort_order=next_order,
+        uploaded_by_user_id=actor.id,
+    )
+    db.add(attachment)
+    db.flush()
+    _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
+    db.add(certificate)
+    db.commit()
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
+
+
+def delete_quarta_taglio_pdf_attachment(
+    db: Session,
+    *,
+    cod_odp: str,
+    attachment_id: int,
+    actor: User,
+    certificate_id: int | None = None,
+) -> QuartaTaglioDetailResponse:
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
+    if certificate is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificato non trovato")
+    _ensure_certificate_word_is_editable(certificate)
+    if _is_manual_word(certificate):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
+        )
+    attachment = (
+        db.query(QuartaTaglioCertificatePdfAttachment)
+        .filter(
+            QuartaTaglioCertificatePdfAttachment.id == attachment_id,
+            QuartaTaglioCertificatePdfAttachment.certificate_id == certificate.id,
+        )
+        .one_or_none()
+    )
+    if attachment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allegato PDF non trovato")
+
+    db.delete(attachment)
+    db.flush()
+    _compact_pdf_attachment_order(db, certificate_id=certificate.id)
+    if certificate.storage_key_docx:
+        _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
+    db.add(certificate)
+    db.commit()
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
+
+
+def _ensure_pdf_attachments_initialized(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+    raw_cod_f3: str | None,
+) -> None:
+    if certificate.pdf_attachments_initialized:
+        return
+    if certificate.id is None:
+        db.add(certificate)
+        db.flush()
+
+    existing = _pdf_attachments_for_certificate(db, certificate=certificate)
+    if existing:
+        certificate.pdf_attachments_initialized = True
+        db.add(certificate)
+        db.flush()
+        return
+
+    source_certificate = _previous_word_certificate_for_inheritance(db, certificate=certificate, raw_cod_f3=raw_cod_f3)
+    if source_certificate is not None:
+        for index, source_attachment in enumerate(_pdf_attachments_for_certificate(db, certificate=source_certificate)):
+            db.add(
+                QuartaTaglioCertificatePdfAttachment(
+                    certificate_id=certificate.id,
+                    certificate_number=certificate.certificate_number,
+                    cod_odp=certificate.cod_odp,
+                    storage_key_pdf=source_attachment.storage_key_pdf,
+                    original_filename=source_attachment.original_filename,
+                    sort_order=index,
+                    uploaded_by_user_id=source_attachment.uploaded_by_user_id,
+                )
+            )
+
+    certificate.pdf_attachments_initialized = True
+    db.add(certificate)
+    db.flush()
+
+
+def _rebuild_generated_certificate_word(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    certificate: QuartaTaglioFinalCertificate,
+    actor: User,
+) -> None:
+    if not certificate.certificate_number:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    if _is_manual_word(certificate):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
+        )
+
+    storage_key = _certificate_docx_storage_key(certificate.cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    quality_manager = _select_quality_manager(db)
+    additional_pages_path = _additional_pages_path_for_certificate(
+        db,
+        certificate_number=certificate.certificate_number,
+        cod_odp=certificate.cod_odp,
+        cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
+        raw_cod_f3=(detail.header or {}).get("codice_f3_raw"),
+    )
+    build_forgialluminio_draft_docx(
+        detail=detail,
+        output_path=output_path,
+        draft_number=certificate.certificate_number,
+        certified_by=actor,
+        quality_manager=quality_manager,
+        additional_pages_path=additional_pages_path,
+        pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
+    )
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    certificate.status = certificate.status or "draft"
+    _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
+    _apply_word_file_state(certificate, output_path, source="generated")
+    _propagate_shared_certificate_word(db, source_certificate=certificate)
+
+
+def _pdf_attachments_for_certificate(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate,
+) -> list[QuartaTaglioCertificatePdfAttachment]:
+    if certificate.id is None:
+        return []
+    return (
+        db.query(QuartaTaglioCertificatePdfAttachment)
+        .filter(QuartaTaglioCertificatePdfAttachment.certificate_id == certificate.id)
+        .order_by(QuartaTaglioCertificatePdfAttachment.sort_order.asc(), QuartaTaglioCertificatePdfAttachment.id.asc())
+        .all()
+    )
+
+
+def _pdf_attachment_sources_for_certificate(
+    db: Session,
+    *,
+    certificate: QuartaTaglioFinalCertificate | None,
+) -> list[tuple[Path, str]]:
+    if certificate is None:
+        return []
+    sources: list[tuple[Path, str]] = []
+    for attachment in _pdf_attachments_for_certificate(db, certificate=certificate):
+        path = _certificate_storage_path(attachment.storage_key_pdf)
+        if path.exists():
+            sources.append((path, attachment.original_filename))
+    return sources
+
+
+def _serialize_pdf_attachments(
+    db: Session,
+    certificate: QuartaTaglioFinalCertificate | None,
+) -> list[QuartaTaglioPdfAttachmentResponse]:
+    if certificate is None:
+        return []
+    items: list[QuartaTaglioPdfAttachmentResponse] = []
+    for attachment in _pdf_attachments_for_certificate(db, certificate=certificate):
+        uploader = db.get(User, attachment.uploaded_by_user_id) if attachment.uploaded_by_user_id else None
+        items.append(
+            QuartaTaglioPdfAttachmentResponse(
+                id=attachment.id,
+                original_filename=attachment.original_filename,
+                sort_order=attachment.sort_order,
+                uploaded_at=attachment.updated_at,
+                uploaded_by=uploader.name if uploader else None,
+            )
+        )
+    return items
+
+
+def _next_pdf_attachment_sort_order(db: Session, *, certificate_id: int) -> int:
+    latest = (
+        db.query(QuartaTaglioCertificatePdfAttachment)
+        .filter(QuartaTaglioCertificatePdfAttachment.certificate_id == certificate_id)
+        .order_by(QuartaTaglioCertificatePdfAttachment.sort_order.desc(), QuartaTaglioCertificatePdfAttachment.id.desc())
+        .first()
+    )
+    return int(latest.sort_order) + 1 if latest else 0
+
+
+def _compact_pdf_attachment_order(db: Session, *, certificate_id: int) -> None:
+    attachments = (
+        db.query(QuartaTaglioCertificatePdfAttachment)
+        .filter(QuartaTaglioCertificatePdfAttachment.certificate_id == certificate_id)
+        .order_by(QuartaTaglioCertificatePdfAttachment.sort_order.asc(), QuartaTaglioCertificatePdfAttachment.id.asc())
+        .all()
+    )
+    for index, attachment in enumerate(attachments):
+        attachment.sort_order = index
+        db.add(attachment)
+
+
+def _certificate_pdf_attachment_storage_key(certificate: QuartaTaglioFinalCertificate, *, original_name: str) -> str:
+    now = datetime.now(timezone.utc)
+    certificate_part = certificate.certificate_number or certificate.draft_number or certificate.cod_odp
+    filename = f"{uuid4().hex}_{_safe_file_part(certificate_part)}_{_safe_file_part(original_name)}"
+    return f"certificati_finali/{now:%Y/%m}/allegati_pdf/{filename}"
 
 
 def get_quarta_taglio_additional_page_template_file() -> tuple[Path, str]:
@@ -2803,6 +3077,64 @@ def _quick_incoming_confirm_blockers(
     if conformity_status != "conforme":
         blockers.append("Conformità standard non OK")
     return blockers
+
+
+def _standard_confirmation_blockers(
+    db: Session,
+    *,
+    quarta_rows: list[QuartaTaglioRow],
+    app_rows: list[AcquisitionRow],
+) -> list[str]:
+    blockers: list[str] = []
+    app_rows_by_key: dict[tuple[str, str], list[AcquisitionRow]] = defaultdict(list)
+    for row in app_rows:
+        app_rows_by_key[(_norm(row.cdq), _norm(row.colata))].append(row)
+
+    seen_material_keys: set[tuple[str, str]] = set()
+    for quarta_row in quarta_rows:
+        key = (_norm(quarta_row.cdq), _norm(quarta_row.colata))
+        if key in seen_material_keys:
+            continue
+        seen_material_keys.add(key)
+
+        label = _certificate_material_label(quarta_row)
+        if not key[0]:
+            blockers.append(f"{label}: CDQ mancante da Quarta")
+            continue
+        if not key[1]:
+            blockers.append(f"{label}: colata mancante da Quarta")
+            continue
+
+        exact_rows = app_rows_by_key.get(key, [])
+        if not exact_rows:
+            candidates = [row for row in app_rows if _norm(row.cdq) == key[0]]
+            if candidates:
+                colate = ", ".join(sorted({_clean_text(row.colata) or "-" for row in candidates}))
+                blockers.append(f"{label}: CDQ trovato in Incoming ma colata non coerente. Colate Incoming: {colate}")
+            else:
+                blockers.append(f"{label}: CDQ non presente in Incoming")
+            continue
+
+        effective_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
+            db,
+            cod_odp=quarta_row.cod_odp,
+            cdq=quarta_row.cdq,
+            colata=quarta_row.colata,
+            qta_totale=quarta_row.qta_totale,
+            exact_rows=exact_rows,
+        )
+        if ambiguity_message:
+            ids = ", ".join(f"#{row.id}" for row in effective_rows)
+            blockers.append(f"{label}: CDQ/colata presenti su più righe Incoming ({ids}), serve verifica manuale")
+            continue
+
+        row = effective_rows[0]
+        if row.document_certificato_id is None:
+            blockers.append(f"{label}: riga Incoming #{row.id} è solo DDT, manca certificato fornitore")
+
+    if not seen_material_keys:
+        blockers.append("Nessun CDQ Quarta disponibile per confermare lo standard")
+    return sorted(set(blockers))
 
 
 def _quick_incoming_confirm_eligible_rows(app_rows: list[AcquisitionRow]) -> list[AcquisitionRow]:

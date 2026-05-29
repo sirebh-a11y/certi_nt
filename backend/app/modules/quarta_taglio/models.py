@@ -138,6 +138,7 @@ class QuartaTaglioFinalCertificate(Base):
     word_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     word_content_controls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     word_missing_content_controls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    pdf_attachments_initialized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     download_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     certified_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
@@ -175,3 +176,20 @@ class QuartaTaglioCertificateExtraPages(Base):
     uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class QuartaTaglioCertificatePdfAttachment(Base):
+    __tablename__ = "quarta_taglio_certificate_pdf_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    certificate_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_final_certificates.id"), nullable=False, index=True)
+    certificate_number: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_key_pdf: Mapped[str] = mapped_column(String(512), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    certificate = relationship("QuartaTaglioFinalCertificate")

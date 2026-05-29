@@ -36,6 +36,7 @@ from app.modules.notes.service import seed_note_templates
 from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioArticleOverride,
     QuartaTaglioCertificateExtraPages,
+    QuartaTaglioCertificatePdfAttachment,
     QuartaTaglioCertificatePdfVersion,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
@@ -386,6 +387,10 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_content_controls JSON DEFAULT '[]' NOT NULL")
         if "word_missing_content_controls" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_missing_content_controls JSON DEFAULT '[]' NOT NULL")
+        if "pdf_attachments_initialized" not in certificate_columns:
+            certificate_statements.append(
+                "ALTER TABLE quarta_taglio_final_certificates ADD COLUMN pdf_attachments_initialized BOOLEAN DEFAULT false NOT NULL"
+            )
         if "storage_key_pdf" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN storage_key_pdf VARCHAR(512)")
         if "certified_by_user_id" not in certificate_columns:
