@@ -233,7 +233,7 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
     p = right.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     p.paragraph_format.space_after = Pt(0)
-    run = p.add_run("Mod. 065 Rev. 01")
+    run = p.add_run("Mod. 065 Rev. 02")
     run.font.size = Pt(5.5)
     p = right.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
