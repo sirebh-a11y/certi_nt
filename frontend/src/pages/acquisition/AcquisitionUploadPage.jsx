@@ -74,7 +74,7 @@ function MaskedAiIcon() {
 }
 
 export default function AcquisitionUploadPage() {
-  const { token, clearAuth } = useAuth();
+  const { token, clearAuth, setAcquisitionAiFlowActive } = useAuth();
   const navigate = useNavigate();
   const [uploadBatchId, setUploadBatchId] = useState(() => {
     if (typeof window === "undefined") {
@@ -115,6 +115,12 @@ export default function AcquisitionUploadPage() {
   const hasAutomationDocuments = sessionDdtDocuments.length > 0 || sessionCertificateDocuments.length > 0;
   const hasDocumentsWithoutSupplier = [...sessionDdtDocuments, ...sessionCertificateDocuments].some((item) => !item.fornitore_id);
   const canRequestAi = hasAutomationDocuments || ddtFiles.length > 0 || certificateFiles.length > 0 || processingDdt || processingCertificates;
+  const aiFlowKeepsSessionActive =
+    processingDdt ||
+    processingCertificates ||
+    startingAiRun ||
+    pendingAiStart ||
+    (currentRun && ["in_coda", "in_esecuzione"].includes(currentRun.stato));
 
   function handleRequestError(requestError) {
     const message = requestError?.message || "Request failed";
@@ -393,6 +399,18 @@ export default function AcquisitionUploadPage() {
       window.sessionStorage.removeItem(UPLOAD_BATCH_STORAGE_KEY);
     }
   }, [uploadBatchId]);
+
+  useEffect(() => {
+    if (!aiFlowKeepsSessionActive) {
+      setAcquisitionAiFlowActive(false);
+      return undefined;
+    }
+    setAcquisitionAiFlowActive(true);
+    const intervalId = window.setInterval(() => {
+      setAcquisitionAiFlowActive(true);
+    }, 30 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [aiFlowKeepsSessionActive, setAcquisitionAiFlowActive]);
 
   useEffect(() => {
     loadCurrentBatch();

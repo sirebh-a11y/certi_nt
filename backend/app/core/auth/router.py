@@ -7,7 +7,7 @@ from app.core.auth.schemas import (
     MessageResponse,
     SetPasswordRequest,
 )
-from app.core.auth.service import build_auth_user, change_password, login, set_password
+from app.core.auth.service import build_auth_user, change_password, login, renew_session, set_password
 from app.core.deps import CurrentUser, DbSession
 from app.core.logs.service import log_service
 
@@ -34,6 +34,11 @@ def change_password_route(payload: ChangePasswordRequest, db: DbSession, current
 def logout_route(current_user: CurrentUser) -> MessageResponse:
     log_service.record("authentication", "Logout", current_user.email)
     return MessageResponse(message="Logout handled client-side")
+
+
+@router.post("/renew-session", response_model=LoginResponse)
+def renew_session_route(current_user: CurrentUser) -> LoginResponse:
+    return renew_session(current_user)
 
 
 @router.get("/me", response_model=LoginResponse)

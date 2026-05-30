@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiRequest, onAuthExpired } from "./api";
 
@@ -8,7 +8,12 @@ const STORAGE_KEYS = {
   token: "certi_nt.token",
   user: "certi_nt.user",
   setupToken: "certi_nt.setupToken",
+  acquisitionAiFlowActive: "certi_nt.acquisitionAiFlowActive",
 };
+
+const SESSION_RENEW_INTERVAL_MS = 15 * 60 * 1000;
+const SESSION_RENEW_CHECK_MS = 60 * 1000;
+const USER_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
 
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem(STORAGE_KEYS.token));
@@ -18,6 +23,13 @@ export function AuthProvider({ children }) {
   });
   const [setupToken, setSetupToken] = useState(() => localStorage.getItem(STORAGE_KEYS.setupToken));
   const [loading, setLoading] = useState(Boolean(token));
+  const [acquisitionAiFlowActive, setAcquisitionAiFlowActiveState] = useState(
+    () => localStorage.getItem(STORAGE_KEYS.acquisitionAiFlowActive) === "1",
+  );
+  const lastUserActivityRef = useRef(Date.now());
+  const lastRenewAttemptRef = useRef(Date.now());
+  const lastAcquisitionAiFlowSignalRef = useRef(0);
+  const renewInProgressRef = useRef(false);
 
   useEffect(() => {
     if (!token) {
@@ -49,23 +61,104 @@ export function AuthProvider({ children }) {
     };
   }, [token]);
 
-  function persistAuth(accessToken, currentUser) {
+  const persistAuth = useCallback((accessToken, currentUser) => {
     setToken(accessToken);
     setUser(currentUser);
     localStorage.setItem(STORAGE_KEYS.token, accessToken);
     localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(currentUser));
-  }
+  }, []);
 
-  function clearAuth() {
+  const clearAuth = useCallback(() => {
     setToken(null);
     setUser(null);
     setSetupToken(null);
+    setAcquisitionAiFlowActiveState(false);
     localStorage.removeItem(STORAGE_KEYS.token);
     localStorage.removeItem(STORAGE_KEYS.user);
     localStorage.removeItem(STORAGE_KEYS.setupToken);
-  }
+    localStorage.removeItem(STORAGE_KEYS.acquisitionAiFlowActive);
+  }, []);
 
-  useEffect(() => onAuthExpired(clearAuth), []);
+  useEffect(() => onAuthExpired(clearAuth), [clearAuth]);
+
+  const setAcquisitionAiFlowActive = useCallback((active) => {
+    setAcquisitionAiFlowActiveState(Boolean(active));
+    if (active) {
+      lastAcquisitionAiFlowSignalRef.current = Date.now();
+      localStorage.setItem(STORAGE_KEYS.acquisitionAiFlowActive, "1");
+    } else {
+      lastAcquisitionAiFlowSignalRef.current = 0;
+      localStorage.removeItem(STORAGE_KEYS.acquisitionAiFlowActive);
+    }
+  }, []);
+
+  const renewSession = useCallback(async () => {
+    if (!token || renewInProgressRef.current) {
+      return null;
+    }
+    renewInProgressRef.current = true;
+    try {
+      const data = await apiRequest("/auth/renew-session", { method: "POST" }, token);
+      if (data?.access_token && data?.user) {
+        persistAuth(data.access_token, data.user);
+      }
+      return data;
+    } finally {
+      renewInProgressRef.current = false;
+    }
+  }, [persistAuth, token]);
+
+  useEffect(() => {
+    const markActivity = () => {
+      lastUserActivityRef.current = Date.now();
+    };
+    const activityEvents = ["pointerdown", "keydown", "input", "scroll", "focus"];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, markActivity, { passive: true }));
+    document.addEventListener("visibilitychange", markActivity);
+    return () => {
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, markActivity));
+      document.removeEventListener("visibilitychange", markActivity);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!token || !user) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      const now = Date.now();
+      const recentUserActivity = now - lastUserActivityRef.current <= USER_ACTIVITY_WINDOW_MS;
+      const shouldKeepAlive = recentUserActivity || acquisitionAiFlowActive;
+      if (!shouldKeepAlive || now - lastRenewAttemptRef.current < SESSION_RENEW_INTERVAL_MS) {
+        return;
+      }
+      lastRenewAttemptRef.current = now;
+      await renewSession().catch(() => undefined);
+    }, SESSION_RENEW_CHECK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [acquisitionAiFlowActive, renewSession, token, user]);
+
+  useEffect(() => {
+    if (!token || !acquisitionAiFlowActive) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const activeRun = await apiRequest("/acquisition/automation/runs/active", {}, token);
+        const recentUploadPageSignal = Date.now() - lastAcquisitionAiFlowSignalRef.current <= 90 * 1000;
+        if (!activeRun && !recentUploadPageSignal) {
+          setAcquisitionAiFlowActive(false);
+        }
+      } catch {
+        // apiRequest already handles auth expiration globally. Keep the flag if the check fails for a transient reason.
+      }
+    }, SESSION_RENEW_CHECK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [acquisitionAiFlowActive, setAcquisitionAiFlowActive, token]);
 
   async function login(email, password) {
     const data = await apiRequest("/auth/login", {
@@ -139,8 +232,11 @@ export function AuthProvider({ children }) {
       logout,
       clearAuth,
       setUser,
+      renewSession,
+      acquisitionAiFlowActive,
+      setAcquisitionAiFlowActive,
     }),
-    [loading, setupToken, token, user],
+    [acquisitionAiFlowActive, changePassword, clearAuth, loading, login, logout, renewSession, setAcquisitionAiFlowActive, setPassword, setupToken, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

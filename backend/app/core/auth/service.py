@@ -60,6 +60,17 @@ def login(db: Session, email: str, password: str | None) -> LoginResponse:
     )
 
 
+def renew_session(user: User) -> LoginResponse:
+    access_token = create_token(
+        subject=str(user.id),
+        token_type="access",
+        expires_minutes=settings.access_token_expire_minutes,
+        extra={"role": user.role},
+    )
+    log_service.record("authentication", "Session renewed", user.email)
+    return LoginResponse(access_token=access_token, user=build_auth_user(user))
+
+
 def set_password(db: Session, setup_token: str, new_password: str) -> LoginResponse:
     payload = decode_token(setup_token, expected_token_type="setup_password")
     user = db.get(User, int(payload["sub"]))
