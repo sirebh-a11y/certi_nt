@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-certi_nt}
+      POSTGRES_USER: ${POSTGRES_USER:-certi_nt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - ${CERTI_DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-certi_nt} -d ${POSTGRES_DB:-certi_nt}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: ${ENV:-production}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?APP_SECRET_KEY is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      SETUP_TOKEN_EXPIRE_MINUTES: ${SETUP_TOKEN_EXPIRE_MINUTES:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_TLS: ${SMTP_TLS:-true}
+      MAIL_FROM_EMAIL: ${MAIL_FROM_EMAIL:-noreply@certi.local}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-CERTI_nt}
+      ACQUISITION_NOTIFICATION_ADMIN_EMAIL: ${ACQUISITION_NOTIFICATION_ADMIN_EMAIL:-}
+      DOCUMENT_STORAGE_ROOT: ${DOCUMENT_STORAGE_ROOT:-/app/storage/documents}
+      CERTI_PUBLIC_BASE_URL: ${CERTI_PUBLIC_BASE_URL:-}
+      CERTI_EXPORT_USERNAME: ${CERTI_EXPORT_USERNAME:-Certi}
+      CERTI_EXPORT_PASSWORD: ${CERTI_EXPORT_PASSWORD:-Certi}
+      PDF_CONVERSION_ENABLED: ${PDF_CONVERSION_ENABLED:-true}
+      PDF_CONVERTER: ${PDF_CONVERTER:-libreoffice}
+      LIBREOFFICE_BIN: ${LIBREOFFICE_BIN:-/usr/bin/soffice}
+      PDF_CONVERSION_TIMEOUT_SECONDS: ${PDF_CONVERSION_TIMEOUT_SECONDS:-120}
+      DOCUMENT_VISION_MODEL: ${DOCUMENT_VISION_MODEL:-gpt-5.5}
+      OPENAI_API_KEY: ${CERTI_OPENAI_API_KEY:-}
+      ESOLVER_PASSWORD: ${ESOLVER_PASSWORD:-}
+      QUARTA_PASSWORD: ${QUARTA_PASSWORD:-}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ${CERTI_DATA_DIR:-../data}/storage:/app/storage
+      - ./docs/modules:/app/docs/modules:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.alpha
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?VITE_API_BASE_URL is required}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"

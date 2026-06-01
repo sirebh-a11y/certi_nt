@@ -87,6 +87,9 @@ PDF_CONVERSION_ENABLED=true
 PDF_CONVERTER=libreoffice
 LIBREOFFICE_BIN=/usr/bin/soffice
 PDF_CONVERSION_TIMEOUT_SECONDS=120
+
+DOCUMENT_VISION_MODEL=gpt-5.5
+CERTI_OPENAI_API_KEY=<chiave OpenAI o vuoto se gestita solo per utente>
 ```
 
 Nota: `CERTI_EXPORT_USERNAME=Certi` e `CERTI_EXPORT_PASSWORD=Certi` sono la coppia prevista per l'accesso eSolver alla vista/API Certi.
@@ -100,13 +103,30 @@ Il `docker-compose.yml` attuale e' comodo per sviluppo, ma non e' ancora ideale 
 - monta il codice come volume
 - espone Mailhog
 
-Per alpha si puo' partire con una variante dedicata, ad esempio `docker-compose.alpha.yml`, che:
+Per alpha usiamo la variante dedicata `docker-compose.alpha.yml`, che:
 
 - rimuove `--reload`
 - non monta `./backend:/app`
-- builda frontend statico o usa un container frontend piu' stabile
-- mantiene Postgres e storage su volumi persistenti
-- rimuove Mailhog se si usa SMTP reale
+- builda il frontend statico con nginx
+- mantiene Postgres e storage su cartelle persistenti host
+- rimuove Mailhog: in alpha si usa SMTP reale o SMTP lasciato non configurato
+
+Il frontend alpha usa:
+
+- `frontend/Dockerfile.alpha`
+- `frontend/docker/nginx.alpha.conf`
+
+La configurazione ambiente di esempio e':
+
+- `.env.alpha.example`
+
+Verifiche gia' fatte in preparazione alpha:
+
+- `docker compose --env-file .env.alpha.example -f docker-compose.alpha.yml config`
+- `npm run build` nel frontend
+- `docker compose --env-file .env.alpha.example -f docker-compose.alpha.yml build backend frontend`
+
+Nota: la build puo' mostrare un warning Vite sulla dimensione del bundle frontend. Non blocca l'alpha.
 
 ## LibreOffice e PDF
 
@@ -326,8 +346,9 @@ Per la prima alpha non consegniamo istruzioni sparse: consegniamo un pacchetto u
 | Repository Git | codice applicazione | `https://github.com/sirebh-a11y/certi_nt.git` |
 | Tag alpha | versione congelata da installare | esempio `v0.1.0-alpha.1`; il tag reale verra' comunicato al rilascio |
 | Documento IT | istruzioni installazione, backup, update, rollback | questo file: `docs/deploy/alpha_production_plan.md` |
-| File env esempio | elenco variabili da compilare | da preparare come `.env.alpha.example` prima della consegna |
-| Compose alpha | avvio Docker per server | da preparare come `docker-compose.alpha.yml` prima della consegna |
+| File env esempio | elenco variabili da compilare | `.env.alpha.example` |
+| Compose alpha | avvio Docker per server | `docker-compose.alpha.yml` |
+| Frontend alpha | build statico nginx | `frontend/Dockerfile.alpha` + `frontend/docker/nginx.alpha.conf` |
 | Checklist test | controlli minimi dopo installazione | contenuta in questo documento |
 
 ### Cosa deve compilare IT
@@ -465,7 +486,7 @@ Il file `.env` e' un dato sensibile e deve essere salvato nei backup. Non deve e
 
 ### Avvio alpha
 
-Quando sara' pronto `docker-compose.alpha.yml`, l'avvio sara':
+L'avvio alpha usa `docker-compose.alpha.yml`:
 
 ```bash
 docker compose -f docker-compose.alpha.yml up -d --build
