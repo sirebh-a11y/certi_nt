@@ -2155,7 +2155,7 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
     path = _certificate_storage_path(certificate.storage_key_docx)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
-    _sync_word_fields_for_download(db, certificate=certificate, path=path)
+    path = _sync_word_fields_for_download(db, certificate=certificate, path=path)
     return path, _certificate_file_name(certificate)
 
 
@@ -2182,7 +2182,7 @@ def generate_quarta_taglio_certificate_pdf(
     word_path = _certificate_storage_path(certificate.storage_key_docx)
     if not word_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
-    _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
+    word_path = _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
     db.refresh(certificate)
     if not _clean_text(certificate.ddt):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT mancante dopo aggiornamento Word")
@@ -2275,20 +2275,39 @@ def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, 
     return path, _certificate_pdf_file_name(certificate)
 
 
-def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> None:
+def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> Path:
     if certificate.status == "pdf_final":
-        return
+        return path
     try:
         present, missing = inspect_docx_content_controls(path)
     except (OSError, zipfile.BadZipFile):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File Word corrente non valido")
+
+    if (
+        certificate.pdf_attachments_initialized
+        and not _is_manual_word(certificate)
+        and (_pdf_attachments_for_certificate(db, certificate=certificate) or _docx_contains_pdf_attachment_pages(path))
+    ):
+        detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
+        current_download_token = certificate.download_token
+        _rebuild_generated_certificate_word(
+            db,
+            detail=detail,
+            certificate=certificate,
+            actor=_certificate_word_actor(db, certificate),
+        )
+        certificate.download_token = current_download_token
+        db.add(certificate)
+        db.commit()
+        return _certificate_storage_path(certificate.storage_key_docx)
+
     if not present:
         if (certificate.word_content_controls or []) != present or (certificate.word_missing_content_controls or []) != missing:
             certificate.word_content_controls = present
             certificate.word_missing_content_controls = missing
             db.add(certificate)
             db.commit()
-        return
+        return path
 
     detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
     update_docx_content_controls(path, path, _word_content_control_values(detail, certificate))
@@ -2297,6 +2316,32 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
     _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
     db.commit()
+    return path
+
+
+def _certificate_word_actor(db: Session, certificate: QuartaTaglioFinalCertificate) -> User:
+    if certificate.certified_by_user_id:
+        user = db.get(User, certificate.certified_by_user_id)
+        if user is not None:
+            return user
+    user = db.query(User).filter(User.active.is_(True)).order_by(User.name.asc(), User.id.asc()).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nessun utente attivo per aggiornare il Word")
+    return user
+
+
+def _docx_contains_pdf_attachment_pages(path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            for name in archive.namelist():
+                if not name.startswith("word/") or not name.endswith(".xml"):
+                    continue
+                xml = archive.read(name).decode("utf-8", errors="ignore")
+                if "Attachment:" in xml:
+                    return True
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return False
 
 
 def _ensure_word_draft_can_be_created(detail: QuartaTaglioDetailResponse) -> None:

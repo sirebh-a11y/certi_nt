@@ -554,7 +554,10 @@ def _add_pdf_attachment_page(document: Document, *, image_path: Path, original_f
         return
 
     usable_width = max(1.0, (int(section.page_width) - int(section.left_margin) - int(section.right_margin)) / 914400)
-    usable_height = max(1.0, (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.35)
+    usable_height = max(
+        1.0,
+        (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.75,
+    )
     aspect_ratio = width_px / height_px
     target_width = usable_width
     target_height = target_width / aspect_ratio
