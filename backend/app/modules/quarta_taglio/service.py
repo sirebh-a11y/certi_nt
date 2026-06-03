@@ -4444,6 +4444,11 @@ def _evaluate_cdq(
         details = [f"Colate in app: {', '.join(sorted({_clean_text(row.colata) or '-' for row in candidates}))}"]
         return "red", "CDQ trovato in app, ma colata non coerente con Quarta", details, [row.id for row in candidates]
 
+    certificate_rows = [row for row in exact_rows if row.document_certificato_id is not None]
+    if not certificate_rows:
+        details = [f"Riga app #{row.id}: solo DDT, manca certificato fornitore" for row in exact_rows]
+        return "red", "CDQ/colata presenti solo su DDT", details, [row.id for row in exact_rows]
+
     details: list[str] = []
     exact_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
         db,
@@ -4451,7 +4456,7 @@ def _evaluate_cdq(
         cdq=cdq,
         colata=colata,
         qta_totale=qta_totale,
-        exact_rows=exact_rows,
+        exact_rows=certificate_rows,
     )
     matching_ids = [row.id for row in exact_rows]
     if ambiguity_message:
