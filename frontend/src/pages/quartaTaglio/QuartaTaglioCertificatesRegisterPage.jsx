@@ -16,6 +16,7 @@ const CONFORMITY_LABELS = {
 };
 
 const LIST_STATE_STORAGE_KEY = "certi_nt.quarta_taglio_certificate_register_state.v1";
+const VISIBLE_REFRESH_CHUNK_SIZE = 50;
 const DEFAULT_LIST_STATE = {
   queryOne: "",
   queryTwo: "",
@@ -325,6 +326,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [visibleRefreshState, setVisibleRefreshState] = useState({ status: "idle", done: 0, total: 0, message: "" });
   const [pdfDialogItem, setPdfDialogItem] = useState(null);
   const [reopenDialogItem, setReopenDialogItem] = useState(null);
   const [reopenReason, setReopenReason] = useState("");
@@ -336,6 +338,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
   const tableRef = useRef(null);
   const syncingScrollRef = useRef(false);
   const restoredScrollRef = useRef(false);
+  const lastVisibleRefreshSignatureRef = useRef("");
 
   useEffect(() => {
     let ignore = false;
@@ -433,6 +436,86 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     }
     return visibleItems.slice(0, limit);
   }, [rowLimit, visibleItems]);
+
+  const visibleRefreshIds = useMemo(
+    () =>
+      displayedItems
+        .filter((item) => item.has_word && !item.has_pdf && item.status !== "pdf_final")
+        .map((item) => item.id),
+    [displayedItems],
+  );
+
+  useEffect(() => {
+    if (loading || !token || !visibleRefreshIds.length) {
+      return undefined;
+    }
+    const signature = visibleRefreshIds.join("|");
+    if (signature === lastVisibleRefreshSignatureRef.current) {
+      return undefined;
+    }
+    lastVisibleRefreshSignatureRef.current = signature;
+    let ignore = false;
+
+    async function refreshVisibleItems() {
+      const chunks = [];
+      for (let index = 0; index < visibleRefreshIds.length; index += VISIBLE_REFRESH_CHUNK_SIZE) {
+        chunks.push(visibleRefreshIds.slice(index, index + VISIBLE_REFRESH_CHUNK_SIZE));
+      }
+      setVisibleRefreshState({ status: "refreshing", done: 0, total: visibleRefreshIds.length, message: "" });
+      let done = 0;
+      try {
+        for (const chunk of chunks) {
+          const response = await apiRequest(
+            "/quarta-taglio/certificates/register/refresh-visible",
+            {
+              method: "POST",
+              body: JSON.stringify(chunk),
+            },
+            token,
+          );
+          if (ignore) {
+            return;
+          }
+          const updatedItems = response.items || [];
+          if (updatedItems.length) {
+            setItems((currentItems) => {
+              const updatedById = new Map(updatedItems.map((item) => [item.id, item]));
+              return currentItems.map((item) => updatedById.get(item.id) || item);
+            });
+          }
+          done += chunk.length;
+          setVisibleRefreshState({
+            status: "refreshing",
+            done: Math.min(done, visibleRefreshIds.length),
+            total: visibleRefreshIds.length,
+            message: "",
+          });
+        }
+        if (!ignore) {
+          setVisibleRefreshState({
+            status: "done",
+            done: visibleRefreshIds.length,
+            total: visibleRefreshIds.length,
+            message: "Dati visibili aggiornati.",
+          });
+        }
+      } catch (requestError) {
+        if (!ignore) {
+          setVisibleRefreshState({
+            status: "error",
+            done,
+            total: visibleRefreshIds.length,
+            message: requestError.message,
+          });
+        }
+      }
+    }
+
+    refreshVisibleItems();
+    return () => {
+      ignore = true;
+    };
+  }, [loading, token, visibleRefreshIds]);
 
   useEffect(() => {
     function updateScrollMetrics() {
@@ -684,6 +767,17 @@ export default function QuartaTaglioCertificatesRegisterPage() {
           </select>
         </div>
       </div>
+
+      {visibleRefreshState.status === "refreshing" ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Aggiornamento dati eSolver/Quarta visibili: {visibleRefreshState.done} / {visibleRefreshState.total} righe.
+        </p>
+      ) : null}
+      {visibleRefreshState.status === "error" ? (
+        <p className="mt-3 text-sm text-amber-700">
+          Aggiornamento dati visibili non completato: {visibleRefreshState.message}
+        </p>
+      ) : null}
 
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento registro certificati...</p> : null}
       {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}

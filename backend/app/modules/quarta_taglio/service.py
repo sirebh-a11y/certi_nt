@@ -74,6 +74,9 @@ from app.modules.supplier_codes.models import SupplierInstallationCode
 from app.modules.suppliers.models import Supplier
 
 
+FINAL_CERTIFICATE_REGISTER_REFRESH_FRESHNESS_MINUTES = 15
+
+
 @dataclass(frozen=True)
 class _AdditionalPagesResolution:
     extra_pages: QuartaTaglioCertificateExtraPages
@@ -412,7 +415,6 @@ def _load_quarta_rows_for_detail(db: Session, *, cod_odp: str) -> list[QuartaTag
 
 
 def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCertificateRegisterResponse:
-    _refresh_final_certificate_register_from_external_data(db)
     certificates = (
         db.query(QuartaTaglioFinalCertificate)
         .filter(
@@ -438,18 +440,21 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
     )
 
 
-def _refresh_final_certificate_register_from_external_data(db: Session) -> None:
-    cod_odps = [
-        row[0]
-        for row in db.query(QuartaTaglioFinalCertificate.cod_odp)
+def refresh_quarta_taglio_visible_final_certificates(db: Session, *, certificate_ids: list[int]) -> QuartaTaglioFinalCertificateRegisterResponse:
+    safe_ids = [certificate_id for certificate_id in dict.fromkeys(certificate_ids) if isinstance(certificate_id, int) and certificate_id > 0]
+    if not safe_ids:
+        return QuartaTaglioFinalCertificateRegisterResponse(items=[], total_items=0)
+
+    certificates = (
+        db.query(QuartaTaglioFinalCertificate)
         .filter(
+            QuartaTaglioFinalCertificate.id.in_(safe_ids),
             QuartaTaglioFinalCertificate.certificate_number.isnot(None),
             QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
         )
-        .distinct()
         .all()
-        if _clean_text(row[0])
-    ]
+    )
+    cod_odps = _final_certificate_register_refresh_cod_odps(certificates)
     stale_cod_odps = _stale_register_cod_odps(db, cod_odps=cod_odps)
     for cod_odp in stale_cod_odps:
         try:
@@ -458,11 +463,51 @@ def _refresh_final_certificate_register_from_external_data(db: Session) -> None:
             db.rollback()
     db.commit()
 
+    refreshed_certificates = (
+        db.query(QuartaTaglioFinalCertificate)
+        .filter(QuartaTaglioFinalCertificate.id.in_(safe_ids))
+        .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
+        .all()
+    )
+    items_by_id = {item.id: item for item in refreshed_certificates}
+    ordered_items = [items_by_id[certificate_id] for certificate_id in safe_ids if certificate_id in items_by_id]
+    return QuartaTaglioFinalCertificateRegisterResponse(
+        items=[_serialize_final_certificate_register_item(certificate) for certificate in ordered_items],
+        total_items=len(ordered_items),
+    )
+
+
+def _final_certificate_register_refresh_cod_odps(certificates: list[QuartaTaglioFinalCertificate]) -> list[str]:
+    urgent_cod_odps: list[str] = []
+    normal_cod_odps: list[str] = []
+    seen: set[str] = set()
+    open_certificates = [
+        certificate
+        for certificate in certificates
+        if certificate.status != "pdf_final" and not certificate.storage_key_pdf
+    ]
+    open_certificates.sort(key=lambda certificate: certificate.updated_at or certificate.created_at, reverse=True)
+    for certificate in open_certificates:
+        cod_odp = _clean_text(certificate.cod_odp)
+        if not cod_odp or cod_odp in seen:
+            continue
+        seen.add(cod_odp)
+        missing_external_data = (
+            not _clean_text(certificate.ddt)
+            or certificate.cert_date is None
+            or not _clean_text(certificate.fornitore_cliente)
+        )
+        if missing_external_data:
+            urgent_cod_odps.append(cod_odp)
+        else:
+            normal_cod_odps.append(cod_odp)
+    return urgent_cod_odps + normal_cod_odps
+
 
 def _stale_register_cod_odps(db: Session, *, cod_odps: list[str]) -> list[str]:
     if not cod_odps:
         return []
-    freshness_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(minutes=FINAL_CERTIFICATE_REGISTER_REFRESH_FRESHNESS_MINUTES)
     links = (
         db.query(QuartaTaglioEsolverLink)
         .filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps))
@@ -4460,7 +4505,7 @@ def _serialize_final_certificate_register_item(
         cod_f3=certificate.cod_f3,
         ddt=certificate.ddt,
         ordine_cliente=certificate.ordine_cliente,
-        quantita=certificate.quantita,
+        quantita=_certificate_quantity_display(certificate),
         cdq=_certificate_cdq_display(certificate),
         cert_date=certificate.cert_date,
         lega_cod_f3=_certificate_cod_f3_display(certificate),
@@ -4484,6 +4529,23 @@ def _certificate_cdq_display(certificate: QuartaTaglioFinalCertificate) -> str |
     values = certificate.cdq_values or []
     cdq_values = [item.get("cdq") for item in values if isinstance(item, dict)]
     return _join_unique(cdq_values) or _clean_text(certificate.cdq_key)
+
+
+def _certificate_quantity_display(certificate: QuartaTaglioFinalCertificate) -> float | None:
+    if certificate.quantita is not None:
+        return certificate.quantita
+    values = certificate.cdq_values or []
+    quantities = [
+        _as_float(item.get("qta_totale"))
+        for item in values
+        if isinstance(item, dict) and _as_float(item.get("qta_totale")) is not None
+    ]
+    if not quantities:
+        return None
+    unique_quantities = {quantity for quantity in quantities}
+    if len(unique_quantities) == 1:
+        return quantities[0]
+    return _sum_optional(quantities)
 
 
 def _live_certificate_conformity_for_register(

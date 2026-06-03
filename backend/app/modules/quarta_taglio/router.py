@@ -25,6 +25,7 @@ from app.modules.quarta_taglio.service import (
     get_quarta_taglio_word_draft_file,
     list_quarta_taglio_final_certificates,
     reopen_quarta_taglio_certificate_pdf,
+    refresh_quarta_taglio_visible_final_certificates,
     set_quarta_taglio_incoming_row_override,
     sync_and_list_quarta_taglio,
     update_quarta_taglio_article_data,
@@ -78,6 +79,15 @@ def list_quarta_taglio_final_certificates_route(
     db: DbSession,
 ) -> QuartaTaglioFinalCertificateRegisterResponse:
     return list_quarta_taglio_final_certificates(db)
+
+
+@router.post("/certificates/register/refresh-visible", response_model=QuartaTaglioFinalCertificateRegisterResponse)
+def refresh_quarta_taglio_visible_final_certificates_route(
+    current_user: CurrentUser,
+    db: DbSession,
+    certificate_ids: list[int] = Body(default=[]),
+) -> QuartaTaglioFinalCertificateRegisterResponse:
+    return refresh_quarta_taglio_visible_final_certificates(db, certificate_ids=certificate_ids)
 
 
 @router.post("/certificates/{certificate_id}/pdf", response_model=QuartaTaglioFinalCertificateRegisterItem)
