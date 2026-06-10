@@ -6375,6 +6375,10 @@ def _detect_document_type(document: Document) -> str | None:
     if impol_type is not None:
         return impol_type
 
+    leichtmetall_type = _detect_leichtmetall_document_type(search_text, file_name)
+    if leichtmetall_type is not None:
+        return leichtmetall_type
+
     certificate_score = 0
     ddt_score = 0
 
@@ -6548,6 +6552,82 @@ def _looks_like_impol_identity_text(search_text: str) -> bool:
             " slovenska bistrica ",
         )
     )
+
+
+def _looks_like_leichtmetall_identity_text(search_text: str) -> bool:
+    return any(
+        marker in search_text
+        for marker in (
+            " leichtmetall ",
+            " ega leichtmetall ",
+            " leichtmetall aluminium ",
+        )
+    )
+
+
+def _detect_leichtmetall_document_type(search_text: str, file_name: str) -> str | None:
+    if not _looks_like_leichtmetall_identity_text(search_text):
+        return None
+
+    if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
+        return "certificato"
+
+    has_delivery_note = " delivery note " in search_text
+    has_packing_list = any(
+        marker in search_text
+        for marker in (
+            " packing list ",
+            " packi n g list ",
+        )
+    )
+    has_logistic_signals = any(
+        marker in search_text
+        for marker in (
+            " transportnummer ",
+            " order confirmation ",
+            " purchase number ",
+            " customer number ",
+            " terms of delivery ",
+            " item detail ",
+            " conditions ",
+        )
+    )
+    has_numeric_ddt_file_name = re.fullmatch(r"\d[\d_-]{1,}\.pdf", file_name) is not None
+
+    if has_delivery_note and (has_packing_list or has_logistic_signals or has_numeric_ddt_file_name):
+        return "ddt"
+
+    has_chemical_table = any(
+        marker in search_text
+        for marker in (
+            " chemische analyse chemical analysis ",
+            " chemical analysis ",
+            " chemical composition ",
+            " composizione chimica ",
+        )
+    )
+    has_certificate_header = any(
+        marker in search_text
+        for marker in (
+            " abnahmeprüfzeugnis ",
+            " abnahmepruefzeugnis ",
+            " inspection certificate ",
+            " en 10204 ",
+        )
+    )
+    has_cast_identity = any(
+        marker in search_text
+        for marker in (
+            " charge cast no ",
+            " cast no ",
+            " ist act ",
+        )
+    )
+
+    if has_chemical_table and (has_certificate_header or has_cast_identity):
+        return "certificato"
+
+    return None
 
 
 def _detect_impol_document_type(search_text: str, file_name: str) -> str | None:
