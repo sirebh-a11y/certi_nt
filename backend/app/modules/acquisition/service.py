@@ -21801,7 +21801,9 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
                 "alloy_raw deve essere la lega materiale del documento o della stessa riga batch, quando visibile. "
                 "diameter_raw deve essere il diametro del materiale, quando visibile. "
                 "batch_raw deve essere il batch della stessa riga logica, letto dal gruppo batch o dalla sezione di continuazione in cui compare. "
-                "net_weight_raw deve essere il peso netto del gruppo batch della stessa riga logica. "
+                "net_weight_raw deve essere il peso netto del gruppo batch della stessa riga logica, letto dalla packing list o dalla riga/tabella dove quel batch compare. "
+                "Se lo stesso batch compare su piu righe packing, somma solo i pesi netti riferiti a quel batch. "
+                "Non usare peso lordo, quantita totale di testata, numero pezzi, material number, document number, footer, riferimenti bancari o numeri vicini non appartenenti alla riga batch. "
                 "Usa solo testo realmente visibile. Non inventare, non inferire e non usare nome file o conoscenza esterna. "
                 "Se un campo non e chiaramente leggibile, restituisci null. "
                 "Restituisci solo JSON con questa struttura: "
@@ -21974,6 +21976,7 @@ def _reconcile_leichtmetall_ai_candidates_with_document(
         return []
 
     batch_groups = _extract_leichtmetall_batch_groups(ddt_document)
+    header_total: int | None = None
     if batch_groups:
         first_page = next((page for page in ddt_document.pages if page.numero_pagina == 1), ddt_document.pages[0])
         first_page_lines = [reader_normalize_line(line) for line in reader_page_lines(first_page)]
@@ -21997,6 +22000,16 @@ def _reconcile_leichtmetall_ai_candidates_with_document(
                         header_total - grouped_total
                     )
 
+    def fallback_weight_for_batch(batch_key: str | None) -> str | None:
+        if not batch_key or batch_key not in batch_groups:
+            return None
+        weight_total = int(batch_groups[batch_key].get("weight_total", 0))
+        if weight_total <= 0:
+            return None
+        if header_total is not None and weight_total > header_total:
+            return None
+        return _format_leichtmetall_weight(weight_total)
+
     merged: dict[tuple[str | None, str | None, str | None, str | None, str | None], ReaderRowSplitCandidateResponse] = {}
     merged_raw_payloads: dict[tuple[str | None, str | None, str | None, str | None, str | None], list[object]] = {}
 
@@ -22008,16 +22021,13 @@ def _reconcile_leichtmetall_ai_candidates_with_document(
         ddt_key = _string_or_none(candidate.ddt_number)
         key = (ddt_key, order_key, batch_key, alloy_key, diameter_key)
 
-        reconciled_weight = None
-        if batch_key and batch_key in batch_groups:
-            weight_total = int(batch_groups[batch_key].get("weight_total", 0))
-            if weight_total > 0:
-                reconciled_weight = _format_leichtmetall_weight(weight_total)
+        candidate_ai_weight = _parse_leichtmetall_weight_token(candidate.peso_netto)
+        fallback_weight = None if candidate_ai_weight is not None else fallback_weight_for_batch(batch_key)
 
         existing = merged.get(key)
         if existing is None:
-            if reconciled_weight is not None:
-                candidate.peso_netto = reconciled_weight
+            if fallback_weight is not None:
+                candidate.peso_netto = fallback_weight
             merged[key] = candidate
             raw_payloads: list[object] = []
             if candidate.ai_row_payload_raw:
@@ -22029,10 +22039,10 @@ def _reconcile_leichtmetall_ai_candidates_with_document(
             continue
 
         existing.snippets = _merge_snippets(existing.snippets, candidate.snippets)
-        if reconciled_weight is not None:
-            existing.peso_netto = reconciled_weight
-        elif existing.peso_netto is None and candidate.peso_netto is not None:
+        if candidate_ai_weight is not None:
             existing.peso_netto = candidate.peso_netto
+        elif existing.peso_netto is None and fallback_weight is not None:
+            existing.peso_netto = fallback_weight
 
         if candidate.ai_row_payload_raw:
             try:
