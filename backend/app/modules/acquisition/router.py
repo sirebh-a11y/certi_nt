@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, BackgroundTasks, File, Form, Query, UploadFile
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
@@ -91,6 +93,7 @@ from app.modules.acquisition.service import (
     index_document,
     get_current_upload_batch,
     list_acquisition_rows,
+    list_gemba_walk_rows,
     list_documents,
     process_row_minimal,
     prepare_document_for_reader,
@@ -498,6 +501,18 @@ def list_acquisition_rows_route(
             row_ids=parsed_row_ids,
         )
     )
+
+
+@router.get("/gemba-walk", response_model=AcquisitionRowListResponse)
+def list_gemba_walk_rows_route(
+    _: CurrentUser,
+    db: DbSession,
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+) -> AcquisitionRowListResponse:
+    if date_to < date_from:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Intervallo date non valido")
+    return AcquisitionRowListResponse(items=list_gemba_walk_rows(db, date_from=date_from, date_to=date_to))
 
 
 @router.get("/quality-rows", response_model=AcquisitionQualityRowListResponse)

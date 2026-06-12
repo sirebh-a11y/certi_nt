@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 
 import fitz
 from fastapi import UploadFile
@@ -8353,6 +8353,34 @@ def list_acquisition_rows(
             return []
         query = query.filter(AcquisitionRow.id.in_(row_ids))
     rows = query.all()
+    for row in rows:
+        _ensure_row_supplier_link(db, row)
+    return [serialize_acquisition_row_list_item(row) for row in rows]
+
+
+def list_gemba_walk_rows(
+    db: Session,
+    *,
+    date_from: date,
+    date_to: date,
+) -> list[AcquisitionRowListItemResponse]:
+    start_dt = datetime.combine(date_from, time.min, tzinfo=UTC)
+    end_dt = datetime.combine(date_to, time.max, tzinfo=UTC)
+    rows = (
+        db.query(AcquisitionRow)
+        .options(
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier),
+            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
+            joinedload(AcquisitionRow.certificate_match),
+            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
+        )
+        .filter(AcquisitionRow.document_certificato_id.is_not(None))
+        .filter(AcquisitionRow.created_at >= start_dt)
+        .filter(AcquisitionRow.created_at <= end_dt)
+        .order_by(AcquisitionRow.created_at.asc(), AcquisitionRow.id.asc())
+        .all()
+    )
     for row in rows:
         _ensure_row_supplier_link(db, row)
     return [serialize_acquisition_row_list_item(row) for row in rows]

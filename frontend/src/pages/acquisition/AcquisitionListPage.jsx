@@ -217,6 +217,12 @@ function formatUploadDate(value) {
   });
 }
 
+function todayDateInputValue() {
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
 function stateSurfaceClasses(state) {
   if (state === "documento_chiuso") {
     return "border-transparent bg-transparent text-slate-950";
@@ -668,6 +674,10 @@ export default function AcquisitionListPage() {
   const [resolveCandidate, setResolveCandidate] = useState(null);
   const [resolveError, setResolveError] = useState("");
   const [savingResolve, setSavingResolve] = useState(false);
+  const [gembaModalOpen, setGembaModalOpen] = useState(false);
+  const [gembaDateFrom, setGembaDateFrom] = useState(todayDateInputValue);
+  const [gembaDateTo, setGembaDateTo] = useState(todayDateInputValue);
+  const [gembaError, setGembaError] = useState("");
   const isIncomingResolveScope = certificationScope?.mode === "resolve_row";
 
   useEffect(() => {
@@ -1002,6 +1012,33 @@ export default function AcquisitionListPage() {
     }
   }
 
+  function openGembaModal() {
+    const today = todayDateInputValue();
+    setGembaDateFrom(today);
+    setGembaDateTo(today);
+    setGembaError("");
+    setGembaModalOpen(true);
+  }
+
+  function closeGembaModal() {
+    setGembaModalOpen(false);
+    setGembaError("");
+  }
+
+  function openGembaPrint() {
+    if (!gembaDateFrom || !gembaDateTo) {
+      setGembaError("Seleziona entrambe le date.");
+      return;
+    }
+    if (gembaDateTo < gembaDateFrom) {
+      setGembaError("La data fine non puo essere precedente alla data inizio.");
+      return;
+    }
+    const params = new URLSearchParams({ date_from: gembaDateFrom, date_to: gembaDateTo });
+    window.open(`/acquisition/gemba-walk/print?${params.toString()}`, "_blank", "noopener,noreferrer");
+    closeGembaModal();
+  }
+
   function handleRowKeyDown(event, rowId) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -1060,9 +1097,13 @@ export default function AcquisitionListPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
           </div>
         <div className="flex flex-wrap gap-2">
-          <Link className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100" to="/acquisition/upload">
-            Carica documenti
-          </Link>
+          <button
+            className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            type="button"
+            onClick={openGembaModal}
+          >
+            Gemba walk
+          </button>
         </div>
       </div>
 
@@ -1427,6 +1468,63 @@ export default function AcquisitionListPage() {
                 type="button"
               >
                 {savingResolve ? "Salvataggio..." : "Conferma scelta"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {gembaModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeGembaModal();
+            }
+          }}
+        >
+          <div className="w-full max-w-xl rounded-2xl border border-border bg-white p-5 shadow-2xl">
+            <p className="text-sm uppercase tracking-[0.18em] text-slate-500">Incoming materiale</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">Gemba walk</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Stampa le righe match e solo certificato create nell'intervallo selezionato.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-700">
+                Data inizio
+                <input
+                  className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-slate-900"
+                  type="date"
+                  value={gembaDateFrom}
+                  onChange={(event) => setGembaDateFrom(event.target.value)}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Data fine
+                <input
+                  className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-slate-900"
+                  type="date"
+                  value={gembaDateTo}
+                  onChange={(event) => setGembaDateTo(event.target.value)}
+                />
+              </label>
+            </div>
+            {gembaError ? <p className="mt-3 text-sm font-semibold text-rose-600">{gembaError}</p> : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                type="button"
+                onClick={closeGembaModal}
+              >
+                Esci
+              </button>
+              <button
+                className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+                type="button"
+                onClick={openGembaPrint}
+              >
+                Crea stampa
               </button>
             </div>
           </div>

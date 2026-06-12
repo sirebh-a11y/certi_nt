@@ -10,6 +10,7 @@ import ChangePasswordPage from "../pages/auth/ChangePasswordPage";
 import LoginPage from "../pages/auth/LoginPage";
 import SetPasswordPage from "../pages/auth/SetPasswordPage";
 import AcquisitionDetailPage from "../pages/acquisition/AcquisitionDetailPage";
+import AcquisitionGembaWalkPrintPage from "../pages/acquisition/AcquisitionGembaWalkPrintPage";
 import AcquisitionListPage from "../pages/acquisition/AcquisitionListPage";
 import AcquisitionManualDdtPage, { AcquisitionManualCertificatePage } from "../pages/acquisition/AcquisitionManualDdtPage";
 import AcquisitionSectionPlaceholderPage from "../pages/acquisition/AcquisitionSectionPlaceholderPage";
@@ -159,6 +160,7 @@ export function AppRouter() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/acquisition" element={<AcquisitionListPage />} />
+          <Route path="/acquisition/gemba-walk/print" element={<AcquisitionGembaWalkPrintPage />} />
           <Route path="/acquisition/upload" element={<AcquisitionUploadPage />} />
           <Route path="/acquisition/manual/ddt" element={<AcquisitionManualDdtPage />} />
           <Route path="/acquisition/manual/certificato" element={<AcquisitionManualCertificatePage />} />
