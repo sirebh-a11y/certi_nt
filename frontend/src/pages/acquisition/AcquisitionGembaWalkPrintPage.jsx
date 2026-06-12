@@ -116,7 +116,7 @@ export default function AcquisitionGembaWalkPrintPage() {
       {loading ? <p className="text-sm text-slate-600">Caricamento righe...</p> : null}
       {error ? <p className="text-sm font-semibold text-rose-600">{error}</p> : null}
       {!loading && !error && rows.length === 0 ? (
-        <p className="text-sm text-slate-600">Nessuna riga con certificato trovata nel periodo selezionato.</p>
+        <p className="text-sm text-slate-600">Nessuna riga trovata nel periodo selezionato.</p>
       ) : null}
 
       {rows.length ? (

@@ -8375,7 +8375,6 @@ def list_gemba_walk_rows(
             joinedload(AcquisitionRow.certificate_match),
             joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
         )
-        .filter(AcquisitionRow.document_certificato_id.is_not(None))
         .filter(AcquisitionRow.created_at >= start_dt)
         .filter(AcquisitionRow.created_at <= end_dt)
         .order_by(AcquisitionRow.created_at.asc(), AcquisitionRow.id.asc())
