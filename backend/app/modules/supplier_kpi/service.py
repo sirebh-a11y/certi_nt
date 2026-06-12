@@ -8,7 +8,7 @@ from html import escape
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.modules.acquisition.models import AcquisitionRow
 from app.modules.suppliers.models import Supplier  # noqa: F401
@@ -40,6 +40,38 @@ QUARTER_MONTHS = {
     3: (7, 8, 9),
     4: (10, 11, 12),
 }
+
+INVALID_SHEET_NAME_CHARS = set("[]:*?/\\")
+
+CHEMISTRY_EXPORT_FIELDS = [
+    ("Si", ("si",)),
+    ("Fe", ("fe",)),
+    ("Cu", ("cu",)),
+    ("Mn", ("mn",)),
+    ("Mg", ("mg",)),
+    ("Cr", ("cr",)),
+    ("Ni", ("ni",)),
+    ("Zn", ("zn",)),
+    ("Ti", ("ti",)),
+    ("Pb", ("pb",)),
+    ("V", ("v",)),
+    ("Bi", ("bi",)),
+    ("Sn", ("sn",)),
+    ("Zr", ("zr",)),
+    ("Be", ("be",)),
+    ("Zr+Ti", ("zr+ti", "zrti", "zr_ti")),
+    ("Mn+Cr", ("mn+cr", "mncr", "mn_cr")),
+    ("Bi+Pb", ("bi+pb", "bipb", "bi_pb")),
+]
+
+PROPERTY_EXPORT_FIELDS = [
+    ("Rm", ("rm",)),
+    ("Rp0.2", ("rp0.2", "rp02", "rp0,2", "rp 0.2", "rp 0,2")),
+    ("A%", ("a%", "a", "a5", "a5%")),
+    ("HB", ("hb",)),
+    ("IACS%", ("iacs%", "iacs")),
+    ("Rp0.2/Rm", ("rp0.2/rm", "rp02/rm", "rp0,2/rm", "rp_rm", "rp/rm")),
+]
 
 
 @dataclass
@@ -92,24 +124,8 @@ def build_supplier_kpi_summary(
     month: int | None = None,
     quarter: int | None = None,
 ) -> SupplierKpiSummaryResponse:
-    query = (
-        db.query(AcquisitionRow)
-        .options(joinedload(AcquisitionRow.supplier))
-        .filter(AcquisitionRow.validata_finale.is_(True))
-        .filter(AcquisitionRow.qualita_data_ricezione.is_not(None))
-    )
-    query = query.filter(AcquisitionRow.qualita_data_ricezione >= date(year, 1, 1))
-    query = query.filter(AcquisitionRow.qualita_data_ricezione <= date(year, 12, 31))
-    if supplier_id is not None:
-        query = query.filter(AcquisitionRow.fornitore_id == supplier_id)
-
-    year_rows = query.all()
     period_months = _period_months(month=month, quarter=quarter)
-    rows = [
-        row
-        for row in year_rows
-        if row.qualita_data_ricezione and row.qualita_data_ricezione.month in period_months
-    ]
+    rows = _filtered_kpi_rows(db, year=year, supplier_id=supplier_id, period_months=period_months)
 
     total_accumulator = _Accumulator()
     supplier_accumulators: dict[tuple[int | None, str], _Accumulator] = defaultdict(_Accumulator)
@@ -167,6 +183,14 @@ def build_supplier_kpi_xlsx(
     )
     period_label = _period_label(year=year, month=month, quarter=quarter)
     supplier_label = summary.by_supplier[0].fornitore if supplier_id and len(summary.by_supplier) == 1 else "Tutti i fornitori"
+    period_months = _period_months(month=month, quarter=quarter)
+    detail_rows = _filtered_kpi_rows(
+        db,
+        year=year,
+        supplier_id=supplier_id,
+        period_months=period_months,
+        include_values=True,
+    )
 
     sheets = [
         (
@@ -230,7 +254,193 @@ def build_supplier_kpi_xlsx(
             ],
         ),
     ]
+    sheets.extend(_supplier_detail_sheets(detail_rows, period_label=period_label, supplier_label=supplier_label))
     return _write_xlsx(sheets)
+
+
+def _filtered_kpi_rows(
+    db: Session,
+    *,
+    year: int,
+    supplier_id: int | None,
+    period_months: tuple[int, ...],
+    include_values: bool = False,
+) -> list[AcquisitionRow]:
+    options = [joinedload(AcquisitionRow.supplier)]
+    if include_values:
+        options.append(selectinload(AcquisitionRow.values))
+    query = (
+        db.query(AcquisitionRow)
+        .options(*options)
+        .filter(AcquisitionRow.validata_finale.is_(True))
+        .filter(AcquisitionRow.qualita_data_ricezione.is_not(None))
+        .filter(AcquisitionRow.qualita_data_ricezione >= date(year, 1, 1))
+        .filter(AcquisitionRow.qualita_data_ricezione <= date(year, 12, 31))
+    )
+    if supplier_id is not None:
+        query = query.filter(AcquisitionRow.fornitore_id == supplier_id)
+
+    rows = [
+        row
+        for row in query.all()
+        if row.qualita_data_ricezione and row.qualita_data_ricezione.month in period_months
+    ]
+    rows.sort(key=lambda row: (_supplier_name(row).lower(), row.qualita_data_ricezione or date.min, row.id))
+    return rows
+
+
+def _supplier_detail_sheets(
+    rows: list[AcquisitionRow],
+    *,
+    period_label: str,
+    supplier_label: str,
+) -> list[tuple[str, list[list[object]]]]:
+    rows_by_supplier: dict[tuple[int | None, str], list[AcquisitionRow]] = defaultdict(list)
+    for row in rows:
+        rows_by_supplier[(row.fornitore_id, _supplier_name(row))].append(row)
+
+    sheets: list[tuple[str, list[list[object]]]] = []
+    used_names = {"Sintesi periodo", "Fornitori", "Mesi"}
+    for (_supplier_id, name), supplier_rows in sorted(rows_by_supplier.items(), key=lambda item: item[0][1].lower()):
+        sheet_name = _unique_sheet_name(_sanitize_sheet_name(name), used_names)
+        used_names.add(sheet_name)
+        sheets.append(
+            (
+                sheet_name,
+                _supplier_detail_rows(
+                    supplier_rows,
+                    period_label=period_label,
+                    supplier_label=name if supplier_label == "Tutti i fornitori" else supplier_label,
+                ),
+            )
+        )
+    return sheets
+
+
+def _supplier_detail_rows(
+    rows: list[AcquisitionRow],
+    *,
+    period_label: str,
+    supplier_label: str,
+) -> list[list[object]]:
+    headers = [
+        "N.",
+        "Data ricezione",
+        "Data accettazione",
+        "Fornitore",
+        "Lega",
+        "Ø",
+        "CDQ",
+        "Colata",
+        "DDT",
+        "Peso Kg",
+        "Vs. ODV",
+        "Data richiesta",
+        "N. analisi",
+        "Valutazione",
+        "Note",
+        "Ritardo giorni",
+        "Tempo controllo giorni",
+        *[label for label, _aliases in CHEMISTRY_EXPORT_FIELDS],
+        *[label for label, _aliases in PROPERTY_EXPORT_FIELDS],
+    ]
+    table_rows = [
+        [
+            row.id,
+            _format_date(row.qualita_data_ricezione),
+            _format_date(row.qualita_data_accettazione),
+            _supplier_name(row),
+            _clean_cell(row.lega_base or row.lega_designazione),
+            _clean_cell(row.diametro),
+            _clean_cell(row.cdq),
+            _clean_cell(row.colata),
+            _clean_cell(row.ddt),
+            _clean_cell(row.peso),
+            _clean_cell(row.ordine),
+            _format_date(row.qualita_data_richiesta),
+            _clean_cell(row.qualita_numero_analisi),
+            _quality_label(row.qualita_valutazione),
+            _clean_cell(row.qualita_note),
+            _delay_days(row),
+            _control_time_days(row),
+            *[_read_value(row, "chimica", aliases) for _label, aliases in CHEMISTRY_EXPORT_FIELDS],
+            *[_read_value(row, "proprieta", aliases) for _label, aliases in PROPERTY_EXPORT_FIELDS],
+        ]
+        for row in rows
+    ]
+    return [
+        ["Fornitore", supplier_label],
+        ["Periodo", period_label],
+        ["Righe", len(rows)],
+        [],
+        headers,
+        *table_rows,
+    ]
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    sanitized = "".join("_" if char in INVALID_SHEET_NAME_CHARS else char for char in name).strip()
+    return (sanitized or "Fornitore")[:31]
+
+
+def _unique_sheet_name(name: str, used_names: set[str]) -> str:
+    if name not in used_names:
+        return name
+    base = name[:28].rstrip() or "Foglio"
+    counter = 2
+    while True:
+        candidate = f"{base}_{counter}"[:31]
+        if candidate not in used_names:
+            return candidate
+        counter += 1
+
+
+def _read_value(row: AcquisitionRow, block: str, aliases: tuple[str, ...]) -> str:
+    alias_keys = {_field_key(alias) for alias in aliases}
+    for value in row.values:
+        if _field_key(value.blocco) == _field_key(block) and _field_key(value.campo) in alias_keys:
+            return _clean_cell(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
+    return "-"
+
+
+def _field_key(value: str | None) -> str:
+    if value is None:
+        return ""
+    return "".join(char.lower() for char in str(value).strip() if char.isalnum())
+
+
+def _format_date(value: date | None) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%d/%m/%Y")
+
+
+def _clean_cell(value: object | None) -> str:
+    if value is None:
+        return "-"
+    text = str(value).strip()
+    return text if text else "-"
+
+
+def _quality_label(value: str | None) -> str:
+    labels = {
+        "accettato": "Accettato",
+        "accettato_con_riserva": "Accettato con riserva",
+        "respinto": "Respinto",
+    }
+    return labels.get(value or "", _clean_cell(value))
+
+
+def _delay_days(row: AcquisitionRow) -> str:
+    if row.qualita_data_ricezione is None or row.qualita_data_richiesta is None:
+        return "-"
+    return str((row.qualita_data_ricezione - row.qualita_data_richiesta).days)
+
+
+def _control_time_days(row: AcquisitionRow) -> str:
+    if row.qualita_data_ricezione is None or row.qualita_data_accettazione is None:
+        return "-"
+    return str(_business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione))
 
 
 def _supplier_name(row: AcquisitionRow) -> str:
