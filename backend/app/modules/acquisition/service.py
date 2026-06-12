@@ -6002,6 +6002,7 @@ def upload_document(
         if (temporary_duplicate.stato_elaborazione or "").lower() == "errore":
             _delete_temporary_documents_by_ids(db, actor_id=actor_id, document_ids=[temporary_duplicate.id])
         else:
+            temporary_duplicate = _apply_document_identity_detection(db, temporary_duplicate)
             return serialize_document(temporary_duplicate)
 
     extension = Path(original_name).suffix.lower()

@@ -239,6 +239,7 @@ export default function AcquisitionUploadPage() {
       if (movedCount) {
         setNotice(`${movedCount} file ${movedCount === 1 ? "è stato riclassificato" : "sono stati riclassificati"} automaticamente.`);
       }
+      await loadCurrentBatch();
       return {
         batchId: response.upload_batch_id || batchId,
         detectedDdt,
@@ -742,6 +743,17 @@ function UploadSection({
   );
 }
 
+function supplierOptionsForDocument(suppliers, item) {
+  if (!item?.fornitore_id || !item?.fornitore_nome) {
+    return suppliers;
+  }
+  const supplierExists = suppliers.some((supplier) => Number(supplier.id) === Number(item.fornitore_id));
+  if (supplierExists) {
+    return suppliers;
+  }
+  return [{ id: item.fornitore_id, ragione_sociale: item.fornitore_nome }, ...suppliers];
+}
+
 function DocumentTable({ title, items, emptyLabel, suppliers, savingSupplierDocumentId, onSupplierChange }) {
   return (
     <div>
@@ -773,7 +785,7 @@ function DocumentTable({ title, items, emptyLabel, suppliers, savingSupplierDocu
                       value={item.fornitore_id || ""}
                     >
                       <option value="">Seleziona fornitore...</option>
-                      {suppliers.map((supplier) => (
+                      {supplierOptionsForDocument(suppliers, item).map((supplier) => (
                         <option key={supplier.id} value={supplier.id}>
                           {supplier.ragione_sociale}
                         </option>
