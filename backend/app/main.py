@@ -8,6 +8,7 @@ from app.core.ai.router import router as ai_router
 from app.core.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.departments.router import router as departments_router
+from app.core.email.settings_router import router as email_settings_router
 from app.core.integrations.router import router as integrations_router
 from app.core.logs.router import router as logs_router
 from app.core.users.router import router as users_router
@@ -39,7 +40,7 @@ async def lifespan(_: FastAPI):
             pass
 
 
-app = FastAPI(title="CERTI_nt Core API", version="0.1.0.alpha.5", lifespan=lifespan)
+app = FastAPI(title="CERTI_nt Core API", version="0.1.0.alpha.6", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +52,7 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
+app.include_router(email_settings_router, prefix="/api/email-settings", tags=["email-settings"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(departments_router, prefix="/api/departments", tags=["departments"])
 app.include_router(integrations_router, prefix="/api/integrations", tags=["integrations"])

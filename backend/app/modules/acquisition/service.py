@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
+from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
@@ -7704,12 +7705,13 @@ def start_autonomous_run(
         stato_elaborazione="in_lavorazione",
     )
 
+    email_config = get_effective_email_settings(db)
     run = AutonomousProcessingRun(
         upload_batch_id=upload_batch_id,
         ddt_document_ids=json.dumps(ddt_document_ids),
         certificate_document_ids=json.dumps(certificate_document_ids),
         notification_email=actor_email,
-        admin_notification_email=_string_or_none(settings.acquisition_notification_admin_email),
+        admin_notification_email=_string_or_none(email_config.acquisition_notification_admin_email),
         expected_upload_document_count=payload.expected_upload_document_count,
         stato="in_coda",
         fase_corrente="in_attesa",
@@ -8008,7 +8010,7 @@ def _send_autonomous_run_notification(
 
     for recipient in recipients:
         try:
-            email_service.send_notification(NotificationEmail(to_email=recipient, subject=subject, body=body))
+            email_service.send_notification(NotificationEmail(to_email=recipient, subject=subject, body=body), db=db)
         except Exception as exc:  # pragma: no cover - notification must not fail the run
             log_service.record("email", f"Notification failed for run {run.id}: {recipient} - {exc}", actor_email)
 

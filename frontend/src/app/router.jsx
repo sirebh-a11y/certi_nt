@@ -20,6 +20,7 @@ import ClientsPage from "../pages/clients/ClientsPage";
 import DashboardPage from "../pages/core/DashboardPage";
 import CustomerRequirementsPage from "../pages/customerRequirements/CustomerRequirementsPage";
 import DepartmentsPage from "../pages/departments/DepartmentsPage";
+import EmailSettingsPage from "../pages/email/EmailSettingsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import SupplierKpiPage from "../pages/kpi/SupplierKpiPage";
@@ -123,6 +124,14 @@ function AIConfigRoute() {
   );
 }
 
+function EmailSettingsRoute() {
+  return (
+    <RoleGuard allowedRoles={["admin"]}>
+      <EmailSettingsPage />
+    </RoleGuard>
+  );
+}
+
 function NotesRoute() {
   return <NotesPage />;
 }
@@ -173,6 +182,7 @@ export function AppRouter() {
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/ai" element={<AIConfigRoute />} />
+          <Route path="/email-settings" element={<EmailSettingsRoute />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/customer-requirements" element={<CustomerRequirementsRoute />} />
           <Route path="/supplier-codes" element={<SupplierCodesRoute />} />

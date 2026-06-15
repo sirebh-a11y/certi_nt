@@ -27,6 +27,7 @@ const navItems = [
   { type: "section", label: "Connettori", key: "connectors" },
   { label: "Database", to: "/integrations", roles: ["admin"], icon: "database" },
   { label: "Assistente AI", to: "/ai", roles: ["admin"], icon: "ai" },
+  { label: "Email", to: "/email-settings", roles: ["admin"], icon: "email" },
 ];
 
 function SidebarIcon({ name }) {
@@ -173,6 +174,12 @@ function SidebarIcon({ name }) {
         <path d="m17.7 6.3-2.8 2.8" />
         <path d="m9.1 14.9-2.8 2.8" />
         <circle cx="12" cy="12" r="3" />
+      </>
+    ),
+    email: (
+      <>
+        <rect x="4" y="6" width="16" height="12" rx="2" />
+        <path d="m5 8 7 5 7-5" />
       </>
     ),
   };

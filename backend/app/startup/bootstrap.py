@@ -9,6 +9,7 @@ from app.core.ai.models import AIModel, AIProvider  # noqa: F401
 from app.core.ai.service import seed_ai_configuration
 from app.core.departments.models import Department  # noqa: F401
 from app.core.departments.service import seed_departments
+from app.core.email.models import EmailSettings  # noqa: F401
 from app.core.logs.service import log_service
 from app.core.integrations.models import ExternalConnection  # noqa: F401
 from app.core.integrations.service import seed_external_connections
