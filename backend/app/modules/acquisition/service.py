@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time as datetime_time
 
 import fitz
 from fastapi import UploadFile
@@ -1352,9 +1352,17 @@ def build_chemistry_overlay_preview(
         for page in certificate_document.pages:
             if not page.immagine_pagina_storage_key:
                 continue
-            arconic_items = _build_arconic_chemistry_overlay_items_from_word_slots(
+            arconic_word_items = _build_arconic_chemistry_overlay_items_from_word_slots(
                 page=page,
                 field_values=field_values,
+            )
+            arconic_geometry_items = _build_arconic_chemistry_overlay_items_from_table_geometry(
+                page=page,
+                field_values=field_values,
+            )
+            arconic_items = _choose_clearer_chemistry_overlay_items(
+                primary=arconic_word_items,
+                fallback=arconic_geometry_items,
             )
             if _count_chemistry_overlay_fields(arconic_items) > _count_chemistry_overlay_fields(best_arconic_items):
                 best_arconic_items = arconic_items
@@ -1437,9 +1445,17 @@ def _build_chemistry_overlay_preview_items_for_page(
     if not field_values or not page.immagine_pagina_storage_key:
         return []
     if supplier_key == "arconic_hannover":
-        arconic_items = _build_arconic_chemistry_overlay_items_from_word_slots(
+        arconic_word_items = _build_arconic_chemistry_overlay_items_from_word_slots(
             page=page,
             field_values=field_values,
+        )
+        arconic_geometry_items = _build_arconic_chemistry_overlay_items_from_table_geometry(
+            page=page,
+            field_values=field_values,
+        )
+        arconic_items = _choose_clearer_chemistry_overlay_items(
+            primary=arconic_word_items,
+            fallback=arconic_geometry_items,
         )
         if _count_chemistry_overlay_fields(arconic_items) >= min(len(field_values), 6):
             return arconic_items
@@ -4246,12 +4262,20 @@ def _build_zalco_chemistry_overlay_items_from_compact_table(
             height = int(word.get("height") or 0)
             if width <= 0 or height <= 0:
                 continue
+            bbox = _zalco_overlay_cell_bbox_from_ordered_words(
+                word=word,
+                ordered_words=value_words,
+                line_box=line_box,
+                image_width=image_width,
+                image_height=image_height,
+                min_left=anchor_right + 1,
+            )
             items.append(
                 ChemistryOverlayPreviewItemResponse(
                     page_id=page.id,
                     page_number=page.numero_pagina,
                     field=field_name,
-                    bbox=f"{left},{top},{left + width},{top + height}",
+                    bbox=_bbox_to_string(bbox),
                     image_width=image_width,
                     image_height=image_height,
                 )
@@ -4305,6 +4329,73 @@ def _zalco_compact_row_anchor_right(*, line_box: dict[str, object], row: Acquisi
     return max(right_edges) if right_edges else None
 
 
+def _zalco_overlay_cell_bbox_from_ordered_words(
+    *,
+    word: dict[str, object],
+    ordered_words: list[dict[str, object]],
+    line_box: dict[str, object],
+    image_width: int,
+    image_height: int,
+    min_left: int | None = None,
+) -> tuple[int, int, int, int]:
+    left = int(word.get("left") or 0)
+    top = int(word.get("top") or 0)
+    width = int(word.get("width") or 0)
+    height = int(word.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return (0, 0, 0, 0)
+
+    ordered = sorted(
+        [candidate for candidate in ordered_words if int(candidate.get("width") or 0) > 0],
+        key=lambda candidate: int(candidate.get("left") or 0),
+    )
+    try:
+        index = next(candidate_index for candidate_index, candidate in enumerate(ordered) if candidate is word)
+    except StopIteration:
+        index = -1
+
+    center = left + width / 2
+    line_left = max(0, int(line_box.get("x0") or 0))
+    line_right = min(image_width, int(line_box.get("x1") or image_width))
+    if min_left is not None:
+        line_left = max(line_left, min_left)
+
+    pad = max(18, min(38, int(width * 0.8)))
+    if index > 0:
+        previous = ordered[index - 1]
+        previous_center = _chemistry_overlay_word_center(previous)
+        cell_left = int((previous_center + center) / 2)
+    else:
+        cell_left = left - pad
+    if 0 <= index < len(ordered) - 1:
+        next_word = ordered[index + 1]
+        next_center = _chemistry_overlay_word_center(next_word)
+        cell_right = int((center + next_center) / 2)
+    else:
+        cell_right = left + width + pad
+
+    cell_left = max(line_left, min(cell_left, left - 4))
+    cell_right = min(line_right, max(cell_right, left + width + 4))
+    if cell_right - cell_left < width + 12:
+        cell_left = max(line_left, left - 8)
+        cell_right = min(line_right, left + width + 8)
+    min_cell_width = max(width + 18, min(96, max(70, int(image_width * 0.045))))
+    if cell_right - cell_left < min_cell_width:
+        half_width = int(min_cell_width / 2)
+        cell_left = max(line_left, int(center) - half_width)
+        cell_right = min(line_right, int(center) + half_width)
+
+    line_top = int(line_box.get("y0") or top)
+    line_bottom = int(line_box.get("y1") or (top + height))
+    cell_top = max(0, min(line_top, top) - 10)
+    cell_bottom = min(image_height, max(line_bottom, top + height) + 10)
+    if cell_bottom - cell_top < 34:
+        middle = int((cell_top + cell_bottom) / 2)
+        cell_top = max(0, middle - 17)
+        cell_bottom = min(image_height, middle + 17)
+    return (cell_left, cell_top, cell_right, cell_bottom)
+
+
 def _normalize_zalco_overlay_anchor_text(value: str | None) -> str:
     return re.sub(r"[^A-Z0-9]+", "", _normalize_mojibake_numeric_text(value or "").upper())
 
@@ -4338,7 +4429,12 @@ def _build_zalco_chemistry_overlay_items_from_analysis_block(
         return []
     items: dict[str, ChemistryOverlayPreviewItemResponse] = {}
     for line_box in value_lines:
-        for field_name, word in _zalco_analysis_value_words_by_field(line_box).items():
+        words_by_field = _zalco_analysis_value_words_by_field(line_box)
+        ordered_value_words = sorted(
+            {id(word): word for word in words_by_field.values()}.values(),
+            key=lambda word: int(word.get("left") or 0),
+        )
+        for field_name, word in words_by_field.items():
             if field_name not in field_values or field_name in items:
                 continue
             target_keys = _chemistry_overlay_match_keys(field_values.get(field_name))
@@ -4351,11 +4447,18 @@ def _build_zalco_chemistry_overlay_items_from_analysis_block(
             height = int(word.get("height") or 0)
             if width <= 0 or height <= 0:
                 continue
+            bbox = _zalco_overlay_cell_bbox_from_ordered_words(
+                word=word,
+                ordered_words=ordered_value_words,
+                line_box=line_box,
+                image_width=image_width,
+                image_height=image_height,
+            )
             items[field_name] = ChemistryOverlayPreviewItemResponse(
                 page_id=page.id,
                 page_number=page.numero_pagina,
                 field=field_name,
-                bbox=f"{left},{top},{left + width},{top + height}",
+                bbox=_bbox_to_string(bbox),
                 image_width=image_width,
                 image_height=image_height,
             )
@@ -4695,7 +4798,6 @@ def _extract_arconic_chemistry_cells(
         bbox = _bbox_to_string(cell_bbox)
         if chosen_word is not None:
             normalized_value = _normalize_chemistry_capture_value(cast(str | None, chosen_word.get("text")))
-            bbox = _word_bbox_to_string(chosen_word)
         if normalized_value is None or _arconic_chemistry_value_word_is_suspicious(
             chosen_word=chosen_word,
             median_value_top=median_value_top,
@@ -5681,6 +5783,79 @@ def _extend_chemistry_overlay_items_from_header_order(
 
 def _count_chemistry_overlay_fields(items: list[ChemistryOverlayPreviewItemResponse]) -> int:
     return len({item.field for item in items})
+
+
+def _choose_clearer_chemistry_overlay_items(
+    *,
+    primary: list[ChemistryOverlayPreviewItemResponse],
+    fallback: list[ChemistryOverlayPreviewItemResponse],
+) -> list[ChemistryOverlayPreviewItemResponse]:
+    primary_count = _count_chemistry_overlay_fields(primary)
+    fallback_count = _count_chemistry_overlay_fields(fallback)
+    if fallback_count <= 0:
+        return primary
+    if primary_count <= 0:
+        return fallback
+    if fallback_count < max(3, primary_count - 1):
+        return primary
+
+    primary_score = _chemistry_overlay_visual_score(primary)
+    fallback_score = _chemistry_overlay_visual_score(fallback)
+    if fallback_count >= primary_count + 2 and fallback_score[1] >= fallback_count - 1:
+        return fallback
+    if _chemistry_overlay_items_are_visually_weak(primary) and fallback_score >= primary_score:
+        return fallback
+    return primary
+
+
+def _chemistry_overlay_visual_score(items: list[ChemistryOverlayPreviewItemResponse]) -> tuple[int, int, int]:
+    count = _count_chemistry_overlay_fields(items)
+    readable_count = 0
+    total_area = 0
+    for item in items:
+        bbox = _parse_overlay_bbox(item.bbox)
+        if bbox is None:
+            continue
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if width >= 34 and height >= 12:
+            readable_count += 1
+        total_area += max(0, width) * max(0, height)
+    return (count, readable_count, total_area)
+
+
+def _chemistry_overlay_items_are_visually_weak(items: list[ChemistryOverlayPreviewItemResponse]) -> bool:
+    if not items:
+        return True
+    weak_count = 0
+    valid_count = 0
+    for item in items:
+        bbox = _parse_overlay_bbox(item.bbox)
+        if bbox is None:
+            continue
+        valid_count += 1
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if width < 34 or height < 12:
+            weak_count += 1
+    if valid_count == 0:
+        return True
+    return weak_count * 2 >= valid_count
+
+
+def _parse_overlay_bbox(bbox: str | None) -> tuple[int, int, int, int] | None:
+    if not bbox:
+        return None
+    parts = [part.strip() for part in bbox.split(",")]
+    if len(parts) != 4:
+        return None
+    try:
+        left, top, right, bottom = (int(float(part)) for part in parts)
+    except ValueError:
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
 
 
 def _merge_chemistry_overlay_items_prefer_first(
@@ -8364,8 +8539,8 @@ def list_gemba_walk_rows(
     date_from: date,
     date_to: date,
 ) -> list[AcquisitionRowListItemResponse]:
-    start_dt = datetime.combine(date_from, time.min, tzinfo=UTC)
-    end_dt = datetime.combine(date_to, time.max, tzinfo=UTC)
+    start_dt = datetime.combine(date_from, datetime_time.min, tzinfo=UTC)
+    end_dt = datetime.combine(date_to, datetime_time.max, tzinfo=UTC)
     rows = (
         db.query(AcquisitionRow)
         .options(
