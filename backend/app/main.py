@@ -39,7 +39,7 @@ async def lifespan(_: FastAPI):
             pass
 
 
-app = FastAPI(title="CERTI_nt Core API", version="0.1.0.alpha.4", lifespan=lifespan)
+app = FastAPI(title="CERTI_nt Core API", version="0.1.0.alpha.5", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

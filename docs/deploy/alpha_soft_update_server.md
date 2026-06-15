@@ -69,6 +69,22 @@ Non procedere se:
 - mancano le cartelle `data/postgres` o `data/storage`;
 - l'app e in mezzo a un caricamento importante.
 
+### Controllare run AI attivi
+
+Prima di fermare backend/frontend controllare che non ci siano elaborazioni AI in corso.
+
+Il nome tabella corretto e `acquisition_processing_runs`.
+
+```bash
+cd /srv/certi_nt/app
+docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
+  python -c "from app.core.database import SessionLocal; from sqlalchemy import text; db=SessionLocal(); rows=db.execute(text(\"select id, stato, fase_corrente from acquisition_processing_runs where stato in ('in_coda', 'in_esecuzione') order by id desc limit 10\")).mappings().all(); print([dict(r) for r in rows]); db.close()"
+```
+
+Se torna `[]`, non ci sono run attivi.
+
+Se ci sono run `in_coda` o `in_esecuzione`, non aggiornare subito: si rischia di interrompere un caricamento documenti o una lettura AI lunga.
+
 ## Creare archivio dal deploy repo
 
 Dal PC locale, nel repo deploy:
@@ -113,13 +129,17 @@ Questo backup salva il codice applicativo corrente e il `.env`, ma non duplica t
 
 Fare sempre un dump DB prima di aggiornamenti che cambiano tabelle, colonne o logiche dati.
 
+Sul server alpha attuale usare esplicitamente utente e database:
+
 ```bash
 cd /srv/certi_nt/app
 TS=$(date +%Y%m%d_%H%M%S)
 docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
-  sh -lc 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+  pg_dump -U certi_nt certi_nt \
   > "/srv/certi_nt/backup/db_before_alpha_${TS}.sql"
 ```
+
+Nota: il comando con `"$POSTGRES_USER"` e `"$POSTGRES_DB"` dentro `sh -lc` puo fallire se quelle variabili non sono disponibili nel processo shell del container. In quel caso `pg_dump` prova l'utente `root` e fallisce. Per questo, nella procedura alpha, usare `pg_dump -U certi_nt certi_nt`.
 
 Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliato ma non sempre obbligatorio. In alpha conviene farlo spesso.
 
@@ -163,6 +183,20 @@ docker compose --env-file .env -f docker-compose.alpha.yml ps
 docker compose --env-file .env -f docker-compose.alpha.yml logs --tail=120 backend
 curl -I http://127.0.0.1:8080/
 curl -I http://127.0.0.1:8001/docs
+```
+
+Controllare anche la versione backend:
+
+```bash
+cd /srv/certi_nt/app
+docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
+  python -c "from app.main import app; print(app.version)"
+```
+
+Per alpha 5 deve tornare:
+
+```text
+0.1.0.alpha.5
 ```
 
 Da browser:
