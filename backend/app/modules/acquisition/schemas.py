@@ -709,6 +709,21 @@ class DocumentMatchDetachResponse(BaseModel):
     certificate_row: AcquisitionRowDetailResponse
 
 
+class AcquisitionRowDeletePreviewResponse(BaseModel):
+    row_id: int
+    can_delete: bool
+    side: DocumentSide | None = None
+    document_id: int | None = None
+    file_name: str | None = None
+    blocked_reason: str | None = None
+    linked_rows_count: int = 0
+    shared_document: bool = False
+    will_delete_document: bool = False
+    normal_reload_available: bool = False
+    fallback_required: bool = False
+    message: str
+
+
 class DocumentLinkCandidateResponse(BaseModel):
     row: AcquisitionRowDetailResponse
     target_row_id: int

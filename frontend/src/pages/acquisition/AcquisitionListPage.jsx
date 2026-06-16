@@ -177,6 +177,15 @@ function matchCellLabel(row) {
   return BLOCK_LABELS.match;
 }
 
+function canRequestRowDelete(row, user) {
+  if (user?.role !== "admin") {
+    return false;
+  }
+  const hasDdt = Boolean(row.document_ddt_id);
+  const hasCertificate = Boolean(row.document_certificato_id);
+  return hasDdt !== hasCertificate && !row.validata_finale && !row.qualita_valutazione;
+}
+
 function matchSortValue(row) {
   const label = matchCellLabel(row);
   const priority =
@@ -643,7 +652,7 @@ function BlockCell({ label, state, secondary, onClick, onKeyDown, boxRef = null 
 }
 
 export default function AcquisitionListPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const certificationScope = useMemo(() => parseCertificationIncomingScope(location.search), [location.search]);
@@ -674,6 +683,9 @@ export default function AcquisitionListPage() {
   const [resolveCandidate, setResolveCandidate] = useState(null);
   const [resolveError, setResolveError] = useState("");
   const [savingResolve, setSavingResolve] = useState(false);
+  const [deletePreview, setDeletePreview] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [gembaModalOpen, setGembaModalOpen] = useState(false);
   const [gembaDateFrom, setGembaDateFrom] = useState(todayDateInputValue);
   const [gembaDateTo, setGembaDateTo] = useState(todayDateInputValue);
@@ -693,6 +705,8 @@ export default function AcquisitionListPage() {
     setSortConfig(nextState.sortConfig);
     setResolveCandidate(null);
     setResolveError("");
+    setDeletePreview(null);
+    setDeleteError("");
   }, [isCertificationScope, location.search]);
 
   useEffect(() => {
@@ -1025,6 +1039,41 @@ export default function AcquisitionListPage() {
     setGembaError("");
   }
 
+  async function openDeletePreview(row) {
+    setDeleteLoading(true);
+    setDeleteError("");
+    try {
+      const preview = await apiRequest(`/acquisition/rows/${row.id}/delete-preview`, {}, token);
+      setDeletePreview(preview);
+    } catch (requestError) {
+      setDeleteError(requestError.message);
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
+  function closeDeletePreview() {
+    setDeletePreview(null);
+    setDeleteError("");
+  }
+
+  async function confirmDeleteRow() {
+    if (!deletePreview?.row_id) {
+      return;
+    }
+    setDeleteLoading(true);
+    setDeleteError("");
+    try {
+      await apiRequest(`/acquisition/rows/${deletePreview.row_id}`, { method: "DELETE" }, token);
+      setRows((currentRows) => currentRows.filter((row) => row.id !== deletePreview.row_id));
+      closeDeletePreview();
+    } catch (requestError) {
+      setDeleteError(requestError.message);
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   function openGembaPrint() {
     if (!gembaDateFrom || !gembaDateTo) {
       setGembaError("Seleziona entrambe le date.");
@@ -1267,7 +1316,7 @@ export default function AcquisitionListPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-          <table className="min-w-[1480px] divide-y divide-slate-200 text-sm" ref={tableRef}>
+          <table className="min-w-[1580px] divide-y divide-slate-200 text-sm" ref={tableRef}>
               <thead className="sticky-list-head bg-slate-50">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -1284,6 +1333,7 @@ export default function AcquisitionListPage() {
                   <SortableHeader field="proprieta" label="Prop." onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
                   <SortableHeader field="stato" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
+                  <th className="px-3 py-3">Azioni</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1417,6 +1467,23 @@ export default function AcquisitionListPage() {
                     <td className="px-0 py-0">
                       <RowStateCell row={row} onClick={() => openRow(row.id)} onKeyDown={(event) => handleRowKeyDown(event, row.id)} />
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      {canRequestRowDelete(row, user) ? (
+                        <button
+                          className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={deleteLoading}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openDeletePreview(row);
+                          }}
+                          type="button"
+                        >
+                          Elimina
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">-</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1471,6 +1538,55 @@ export default function AcquisitionListPage() {
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+      {deletePreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-white p-5 shadow-2xl">
+            <p className="text-sm uppercase tracking-[0.18em] text-slate-500">Eliminazione riga Incoming</p>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">
+              Riga #{deletePreview.row_id} · {deletePreview.side === "ddt" ? "Solo DDT" : "Solo Certificato"}
+            </h2>
+            <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+              <div>
+                <span className="font-semibold">File:</span> {deletePreview.file_name || "-"}
+              </div>
+              <div>
+                <span className="font-semibold">Documento:</span>{" "}
+                {deletePreview.will_delete_document ? "verra eliminato con la riga" : "rimane perche condiviso con altre righe"}
+              </div>
+              {deletePreview.shared_document ? (
+                <div>
+                  <span className="font-semibold">Righe collegate:</span> {deletePreview.linked_rows_count}
+                </div>
+              ) : null}
+            </div>
+            <p className="mt-3 text-sm text-slate-600">{deletePreview.message}</p>
+            {deleteError ? <p className="mt-3 text-sm font-semibold text-rose-600">{deleteError}</p> : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                disabled={deleteLoading}
+                onClick={closeDeletePreview}
+                type="button"
+              >
+                Annulla
+              </button>
+              <button
+                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deleteLoading || !deletePreview.can_delete}
+                onClick={confirmDeleteRow}
+                type="button"
+              >
+                {deleteLoading ? "Eliminazione..." : "Elimina riga"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {deleteError && !deletePreview ? (
+        <div className="fixed bottom-4 right-4 z-50 max-w-md rounded-xl border border-rose-200 bg-white px-4 py-3 text-sm font-semibold text-rose-700 shadow-xl">
+          {deleteError}
         </div>
       ) : null}
       {gembaModalOpen ? (

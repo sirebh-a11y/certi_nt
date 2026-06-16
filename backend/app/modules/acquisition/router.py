@@ -16,6 +16,7 @@ from app.modules.acquisition.schemas import (
     AcquisitionQualityRowResponse,
     AcquisitionQualityUpdateRequest,
     AcquisitionRowCreateRequest,
+    AcquisitionRowDeletePreviewResponse,
     AcquisitionRowDetailResponse,
     AcquisitionRowListResponse,
     AcquisitionNotesSectionUpdateRequest,
@@ -80,6 +81,7 @@ from app.modules.acquisition.service import (
     detect_chemistry,
     detect_properties,
     detect_standard_notes,
+    delete_single_document_acquisition_row,
     detach_document_match,
     link_document_match_candidate,
     list_quality_rows,
@@ -96,6 +98,7 @@ from app.modules.acquisition.service import (
     list_gemba_walk_rows,
     list_documents,
     process_row_minimal,
+    preview_acquisition_row_delete,
     prepare_document_for_reader,
     refresh_certificate_first_row,
     reopen_final_validation,
@@ -537,6 +540,24 @@ def create_acquisition_row_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     return create_acquisition_row(db=db, payload=payload, actor_id=current_user.id, actor_email=current_user.email)
+
+
+@router.get("/rows/{row_id}/delete-preview", response_model=AcquisitionRowDeletePreviewResponse)
+def preview_acquisition_row_delete_route(row_id: int, current_user: CurrentUser, db: DbSession) -> AcquisitionRowDeletePreviewResponse:
+    if current_user.role != ROLE_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return preview_acquisition_row_delete(db=db, row=get_acquisition_row(db, row_id))
+
+
+@router.delete("/rows/{row_id}", response_model=AcquisitionRowDeletePreviewResponse)
+def delete_single_document_acquisition_row_route(
+    row_id: int,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDeletePreviewResponse:
+    if current_user.role != ROLE_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return delete_single_document_acquisition_row(db=db, row=get_acquisition_row(db, row_id), actor_id=current_user.id)
 
 
 @router.get("/rows/{row_id}", response_model=AcquisitionRowDetailResponse)

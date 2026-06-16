@@ -32,10 +32,12 @@ from app.modules.acquisition.service import (
     _run_cross_run_auto_rematch,
     _score_certificate_candidate,
     confirm_document_side_fields,
+    delete_single_document_acquisition_row,
     detach_document_match,
     get_acquisition_row,
     list_quality_rows,
     reopen_final_validation,
+    preview_acquisition_row_delete,
     update_quality_row,
     update_acquisition_row,
     upsert_read_value,
@@ -1064,6 +1066,103 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(matched_row.certificate_match.document_certificato_id, certificate_document.id)
         self.assertEqual(len(matched_row.certificate_match.candidates), 1)
         self.assertEqual(matched_row.certificate_match.candidates[0].stato, "scelto")
+
+    def test_delete_single_document_row_removes_unique_document_and_frees_hash(self):
+        document = Document(
+            tipo_documento="ddt",
+            nome_file_originale="ddt-unico.pdf",
+            storage_key="ddt-unico.pdf",
+            hash_file="hash-unico",
+            stato_upload="persistente",
+        )
+        self.db.add(document)
+        self.db.flush()
+        page = DocumentPage(document_id=document.id, numero_pagina=1, immagine_pagina_storage_key="page-unico.png")
+        self.db.add(page)
+        self.db.flush()
+        row = AcquisitionRow(document_ddt_id=document.id, cdq="1001", colata="C1001")
+        self.db.add(row)
+        self.db.flush()
+        evidence = DocumentEvidence(
+            document_id=document.id,
+            document_page_id=page.id,
+            acquisition_row_id=row.id,
+            blocco="ddt",
+            tipo_evidenza="text",
+            testo_grezzo="test",
+            metodo_estrazione="utente",
+        )
+        self.db.add(evidence)
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, row.id))
+        self.assertTrue(preview.can_delete)
+        self.assertTrue(preview.will_delete_document)
+        self.assertTrue(preview.normal_reload_available)
+
+        delete_single_document_acquisition_row(self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
+
+        self.assertIsNone(self.db.get(AcquisitionRow, row.id))
+        self.assertIsNone(self.db.get(Document, document.id))
+        self.assertEqual(self.db.query(Document).filter(Document.hash_file == "hash-unico").count(), 0)
+        self.assertEqual(self.db.query(DocumentEvidence).count(), 0)
+        self.assertEqual(self.db.query(DocumentPage).count(), 0)
+
+    def test_delete_single_document_row_keeps_shared_document_for_manual_fallback(self):
+        document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert-condiviso.pdf",
+            storage_key="cert-condiviso.pdf",
+            hash_file="hash-condiviso",
+            stato_upload="persistente",
+        )
+        self.db.add(document)
+        self.db.flush()
+        first_row = AcquisitionRow(document_certificato_id=document.id, cdq="1001", colata="C1001")
+        second_row = AcquisitionRow(document_certificato_id=document.id, cdq="1002", colata="C1002")
+        self.db.add_all([first_row, second_row])
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, first_row.id))
+        self.assertTrue(preview.can_delete)
+        self.assertTrue(preview.shared_document)
+        self.assertFalse(preview.will_delete_document)
+        self.assertTrue(preview.fallback_required)
+
+        delete_single_document_acquisition_row(self.db, row=get_acquisition_row(self.db, first_row.id), actor_id=1)
+
+        self.assertIsNone(self.db.get(AcquisitionRow, first_row.id))
+        self.assertIsNotNone(self.db.get(AcquisitionRow, second_row.id))
+        self.assertIsNotNone(self.db.get(Document, document.id))
+        self.assertEqual(self.db.query(Document).filter(Document.hash_file == "hash-condiviso").count(), 1)
+
+    def test_delete_single_document_row_blocks_matched_and_quality_rows(self):
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt.pdf")
+        certificate_document = Document(tipo_documento="certificato", nome_file_originale="cert.pdf", storage_key="cert.pdf")
+        self.db.add_all([ddt_document, certificate_document])
+        self.db.flush()
+        matched_row = AcquisitionRow(document_ddt_id=ddt_document.id, document_certificato_id=certificate_document.id)
+        quality_document = Document(tipo_documento="ddt", nome_file_originale="ddt-quality.pdf", storage_key="ddt-quality.pdf")
+        self.db.add(quality_document)
+        self.db.flush()
+        quality_row = AcquisitionRow(
+            document_ddt_id=quality_document.id,
+            validata_finale=True,
+            qualita_valutazione="accettato",
+            stato_workflow="validata_quality",
+        )
+        self.db.add_all([matched_row, quality_row])
+        self.db.commit()
+
+        matched_preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, matched_row.id))
+        quality_preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, quality_row.id))
+
+        self.assertFalse(matched_preview.can_delete)
+        self.assertFalse(quality_preview.can_delete)
+        with self.assertRaises(HTTPException):
+            delete_single_document_acquisition_row(self.db, row=get_acquisition_row(self.db, matched_row.id), actor_id=1)
+        with self.assertRaises(HTTPException):
+            delete_single_document_acquisition_row(self.db, row=get_acquisition_row(self.db, quality_row.id), actor_id=1)
 
 
 if __name__ == "__main__":

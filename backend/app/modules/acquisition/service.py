@@ -21,7 +21,7 @@ from fastapi import HTTPException, status
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from pypdf import PdfReader
-from sqlalchemy import or_
+from sqlalchemy import inspect as sqlalchemy_inspect, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -54,6 +54,7 @@ from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
     AutonomousRunStartRequest,
     AcquisitionRowCreateRequest,
+    AcquisitionRowDeletePreviewResponse,
     AcquisitionRowDetailResponse,
     AcquisitionRowListItemResponse,
     AcquisitionValueHistoryResponse,
@@ -8647,6 +8648,233 @@ def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
     return row
 
 
+def _single_document_side_for_delete(row: AcquisitionRow) -> tuple[str, int] | None:
+    has_ddt = row.document_ddt_id is not None
+    has_certificate = row.document_certificato_id is not None
+    if has_ddt == has_certificate:
+        return None
+    if has_ddt:
+        return "ddt", int(row.document_ddt_id)
+    return "certificato", int(row.document_certificato_id)
+
+
+def _row_is_used_by_quarta_taglio(db: Session, row_id: int) -> bool:
+    try:
+        if not sqlalchemy_inspect(db.bind).has_table("quarta_taglio_incoming_row_overrides"):
+            return False
+        from app.modules.quarta_taglio.models import QuartaTaglioIncomingRowOverride
+
+        return (
+            db.query(QuartaTaglioIncomingRowOverride.id)
+            .filter(QuartaTaglioIncomingRowOverride.acquisition_row_id == row_id)
+            .first()
+            is not None
+        )
+    except Exception:
+        logger.exception("Unable to check Quarta incoming override for acquisition row %s", row_id)
+        return True
+
+
+def _document_link_count_excluding_row(db: Session, *, document_id: int, row_id: int) -> int:
+    rows_count = (
+        db.query(AcquisitionRow.id)
+        .filter(
+            AcquisitionRow.id != row_id,
+            or_(
+                AcquisitionRow.document_ddt_id == document_id,
+                AcquisitionRow.document_certificato_id == document_id,
+            ),
+        )
+        .count()
+    )
+    matches_count = (
+        db.query(CertificateMatch.id)
+        .filter(CertificateMatch.document_certificato_id == document_id)
+        .count()
+    )
+    candidates_count = (
+        db.query(CertificateMatchCandidate.id)
+        .filter(CertificateMatchCandidate.document_certificato_id == document_id)
+        .count()
+    )
+    return int(rows_count + matches_count + candidates_count)
+
+
+def _build_delete_preview(
+    *,
+    row: AcquisitionRow,
+    side: str | None,
+    document: Document | None,
+    can_delete: bool,
+    blocked_reason: str | None,
+    linked_rows_count: int = 0,
+) -> AcquisitionRowDeletePreviewResponse:
+    shared_document = linked_rows_count > 0
+    will_delete_document = can_delete and document is not None and not shared_document
+    if blocked_reason:
+        message = blocked_reason
+    elif will_delete_document:
+        message = (
+            "La riga e il documento verranno eliminati. Il file potra essere ricaricato "
+            "dal caricamento normale."
+        )
+    else:
+        message = (
+            "La riga verra eliminata, ma il documento resta perche usato anche da altre righe. "
+            "Per aggiungere righe dallo stesso PDF usa il fallback manuale."
+        )
+    return AcquisitionRowDeletePreviewResponse(
+        row_id=row.id,
+        can_delete=can_delete,
+        side=side if side in {"ddt", "certificato"} else None,
+        document_id=document.id if document is not None else None,
+        file_name=document.nome_file_originale if document is not None else None,
+        blocked_reason=blocked_reason,
+        linked_rows_count=linked_rows_count,
+        shared_document=shared_document,
+        will_delete_document=will_delete_document,
+        normal_reload_available=will_delete_document,
+        fallback_required=can_delete and document is not None and shared_document,
+        message=message,
+    )
+
+
+def preview_acquisition_row_delete(db: Session, *, row: AcquisitionRow) -> AcquisitionRowDeletePreviewResponse:
+    current_row = get_acquisition_row(db, row.id)
+    side_and_document_id = _single_document_side_for_delete(current_row)
+    if side_and_document_id is None:
+        return _build_delete_preview(
+            row=current_row,
+            side=None,
+            document=None,
+            can_delete=False,
+            blocked_reason="Puoi eliminare solo righe Solo DDT o Solo Certificato. Se la riga e matchata, prima disaccoppia i documenti.",
+        )
+    side, document_id = side_and_document_id
+    document = db.get(Document, document_id)
+    if document is None:
+        return _build_delete_preview(
+            row=current_row,
+            side=side,
+            document=None,
+            can_delete=False,
+            blocked_reason="Documento collegato non trovato: serve controllo tecnico.",
+        )
+    if current_row.validata_finale or current_row.qualita_valutazione or current_row.stato_workflow == "validata_quality":
+        return _build_delete_preview(
+            row=current_row,
+            side=side,
+            document=document,
+            can_delete=False,
+            blocked_reason="Riga gia valutata o confermata: non puo essere eliminata.",
+        )
+    if _row_is_used_by_quarta_taglio(db, current_row.id):
+        return _build_delete_preview(
+            row=current_row,
+            side=side,
+            document=document,
+            can_delete=False,
+            blocked_reason="Riga gia collegata a Certificazione: non puo essere eliminata da Incoming.",
+        )
+
+    linked_count = _document_link_count_excluding_row(db, document_id=document_id, row_id=current_row.id)
+    return _build_delete_preview(
+        row=current_row,
+        side=side,
+        document=document,
+        can_delete=True,
+        blocked_reason=None,
+        linked_rows_count=linked_count,
+    )
+
+
+def _delete_evidence_records(db: Session, evidences: list[DocumentEvidence]) -> None:
+    if not evidences:
+        return
+    evidence_by_id = {evidence.id: evidence for evidence in evidences if evidence.id is not None}
+    if not evidence_by_id:
+        return
+    db.query(ReadValue).filter(ReadValue.document_evidence_id.in_(evidence_by_id.keys())).update(
+        {ReadValue.document_evidence_id: None},
+        synchronize_session=False,
+    )
+    for evidence in evidence_by_id.values():
+        _delete_storage_key_if_present(evidence.storage_key_derivato)
+        db.delete(evidence)
+
+
+def _delete_document_record_and_files(db: Session, document: Document) -> None:
+    current_document = (
+        db.query(Document)
+        .options(joinedload(Document.pages), joinedload(Document.evidences))
+        .filter(Document.id == document.id)
+        .one_or_none()
+    )
+    if current_document is None:
+        return
+    page_ids = [page.id for page in current_document.pages]
+    all_evidences = list(current_document.evidences)
+    if page_ids:
+        all_evidences.extend(
+            db.query(DocumentEvidence)
+            .filter(DocumentEvidence.document_page_id.in_(page_ids))
+            .all()
+        )
+    _delete_evidence_records(db, all_evidences)
+    for page in current_document.pages:
+        _delete_storage_key_if_present(page.immagine_pagina_storage_key)
+        db.delete(page)
+    _delete_storage_key_if_present(current_document.storage_key)
+    db.delete(current_document)
+
+
+def _unlink_manual_blocks_for_deleted_row(db: Session, row_id: int) -> None:
+    blocks = (
+        db.query(ManualMatchBlock)
+        .filter(
+            or_(
+                ManualMatchBlock.source_row_id == row_id,
+                ManualMatchBlock.certificate_row_id == row_id,
+            )
+        )
+        .all()
+    )
+    for block in blocks:
+        if block.source_row_id == row_id:
+            block.source_row_id = None
+        if block.certificate_row_id == row_id:
+            block.certificate_row_id = None
+        block.attivo = False
+        db.add(block)
+
+
+def delete_single_document_acquisition_row(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    actor_id: int,
+) -> AcquisitionRowDeletePreviewResponse:
+    preview = preview_acquisition_row_delete(db, row=row)
+    if not preview.can_delete:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=preview.blocked_reason or preview.message)
+
+    current_row = get_acquisition_row(db, row.id)
+    document = db.get(Document, preview.document_id) if preview.document_id is not None else None
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Documento collegato non trovato")
+
+    _unlink_manual_blocks_for_deleted_row(db, current_row.id)
+    _delete_evidence_records(db, list(current_row.evidences))
+    db.delete(current_row)
+    db.flush()
+
+    if preview.will_delete_document:
+        _delete_document_record_and_files(db, document)
+
+    db.commit()
+    return preview
+
+
 def create_acquisition_row(
     db: Session,
     payload: AcquisitionRowCreateRequest,
@@ -15088,7 +15316,12 @@ def _delete_storage_key_if_present(storage_key: str | None) -> None:
     resolved_key = _string_or_none(storage_key)
     if resolved_key is None:
         return
-    path = _resolve_storage_path(resolved_key)
+    try:
+        path = _resolve_storage_path(resolved_key)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_404_NOT_FOUND:
+            return
+        raise
     if path.exists():
         path.unlink()
 
