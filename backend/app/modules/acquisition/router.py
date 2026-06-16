@@ -5,8 +5,7 @@ from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
-from app.core.deps import CurrentUser, DbSession
-from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
+from app.core.deps import CurrentUser, DbSession, require_quality_area_admin, require_quality_area_manager_or_admin
 from app.core.security.crypto import decrypt_secret
 from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
@@ -544,8 +543,7 @@ def create_acquisition_row_route(
 
 @router.get("/rows/{row_id}/delete-preview", response_model=AcquisitionRowDeletePreviewResponse)
 def preview_acquisition_row_delete_route(row_id: int, current_user: CurrentUser, db: DbSession) -> AcquisitionRowDeletePreviewResponse:
-    if current_user.role != ROLE_ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    require_quality_area_admin(current_user)
     return preview_acquisition_row_delete(db=db, row=get_acquisition_row(db, row_id))
 
 
@@ -555,8 +553,7 @@ def delete_single_document_acquisition_row_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDeletePreviewResponse:
-    if current_user.role != ROLE_ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    require_quality_area_admin(current_user)
     return delete_single_document_acquisition_row(db=db, row=get_acquisition_row(db, row_id), actor_id=current_user.id)
 
 
@@ -786,7 +783,6 @@ def reopen_final_validation_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    if current_user.role not in {ROLE_ADMIN, ROLE_MANAGER}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    require_quality_area_manager_or_admin(current_user)
     row = get_acquisition_row(db, row_id)
     return reopen_final_validation(db=db, row=row, actor_id=current_user.id)

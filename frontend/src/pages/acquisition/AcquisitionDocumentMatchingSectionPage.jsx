@@ -678,7 +678,7 @@ function MatchBridgePanel({ canDetach, detaching, ddtLinkPreview, isCertificateF
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${renderStateTone(state)}`}>{matchStateLabel(row)}</span>
         <p className="max-w-[260px] text-sm leading-6 text-slate-600">
           {detachLocked
-            ? "Riga già valutata: il disaccoppio è bloccato. Serve Forza riapertura da manager o admin."
+            ? "Riga già valutata: il disaccoppio è bloccato. Serve Forza riapertura da Qualità o IT."
             : "Qui vivranno collegamento, conferma match e disaccoppio forte tra i due documenti."}
         </p>
         {isCertificateFirstRow ? <CandidateBox label="candidati DDT" loadingPreview={loadingDdtPreview} preview={ddtLinkPreview} /> : null}
@@ -925,7 +925,7 @@ function DocumentConfirmGuidanceDialog({ dialog, onClose }) {
     dialog.kind === "final"
       ? "La coppia documentale è confermata. Torno a Incoming materiale."
       : dialog.kind === "locked"
-        ? "Per modificare DDT o certificato devi prima usare Forza riapertura. Se non hai i permessi, richiedere a manager o admin."
+        ? "Per modificare DDT o certificato devi prima usare Forza riapertura. Se non hai i permessi, richiedere a Qualità o IT."
       : isValidatedEdit
         ? dialog.fields?.length
           ? `La riga è già valutata: il match resta confermato. Controlla però questi campi non allineati tra DDT e certificato: ${dialog.fields.join(", ")}.`

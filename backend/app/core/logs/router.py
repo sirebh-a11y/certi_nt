@@ -2,14 +2,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import require_roles
+from app.core.deps import require_it_admin
 from app.core.logs.schemas import LogListResponse
 from app.core.logs.service import log_service
-from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 
 router = APIRouter()
 
-LogViewer = Annotated[object, Depends(require_roles(ROLE_ADMIN, ROLE_MANAGER))]
+LogViewer = Annotated[object, Depends(require_it_admin)]
 
 
 @router.get("", response_model=LogListResponse)

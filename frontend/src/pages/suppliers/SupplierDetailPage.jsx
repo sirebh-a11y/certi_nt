@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { canEditQualitySetup } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { EMAIL_ERROR_MESSAGE, isValidEmail } from "../../app/validation";
@@ -41,7 +42,7 @@ export default function SupplierDetailPage() {
   const [savingSupplier, setSavingSupplier] = useState(false);
   const [savingAliasId, setSavingAliasId] = useState(null);
   const [creatingAlias, setCreatingAlias] = useState(false);
-  const isAdmin = user?.role === "admin";
+  const isAdmin = canEditQualitySetup(user);
 
   useEffect(() => {
     let ignore = false;
@@ -248,7 +249,7 @@ export default function SupplierDetailPage() {
           <form className="grid gap-4 rounded-2xl border border-border p-5 md:grid-cols-2" onSubmit={handleSupplierSave}>
             <div className="md:col-span-2">
               <h3 className="text-lg font-semibold">{isAdmin ? "Modifica fornitore" : "Dati fornitore"}</h3>
-              {!isAdmin ? <p className="mt-2 text-sm text-slate-500">Solo un utente admin può modificare i fornitori.</p> : null}
+              {!isAdmin ? <p className="mt-2 text-sm text-slate-500">Solo admin IT/Qualità possono modificare i fornitori.</p> : null}
             </div>
             <div className="md:col-span-2">
               <label className="mb-2 block text-sm font-medium">Ragione sociale</label>

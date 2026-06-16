@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { canEditQualitySetup } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
@@ -21,7 +22,8 @@ function emptyCreateForm() {
 }
 
 export default function NotesPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const canEdit = canEditQualitySetup(user);
   const [items, setItems] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [createForm, setCreateForm] = useState(emptyCreateForm());
@@ -94,6 +96,10 @@ export default function NotesPage() {
   async function handleSave(noteId) {
     setError("");
     setStatusMessage("");
+    if (!canEdit) {
+      setError("Solo admin IT/Qualità possono modificare le note.");
+      return;
+    }
     setSavingId(noteId);
     try {
       await apiRequest(
@@ -117,6 +123,10 @@ export default function NotesPage() {
     event.preventDefault();
     setError("");
     setStatusMessage("");
+    if (!canEdit) {
+      setError("Solo admin IT/Qualità possono creare note.");
+      return;
+    }
     setCreating(true);
     try {
       await apiRequest(
@@ -166,6 +176,7 @@ export default function NotesPage() {
         <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Testo nota</label>
         <textarea
           className="mt-2 min-h-[72px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-5 text-ink"
+          disabled={!canEdit}
           rows={3}
           value={draft.text}
           onChange={(event) =>
@@ -181,6 +192,7 @@ export default function NotesPage() {
             <input
               checked={draft.is_active}
               className={CHECKBOX_CLASSNAME}
+              disabled={!canEdit}
               onChange={(event) =>
                 setDrafts((currentValue) => ({
                   ...currentValue,
@@ -194,7 +206,7 @@ export default function NotesPage() {
 
           <button
             className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-            disabled={savingId === item.id}
+            disabled={!canEdit || savingId === item.id}
             type="submit"
           >
             {savingId === item.id ? "Salvataggio..." : "Salva"}
@@ -216,6 +228,7 @@ export default function NotesPage() {
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento...</p> : null}
       {error ? <p className="mt-6 text-sm text-rose-600">{error}</p> : null}
       {statusMessage ? <p className="mt-6 text-sm text-slate-600">{statusMessage}</p> : null}
+      {!canEdit ? <p className="mt-6 text-sm text-slate-500">Solo admin IT/Qualità possono modificare il catalogo note.</p> : null}
 
       <form className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm" onSubmit={handleCreate}>
         <div className="grid gap-4 xl:grid-cols-[260px,minmax(0,1fr),auto] xl:items-end">
@@ -228,6 +241,7 @@ export default function NotesPage() {
             <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">Testo nota</label>
             <textarea
               className="mt-2 min-h-[76px] w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm leading-5 text-ink"
+              disabled={!canEdit}
               rows={3}
               value={createForm.text}
               onChange={(event) => setCreateForm((currentValue) => ({ ...currentValue, text: event.target.value }))}
@@ -239,6 +253,7 @@ export default function NotesPage() {
               <input
                 checked={createForm.is_active}
                 className={CHECKBOX_CLASSNAME}
+                disabled={!canEdit}
                 onChange={(event) => setCreateForm((currentValue) => ({ ...currentValue, is_active: event.target.checked }))}
                 type="checkbox"
               />
@@ -246,7 +261,7 @@ export default function NotesPage() {
             </label>
             <button
               className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-              disabled={creating}
+              disabled={!canEdit || creating}
               type="submit"
             >
               {creating ? "Creazione..." : "Crea nota"}

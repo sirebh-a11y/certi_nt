@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { canEditQualitySetup } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
@@ -14,7 +15,7 @@ export default function SuppliersListPage() {
   const [importingCode, setImportingCode] = useState(null);
   const [syncingEsolver, setSyncingEsolver] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
-  const isAdmin = user?.role === "admin";
+  const isAdmin = canEditQualitySetup(user);
 
   useEffect(() => {
     let ignore = false;
@@ -239,7 +240,7 @@ export default function SuppliersListPage() {
                       {importingCode === item.cod_clifor ? "Aggiungo..." : "Aggiungi in app"}
                     </button>
                   ) : (
-                    <span className="text-xs text-slate-500">Solo admin</span>
+                    <span className="text-xs text-slate-500">Solo admin IT/Qualità</span>
                   )}
                 </td>
               </tr>

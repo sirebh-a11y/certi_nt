@@ -8993,7 +8993,7 @@ def update_acquisition_row(
 DOCUMENT_SIDE_UI_FIELDS: tuple[str, ...] = ("lega_base", "diametro", "cdq", "colata", "ddt", "peso", "ordine")
 FINAL_VALIDATION_LOCK_MESSAGE = (
     "Riga gia valutata: per modificare devi prima usare Forza riapertura. "
-    "Se non hai i permessi, richiedere a manager o admin."
+    "Se non hai i permessi, richiedere a Qualità o IT."
 )
 DOCUMENT_SIDE_FIELD_LABELS: dict[str, str] = {
     "lega_base": "Lega",

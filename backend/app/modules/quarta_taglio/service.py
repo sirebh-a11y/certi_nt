@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import settings
 from app.core.integrations.models import ExternalConnection
 from app.core.pdf.converter import PDFConversionError, convert_docx_to_pdf
+from app.core.deps import is_quality_area_manager_or_admin
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
@@ -2271,8 +2272,8 @@ def reopen_quarta_taglio_certificate_pdf(
     reason: str,
     actor: User,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
-    if actor.role not in {ROLE_MANAGER, ROLE_ADMIN}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo manager o admin possono riaprire un certificato PDF")
+    if not is_quality_area_manager_or_admin(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Qualità o IT possono riaprire un certificato PDF")
     clean_reason = _clean_text(reason)
     if not clean_reason:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Motivo riapertura obbligatorio")

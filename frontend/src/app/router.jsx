@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 
 import { apiRequest } from "./api";
 import { useAuth } from "./auth";
+import AccessGuard from "../components/common/AccessGuard";
 import ProtectedRoute from "../components/common/ProtectedRoute";
-import RoleGuard from "../components/common/RoleGuard";
 import AppShell from "../components/layout/AppShell";
 import ChangePasswordPage from "../pages/auth/ChangePasswordPage";
 import LoginPage from "../pages/auth/LoginPage";
@@ -86,70 +86,90 @@ function UserDetailRoute() {
 
 function DepartmentsRoute() {
   return (
-    <RoleGuard allowedRoles={["admin"]}>
+    <AccessGuard page="departments">
       <DepartmentsPage />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function UsersRoute() {
   return (
-    <RoleGuard allowedRoles={["manager", "admin"]}>
+    <AccessGuard page="users">
       <Outlet />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function LogsRoute() {
   return (
-    <RoleGuard allowedRoles={["manager", "admin"]}>
+    <AccessGuard page="logs">
       <LogsPage />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function IntegrationsRoute() {
   return (
-    <RoleGuard allowedRoles={["admin"]}>
+    <AccessGuard page="integrations">
       <IntegrationsPage />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function AIConfigRoute() {
   return (
-    <RoleGuard allowedRoles={["admin"]}>
+    <AccessGuard page="ai">
       <AIConfigPage />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function EmailSettingsRoute() {
   return (
-    <RoleGuard allowedRoles={["admin"]}>
+    <AccessGuard page="emailSettings">
       <EmailSettingsPage />
-    </RoleGuard>
+    </AccessGuard>
   );
 }
 
 function NotesRoute() {
-  return <NotesPage />;
+  return (
+    <AccessGuard page="notes">
+      <NotesPage />
+    </AccessGuard>
+  );
 }
 
 function KpiRoute() {
-  return <SupplierKpiPage />;
+  return (
+    <AccessGuard page="supplierKpi">
+      <SupplierKpiPage />
+    </AccessGuard>
+  );
 }
 
 function ClientsRoute() {
-  return <ClientsPage />;
+  return (
+    <AccessGuard page="clients">
+      <ClientsPage />
+    </AccessGuard>
+  );
 }
 
 function CustomerRequirementsRoute() {
-  return <CustomerRequirementsPage />;
+  return (
+    <AccessGuard page="customerRequirements">
+      <CustomerRequirementsPage />
+    </AccessGuard>
+  );
 }
 
 function SupplierCodesRoute() {
-  return <SupplierCodesPage />;
+  return (
+    <AccessGuard page="supplierCodes">
+      <SupplierCodesPage />
+    </AccessGuard>
+  );
 }
 
 export function AppRouter() {
@@ -165,32 +185,32 @@ export function AppRouter() {
       </Route>
 
       <Route element={<ProtectedRoute />}>
-        <Route element={<AppShellRoute />}>
+          <Route element={<AppShellRoute />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/acquisition" element={<AcquisitionListPage />} />
-          <Route path="/acquisition/gemba-walk/print" element={<AcquisitionGembaWalkPrintPage />} />
-          <Route path="/acquisition/upload" element={<AcquisitionUploadPage />} />
-          <Route path="/acquisition/manual/ddt" element={<AcquisitionManualDdtPage />} />
-          <Route path="/acquisition/manual/certificato" element={<AcquisitionManualCertificatePage />} />
-          <Route path="/acquisition/:rowId/:sectionKey" element={<AcquisitionSectionPlaceholderPage />} />
-          <Route path="/acquisition/:rowId" element={<AcquisitionDetailPage />} />
-          <Route path="/suppliers" element={<SuppliersListPage />} />
+          <Route path="/dashboard" element={<AccessGuard page="dashboard"><DashboardPage /></AccessGuard>} />
+          <Route path="/acquisition" element={<AccessGuard page="acquisition"><AcquisitionListPage /></AccessGuard>} />
+          <Route path="/acquisition/gemba-walk/print" element={<AccessGuard page="acquisition"><AcquisitionGembaWalkPrintPage /></AccessGuard>} />
+          <Route path="/acquisition/upload" element={<AccessGuard page="acquisitionUpload"><AcquisitionUploadPage /></AccessGuard>} />
+          <Route path="/acquisition/manual/ddt" element={<AccessGuard page="acquisitionUpload"><AcquisitionManualDdtPage /></AccessGuard>} />
+          <Route path="/acquisition/manual/certificato" element={<AccessGuard page="acquisitionUpload"><AcquisitionManualCertificatePage /></AccessGuard>} />
+          <Route path="/acquisition/:rowId/:sectionKey" element={<AccessGuard page="acquisition"><AcquisitionSectionPlaceholderPage /></AccessGuard>} />
+          <Route path="/acquisition/:rowId" element={<AccessGuard page="acquisition"><AcquisitionDetailPage /></AccessGuard>} />
+          <Route path="/suppliers" element={<AccessGuard page="suppliers"><SuppliersListPage /></AccessGuard>} />
           <Route path="/suppliers/new" element={<Navigate to="/suppliers" replace />} />
-          <Route path="/suppliers/:supplierId" element={<SupplierDetailPage />} />
+          <Route path="/suppliers/:supplierId" element={<AccessGuard page="suppliers"><SupplierDetailPage /></AccessGuard>} />
           <Route path="/clients" element={<ClientsRoute />} />
           <Route path="/departments" element={<DepartmentsRoute />} />
           <Route path="/integrations" element={<IntegrationsRoute />} />
           <Route path="/ai" element={<AIConfigRoute />} />
           <Route path="/email-settings" element={<EmailSettingsRoute />} />
-          <Route path="/standards" element={<StandardsPage />} />
+          <Route path="/standards" element={<AccessGuard page="standards"><StandardsPage /></AccessGuard>} />
           <Route path="/customer-requirements" element={<CustomerRequirementsRoute />} />
           <Route path="/supplier-codes" element={<SupplierCodesRoute />} />
-          <Route path="/quality-evaluation" element={<QualityEvaluationPage />} />
+          <Route path="/quality-evaluation" element={<AccessGuard page="qualityEvaluation"><QualityEvaluationPage /></AccessGuard>} />
           <Route path="/supplier-kpi" element={<KpiRoute />} />
-          <Route path="/quarta-taglio" element={<QuartaTaglioPage />} />
-          <Route path="/quarta-taglio/certificati" element={<QuartaTaglioCertificatesRegisterPage />} />
-          <Route path="/quarta-taglio/:codOdp" element={<QuartaTaglioDetailPage />} />
+          <Route path="/quarta-taglio" element={<AccessGuard page="certification"><QuartaTaglioPage /></AccessGuard>} />
+          <Route path="/quarta-taglio/certificati" element={<AccessGuard page="certificateRegister"><QuartaTaglioCertificatesRegisterPage /></AccessGuard>} />
+          <Route path="/quarta-taglio/:codOdp" element={<AccessGuard page="certification"><QuartaTaglioDetailPage /></AccessGuard>} />
           <Route path="/notes" element={<NotesRoute />} />
           <Route path="/logs" element={<LogsRoute />} />
           <Route path="/users" element={<UsersRoute />}>
@@ -198,9 +218,9 @@ export function AppRouter() {
             <Route
               path="new"
               element={
-                <RoleGuard allowedRoles={["admin"]}>
+                <AccessGuard page="users">
                   <NewUserPage />
-                </RoleGuard>
+                </AccessGuard>
               }
             />
             <Route path=":userId" element={<UserDetailRoute />} />

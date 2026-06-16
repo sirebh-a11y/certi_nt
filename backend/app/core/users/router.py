@@ -2,9 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import CurrentUser, DbSession, require_roles
+from app.core.deps import CurrentUser, DbSession, require_it_admin
 from app.core.departments.service import get_department_by_name
-from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.users.schemas import (
     OpenAIKeyStatusResponse,
     OpenAIKeyUpdateRequest,
@@ -27,28 +26,27 @@ from app.core.users.service import (
 
 router = APIRouter()
 
-AdminUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN))]
-AdminOrManagerUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN, ROLE_MANAGER))]
+ItAdminUser = Annotated[CurrentUser, Depends(require_it_admin)]
 
 
 @router.get("", response_model=UserListResponse)
-def list_users_route(_: AdminOrManagerUser, db: DbSession) -> UserListResponse:
+def list_users_route(_: ItAdminUser, db: DbSession) -> UserListResponse:
     return UserListResponse(items=list_users(db))
 
 
 @router.post("", response_model=UserResponse)
-def create_user_route(payload: UserCreateRequest, current_user: AdminUser, db: DbSession) -> UserResponse:
+def create_user_route(payload: UserCreateRequest, current_user: ItAdminUser, db: DbSession) -> UserResponse:
     department = get_department_by_name(db, payload.department)
     return create_user(db=db, payload=payload, department_id=department.id, actor_email=current_user.email)
 
 
 @router.get("/{user_id}", response_model=UserResponse)
-def get_user_route(user_id: int, _: AdminOrManagerUser, db: DbSession) -> UserResponse:
+def get_user_route(user_id: int, _: ItAdminUser, db: DbSession) -> UserResponse:
     return serialize_user(get_user(db, user_id))
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
-def update_user_route(user_id: int, payload: UserUpdateRequest, current_user: AdminUser, db: DbSession) -> UserResponse:
+def update_user_route(user_id: int, payload: UserUpdateRequest, current_user: ItAdminUser, db: DbSession) -> UserResponse:
     user = get_user(db, user_id)
     department = get_department_by_name(db, payload.department)
     return update_user(db=db, user=user, payload=payload, department_id=department.id, actor_email=current_user.email)
@@ -58,7 +56,7 @@ def update_user_route(user_id: int, payload: UserUpdateRequest, current_user: Ad
 def update_openai_key_route(
     user_id: int,
     payload: OpenAIKeyUpdateRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> OpenAIKeyStatusResponse:
     user = get_user(db, user_id)
@@ -72,14 +70,14 @@ def update_openai_key_route(
 
 
 @router.patch("/{user_id}/disable", response_model=UserActionResponse)
-def disable_user_route(user_id: int, current_user: AdminUser, db: DbSession) -> UserActionResponse:
+def disable_user_route(user_id: int, current_user: ItAdminUser, db: DbSession) -> UserActionResponse:
     user = get_user(db, user_id)
     disable_user(db=db, user=user, actor_email=current_user.email)
     return UserActionResponse(message="User disabled")
 
 
 @router.patch("/{user_id}/reset-password", response_model=UserActionResponse)
-def reset_password_route(user_id: int, current_user: AdminUser, db: DbSession) -> UserActionResponse:
+def reset_password_route(user_id: int, current_user: ItAdminUser, db: DbSession) -> UserActionResponse:
     user = get_user(db, user_id)
     reset_user_password(db=db, user=user, actor_email=current_user.email)
     return UserActionResponse(message="Password reset")

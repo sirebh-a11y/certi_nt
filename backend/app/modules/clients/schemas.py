@@ -18,4 +18,6 @@ class EsolverClientResponse(BaseModel):
 
 class EsolverClientListResponse(BaseModel):
     items: list[EsolverClientResponse]
-
+    total: int | None = None
+    limit: int | None = None
+    offset: int | None = None

@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import CurrentUser, DbSession, require_roles
+from app.core.deps import CurrentUser, DbSession, require_quality_area_admin
 from app.core.users.models import User
 from app.modules.notes.schemas import (
     NoteTemplateCreateRequest,
@@ -18,7 +18,7 @@ from app.modules.notes.service import (
 )
 
 router = APIRouter()
-AdminUser = Annotated[User, Depends(require_roles("admin"))]
+AdminUser = Annotated[User, Depends(require_quality_area_admin)]
 
 
 @router.get("", response_model=NoteTemplateListResponse)

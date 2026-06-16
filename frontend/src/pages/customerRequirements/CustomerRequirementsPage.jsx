@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { canEditQualitySetup } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
@@ -274,7 +275,8 @@ function DeleteModal({ item, onCancel, onConfirm, saving }) {
 }
 
 export default function CustomerRequirementsPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const canEdit = canEditQualitySetup(user);
   const initialStateRef = useRef(loadPersistedTableState());
   const tableScrollRef = useRef(null);
   const tableRef = useRef(null);
@@ -441,6 +443,10 @@ export default function CustomerRequirementsPage() {
   }
 
   async function saveRow(row) {
+    if (!canEdit) {
+      setError("Solo admin IT/Qualità possono modificare i requisiti cliente.");
+      return;
+    }
     const draft = drafts[row.id] || buildDraft(row);
     const payload = payloadFromDraft(draft);
     if (!payload.cod_f3 || !payload.cliente) {
@@ -466,6 +472,10 @@ export default function CustomerRequirementsPage() {
   }
 
   async function createRow() {
+    if (!canEdit) {
+      setError("Solo admin IT/Qualità possono creare requisiti cliente.");
+      return;
+    }
     const payload = payloadFromDraft(newDraft);
     if (!payload.cod_f3 || !payload.cliente) {
       setError("Cod. F3 e Cliente sono obbligatori.");
@@ -489,6 +499,11 @@ export default function CustomerRequirementsPage() {
 
   async function confirmDelete() {
     if (!deleteTarget) {
+      return;
+    }
+    if (!canEdit) {
+      setError("Solo admin IT/Qualità possono eliminare requisiti cliente.");
+      setDeleteTarget(null);
       return;
     }
     setDeleting(true);
@@ -523,7 +538,8 @@ export default function CustomerRequirementsPage() {
               {filteredRows.length} righe visibili
             </span>
             <button
-              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800"
+              className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+              disabled={!canEdit}
               type="button"
               onClick={() => setShowNewRow((current) => !current)}
             >
@@ -537,6 +553,7 @@ export default function CustomerRequirementsPage() {
             {error || message}
           </div>
         )}
+        {!canEdit ? <p className="mt-4 text-sm text-slate-500">Solo admin IT/Qualità possono modificare i requisiti cliente.</p> : null}
 
         {showNewRow && (
           <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50/60 p-4">
@@ -544,18 +561,21 @@ export default function CustomerRequirementsPage() {
             <div className="mt-4 grid gap-3 xl:grid-cols-[180px_260px_1fr_auto]">
               <input
                 className={inputClass()}
+                disabled={!canEdit}
                 placeholder="Cod. F3"
                 value={newDraft.cod_f3}
                 onChange={(event) => updateNewDraft("cod_f3", event.target.value)}
               />
               <input
                 className={inputClass()}
+                disabled={!canEdit}
                 placeholder="Cliente"
                 value={newDraft.cliente}
                 onChange={(event) => updateNewDraft("cliente", event.target.value)}
               />
               <input
                 className={inputClass()}
+                disabled={!canEdit}
                 placeholder="Note"
                 value={newDraft.note}
                 onChange={(event) => updateNewDraft("note", event.target.value)}
@@ -563,7 +583,7 @@ export default function CustomerRequirementsPage() {
               <button
                 className="rounded-xl bg-accent px-5 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
                 type="button"
-                disabled={savingId === "new"}
+                disabled={!canEdit || savingId === "new"}
                 onClick={createRow}
               >
                 Aggiungi
@@ -573,6 +593,7 @@ export default function CustomerRequirementsPage() {
               {BOOLEAN_COLUMNS.map((column) => (
                 <label key={column.field} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                   <input
+                    disabled={!canEdit}
                     type="checkbox"
                     checked={Boolean(newDraft[column.field])}
                     onChange={(event) => updateNewDraft(column.field, event.target.checked)}
@@ -681,6 +702,7 @@ export default function CustomerRequirementsPage() {
                       <td className="px-3 py-3 align-top">
                         <input
                           className={inputClass(textValue(row.cod_f3) !== textValue(draft.cod_f3))}
+                          disabled={!canEdit}
                           value={draft.cod_f3}
                           onChange={(event) => updateDraft(row.id, "cod_f3", event.target.value)}
                         />
@@ -688,6 +710,7 @@ export default function CustomerRequirementsPage() {
                       <td className="px-3 py-3 align-top">
                         <input
                           className={inputClass(textValue(row.cliente) !== textValue(draft.cliente))}
+                          disabled={!canEdit}
                           value={draft.cliente}
                           onChange={(event) => updateDraft(row.id, "cliente", event.target.value)}
                         />
@@ -696,6 +719,7 @@ export default function CustomerRequirementsPage() {
                         <td key={column.field} className="px-1 py-3 text-center align-top">
                           <input
                             className="h-4 w-4 accent-teal-700"
+                            disabled={!canEdit}
                             type="checkbox"
                             checked={Boolean(draft[column.field])}
                             onChange={(event) => updateDraft(row.id, column.field, event.target.checked)}
@@ -705,6 +729,7 @@ export default function CustomerRequirementsPage() {
                       <td className="px-3 py-3 align-top">
                         <textarea
                           className={`${inputClass(textValue(row.note) !== textValue(draft.note))} min-h-10 resize-y`}
+                          disabled={!canEdit}
                           value={draft.note || ""}
                           onChange={(event) => updateDraft(row.id, "note", event.target.value)}
                         />
@@ -714,7 +739,7 @@ export default function CustomerRequirementsPage() {
                           <button
                             className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                             type="button"
-                            disabled={!changed || savingId === row.id}
+                            disabled={!canEdit || !changed || savingId === row.id}
                             onClick={() => setDrafts((current) => ({ ...current, [row.id]: buildDraft(row) }))}
                           >
                             Annulla
@@ -722,13 +747,14 @@ export default function CustomerRequirementsPage() {
                           <button
                             className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
                             type="button"
-                            disabled={!changed || savingId === row.id}
+                            disabled={!canEdit || !changed || savingId === row.id}
                             onClick={() => saveRow(row)}
                           >
                             Salva
                           </button>
                           <button
-                            className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                            className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                            disabled={!canEdit}
                             type="button"
                             onClick={() => setDeleteTarget(row)}
                           >

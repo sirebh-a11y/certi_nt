@@ -23,7 +23,7 @@ function loadPersistedListState() {
     const parsed = JSON.parse(raw);
     return {
       search: typeof parsed?.search === "string" ? parsed.search : DEFAULT_LIST_STATE.search,
-      rowLimit: ["25", "50", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
+      rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
       sortConfig:
         parsed?.sortConfig && typeof parsed.sortConfig === "object"
           ? {
@@ -99,15 +99,19 @@ export default function ClientsPage() {
   const [rowLimit, setRowLimit] = useState(initialStateRef.current.rowLimit);
   const [sortConfig, setSortConfig] = useState(initialStateRef.current.sortConfig);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [totalClients, setTotalClients] = useState(0);
   const [scrollMetrics, setScrollMetrics] = useState({ contentWidth: 1600, viewportWidth: 0 });
+
+  const pageSize = rowLimit === "all" ? 20000 : Number(rowLimit);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       void loadClients();
     }, 250);
     return () => window.clearTimeout(timeoutId);
-  }, [search, token]);
+  }, [rowLimit, search, token]);
 
   useEffect(() => {
     savePersistedListState({
@@ -149,21 +153,38 @@ export default function ClientsPage() {
     });
   }, [scrollMetrics.contentWidth]);
 
-  async function loadClients() {
-    setLoading(true);
+  async function loadClients({ append = false } = {}) {
+    const offset = append ? clients.length : 0;
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError("");
     try {
-      const params = new URLSearchParams({ limit: "300" });
+      const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
       if (search.trim()) {
         params.set("search", search.trim());
       }
       const data = await apiRequest(`/clients/esolver?${params.toString()}`, {}, token);
-      setClients(data.items);
+      setTotalClients(Number(data.total || 0));
+      setClients((current) => {
+        if (!append) {
+          return data.items;
+        }
+        const seen = new Set(current.map((item) => item.cod_clifor));
+        const nextItems = data.items.filter((item) => !seen.has(item.cod_clifor));
+        return [...current, ...nextItems];
+      });
     } catch (requestError) {
-      setClients([]);
+      if (!append) {
+        setClients([]);
+        setTotalClients(0);
+      }
       setError(requestError.message);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }
 
@@ -174,12 +195,8 @@ export default function ClientsPage() {
     });
   }, [clients, sortConfig]);
 
-  const visibleClients = useMemo(() => {
-    if (rowLimit === "all") {
-      return sortedClients;
-    }
-    return sortedClients.slice(0, Number(rowLimit));
-  }, [rowLimit, sortedClients]);
+  const visibleClients = sortedClients;
+  const hasMoreClients = totalClients > clients.length;
 
   function toggleSort(field) {
     setSortConfig((current) => {
@@ -217,8 +234,8 @@ export default function ClientsPage() {
             <p className="mt-2 text-sm text-slate-500">Vista sola lettura dell'anagrafica clienti esposta da eSolver.</p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-            <span className="font-semibold text-ink">{visibleClients.length}</span> clienti visibili
-            {visibleClients.length !== sortedClients.length ? <span className="ml-2 text-slate-500">su {sortedClients.length}</span> : null}
+            <span className="font-semibold text-ink">{clients.length}</span> clienti caricati
+            {totalClients ? <span className="ml-2 text-slate-500">su {totalClients}</span> : null}
           </div>
         </div>
 
@@ -241,6 +258,7 @@ export default function ClientsPage() {
             >
               <option value="25">25</option>
               <option value="50">50</option>
+              <option value="75">75</option>
               <option value="100">100</option>
               <option value="all">Tutte</option>
             </select>
@@ -321,6 +339,18 @@ export default function ClientsPage() {
           {loading ? <p className="px-4 py-3 text-sm text-slate-500">Lettura clienti eSolver...</p> : null}
           {!loading && !visibleClients.length && !error ? (
             <p className="px-4 py-3 text-sm text-slate-500">Nessun cliente trovato con i criteri attuali.</p>
+          ) : null}
+          {!loading && hasMoreClients ? (
+            <div className="border-t border-slate-100 px-4 py-4 text-center">
+              <button
+                className="rounded-xl border border-sky-200 bg-sky-50 px-5 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={loadingMore}
+                onClick={() => loadClients({ append: true })}
+                type="button"
+              >
+                {loadingMore ? "Caricamento..." : `Carica altri ${pageSize} (${clients.length} su ${totalClients})`}
+              </button>
+            </div>
           ) : null}
         </div>
       </section>

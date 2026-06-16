@@ -2,8 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.core.deps import CurrentUser, DbSession, require_roles
-from app.core.roles.constants import ROLE_ADMIN
+from app.core.deps import CurrentUser, DbSession, require_quality_area_admin
 from app.modules.supplier_codes.schemas import (
     SupplierInstallationCodeCreateRequest,
     SupplierInstallationCodeListResponse,
@@ -19,7 +18,7 @@ from app.modules.supplier_codes.service import (
 )
 
 router = APIRouter()
-AdminUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN))]
+AdminUser = Annotated[CurrentUser, Depends(require_quality_area_admin)]
 
 
 @router.get("", response_model=SupplierInstallationCodeListResponse)

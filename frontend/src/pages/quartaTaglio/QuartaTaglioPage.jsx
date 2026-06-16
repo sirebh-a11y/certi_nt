@@ -615,7 +615,7 @@ export default function QuartaTaglioPage() {
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Metodo Incoming</div>
             <div className="mt-1 text-sm font-semibold text-slate-900">Conferma rapida da Certificazione</div>
-            <div className="mt-0.5 text-xs text-slate-500">Se attiva, aprendo un OL idoneo conferma CHIM. e PROP. in Incoming.</div>
+            <div className="mt-0.5 text-xs text-slate-500">Se attiva, aprendo un OL idoneo conferma CHIM., PROP. e NOTE in Incoming.</div>
           </div>
           <label className="inline-flex w-fit items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
             <input

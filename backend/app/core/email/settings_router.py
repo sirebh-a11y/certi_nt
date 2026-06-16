@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import CurrentUser, DbSession, require_roles
+from app.core.deps import CurrentUser, DbSession, require_it_admin
 from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
 from app.core.email.settings_schemas import (
@@ -12,22 +12,21 @@ from app.core.email.settings_schemas import (
     EmailSettingsUpdateRequest,
 )
 from app.core.email.settings_service import ensure_email_is_configured, get_effective_email_settings, serialize_email_settings, update_email_settings
-from app.core.roles.constants import ROLE_ADMIN
 
 router = APIRouter()
 
-AdminUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN))]
+ItAdminUser = Annotated[CurrentUser, Depends(require_it_admin)]
 
 
 @router.get("", response_model=EmailSettingsResponse)
-def get_email_settings_route(_: AdminUser, db: DbSession) -> EmailSettingsResponse:
+def get_email_settings_route(_: ItAdminUser, db: DbSession) -> EmailSettingsResponse:
     return serialize_email_settings(db)
 
 
 @router.patch("", response_model=EmailSettingsResponse)
 def update_email_settings_route(
     payload: EmailSettingsUpdateRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> EmailSettingsResponse:
     return update_email_settings(db=db, payload=payload, actor_email=current_user.email)
@@ -36,7 +35,7 @@ def update_email_settings_route(
 @router.post("/test", response_model=EmailSettingsTestResponse)
 def test_email_settings_route(
     payload: EmailSettingsTestRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> EmailSettingsTestResponse:
     config = get_effective_email_settings(db)

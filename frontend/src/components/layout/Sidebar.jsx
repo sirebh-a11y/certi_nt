@@ -1,33 +1,34 @@
 import { NavLink, useLocation } from "react-router-dom";
 
+import { canAccessPage } from "../../app/access";
 import { useAuth } from "../../app/auth";
 
 const navItems = [
-  { label: "Dashboard", to: "/dashboard", roles: ["user", "manager", "admin"], icon: "dashboard" },
+  { label: "Dashboard", to: "/dashboard", page: "dashboard", icon: "dashboard" },
   { type: "section", label: "Flusso certificazione", key: "certification-flow" },
-  { label: "Carica Documenti", to: "/acquisition/upload", roles: ["user", "manager", "admin"], icon: "upload" },
-  { label: "Incoming materiale", to: "/acquisition", roles: ["user", "manager", "admin"], icon: "inbox" },
-  { label: "Certificazione", to: "/quarta-taglio", roles: ["user", "manager", "admin"], icon: "certificate" },
-  { label: "Registro certificazione", to: "/quarta-taglio/certificati", roles: ["user", "manager", "admin"], icon: "archive" },
+  { label: "Carica Documenti", to: "/acquisition/upload", page: "acquisitionUpload", icon: "upload" },
+  { label: "Incoming materiale", to: "/acquisition", page: "acquisition", icon: "inbox" },
+  { label: "Certificazione", to: "/quarta-taglio", page: "certification", icon: "certificate" },
+  { label: "Registro certificazione", to: "/quarta-taglio/certificati", page: "certificateRegister", icon: "archive" },
   { type: "section", label: "Valutazione fornitori", key: "supplier-evaluation" },
-  { label: "Valutazione", to: "/quality-evaluation", roles: ["user", "manager", "admin"], icon: "check" },
-  { label: "KPI", to: "/supplier-kpi", roles: ["user", "manager", "admin"], icon: "chart" },
+  { label: "Valutazione", to: "/quality-evaluation", page: "qualityEvaluation", icon: "check" },
+  { label: "KPI", to: "/supplier-kpi", page: "supplierKpi", icon: "chart" },
   { type: "section", label: "Strumenti qualità", key: "quality-tools" },
-  { label: "Standards", to: "/standards", roles: ["user", "manager", "admin"], icon: "standards" },
-  { label: "Requisiti Cliente", to: "/customer-requirements", roles: ["user", "manager", "admin"], icon: "requirements" },
-  { label: "Note", to: "/notes", roles: ["user", "manager", "admin"], icon: "note" },
-  { label: "Codici fornitori", to: "/supplier-codes", roles: ["user", "manager", "admin"], icon: "requirements" },
+  { label: "Standards", to: "/standards", page: "standards", icon: "standards" },
+  { label: "Requisiti Cliente", to: "/customer-requirements", page: "customerRequirements", icon: "requirements" },
+  { label: "Note", to: "/notes", page: "notes", icon: "note" },
+  { label: "Codici fornitori", to: "/supplier-codes", page: "supplierCodes", icon: "requirements" },
   { type: "section", label: "Anagrafica", key: "master-data" },
-  { label: "Fornitori", to: "/suppliers", roles: ["user", "manager", "admin"], icon: "factory" },
-  { label: "Clienti", to: "/clients", roles: ["user", "manager", "admin"], icon: "clients" },
+  { label: "Fornitori", to: "/suppliers", page: "suppliers", icon: "factory" },
+  { label: "Clienti", to: "/clients", page: "clients", icon: "clients" },
   { type: "section", label: "Risorse", key: "resources" },
-  { label: "Utenti", to: "/users", roles: ["manager", "admin"], icon: "users" },
-  { label: "Reparti", to: "/departments", roles: ["admin"], icon: "departments" },
-  { label: "Log", to: "/logs", roles: ["manager", "admin"], icon: "log" },
+  { label: "Utenti", to: "/users", page: "users", icon: "users" },
+  { label: "Reparti", to: "/departments", page: "departments", icon: "departments" },
+  { label: "Log", to: "/logs", page: "logs", icon: "log" },
   { type: "section", label: "Connettori", key: "connectors" },
-  { label: "Database", to: "/integrations", roles: ["admin"], icon: "database" },
-  { label: "Assistente AI", to: "/ai", roles: ["admin"], icon: "ai" },
-  { label: "Email", to: "/email-settings", roles: ["admin"], icon: "email" },
+  { label: "Database", to: "/integrations", page: "integrations", icon: "database" },
+  { label: "Assistente AI", to: "/ai", page: "ai", icon: "ai" },
+  { label: "Email", to: "/email-settings", page: "emailSettings", icon: "email" },
 ];
 
 function SidebarIcon({ name }) {
@@ -198,7 +199,7 @@ export default function Sidebar() {
 
   navItems.forEach((item, index) => {
     if (item.type !== "section") {
-      if (item.roles.includes(user?.role)) {
+      if (canAccessPage(user, item.page)) {
         visibleNavItems.push(item);
       }
       return;
@@ -206,7 +207,7 @@ export default function Sidebar() {
 
     const nextSectionIndex = navItems.findIndex((nextItem, nextIndex) => nextIndex > index && nextItem.type === "section");
     const sectionItems = navItems.slice(index + 1, nextSectionIndex === -1 ? navItems.length : nextSectionIndex);
-    const hasVisibleItem = sectionItems.some((nextItem) => nextItem.roles.includes(user?.role));
+    const hasVisibleItem = sectionItems.some((nextItem) => canAccessPage(user, nextItem.page));
 
     if (hasVisibleItem) {
       visibleNavItems.push(item);
@@ -235,7 +236,7 @@ export default function Sidebar() {
             );
           }
 
-          if (!item.roles.includes(user?.role)) {
+          if (!canAccessPage(user, item.page)) {
             return null;
           }
 

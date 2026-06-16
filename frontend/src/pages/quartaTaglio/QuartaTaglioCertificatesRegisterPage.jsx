@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiRequest, resolveApiAssetUrl } from "../../app/api";
+import { canReopenQualityFlow } from "../../app/access";
 import { useAuth } from "../../app/auth";
 
 const STATUS_LABELS = {
@@ -663,7 +664,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     setActionState({ status: "idle", message: "" });
   }
 
-  const canReopenPdf = user?.role === "manager" || user?.role === "admin";
+  const canReopenPdf = canReopenQualityFlow(user);
 
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8" ref={sectionRef}>

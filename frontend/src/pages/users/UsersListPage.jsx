@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { isItAdmin } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
@@ -35,7 +36,7 @@ export default function UsersListPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Utenti</p>
           <h2 className="mt-2 text-2xl font-semibold">Users List</h2>
         </div>
-        {user?.role === "admin" ? (
+        {isItAdmin(user) ? (
           <Link className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-teal-700" to="/users/new">
             New User
           </Link>

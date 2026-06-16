@@ -8,9 +8,14 @@ from app.core.security.crypto import decrypt_secret
 from app.modules.clients.schemas import EsolverClientListResponse, EsolverClientResponse
 
 
-def list_esolver_clients(db: Session, search: str | None = None, limit: int = 100) -> EsolverClientListResponse:
-    rows = _fetch_esolver_client_rows(db, search=search, limit=limit)
-    return EsolverClientListResponse(items=[EsolverClientResponse(**row) for row in rows])
+def list_esolver_clients(db: Session, search: str | None = None, limit: int = 100, offset: int = 0) -> EsolverClientListResponse:
+    rows, total, safe_limit, safe_offset = _fetch_esolver_client_rows(db, search=search, limit=limit, offset=offset)
+    return EsolverClientListResponse(
+        items=[EsolverClientResponse(**row) for row in rows],
+        total=total,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
 
 
 def _fetch_esolver_client_rows(
@@ -18,7 +23,10 @@ def _fetch_esolver_client_rows(
     *,
     search: str | None = None,
     limit: int = 100,
-) -> list[dict[str, str | None]]:
+    offset: int = 0,
+) -> tuple[list[dict[str, str | None]], int, int, int]:
+    safe_limit = max(1, min(limit, 20000))
+    safe_offset = max(0, offset)
     connection = db.query(ExternalConnection).filter(ExternalConnection.code == "esolver").one_or_none()
     if connection is None or not connection.enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Connessione eSolver non configurata o disabilitata")
@@ -43,13 +51,15 @@ def _fetch_esolver_client_rows(
         where.append("(RagSoc1 LIKE %s OR RagSoc2 LIKE %s OR CodCliFor LIKE %s OR PartitaIva LIKE %s OR CodAlternativo2 LIKE %s)")
         params.extend([like, like, like, like, like])
 
-    max_rows = max(1, min(limit, 300))
+    where_sql = " AND ".join(where)
+    count_query = f"SELECT COUNT(*) AS TotalRows FROM [{schema_name}].[{view_name}] WHERE {where_sql}"
     query = (
-        f"SELECT TOP {max_rows} CodCliFor, RagSoc1, RagSoc2, Indirizzo, Indirizzo2, Localita, "
+        f"SELECT CodCliFor, RagSoc1, RagSoc2, Indirizzo, Indirizzo2, Localita, "
         f"Localita2, Provincia, Cap, CodStato, IndirEmail, NumTel, NumTel2, CodFiscale, PartitaIva, CodAlternativo2 "
         f"FROM [{schema_name}].[{view_name}] "
-        f"WHERE {' AND '.join(where)} "
-        f"ORDER BY RagSoc1 ASC, CodCliFor ASC"
+        f"WHERE {where_sql} "
+        f"ORDER BY RagSoc1 ASC, CodCliFor ASC "
+        f"OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
     )
     password = decrypt_secret(connection.password_encrypted)
     with pymssql.connect(
@@ -63,8 +73,11 @@ def _fetch_esolver_client_rows(
         as_dict=True,
     ) as sql_connection:
         with sql_connection.cursor() as cursor:
-            cursor.execute(query, tuple(params))
-            return [_serialize_esolver_client_row(row) for row in cursor.fetchall()]
+            cursor.execute(count_query, tuple(params))
+            total_row = cursor.fetchone() or {}
+            total = int(total_row.get("TotalRows") or 0)
+            cursor.execute(query, tuple([*params, safe_offset, safe_limit]))
+            return [_serialize_esolver_client_row(row) for row in cursor.fetchall()], total, safe_limit, safe_offset
 
 
 def _serialize_esolver_client_row(row: dict[str, Any]) -> dict[str, str | None]:
@@ -101,4 +114,3 @@ def _clean_value(value: object | None) -> str | None:
         return None
     cleaned = str(value).strip()
     return cleaned or None
-

@@ -3,7 +3,7 @@ import socket
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import CurrentUser, DbSession, require_roles
+from app.core.deps import CurrentUser, DbSession, require_it_admin
 from app.core.integrations.schemas import (
     ExternalConnectionListResponse,
     ExternalConnectionResponse,
@@ -17,20 +17,19 @@ from app.core.integrations.service import (
     serialize_connection,
     update_external_connection,
 )
-from app.core.roles.constants import ROLE_ADMIN
 
 router = APIRouter()
 
-AdminUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN))]
+ItAdminUser = Annotated[CurrentUser, Depends(require_it_admin)]
 
 
 @router.get("", response_model=ExternalConnectionListResponse)
-def list_connections_route(_: AdminUser, db: DbSession) -> ExternalConnectionListResponse:
+def list_connections_route(_: ItAdminUser, db: DbSession) -> ExternalConnectionListResponse:
     return ExternalConnectionListResponse(items=list_external_connections(db))
 
 
 @router.get("/{code}", response_model=ExternalConnectionResponse)
-def get_connection_route(code: str, _: AdminUser, db: DbSession) -> ExternalConnectionResponse:
+def get_connection_route(code: str, _: ItAdminUser, db: DbSession) -> ExternalConnectionResponse:
     return serialize_connection(get_external_connection(db, code))
 
 
@@ -38,7 +37,7 @@ def get_connection_route(code: str, _: AdminUser, db: DbSession) -> ExternalConn
 def update_connection_route(
     code: str,
     payload: ExternalConnectionUpdateRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> ExternalConnectionResponse:
     connection = get_external_connection(db, code)
@@ -46,7 +45,7 @@ def update_connection_route(
 
 
 @router.post("/{code}/test-network", response_model=ExternalConnectionTestResponse)
-def test_network_route(code: str, current_user: AdminUser, db: DbSession) -> ExternalConnectionTestResponse:
+def test_network_route(code: str, current_user: ItAdminUser, db: DbSession) -> ExternalConnectionTestResponse:
     connection = get_external_connection(db, code)
     try:
         with socket.create_connection((connection.server_host, connection.port), timeout=connection.connection_timeout):

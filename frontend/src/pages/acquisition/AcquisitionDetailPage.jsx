@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { canReopenQualityFlow } from "../../app/access";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 import { documentTone } from "./documentTone";
 import { formatFieldDisplay, formatRowFieldDisplay } from "./fieldFormatting";
@@ -288,7 +289,7 @@ export default function AcquisitionDetailPage() {
   const [reopenFinalDialogOpen, setReopenFinalDialogOpen] = useState(false);
   const [processingFinalReopen, setProcessingFinalReopen] = useState(false);
   const canSeeTechnicalDetail = user?.role === "admin";
-  const canReopenFinalValidation = user?.role === "admin" || user?.role === "manager";
+  const canReopenFinalValidation = canReopenQualityFlow(user);
 
   function guardFinalValidatedEdit() {
     if (!row?.validata_finale) {
@@ -298,7 +299,7 @@ export default function AcquisitionDetailPage() {
       title: "Riga gia valutata",
       message: canReopenFinalValidation
         ? "Per modificare questa riga devi prima usare Forza riapertura."
-        : "Per modificare questa riga devi richiedere Forza riapertura a manager o admin.",
+        : "Per modificare questa riga devi richiedere Forza riapertura a Qualità o IT.",
     });
     return true;
   }
@@ -311,7 +312,7 @@ export default function AcquisitionDetailPage() {
       title: "Riga già valutata qualità",
       message: canReopenFinalValidation
         ? "Puoi completare DDT e match. Per modificare chimica, proprietà, note o dati del certificato devi prima usare Forza riapertura."
-        : "Puoi completare DDT e match. Per modificare la parte tecnica serve Forza riapertura da manager o admin.",
+        : "Puoi completare DDT e match. Per modificare la parte tecnica serve Forza riapertura da Qualità o IT.",
     });
     return true;
   }

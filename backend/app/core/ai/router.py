@@ -20,21 +20,20 @@ from app.core.ai.service import (
     update_ai_model,
     update_ai_provider,
 )
-from app.core.deps import CurrentUser, DbSession, require_roles
-from app.core.roles.constants import ROLE_ADMIN
+from app.core.deps import CurrentUser, DbSession, require_it_admin
 
 router = APIRouter()
 
-AdminUser = Annotated[CurrentUser, Depends(require_roles(ROLE_ADMIN))]
+ItAdminUser = Annotated[CurrentUser, Depends(require_it_admin)]
 
 
 @router.get("", response_model=AIConfigResponse)
-def get_ai_configuration_route(_: AdminUser, db: DbSession) -> AIConfigResponse:
+def get_ai_configuration_route(_: ItAdminUser, db: DbSession) -> AIConfigResponse:
     return get_ai_configuration(db)
 
 
 @router.post("/providers", response_model=AIProviderResponse)
-def create_provider_route(payload: AIProviderCreateRequest, current_user: AdminUser, db: DbSession) -> AIProviderResponse:
+def create_provider_route(payload: AIProviderCreateRequest, current_user: ItAdminUser, db: DbSession) -> AIProviderResponse:
     return create_ai_provider(db=db, payload=payload, actor_email=current_user.email)
 
 
@@ -42,7 +41,7 @@ def create_provider_route(payload: AIProviderCreateRequest, current_user: AdminU
 def update_provider_route(
     provider_id: int,
     payload: AIProviderUpdateRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> AIProviderResponse:
     provider = get_ai_provider(db, provider_id)
@@ -50,7 +49,7 @@ def update_provider_route(
 
 
 @router.post("/models", response_model=AIModelResponse)
-def create_model_route(payload: AIModelCreateRequest, current_user: AdminUser, db: DbSession) -> AIModelResponse:
+def create_model_route(payload: AIModelCreateRequest, current_user: ItAdminUser, db: DbSession) -> AIModelResponse:
     return create_ai_model(db=db, payload=payload, actor_email=current_user.email)
 
 
@@ -58,7 +57,7 @@ def create_model_route(payload: AIModelCreateRequest, current_user: AdminUser, d
 def update_model_route(
     model_id: int,
     payload: AIModelUpdateRequest,
-    current_user: AdminUser,
+    current_user: ItAdminUser,
     db: DbSession,
 ) -> AIModelResponse:
     model = get_ai_model(db, model_id)

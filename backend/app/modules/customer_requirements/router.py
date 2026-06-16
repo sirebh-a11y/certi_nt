@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Response, status
+from typing import Annotated
 
-from app.core.deps import CurrentUser, DbSession
+from fastapi import APIRouter, Depends, Response, status
+
+from app.core.deps import CurrentUser, DbSession, require_quality_area_admin
 from app.modules.customer_requirements.schemas import (
     CustomerRequirementCreateRequest,
     CustomerRequirementListResponse,
@@ -16,6 +18,7 @@ from app.modules.customer_requirements.service import (
 )
 
 router = APIRouter()
+QualityAdminUser = Annotated[CurrentUser, Depends(require_quality_area_admin)]
 
 
 @router.get("", response_model=CustomerRequirementListResponse)
@@ -26,7 +29,7 @@ def list_customer_requirements_route(_: CurrentUser, db: DbSession) -> CustomerR
 @router.post("", response_model=CustomerRequirementResponse)
 def create_customer_requirement_route(
     payload: CustomerRequirementCreateRequest,
-    current_user: CurrentUser,
+    current_user: QualityAdminUser,
     db: DbSession,
 ) -> CustomerRequirementResponse:
     return create_customer_requirement(db=db, payload=payload, actor_email=current_user.email)
@@ -36,7 +39,7 @@ def create_customer_requirement_route(
 def update_customer_requirement_route(
     requirement_id: int,
     payload: CustomerRequirementUpdateRequest,
-    current_user: CurrentUser,
+    current_user: QualityAdminUser,
     db: DbSession,
 ) -> CustomerRequirementResponse:
     requirement = get_customer_requirement(db, requirement_id)
@@ -46,7 +49,7 @@ def update_customer_requirement_route(
 @router.delete("/{requirement_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_customer_requirement_route(
     requirement_id: int,
-    current_user: CurrentUser,
+    current_user: QualityAdminUser,
     db: DbSession,
 ) -> Response:
     requirement = get_customer_requirement(db, requirement_id)

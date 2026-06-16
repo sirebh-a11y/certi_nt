@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { canEditQualitySetup } from "../../app/access";
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 
@@ -48,7 +49,7 @@ function targetFromDraft(draft) {
 
 export default function SupplierCodesPage() {
   const { token, user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = canEditQualitySetup(user);
   const [items, setItems] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [esolverSuppliers, setEsolverSuppliers] = useState([]);
@@ -120,11 +121,12 @@ export default function SupplierCodesPage() {
   }
 
   async function loadEsolverSuppliers() {
+    const trimmedSearch = esolverSearch.trim();
     setLoadingEsolver(true);
     try {
-      const params = new URLSearchParams({ limit: "5000" });
-      if (esolverSearch.trim()) {
-        params.set("search", esolverSearch.trim());
+      const params = new URLSearchParams({ limit: "50" });
+      if (trimmedSearch) {
+        params.set("search", trimmedSearch);
       }
       const data = await apiRequest(`/suppliers/esolver?${params.toString()}`, {}, token);
       setEsolverSuppliers(data.items || []);
@@ -306,7 +308,7 @@ export default function SupplierCodesPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr),360px] xl:items-end">
+      <div className="grid gap-4 xl:grid-cols-1 xl:items-end">
         <label className="block">
           <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Filtro</span>
           <input
@@ -316,25 +318,16 @@ export default function SupplierCodesPage() {
             value={filter}
           />
         </label>
-        <label className="block">
-          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Cerca fornitore eSolver</span>
-          <input
-            className="w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-ink shadow-inner outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/10"
-            onChange={(event) => setEsolverSearch(event.target.value)}
-            placeholder="Nome, codice, P.IVA"
-            value={esolverSearch}
-          />
-        </label>
       </div>
 
-      {!isAdmin ? <p className="text-sm text-slate-500">Solo gli admin possono aggiungere, modificare o eliminare codici.</p> : null}
+      {!isAdmin ? <p className="text-sm text-slate-500">Solo admin IT/Qualità possono aggiungere, modificare o eliminare codici.</p> : null}
       {loadingEsolver ? <p className="text-sm text-slate-500">Lettura fornitori eSolver...</p> : null}
 
       {error ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
       {statusMessage ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{statusMessage}</p> : null}
 
       <form className="rounded-2xl border border-sky-200 bg-sky-50 p-4" onSubmit={handleCreate}>
-        <div className="grid gap-3 xl:grid-cols-[110px,minmax(420px,1fr),auto] xl:items-start">
+        <div className="grid gap-3 xl:grid-cols-[110px,minmax(360px,1fr),320px,auto] xl:items-start">
           <label>
             <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Codice</span>
             <input
@@ -356,6 +349,19 @@ export default function SupplierCodesPage() {
                 })),
               !isAdmin,
             )}
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Cerca fornitore eSolver</span>
+            <input
+              className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm text-ink shadow-inner outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 disabled:bg-slate-100"
+              disabled={!isAdmin}
+              onChange={(event) => setEsolverSearch(event.target.value)}
+              placeholder="Nome, codice, P.IVA"
+              value={esolverSearch}
+            />
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              {loadingEsolver ? "Ricerca eSolver..." : "Aggiorna i fornitori eSolver nella tendina."}
+            </p>
           </label>
           <button
             className="mt-7 rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"

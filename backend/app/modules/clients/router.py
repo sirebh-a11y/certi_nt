@@ -13,6 +13,6 @@ def list_esolver_clients_route(
     db: DbSession,
     search: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> EsolverClientListResponse:
-    return list_esolver_clients(db, search=search, limit=limit)
-
+    return list_esolver_clients(db, search=search, limit=limit, offset=offset)

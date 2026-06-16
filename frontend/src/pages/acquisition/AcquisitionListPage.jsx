@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
+import { canEditQualitySetup } from "../../app/access";
 import { useAuth } from "../../app/auth";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 
@@ -178,7 +179,7 @@ function matchCellLabel(row) {
 }
 
 function canRequestRowDelete(row, user) {
-  if (user?.role !== "admin") {
+  if (!canEditQualitySetup(user)) {
     return false;
   }
   const hasDdt = Boolean(row.document_ddt_id);
