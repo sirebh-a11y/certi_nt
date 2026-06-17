@@ -7861,6 +7861,21 @@ def _count_final_rows_for_run_documents(
     ddt_document_ids: list[int],
     certificate_document_ids: list[int],
 ) -> int:
+    return len(
+        _final_row_ids_for_run_documents(
+            db,
+            ddt_document_ids=ddt_document_ids,
+            certificate_document_ids=certificate_document_ids,
+        )
+    )
+
+
+def _final_row_ids_for_run_documents(
+    db: Session,
+    *,
+    ddt_document_ids: list[int],
+    certificate_document_ids: list[int],
+) -> list[int]:
     normalized_ddt_ids = _normalize_document_id_list(ddt_document_ids)
     normalized_certificate_ids = _normalize_document_id_list(certificate_document_ids)
     filters = []
@@ -7869,8 +7884,30 @@ def _count_final_rows_for_run_documents(
     if normalized_certificate_ids:
         filters.append(AcquisitionRow.document_certificato_id.in_(normalized_certificate_ids))
     if not filters:
-        return 0
-    return db.query(AcquisitionRow.id).filter(or_(*filters)).distinct().count()
+        return []
+    return [
+        int(row_id)
+        for (row_id,) in db.query(AcquisitionRow.id).filter(or_(*filters)).distinct().order_by(AcquisitionRow.id.asc()).all()
+    ]
+
+
+def _count_detected_blocks_for_run_documents(
+    db: Session,
+    *,
+    ddt_document_ids: list[int],
+    certificate_document_ids: list[int],
+) -> dict[str, int]:
+    row_ids = _final_row_ids_for_run_documents(
+        db,
+        ddt_document_ids=ddt_document_ids,
+        certificate_document_ids=certificate_document_ids,
+    )
+    result = {"chimica": 0, "proprieta": 0, "note": 0}
+    for row_id in row_ids:
+        for block in result:
+            if _block_has_values(db, row_id, block):
+                result[block] += 1
+    return result
 
 
 def _add_failed_notification_item(failed_items: list[dict[str, str]], *, file_name: str, reason: str) -> None:
@@ -8402,6 +8439,11 @@ def run_autonomous_processing(
             ddt_document_ids=ddt_document_ids,
             certificate_document_ids=certificate_document_ids,
         )
+        detected_blocks = _count_detected_blocks_for_run_documents(
+            db,
+            ddt_document_ids=ddt_document_ids,
+            certificate_document_ids=certificate_document_ids,
+        )
         run = _save_run(
             db,
             run,
@@ -8411,6 +8453,9 @@ def run_autonomous_processing(
             righe_create=final_row_count,
             righe_processate=final_row_count,
             totale_righe_target=final_row_count,
+            chimica_rilevata=detected_blocks["chimica"],
+            proprieta_rilevate=detected_blocks["proprieta"],
+            note_rilevate=detected_blocks["note"],
             current_row_id=None,
             finished_at=datetime.now(UTC),
         )
