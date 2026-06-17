@@ -7957,6 +7957,7 @@ def _run_retryable_processing_step(
 
 def _send_autonomous_run_notification(
     *,
+    db: Session,
     run: AutonomousProcessingRun,
     actor_email: str,
     success: bool,
@@ -8427,6 +8428,7 @@ def run_autonomous_processing(
                 db.add(batch)
                 db.commit()
         _send_autonomous_run_notification(
+            db=db,
             run=run,
             actor_email=actor_email,
             success=True,
@@ -8484,6 +8486,7 @@ def run_autonomous_processing(
                     db.add(batch)
                     db.commit()
             _send_autonomous_run_notification(
+                db=db,
                 run=run,
                 actor_email=actor_email,
                 success=False,

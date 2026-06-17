@@ -126,6 +126,32 @@ export default function EmailSettingsPage() {
     }
   }
 
+  async function resetToEnv() {
+    const confirmed = window.confirm(
+      "Vuoi ripristinare la configurazione server? Le impostazioni email salvate nell'app verranno annullate e torneranno valide quelle del file .env.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setMessage("");
+    setSaving("reset");
+    try {
+      await apiRequest(
+        "/email-settings/reset-to-env",
+        {
+          method: "POST",
+        },
+        token,
+      );
+      await refresh();
+      setMessage("Configurazione server ripristinata");
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setSaving("");
+    }
+  }
+
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -230,7 +256,25 @@ export default function EmailSettingsPage() {
           </div>
         </form>
 
-        <form className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={sendTest}>
+        <div className="grid gap-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+            <div className="border-b border-amber-100 pb-4">
+              <h3 className="text-xl font-semibold text-slate-950">Configurazione server</h3>
+              <p className="mt-1 text-sm text-amber-800">
+                Annulla i valori salvati nel DB e torna ai parametri impostati da IT nel file .env.
+              </p>
+            </div>
+            <button
+              className="mt-5 w-full rounded-xl border border-amber-300 bg-white px-4 py-2.5 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+              disabled={saving === "reset"}
+              type="button"
+              onClick={resetToEnv}
+            >
+              {saving === "reset" ? "Ripristino..." : "Ripristina configurazione server"}
+            </button>
+          </div>
+
+          <form className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={sendTest}>
           <div className="border-b border-slate-100 pb-4">
             <h3 className="text-xl font-semibold text-slate-950">Test invio</h3>
             <p className="mt-1 text-sm text-slate-500">Usa la configurazione effettiva, quindi DB se presente.</p>
@@ -252,7 +296,8 @@ export default function EmailSettingsPage() {
               {saving === "test" ? "Invio..." : "Invia email test"}
             </button>
           </div>
-        </form>
+          </form>
+        </div>
       </div>
     </section>
   );

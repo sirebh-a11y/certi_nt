@@ -110,6 +110,15 @@ def update_email_settings(db: Session, payload: EmailSettingsUpdateRequest, acto
     return serialize_email_settings(db)
 
 
+def reset_email_settings_to_env(db: Session, actor_email: str) -> EmailSettingsResponse:
+    rows = db.query(EmailSettings).all()
+    for row in rows:
+        db.delete(row)
+    db.commit()
+    log_service.record("email", "Email settings reset to env", actor_email)
+    return serialize_email_settings(db)
+
+
 def ensure_email_is_configured(config: EffectiveEmailSettings) -> None:
     if not config.smtp_host:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Host SMTP non configurato")

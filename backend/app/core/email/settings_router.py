@@ -11,7 +11,13 @@ from app.core.email.settings_schemas import (
     EmailSettingsTestResponse,
     EmailSettingsUpdateRequest,
 )
-from app.core.email.settings_service import ensure_email_is_configured, get_effective_email_settings, serialize_email_settings, update_email_settings
+from app.core.email.settings_service import (
+    ensure_email_is_configured,
+    get_effective_email_settings,
+    reset_email_settings_to_env,
+    serialize_email_settings,
+    update_email_settings,
+)
 
 router = APIRouter()
 
@@ -30,6 +36,14 @@ def update_email_settings_route(
     db: DbSession,
 ) -> EmailSettingsResponse:
     return update_email_settings(db=db, payload=payload, actor_email=current_user.email)
+
+
+@router.post("/reset-to-env", response_model=EmailSettingsResponse)
+def reset_email_settings_route(
+    current_user: ItAdminUser,
+    db: DbSession,
+) -> EmailSettingsResponse:
+    return reset_email_settings_to_env(db=db, actor_email=current_user.email)
 
 
 @router.post("/test", response_model=EmailSettingsTestResponse)
