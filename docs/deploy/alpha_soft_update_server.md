@@ -37,6 +37,12 @@ ssh -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" admcerti01@certi-test
 
 La chiave da usare qui e la chiave privata locale `certi_nt_admcerti01_ed25519`, non il file `.pub`.
 
+Se PowerShell crea problemi di quoting con comandi lunghi, usare anche la forma con path esplicito:
+
+```powershell
+ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.forgialluminio.it
+```
+
 ## Flusso corretto
 
 1. Sviluppo e test in locale.
@@ -85,6 +91,17 @@ Se torna `[]`, non ci sono run attivi.
 
 Se ci sono run `in_coda` o `in_esecuzione`, non aggiornare subito: si rischia di interrompere un caricamento documenti o una lettura AI lunga.
 
+Alternativa piu semplice via PostgreSQL, utile quando il quoting Python da PowerShell diventa fragile:
+
+```bash
+cd /srv/certi_nt/app
+docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
+  psql -U certi_nt -d certi_nt \
+  -c "select id, stato, fase_corrente from acquisition_processing_runs where stato in ('in_coda', 'in_esecuzione') order by id desc limit 10;"
+```
+
+Se torna `(0 rows)`, non ci sono run attivi.
+
 ## Creare archivio dal deploy repo
 
 Dal PC locale, nel repo deploy:
@@ -103,6 +120,8 @@ git archive --format=tar --output alpha-produzione-v0.1.0-alpha.X-deploy.tar v0.
 Se il tag esiste gia e si scopre che non rappresenta il pacchetto corretto, non spostare il tag con force push.
 Creare invece un tag progressivo, per esempio `v0.1.0-alpha.6.1-deploy`.
 In quel caso la versione applicativa resta `0.1.0.alpha.6`, mentre il suffisso `.1` indica solo il pacchetto deploy aggiornato.
+
+Gli archivi `.tar` creati localmente servono solo per il trasferimento sul server. Possono rimanere non tracciati nel repo deploy e non vanno aggiunti al commit.
 
 ## Copiare archivio sul server
 
@@ -197,11 +216,27 @@ docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
   python -c "from app.main import app; print(app.version)"
 ```
 
-Per alpha 6 deve tornare:
+Deve tornare la versione appena installata, per esempio:
 
 ```text
-0.1.0.alpha.6
+0.1.0.alpha.7
 ```
+
+### Controlli HTTP pubblici
+
+Dal PC locale, se la rete/VPN lo consente:
+
+```powershell
+C:\Windows\System32\curl.exe -I -s http://certi-test.forgialluminio.it/
+C:\Windows\System32\curl.exe -I -s http://certi-test.forgialluminio.it/api/auth/me
+```
+
+Interpretazione:
+
+- `/` deve rispondere `200 OK`: frontend pubblico raggiungibile;
+- `/api/auth/me` con `HEAD` puo rispondere `405 Method Not Allowed` con `allow: GET`: e comunque utile, perche dimostra che la richiesta arriva al backend attraverso Nginx;
+- non usare `/api/docs` come controllo: puo rispondere `404` perche la documentazione FastAPI non e esposta sotto `/api/docs`;
+- non usare `/docs` come prova backend pubblica: puo essere servito dal frontend, quindi non dimostra che il proxy API funzioni.
 
 Da browser:
 
