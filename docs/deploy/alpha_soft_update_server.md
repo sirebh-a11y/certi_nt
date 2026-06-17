@@ -100,6 +100,10 @@ git archive --format=tar --output alpha-produzione-v0.1.0-alpha.X-deploy.tar v0.
 
 `X` va sostituito con il numero reale della versione.
 
+Se il tag esiste gia e si scopre che non rappresenta il pacchetto corretto, non spostare il tag con force push.
+Creare invece un tag progressivo, per esempio `v0.1.0-alpha.6.1-deploy`.
+In quel caso la versione applicativa resta `0.1.0.alpha.6`, mentre il suffisso `.1` indica solo il pacchetto deploy aggiornato.
+
 ## Copiare archivio sul server
 
 Da PowerShell locale:
@@ -193,10 +197,10 @@ docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
   python -c "from app.main import app; print(app.version)"
 ```
 
-Per alpha 5 deve tornare:
+Per alpha 6 deve tornare:
 
 ```text
-0.1.0.alpha.5
+0.1.0.alpha.6
 ```
 
 Da browser:
