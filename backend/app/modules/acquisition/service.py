@@ -155,6 +155,11 @@ def _make_openai_client(openai_api_key: str) -> OpenAI:
     return OpenAI(api_key=openai_api_key, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
 
 
+def _create_openai_response(client: OpenAI, **kwargs):
+    kwargs.setdefault("store", False)
+    return client.responses.create(**kwargs)
+
+
 CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
 CHEMISTRY_CAPTURE_FIELD_ORDER = [
     "Si",
@@ -11586,7 +11591,7 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -11660,7 +11665,7 @@ def _extract_impol_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -13428,7 +13433,7 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -13738,7 +13743,7 @@ def _extract_grupa_kety_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -14101,7 +14106,7 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -14325,7 +14330,7 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -14642,7 +14647,7 @@ def _extract_metalba_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -21122,7 +21127,7 @@ def _extract_ddt_fields_from_openai(
         content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[
                 {
@@ -21177,7 +21182,7 @@ def _extract_certificate_fields_from_openai(
         content.append({"type": "input_image", "image_url": f"data:{mime_type};base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -21464,7 +21469,7 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -21735,7 +21740,7 @@ def _extract_impol_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -22036,7 +22041,7 @@ def _extract_metalba_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -22323,7 +22328,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -22736,7 +22741,7 @@ def _extract_aww_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -23169,7 +23174,7 @@ def _extract_neuman_ddt_row_groups_from_openai(
         )
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -23597,7 +23602,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -23829,7 +23834,7 @@ def _extract_aww_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -24175,7 +24180,7 @@ def _extract_neuman_certificate_payload_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -24817,7 +24822,7 @@ def _extract_zalco_ddt_row_groups_from_openai(
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
 
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -25125,7 +25130,7 @@ def _extract_zalco_certificate_payload_from_openai(
         content.append({"type": "input_text", "text": f"Image label: {image_label}; page_number: {crop.get('page_number') or 'unknown'}"})
         content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
     try:
-        response = client.responses.create(
+        response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
         )
@@ -30366,3 +30371,4 @@ def _is_radioactive_free_line(line: str) -> bool:
     if "contamination radioactive" in normalized:
         return True
     return False
+
