@@ -26,9 +26,11 @@ from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, AcquisitionValueHistory, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
+    append_pdf_attachments_to_docx,
     build_additional_page_template_docx,
     build_forgialluminio_draft_docx,
     inspect_docx_content_controls,
+    prepare_manual_docx_base,
     update_docx_content_controls,
 )
 from app.modules.quarta_taglio.models import (
@@ -1197,11 +1199,6 @@ def upload_quarta_taglio_pdf_attachment(
     if certificate is None or not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
     _ensure_certificate_word_is_editable(certificate)
-    if _is_manual_word(certificate):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
-        )
 
     _ensure_pdf_attachments_initialized(db, certificate=certificate, raw_cod_f3=(detail.header or {}).get("codice_f3_raw"))
     attachment_storage_key = _certificate_pdf_attachment_storage_key(certificate, original_name=original_name)
@@ -1221,7 +1218,7 @@ def upload_quarta_taglio_pdf_attachment(
     )
     db.add(attachment)
     db.flush()
-    _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
+    _rebuild_certificate_word_after_pdf_attachment(db, detail=detail, certificate=certificate, actor=actor)
     db.add(certificate)
     db.commit()
     return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
@@ -1240,11 +1237,6 @@ def delete_quarta_taglio_pdf_attachment(
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificato non trovato")
     _ensure_certificate_word_is_editable(certificate)
-    if _is_manual_word(certificate):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
-        )
     attachment = (
         db.query(QuartaTaglioCertificatePdfAttachment)
         .filter(
@@ -1260,7 +1252,7 @@ def delete_quarta_taglio_pdf_attachment(
     db.flush()
     _compact_pdf_attachment_order(db, certificate_id=certificate.id)
     if certificate.storage_key_docx:
-        _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
+        _rebuild_certificate_word_after_pdf_attachment(db, detail=detail, certificate=certificate, actor=actor)
     db.add(certificate)
     db.commit()
     return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
@@ -1303,6 +1295,61 @@ def _ensure_pdf_attachments_initialized(
     certificate.pdf_attachments_initialized = True
     db.add(certificate)
     db.flush()
+
+
+def _rebuild_certificate_word_after_pdf_attachment(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    certificate: QuartaTaglioFinalCertificate,
+    actor: User,
+) -> None:
+    if _is_manual_word(certificate):
+        _rebuild_manual_certificate_word_with_pdf_attachments(db, detail=detail, certificate=certificate, actor=actor)
+        return
+    _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
+
+
+def _rebuild_manual_certificate_word_with_pdf_attachments(
+    db: Session,
+    *,
+    detail: QuartaTaglioDetailResponse,
+    certificate: QuartaTaglioFinalCertificate,
+    actor: User,
+) -> None:
+    if not certificate.certificate_number:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    source_path = _manual_word_base_path(certificate)
+    if source_path is None:
+        if not certificate.storage_key_docx:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word manuale non presente")
+        current_path = _certificate_storage_path(certificate.storage_key_docx)
+        if not current_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word manuale non trovato")
+        source_path = _certificate_storage_path(_certificate_manual_base_docx_storage_key(certificate))
+        prepare_manual_docx_base(current_path, source_path)
+
+    storage_key = _certificate_docx_storage_key(certificate.cod_odp)
+    output_path = _certificate_storage_path(storage_key)
+    quality_manager = _select_quality_manager(db)
+    append_pdf_attachments_to_docx(
+        base_docx_path=source_path,
+        output_path=output_path,
+        pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
+        certified_by=actor,
+        quality_manager=quality_manager,
+    )
+    certificate.storage_key_docx = storage_key
+    certificate.download_token = secrets.token_urlsafe(32)
+    certificate.certified_by_user_id = actor.id
+    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    certificate.status = certificate.status or "draft"
+    original_filename = certificate.word_original_filename
+    source = certificate.word_source or "user_uploaded"
+    _apply_certificate_register_fields(certificate, detail)
+    _apply_certificate_conformity(certificate, detail)
+    _apply_word_file_state(certificate, output_path, source=source, original_filename=original_filename)
+    _propagate_shared_certificate_word(db, source_certificate=certificate)
 
 
 def _rebuild_generated_certificate_word(
@@ -1473,6 +1520,7 @@ def upload_quarta_taglio_word_file(
     output_path = _certificate_storage_path(storage_key)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(file_bytes)
+    prepare_manual_docx_base(output_path, _certificate_storage_path(_certificate_manual_base_docx_storage_key(certificate)))
 
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
@@ -2415,6 +2463,17 @@ def _certificate_uploaded_docx_storage_key(cod_odp: str, *, original_name: str) 
     now = datetime.now(timezone.utc)
     filename = f"{uuid4().hex}_{_safe_file_part(cod_odp)}_{_safe_file_part(original_name)}"
     return f"certificati_finali/{now:%Y/%m}/{filename}"
+
+
+def _certificate_manual_base_docx_storage_key(certificate: QuartaTaglioFinalCertificate) -> str:
+    token = certificate.certificate_number or certificate.draft_number or f"id_{certificate.id}"
+    filename = f"{_safe_file_part(token)}_manual_base.docx"
+    return f"certificati_finali/manual_bases/{filename}"
+
+
+def _manual_word_base_path(certificate: QuartaTaglioFinalCertificate) -> Path | None:
+    path = _certificate_storage_path(_certificate_manual_base_docx_storage_key(certificate))
+    return path if path.exists() else None
 
 
 def _certificate_extra_pages_storage_key(certificate_number: str, *, original_name: str) -> str:

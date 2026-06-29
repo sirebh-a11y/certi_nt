@@ -1406,14 +1406,14 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".pdf,application/pdf"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={isPdfFinal || !hasCertificateNumber || !activeCertificateId || isManualWord}
+                disabled={isPdfFinal || !hasCertificateNumber || !activeCertificateId}
                 id="quarta-pdf-attachment-upload"
                 onChange={(event) => setPdfAttachmentFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isPdfFinal || pdfAttachmentState.status === "saving" || !pdfAttachmentFile || !hasCertificateNumber || !activeCertificateId || isManualWord}
+                disabled={isPdfFinal || pdfAttachmentState.status === "saving" || !pdfAttachmentFile || !hasCertificateNumber || !activeCertificateId}
                 onClick={uploadPdfAttachment}
                 type="button"
               >
@@ -1430,7 +1430,7 @@ export default function QuartaTaglioDetailPage() {
                     <span className="min-w-0 truncate font-semibold">{attachment.original_filename}</span>
                     <button
                       className="shrink-0 rounded-lg border border-rose-200 bg-white px-2 py-1 font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={isPdfFinal || pdfAttachmentState.status === "saving" || isManualWord}
+                      disabled={isPdfFinal || pdfAttachmentState.status === "saving"}
                       onClick={() => deletePdfAttachment(attachment.id)}
                       type="button"
                     >
@@ -1442,7 +1442,7 @@ export default function QuartaTaglioDetailPage() {
             ) : (
               <p className="text-xs text-slate-500">Nessun allegato PDF.</p>
             )}
-            {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci gli allegati in Word e ricarica il file.</p> : null}
+            {isManualWord ? <p className="text-xs text-slate-500">Word manuale corrente: gli allegati PDF vengono aggiornati in coda al Word caricato.</p> : null}
           </div>
         </div>
         </div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import zipfile
 import zlib
 import re
+import shutil
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -182,6 +183,35 @@ def build_forgialluminio_draft_docx(
             certified_by=certified_by,
             quality_manager=quality_manager,
         )
+    if pdf_attachments:
+        _append_pdf_attachments(
+            output_path,
+            pdf_attachments,
+            certified_by=certified_by,
+            quality_manager=quality_manager,
+        )
+    normalize_certificate_docx_layout(output_path)
+
+
+def prepare_manual_docx_base(source_path: Path, output_path: Path) -> None:
+    """Copy a user Word and remove app-managed PDF attachment pages from the base."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, output_path)
+    _strip_app_pdf_attachment_pages(output_path)
+    normalize_certificate_docx_layout(output_path)
+
+
+def append_pdf_attachments_to_docx(
+    *,
+    base_docx_path: Path,
+    output_path: Path,
+    pdf_attachments: Sequence[tuple[Path, str]] | None,
+    certified_by: User,
+    quality_manager: User | None,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if base_docx_path.resolve() != output_path.resolve():
+        shutil.copy2(base_docx_path, output_path)
     if pdf_attachments:
         _append_pdf_attachments(
             output_path,
@@ -536,6 +566,31 @@ def _append_pdf_attachments(
                 _add_pdf_attachment_page(document, image_path=image_path, original_filename=original_filename, section=attachment_section)
             pdf_document.close()
     document.save(str(base_docx_path))
+
+
+def _strip_app_pdf_attachment_pages(path: Path) -> None:
+    try:
+        document = Document(str(path))
+    except Exception:
+        return
+
+    body = document._body._element
+    remove_after_attachment_title = False
+    changed = False
+    for child in list(body):
+        if child.tag.endswith("sectPr"):
+            continue
+        if not remove_after_attachment_title and child.tag.endswith("p"):
+            texts = [node.text or "" for node in child.iter(qn("w:t"))]
+            paragraph_text = "".join(texts).strip()
+            if paragraph_text.startswith("Attachment:"):
+                remove_after_attachment_title = True
+        if remove_after_attachment_title:
+            body.remove(child)
+            changed = True
+
+    if changed:
+        document.save(str(path))
 
 
 def _add_pdf_attachment_page(document: Document, *, image_path: Path, original_filename: str, section) -> None:
