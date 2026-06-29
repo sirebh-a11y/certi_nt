@@ -21,14 +21,14 @@ SYSTEM_NOTE_SEEDS = [
         "code": "us_control_class_a",
         "note_key": "nota_us_control_class_a",
         "note_value": "true",
-        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class A.",
+        "text": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class A.",
         "sort_order": 10,
     },
     {
         "code": "us_control_class_b",
         "note_key": "nota_us_control_class_b",
         "note_value": "true",
-        "text": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class B.",
+        "text": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class B.",
         "sort_order": 20,
     },
     {

@@ -156,8 +156,8 @@ NOTE_FIELDS = [
 US_CONTROL_NOTE_KEYS = {"nota_us_control_class_a", "nota_us_control_class_b"}
 
 SYSTEM_NOTE_TEXT_FALLBACKS = {
-    "nota_us_control_class_a": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class A.",
-    "nota_us_control_class_b": "U.S. control according to ASTM 594 or SAE AMS STD 2154 class B.",
+    "nota_us_control_class_a": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class A.",
+    "nota_us_control_class_b": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class B.",
     "nota_rohs": (
         "We hereby declare that material is in compliance with DIRECTIVE 2011/65/EU OF THE "
         "EUROPEAN PARLIAMENT AND OF THE COUNCIL of 8 June 2011 on the restriction of the use "
