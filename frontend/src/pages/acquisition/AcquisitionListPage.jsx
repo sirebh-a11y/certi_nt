@@ -1084,7 +1084,20 @@ export default function AcquisitionListPage() {
       setGembaError("La data fine non puo essere precedente alla data inizio.");
       return;
     }
-    const params = new URLSearchParams({ date_from: gembaDateFrom, date_to: gembaDateTo });
+    const params = new URLSearchParams({
+      date_from: gembaDateFrom,
+      date_to: gembaDateTo,
+      view: showConfirmedOnly ? "confirmed" : "open",
+      query_one: queryOne,
+      query_two: queryTwo,
+      query_three: queryThree,
+      operator_one: operatorOne,
+      operator_two: operatorTwo,
+    });
+    if (sortConfig.field) {
+      params.set("sort_field", sortConfig.field);
+      params.set("sort_direction", sortConfig.direction);
+    }
     window.open(`/acquisition/gemba-walk/print?${params.toString()}`, "_blank", "noopener,noreferrer");
     closeGembaModal();
   }

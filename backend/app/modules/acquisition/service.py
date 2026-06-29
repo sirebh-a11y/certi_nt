@@ -8589,11 +8589,270 @@ def list_acquisition_rows(
     return [serialize_acquisition_row_list_item(row) for row in rows]
 
 
+_GEMBA_QUALITY_LABELS = {
+    "accettato": "Accettato",
+    "accettato_con_riserva": "Accettato con riserva",
+    "respinto": "Respinto",
+}
+
+
+def _gemba_text(value: object) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "value"):
+        value = getattr(value, "value")
+    return str(value)
+
+
+def _gemba_quality_label(value: object) -> str:
+    normalized = _gemba_text(value)
+    return _GEMBA_QUALITY_LABELS.get(normalized, "Validata senza valutazione")
+
+
+def _gemba_activity_label(state: str | None) -> str:
+    if state == "verde":
+        return "pronto"
+    if state == "giallo":
+        return "quasi"
+    return "da fare"
+
+
+def _gemba_block_activity_label(block: str, state: str | None) -> str:
+    if block in {"chimica", "proprieta"} and state == "verde":
+        return "confermato"
+    return _gemba_activity_label(state)
+
+
+def _gemba_compose_lega(item: AcquisitionRowListItemResponse) -> str:
+    return item.lega_designazione or item.lega_base or item.variante_lega or "-"
+
+
+def _gemba_supplier_name(item: AcquisitionRowListItemResponse) -> str:
+    return item.fornitore_nome or item.fornitore_raw or "-"
+
+
+def _gemba_ddt_core_state(item: AcquisitionRowListItemResponse) -> str:
+    required = item.ddt_required_fields or []
+    missing = item.ddt_missing_fields or []
+    pending = item.ddt_pending_fields or []
+    if any(field in missing for field in required):
+        return "rosso"
+    return "giallo" if any(field in pending for field in required) else "verde"
+
+
+def _gemba_document_matching_closed(item: AcquisitionRowListItemResponse) -> bool:
+    return _gemba_ddt_core_state(item) == "verde" and item.block_states.get("match") == "verde"
+
+
+def _gemba_is_waiting_for_ddt(item: AcquisitionRowListItemResponse) -> bool:
+    return bool(item.qualita_valutazione) and not _gemba_document_matching_closed(item)
+
+
+def _gemba_quality_blocks_confirmed(item: AcquisitionRowListItemResponse) -> bool:
+    return all(item.block_states.get(block) == "verde" for block in ("chimica", "proprieta", "note"))
+
+
+def _gemba_is_confirmed_list_row(item: AcquisitionRowListItemResponse) -> bool:
+    has_documents = bool(item.document_ddt_id and item.document_certificato_id)
+    return bool(item.validata_finale or (item.qualita_valutazione and _gemba_quality_blocks_confirmed(item) and has_documents))
+
+
+def _gemba_match_cell_label(item: AcquisitionRowListItemResponse) -> str:
+    has_ddt = bool(item.document_ddt_id)
+    has_certificate = bool(item.document_certificato_id)
+    if has_ddt and not has_certificate:
+        return "Solo DDT"
+    if has_certificate and not has_ddt:
+        return "Solo Certificato"
+    if item.match_state == "confermato":
+        return "Match Confermato"
+    return "Match"
+
+
+def _gemba_compact_match_reference(item: AcquisitionRowListItemResponse) -> str:
+    has_ddt = bool(item.document_ddt_id)
+    has_certificate = bool(item.document_certificato_id)
+    if has_ddt != has_certificate or item.match_state == "confermato":
+        return ""
+    if not item.certificate_file_name:
+        return _gemba_activity_label(item.block_states.get("match"))
+    numeric_match = re.search(r"\d{4,}", item.certificate_file_name)
+    if numeric_match:
+        return numeric_match.group(0)
+    return re.sub(r"\.pdf$", "", item.certificate_file_name, flags=re.IGNORECASE)[:12]
+
+
+def _gemba_searchable_values(item: AcquisitionRowListItemResponse) -> list[str]:
+    values = [
+        item.id,
+        item.fornitore_nome,
+        item.fornitore_raw,
+        item.lega_designazione,
+        item.lega_base,
+        item.variante_lega,
+        item.diametro,
+        item.cdq,
+        item.colata,
+        item.ddt,
+        item.peso,
+        item.ordine,
+        item.qualita_valutazione,
+        _gemba_quality_label(item.qualita_valutazione) if item.qualita_valutazione else None,
+        "attesa ddt attesa match" if _gemba_is_waiting_for_ddt(item) else None,
+        item.qualita_note,
+        _gemba_match_cell_label(item),
+        _gemba_compact_match_reference(item),
+        item.certificate_file_name,
+        item.note_documento,
+    ]
+    return [_gemba_text(value).lower() for value in values if _gemba_text(value)]
+
+
+def _gemba_evaluate_filter(values: list[str], query: str) -> tuple[bool, bool, list[str]]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return False, True, values
+    matched_indexes = {index for index, value in enumerate(values) if normalized_query in value}
+    return True, bool(matched_indexes), [
+        value for index, value in enumerate(values) if index not in matched_indexes
+    ]
+
+
+def _gemba_combine_filter_results(first: bool | None, second: bool | None, operator: str) -> bool | None:
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return (first or second) if operator == "or" else (first and second)
+
+
+def _gemba_matches_filters(
+    item: AcquisitionRowListItemResponse,
+    *,
+    query_one: str,
+    query_two: str,
+    query_three: str,
+    operator_one: str,
+    operator_two: str,
+) -> bool:
+    values = _gemba_searchable_values(item)
+    first_active, first_matched, remaining = _gemba_evaluate_filter(values, query_one)
+    second_active, second_matched, remaining = _gemba_evaluate_filter(remaining, query_two)
+    third_active, third_matched, _ = _gemba_evaluate_filter(remaining, query_three)
+    first = first_matched if first_active else None
+    second = second_matched if second_active else None
+    third = third_matched if third_active else None
+    final_result = _gemba_combine_filter_results(
+        _gemba_combine_filter_results(first, second, operator_one),
+        third,
+        operator_two,
+    )
+    return True if final_result is None else final_result
+
+
+def _gemba_parse_sortable_number(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    match = re.search(r"-?\d+(?:[.,]\d+)?", str(value).strip())
+    if not match:
+        return None
+    parsed = float(match.group(0).replace(",", "."))
+    return parsed if math.isfinite(parsed) else None
+
+
+def _gemba_activity_rank(label: str) -> int:
+    if label == "Accettato":
+        return 5
+    if label == "Accettato con riserva":
+        return 4
+    if label in {"Respinto", "Validata senza valutazione"}:
+        return 3
+    if label == "pronto":
+        return 2
+    if label in {"quasi", "Attesa DDT"}:
+        return 1
+    return 0
+
+
+def _gemba_row_activity_label(item: AcquisitionRowListItemResponse) -> str:
+    if item.qualita_valutazione:
+        return _gemba_quality_label(item.qualita_valutazione)
+    states = [
+        _gemba_ddt_core_state(item),
+        item.block_states.get("match", "rosso"),
+        item.block_states.get("chimica", "rosso"),
+        item.block_states.get("proprieta", "rosso"),
+        item.block_states.get("note", "rosso"),
+    ]
+    if "rosso" in states:
+        return "da fare"
+    if any(state != "verde" for state in states):
+        return "quasi"
+    return "pronto"
+
+
+def _gemba_match_sort_value(item: AcquisitionRowListItemResponse) -> str:
+    label = _gemba_match_cell_label(item)
+    priority = 1 if label == "Solo DDT" else 2 if label == "Solo Certificato" else 3 if label == "Match" else 4
+    return f"{priority}-{label}-{_gemba_compact_match_reference(item)}-{item.id}"
+
+
+def _gemba_sort_value(item: AcquisitionRowListItemResponse, field: str) -> object:
+    if field == "id":
+        return item.id
+    if field == "fornitore":
+        return _gemba_supplier_name(item)
+    if field == "lega":
+        return _gemba_compose_lega(item)
+    if field == "diametro":
+        return _gemba_parse_sortable_number(item.diametro)
+    if field == "cdq":
+        return item.cdq or ""
+    if field == "colata":
+        return item.colata or ""
+    if field == "ddt":
+        return item.ddt or ""
+    if field == "peso":
+        return _gemba_parse_sortable_number(item.peso)
+    if field == "ordine":
+        return item.ordine or ""
+    if field == "match":
+        return _gemba_match_sort_value(item)
+    if field == "chimica":
+        return _gemba_activity_rank(_gemba_block_activity_label("chimica", item.block_states.get("chimica")))
+    if field == "proprieta":
+        return _gemba_activity_rank(_gemba_block_activity_label("proprieta", item.block_states.get("proprieta")))
+    if field == "note":
+        return item.note_documento or _gemba_block_activity_label("note", item.block_states.get("note"))
+    if field == "stato":
+        return _gemba_activity_rank(_gemba_row_activity_label(item))
+    return None
+
+
+def _gemba_sort_key(item: AcquisitionRowListItemResponse, field: str) -> tuple[int, object, int]:
+    value = _gemba_sort_value(item, field)
+    if value is None or value == "":
+        return (0, "", item.id)
+    if isinstance(value, (int, float)):
+        return (1, value, item.id)
+    return (1, str(value).lower(), item.id)
+
+
 def list_gemba_walk_rows(
     db: Session,
     *,
     date_from: date,
     date_to: date,
+    view: str = "open",
+    query_one: str = "",
+    query_two: str = "",
+    query_three: str = "",
+    operator_one: str = "and",
+    operator_two: str = "and",
+    sort_field: str | None = None,
+    sort_direction: str = "asc",
 ) -> list[AcquisitionRowListItemResponse]:
     start_dt = datetime.combine(date_from, datetime_time.min, tzinfo=UTC)
     end_dt = datetime.combine(date_to, datetime_time.max, tzinfo=UTC)
@@ -8613,7 +8872,27 @@ def list_gemba_walk_rows(
     )
     for row in rows:
         _ensure_row_supplier_link(db, row)
-    return [serialize_acquisition_row_list_item(row) for row in rows]
+    items = [serialize_acquisition_row_list_item(row) for row in rows]
+    items = [
+        item
+        for item in items
+        if (_gemba_is_confirmed_list_row(item) if view == "confirmed" else not _gemba_is_confirmed_list_row(item))
+    ]
+    items = [
+        item
+        for item in items
+        if _gemba_matches_filters(
+            item,
+            query_one=query_one,
+            query_two=query_two,
+            query_three=query_three,
+            operator_one=operator_one,
+            operator_two=operator_two,
+        )
+    ]
+    if sort_field:
+        items.sort(key=lambda item: _gemba_sort_key(item, sort_field), reverse=sort_direction == "desc")
+    return items
 
 
 def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:

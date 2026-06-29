@@ -511,10 +511,32 @@ def list_gemba_walk_rows_route(
     db: DbSession,
     date_from: date = Query(...),
     date_to: date = Query(...),
+    view: str = Query("open", pattern="^(open|confirmed)$"),
+    query_one: str = Query(""),
+    query_two: str = Query(""),
+    query_three: str = Query(""),
+    operator_one: str = Query("and", pattern="^(and|or)$"),
+    operator_two: str = Query("and", pattern="^(and|or)$"),
+    sort_field: str | None = Query(None),
+    sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
 ) -> AcquisitionRowListResponse:
     if date_to < date_from:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Intervallo date non valido")
-    return AcquisitionRowListResponse(items=list_gemba_walk_rows(db, date_from=date_from, date_to=date_to))
+    return AcquisitionRowListResponse(
+        items=list_gemba_walk_rows(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            view=view,
+            query_one=query_one,
+            query_two=query_two,
+            query_three=query_three,
+            operator_one=operator_one,
+            operator_two=operator_two,
+            sort_field=sort_field,
+            sort_direction=sort_direction,
+        )
+    )
 
 
 @router.get("/quality-rows", response_model=AcquisitionQualityRowListResponse)

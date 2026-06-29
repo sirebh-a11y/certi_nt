@@ -45,13 +45,34 @@ export default function AcquisitionGembaWalkPrintPage() {
   const today = useMemo(() => todayDateInputValue(), []);
   const dateFrom = searchParams.get("date_from") || today;
   const dateTo = searchParams.get("date_to") || today;
+  const view = searchParams.get("view") === "confirmed" ? "confirmed" : "open";
+  const queryOne = searchParams.get("query_one") || "";
+  const queryTwo = searchParams.get("query_two") || "";
+  const queryThree = searchParams.get("query_three") || "";
+  const operatorOne = searchParams.get("operator_one") === "or" ? "or" : "and";
+  const operatorTwo = searchParams.get("operator_two") === "or" ? "or" : "and";
+  const sortField = searchParams.get("sort_field") || "";
+  const sortDirection = searchParams.get("sort_direction") === "desc" ? "desc" : "asc";
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let ignore = false;
-    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    const params = new URLSearchParams({
+      date_from: dateFrom,
+      date_to: dateTo,
+      view,
+      query_one: queryOne,
+      query_two: queryTwo,
+      query_three: queryThree,
+      operator_one: operatorOne,
+      operator_two: operatorTwo,
+    });
+    if (sortField) {
+      params.set("sort_field", sortField);
+      params.set("sort_direction", sortDirection);
+    }
     setLoading(true);
     setError("");
     apiRequest(`/acquisition/gemba-walk?${params.toString()}`, {}, token)
@@ -74,7 +95,7 @@ export default function AcquisitionGembaWalkPrintPage() {
     return () => {
       ignore = true;
     };
-  }, [dateFrom, dateTo, token]);
+  }, [dateFrom, dateTo, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, sortDirection, sortField, token, view]);
 
   return (
     <section className="min-h-screen bg-white p-6 text-slate-950" id="gemba-print-root">
@@ -109,7 +130,7 @@ export default function AcquisitionGembaWalkPrintPage() {
         <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
         <h1 className="mt-1 text-3xl font-bold">Gemba walk</h1>
         <p className="mt-2 text-sm font-medium">
-          Periodo: {formatDate(dateFrom)} - {formatDate(dateTo)} · Righe: {rows.length}
+          Periodo: {formatDate(dateFrom)} - {formatDate(dateTo)} · Vista: {view === "confirmed" ? "Confermate" : "Aperte"} · Righe: {rows.length}
         </p>
       </header>
 
