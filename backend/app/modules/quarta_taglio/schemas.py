@@ -21,6 +21,7 @@ class QuartaTaglioCertificateResponse(BaseModel):
     cdq: str
     colata: str | None
     cod_art: str | None
+    cod_mp: str | None = None
     des_art: str | None = None
     qta_totale: float | None
     righe_materiale: int
@@ -69,6 +70,7 @@ class QuartaTaglioRowResponse(BaseModel):
     data_registro: datetime | None
     cod_odp: str
     cod_art: str | None
+    cod_mp: str | None = None
     des_art: str | None = None
     cdq: str
     colata: str | None

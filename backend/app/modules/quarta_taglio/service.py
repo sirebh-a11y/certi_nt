@@ -208,6 +208,7 @@ select
     coalesce(l.SALDO, '0') as SALDO,
     case when l.COD_ODP is not null and l.SALDO = '1' then 1 else 0 end as TAGLIO_ATTIVO,
     tr.COD_ART,
+    max(cast(tr.COD_MP as varchar(max))) as COD_MP,
     max(cast(tr.DES_ART as nvarchar(max))) as DES_ART,
     tr.CERT_FORN as CDQ,
     tr.COLATA,
@@ -4440,6 +4441,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
         cdq = _clean_text(external_row.get("CDQ")) or "Non indicato"
         cod_odp = _clean_text(external_row.get("COD_ODP"))
         cod_art = _clean_text(external_row.get("COD_ART"))
+        cod_mp = _clean_text(external_row.get("COD_MP"))
         des_art = _clean_text(external_row.get("DES_ART"))
         colata = _clean_text(external_row.get("COLATA"))
         if not cod_odp:
@@ -4470,6 +4472,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
         item.latest_run_id = run.id
         item.codice_registro = _clean_text(external_row.get("CODICE_REGISTRO")) or ""
         item.data_registro = _as_datetime(external_row.get("DATA_REGISTRO"))
+        item.cod_mp = cod_mp
         item.des_art = des_art
         item.saldo = str(external_row.get("SALDO") or "").strip() == "1"
         item.taglio_attivo = _as_bool(external_row.get("TAGLIO_ATTIVO"))
@@ -4909,6 +4912,7 @@ def _quarta_searchable_values(item: QuartaTaglioRowResponse) -> list[str]:
         item.cdq,
         item.colata,
         item.cod_art,
+        item.cod_mp,
         item.codice_registro,
         item.data_registro,
         item.status_color,
@@ -4937,6 +4941,7 @@ def _quarta_searchable_values(item: QuartaTaglioRowResponse) -> list[str]:
                 certificate.cdq,
                 certificate.colata,
                 certificate.cod_art,
+                certificate.cod_mp,
                 certificate.status_color,
                 certificate.status_message,
                 *(certificate.status_details or []),
@@ -4980,6 +4985,8 @@ def _quarta_group_sort_key(item: QuartaTaglioRowResponse, *, sort_field: str | N
         return item.colata or ""
     if sort_field == "cod_art":
         return item.cod_art or ""
+    if sort_field == "cod_mp":
+        return item.cod_mp or ""
     if sort_field == "qta_totale":
         return item.qta_totale or 0
     if sort_field == "lotti_count":
@@ -5027,6 +5034,7 @@ def _serialize_ol_group(
         data_registro=primary.data_registro,
         cod_odp=primary.cod_odp,
         cod_art=", ".join(_unique_clean(row.cod_art for row in rows)) or None,
+        cod_mp=", ".join(_unique_clean(row.cod_mp for row in rows)) or None,
         des_art=_join_unique(row.des_art for row in rows) or None,
         cdq=", ".join(_unique_clean(row.cdq for row in rows)),
         colata=", ".join(_unique_clean(row.colata for row in rows)) or None,
@@ -5520,6 +5528,7 @@ def _serialize_certificate(row: QuartaTaglioRow) -> QuartaTaglioCertificateRespo
         cdq=row.cdq,
         colata=row.colata,
         cod_art=row.cod_art,
+        cod_mp=row.cod_mp,
         des_art=row.des_art,
         qta_totale=row.qta_totale,
         righe_materiale=row.righe_materiale,

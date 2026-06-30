@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
@@ -46,7 +46,6 @@ const DEFAULT_LIST_STATE = {
   operatorOne: "and",
   operatorTwo: "and",
   rowLimit: "25",
-  onlyTaglioActive: false,
   hideCertified: false,
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
@@ -92,7 +91,6 @@ function loadPersistedListState() {
       operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
       rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
-      onlyTaglioActive: parsed?.onlyTaglioActive === true,
       hideCertified: parsed?.hideCertified === true,
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
@@ -213,6 +211,7 @@ function searchableFieldValues(item) {
     item.cdq,
     item.colata,
     item.cod_art,
+    item.cod_mp,
     item.codice_registro,
     item.data_registro,
     item.status_color,
@@ -236,6 +235,7 @@ function searchableFieldValues(item) {
       certificate.cdq,
       certificate.colata,
       certificate.cod_art,
+      certificate.cod_mp,
       certificate.status_color,
       STATUS_LABELS[certificate.status_color],
       certificate.status_message,
@@ -286,6 +286,8 @@ function taglioSortValue(item, field) {
       return item.colata || "";
     case "cod_art":
       return item.cod_art || "";
+    case "cod_mp":
+      return item.cod_mp || "";
     case "qta_totale":
       return parseSortableNumber(item.qta_totale);
     case "lotti_count":
@@ -346,7 +348,6 @@ export default function QuartaTaglioPage() {
   const [operatorOne, setOperatorOne] = useState(initialListStateRef.current.operatorOne);
   const [operatorTwo, setOperatorTwo] = useState(initialListStateRef.current.operatorTwo);
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
-  const [onlyTaglioActive, setOnlyTaglioActive] = useState(initialListStateRef.current.onlyTaglioActive);
   const [hideCertified, setHideCertified] = useState(initialListStateRef.current.hideCertified);
   const [quickIncomingConfirm, setQuickIncomingConfirm] = useState(loadQuickIncomingConfirmSetting);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
@@ -378,7 +379,6 @@ export default function QuartaTaglioPage() {
     setError("");
     const params = new URLSearchParams({
       sync: sync ? "true" : "false",
-      only_taglio_active: onlyTaglioActive ? "true" : "false",
       hide_certified: hideCertified ? "true" : "false",
       limit: rowLimit === "all" ? "1000" : rowLimit,
       offset: String(offset),
@@ -431,7 +431,7 @@ export default function QuartaTaglioPage() {
     return () => {
       ignore = true;
     };
-  }, [hideCertified, operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
+  }, [hideCertified, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
 
   useEffect(() => {
     const viewport = tableViewportRef.current;
@@ -443,14 +443,13 @@ export default function QuartaTaglioPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
-      onlyTaglioActive,
       hideCertified,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [hideCertified, operatorOne, operatorTwo, onlyTaglioActive, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [hideCertified, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -466,16 +465,9 @@ export default function QuartaTaglioPage() {
     return () => pageScroller?.removeEventListener("scroll", handlePageScroll);
   }, []);
 
-  const visibleItems = useMemo(() => {
-    if (!onlyTaglioActive) {
-      return items;
-    }
-    return items.filter((item) => item.taglio_attivo);
-  }, [items, onlyTaglioActive]);
+  const visibleItems = items;
 
-  const displayedItems = useMemo(() => {
-    return visibleItems;
-  }, [visibleItems]);
+  const displayedItems = items;
 
   useEffect(() => {
     function updateScrollMetrics() {
@@ -569,7 +561,6 @@ export default function QuartaTaglioPage() {
       operatorOne,
       operatorTwo,
       rowLimit,
-      onlyTaglioActive,
       hideCertified,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
@@ -630,17 +621,6 @@ export default function QuartaTaglioPage() {
       </div>
 
       <div className="flex items-end gap-2 overflow-x-auto pb-1">
-        <button
-          className={`min-w-[170px] rounded-xl border px-3 py-2 text-sm font-semibold ${
-            onlyTaglioActive
-              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-              : "border-border bg-white text-slate-700 hover:bg-slate-50"
-          }`}
-          onClick={() => setOnlyTaglioActive((current) => !current)}
-          type="button"
-        >
-          Solo taglio attivo
-        </button>
         <button
           className={`min-w-[190px] rounded-xl border px-3 py-2 text-sm font-semibold ${
             hideCertified
@@ -764,10 +744,10 @@ export default function QuartaTaglioPage() {
             <thead className="sticky-list-head bg-slate-50">
               <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <SortableHeader field="status" label="Stato" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="taglio_attivo" label="Taglio" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cod_odp" label="OL" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cdq" label="CDQ" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="cod_mp" label="Cod. Art." onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="qta_totale" label="Qta" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
@@ -787,15 +767,6 @@ export default function QuartaTaglioPage() {
                   <td className="px-3 py-2.5">
                     <span className={`inline-flex min-w-[74px] justify-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item.status_color)}`}>
                       {STATUS_LABELS[item.status_color] || "Rosso"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span
-                      className={`inline-flex min-w-[86px] justify-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${
-                        item.taglio_attivo ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600"
-                      }`}
-                    >
-                      {item.taglio_attivo ? "Attivo" : "-"}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 font-semibold">
@@ -829,6 +800,9 @@ export default function QuartaTaglioPage() {
                   </td>
                   <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.colata || "-"}</div>
+                  </td>
+                  <td className="min-w-[150px] max-w-[220px] px-3 py-2.5 text-slate-700">
+                    <div className="whitespace-normal break-words">{item.cod_mp || "-"}</div>
                   </td>
                   <td className="min-w-[180px] max-w-[240px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words font-medium">{item.esolver_cod_f3 || "-"}</div>

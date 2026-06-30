@@ -34,6 +34,7 @@ class QuartaTaglioRow(Base):
     data_registro: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     cod_odp: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     cod_art: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    cod_mp: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     des_art: Mapped[str | None] = mapped_column(Text, nullable=True)
     cdq: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     colata: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)

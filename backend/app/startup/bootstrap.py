@@ -332,6 +332,9 @@ def ensure_quarta_taglio_columns() -> None:
 
     if "des_art" not in columns:
         statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN des_art TEXT")
+    if "cod_mp" not in columns:
+        statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN cod_mp VARCHAR(128)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_quarta_taglio_rows_cod_mp ON quarta_taglio_rows (cod_mp)")
     if "taglio_attivo" not in columns:
         statements.append("ALTER TABLE quarta_taglio_rows ADD COLUMN taglio_attivo BOOLEAN DEFAULT false NOT NULL")
 
