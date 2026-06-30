@@ -303,14 +303,16 @@ function SortableHeader({ field, label, onSort, sortConfig }) {
   );
 }
 
-function LockedCell({ children, strong = false, wide = false }) {
+function LockedCell({ children, strong = false, wide = false, widthClass = "", truncate = true }) {
+  const text = children || "-";
   return (
     <div
-      className={`truncate text-[14px] leading-tight text-slate-950 ${
+      className={`${truncate ? "truncate" : "whitespace-nowrap"} text-[13px] leading-tight text-slate-950 ${
         strong ? "font-semibold" : "font-medium"
-      } ${wide ? "w-36" : "w-20"}`}
+      } ${widthClass || (wide ? "w-36" : "w-20")}`}
+      title={typeof text === "string" ? text : undefined}
     >
-      {children || "-"}
+      {text}
     </div>
   );
 }
@@ -816,7 +818,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1360px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -844,7 +846,7 @@ export default function QualityEvaluationPage() {
                   <td className="px-2 py-2 font-semibold text-slate-900">{row.id}</td>
                   <td className="px-2 py-2">
                     <input
-                      className={`w-28 rounded-lg border px-2 py-1.5 ${fieldClass({
+                      className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_ricezione) !== textValue(draft.qualita_data_ricezione),
                         status: cellStates[cellKey(row.id, "qualita_data_ricezione")]?.status,
                       })}`}
@@ -857,7 +859,7 @@ export default function QualityEvaluationPage() {
                   </td>
                   <td className="px-2 py-2">
                     <input
-                      className={`w-28 rounded-lg border px-2 py-1.5 ${fieldClass({
+                      className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_accettazione) !== textValue(draft.qualita_data_accettazione),
                         status: cellStates[cellKey(row.id, "qualita_data_accettazione")]?.status,
                       })}`}
@@ -872,29 +874,29 @@ export default function QualityEvaluationPage() {
                     <SupplierCell row={row} />
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{composeLega(row)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-24">{composeLega(row)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{formatRowFieldDisplay("diametro", row.diametro)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-16">{formatRowFieldDisplay("diametro", row.diametro)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell strong>{formatRowFieldDisplay("cdq", row.cdq)}</LockedCell>
+                    <LockedCell strong truncate={false} widthClass="w-28">{formatRowFieldDisplay("cdq", row.cdq)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{formatRowFieldDisplay("colata", row.colata)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-28">{formatRowFieldDisplay("colata", row.colata)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{formatRowFieldDisplay("ddt", row.ddt)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-28">{formatRowFieldDisplay("ddt", row.ddt)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{formatRowFieldDisplay("peso", row.peso)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-24">{formatRowFieldDisplay("peso", row.peso)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell>{formatRowFieldDisplay("ordine", row.ordine)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-36">{formatRowFieldDisplay("ordine", row.ordine)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
                     <input
-                      className={`w-28 rounded-lg border px-2 py-1.5 ${fieldClass({
+                      className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_richiesta) !== textValue(draft.qualita_data_richiesta),
                         status: cellStates[cellKey(row.id, "qualita_data_richiesta")]?.status,
                       })}`}
