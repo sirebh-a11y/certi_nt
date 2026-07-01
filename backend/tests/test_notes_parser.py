@@ -3,9 +3,11 @@ from types import SimpleNamespace
 
 from app.modules.acquisition.service import (
     _detect_note_matches,
+    _enrich_notes_with_lst_00_class_b,
     _find_best_note_overlay_match,
     _is_radioactive_free_line,
     _normalize_vision_note_matches,
+    _text_has_lst_00_us_control_implication,
 )
 
 
@@ -40,6 +42,73 @@ class NotesParserTest(unittest.TestCase):
 
         self.assertEqual(matches["nota_us_control_class_a"]["final"], "true")
         self.assertEqual(matches["nota_us_control_class_b"]["final"], "true")
+
+    def test_detects_lst_00_as_implicit_us_control_class_b_from_text(self):
+        matches = _detect_note_matches(
+            [
+                SimpleNamespace(
+                    id=9,
+                    testo_estratto="Exception to N° LST 00 Rev. 01: values specially agreed.",
+                    ocr_text=None,
+                )
+            ]
+        )
+
+        self.assertEqual(matches["nota_us_control_class_b"]["final"], "true")
+
+    def test_lst_00_implication_accepts_common_variants_only(self):
+        self.assertTrue(_text_has_lst_00_us_control_implication("Materiale secondo Spec. N. LST00"))
+        self.assertTrue(_text_has_lst_00_us_control_implication("Exception to N° LST-00 Rev. 01"))
+        self.assertTrue(_text_has_lst_00_us_control_implication("Spec. LST.00"))
+        self.assertFalse(_text_has_lst_00_us_control_implication("WITH PROOF OF TEMPER T62"))
+        self.assertFalse(_text_has_lst_00_us_control_implication("LST 000"))
+
+    def test_ai_mechanical_requirement_lst_00_enriches_notes_with_class_b(self):
+        payload = {
+            "notes": {},
+            "mechanical_requirement": {
+                "customer_requirement_quote": {
+                    "page_id": 7,
+                    "snippet": "Exception to N° LST 00 Rev. 01",
+                    "raw": "Exception to N° LST 00 Rev. 01",
+                    "standardized": "Exception to N° LST 00 Rev. 01",
+                    "final": "Exception to N° LST 00 Rev. 01",
+                    "method": "chatgpt",
+                }
+            },
+        }
+
+        _enrich_notes_with_lst_00_class_b(payload)
+
+        self.assertEqual(payload["notes"]["nota_us_control_class_b"]["final"], "true")
+        self.assertEqual(payload["notes"]["nota_us_control_class_b"]["method"], "chatgpt")
+
+    def test_ai_mechanical_requirement_does_not_overwrite_existing_class_b_note(self):
+        payload = {
+            "notes": {
+                "nota_us_control_class_b": {
+                    "page_id": 1,
+                    "snippet": "explicit Class B",
+                    "standardized": "true",
+                    "final": "true",
+                    "method": "chatgpt",
+                }
+            },
+            "mechanical_requirement": {
+                "customer_requirement_quote": {
+                    "page_id": 7,
+                    "snippet": "Exception to N° LST 00 Rev. 01",
+                    "raw": "Exception to N° LST 00 Rev. 01",
+                    "standardized": "Exception to N° LST 00 Rev. 01",
+                    "final": "Exception to N° LST 00 Rev. 01",
+                    "method": "chatgpt",
+                }
+            },
+        }
+
+        _enrich_notes_with_lst_00_class_b(payload)
+
+        self.assertEqual(payload["notes"]["nota_us_control_class_b"]["snippet"], "explicit Class B")
 
     def test_vision_note_payload_keeps_both_us_classes(self):
         normalized = _normalize_vision_note_matches(

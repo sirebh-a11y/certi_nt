@@ -11137,6 +11137,7 @@ def detect_standard_notes(
                     openai_api_key=openai_api_key,
                     certificate_ai_cache=None,
                 )
+                _enrich_notes_with_lst_00_class_b(payload)
                 vision_matches = cast(dict[str, dict[str, str | int]], payload.get("notes") or {})
             else:
                 vision_matches = _detect_note_matches_with_vision(
@@ -24594,6 +24595,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
     payload: dict[str, object],
     actor_id: int,
 ) -> None:
+    _enrich_notes_with_lst_00_class_b(payload)
     certificate_document = get_document(db, row.document_certificato_id)
     raw_payload_text = _string_or_none(cast(dict[str, object], payload).get("debug_raw_output"))
     if raw_payload_text:
@@ -27455,6 +27457,13 @@ def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str |
                         "standardized": "true",
                         "final": "true",
                     }
+            if "nota_us_control_class_b" not in matches and _text_has_lst_00_us_control_implication(line):
+                matches["nota_us_control_class_b"] = {
+                    "page_id": page.id,
+                    "snippet": line,
+                    "standardized": "true",
+                    "final": "true",
+                }
             if "nota_rohs" not in matches and "rohs" in normalized_line:
                 matches["nota_rohs"] = {
                     "page_id": page.id,
@@ -27470,6 +27479,49 @@ def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str |
                     "final": "true",
                 }
     return matches
+
+
+def _text_has_lst_00_us_control_implication(*values: str | None) -> bool:
+    haystack = " ".join(
+        _normalize_mojibake_numeric_text(value or "")
+        for value in values
+        if _string_or_none(value) is not None
+    ).upper()
+    if not haystack:
+        return False
+    return re.search(r"\bLST\s*[-./]?\s*0\s*0\b", haystack) is not None
+
+
+def _enrich_notes_with_lst_00_class_b(payload: dict[str, object]) -> dict[str, object]:
+    notes_obj = payload.get("notes")
+    notes = cast(dict[str, dict[str, str | int]], notes_obj if isinstance(notes_obj, dict) else {})
+    if notes.get("nota_us_control_class_b"):
+        return payload
+
+    requirement_matches = cast(dict[str, dict[str, str | int]], payload.get("mechanical_requirement") or {})
+    for match in requirement_matches.values():
+        if not isinstance(match, dict):
+            continue
+        snippet = _string_or_none(cast(str | int | None, match.get("snippet")))
+        raw = _string_or_none(cast(str | int | None, match.get("raw")))
+        standardized = _string_or_none(cast(str | int | None, match.get("standardized")))
+        final = _string_or_none(cast(str | int | None, match.get("final")))
+        if not _text_has_lst_00_us_control_implication(snippet, raw, standardized, final):
+            continue
+        page_id = match.get("page_id")
+        if page_id is None:
+            continue
+        enriched_notes = dict(notes)
+        enriched_notes["nota_us_control_class_b"] = {
+            "page_id": int(page_id),
+            "snippet": snippet or raw or standardized or final or "LST 00",
+            "standardized": "true",
+            "final": "true",
+            "method": _string_or_none(cast(str | int | None, match.get("method"))) or "chatgpt",
+        }
+        payload["notes"] = enriched_notes
+        return payload
+    return payload
 
 
 CHEMISTRY_FIELD_SET = {
