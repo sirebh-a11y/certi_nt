@@ -25,6 +25,16 @@ SYSTEM_NOTE_SEEDS = [
         "sort_order": 10,
     },
     {
+        "code": "us_control_class_a_type1_bsh",
+        "note_key": "nota_us_control_class_a_type1_bsh",
+        "note_value": "true",
+        "text": (
+            "U.S. control acc. to SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm "
+            "and control of backwall echo drop > 50% BSH."
+        ),
+        "sort_order": 15,
+    },
+    {
         "code": "us_control_class_b",
         "note_key": "nota_us_control_class_b",
         "note_value": "true",
@@ -119,7 +129,7 @@ def seed_note_templates(db: Session) -> None:
         existing = db.query(NoteTemplate).filter(NoteTemplate.code == seed["code"]).one_or_none()
         if existing is not None:
             changed = False
-            for field in ("note_key", "note_value", "sort_order"):
+            for field in ("note_key", "note_value", "text", "sort_order"):
                 seed_value = seed[field]
                 if getattr(existing, field) != seed_value:
                     setattr(existing, field, seed_value)

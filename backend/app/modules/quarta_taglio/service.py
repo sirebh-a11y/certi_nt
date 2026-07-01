@@ -152,13 +152,20 @@ NOTE_FIELDS = [
     ("nota_rohs", "RoHS"),
     ("nota_radioactive_free", "Radioactive free"),
     ("nota_us_control_class_a", "US control Class A"),
+    ("nota_us_control_class_a_type1_bsh", "US control Class A Type 1 BSH"),
     ("nota_us_control_class_b", "US control Class B"),
 ]
 
-US_CONTROL_NOTE_KEYS = {"nota_us_control_class_a", "nota_us_control_class_b"}
+US_CONTROL_CLASS_A_FIELD = "nota_us_control_class_a"
+US_CONTROL_CLASS_A_EXTENDED_FIELD = "nota_us_control_class_a_type1_bsh"
+US_CONTROL_NOTE_KEYS = {US_CONTROL_CLASS_A_FIELD, US_CONTROL_CLASS_A_EXTENDED_FIELD, "nota_us_control_class_b"}
 
 SYSTEM_NOTE_TEXT_FALLBACKS = {
     "nota_us_control_class_a": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class A.",
+    "nota_us_control_class_a_type1_bsh": (
+        "U.S. control acc. to SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm "
+        "and control of backwall echo drop > 50% BSH."
+    ),
     "nota_us_control_class_b": "U.S. control according to ASTM B594 or SAE AMS STD 2154 class B.",
     "nota_rohs": (
         "We hereby declare that material is in compliance with DIRECTIVE 2011/65/EU OF THE "
@@ -170,6 +177,7 @@ SYSTEM_NOTE_TEXT_FALLBACKS = {
 
 SYSTEM_NOTE_CODE_KEYS = {
     "us_control_class_a": "nota_us_control_class_a",
+    "us_control_class_a_type1_bsh": "nota_us_control_class_a_type1_bsh",
     "us_control_class_b": "nota_us_control_class_b",
     "rohs": "nota_rohs",
     "radioactive_free": "nota_radioactive_free",
@@ -3870,9 +3878,24 @@ def _evaluate_notes(app_rows: list[AcquisitionRow], system_note_texts: dict[str,
         code: [_clean_note_value(_read_value(row, "note", code)) for row in app_rows]
         for code, _ in NOTE_FIELDS
     }
+    extended_class_a_values = values_by_code.get(US_CONTROL_CLASS_A_EXTENDED_FIELD, [])
+    extended_class_a_uniform = bool(app_rows) and all(extended_class_a_values)
     us_control_present = any(value for code in US_CONTROL_NOTE_KEYS for value in values_by_code.get(code, []) if value)
     for code, label in NOTE_FIELDS:
-        values = values_by_code[code]
+        if code == US_CONTROL_CLASS_A_FIELD and extended_class_a_uniform:
+            continue
+        if code == US_CONTROL_CLASS_A_EXTENDED_FIELD and not extended_class_a_uniform:
+            continue
+        if code == US_CONTROL_CLASS_A_FIELD:
+            values = [
+                value or extended_value
+                for value, extended_value in zip(
+                    values_by_code.get(US_CONTROL_CLASS_A_FIELD, []),
+                    extended_class_a_values,
+                )
+            ]
+        else:
+            values = values_by_code[code]
         filled = [value for value in values if value]
         unique_values = sorted(set(filled))
         if not filled:

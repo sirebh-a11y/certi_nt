@@ -785,6 +785,7 @@ class AcquisitionFinalValidationRequest(BaseModel):
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):
     nota_us_control_class_a: bool = False
+    nota_us_control_class_a_type1_bsh: bool = False
     nota_us_control_class_b: bool = False
     nota_rohs: bool = False
     nota_radioactive_free: bool = False

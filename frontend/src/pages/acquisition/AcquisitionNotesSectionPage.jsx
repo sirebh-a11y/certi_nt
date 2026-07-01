@@ -7,6 +7,7 @@ import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
 const SYSTEM_NOTE_ORDER = [
   "us_control_class_a",
+  "us_control_class_a_type1_bsh",
   "us_control_class_b",
   "rohs",
   "radioactive_free",
@@ -14,6 +15,7 @@ const SYSTEM_NOTE_ORDER = [
 
 const SYSTEM_NOTE_LABELS = {
   us_control_class_a: "Class A",
+  us_control_class_a_type1_bsh: "Class A Type 1 BSH",
   us_control_class_b: "Class B",
   rohs: "RoHS",
   radioactive_free: "Material free from radioactive contamination",
@@ -253,7 +255,9 @@ function buildInitialDraft(row) {
     (byField.nota_us_control_class_a?.valore_finale || byField.nota_us_control_class_a?.valore_standardizzato || "").trim().toLowerCase();
   const usClassBRaw =
     (byField.nota_us_control_class_b?.valore_finale || byField.nota_us_control_class_b?.valore_standardizzato || "").trim().toLowerCase();
-  const hasNewUsFields = Boolean(byField.nota_us_control_class_a || byField.nota_us_control_class_b);
+  const usClassAType1BshRaw =
+    (byField.nota_us_control_class_a_type1_bsh?.valore_finale || byField.nota_us_control_class_a_type1_bsh?.valore_standardizzato || "").trim().toLowerCase();
+  const hasNewUsFields = Boolean(byField.nota_us_control_class_a || byField.nota_us_control_class_a_type1_bsh || byField.nota_us_control_class_b);
   const rohsRaw = (byField.nota_rohs?.valore_finale || byField.nota_rohs?.valore_standardizzato || "").trim().toLowerCase();
   const radioactiveRaw =
     (byField.nota_radioactive_free?.valore_finale || byField.nota_radioactive_free?.valore_standardizzato || "").trim().toLowerCase();
@@ -261,6 +265,7 @@ function buildInitialDraft(row) {
 
   return {
     usClassA: hasNewUsFields ? usClassARaw === "true" : legacyUsClass === "A",
+    usClassAType1Bsh: usClassAType1BshRaw === "true",
     usClassB: hasNewUsFields ? usClassBRaw === "true" : legacyUsClass === "B",
     rohs: rohsRaw === "true",
     radioactiveFree: radioactiveRaw === "true",
@@ -271,6 +276,7 @@ function buildInitialDraft(row) {
 function draftsEqual(left, right) {
   return (
     left.usClassA === right.usClassA &&
+    left.usClassAType1Bsh === right.usClassAType1Bsh &&
     left.usClassB === right.usClassB &&
     left.rohs === right.rohs &&
     left.radioactiveFree === right.radioactiveFree &&
@@ -427,6 +433,7 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
           method: "PUT",
           body: JSON.stringify({
             nota_us_control_class_a: draft.usClassA,
+            nota_us_control_class_a_type1_bsh: draft.usClassAType1Bsh,
             nota_us_control_class_b: draft.usClassB,
             nota_rohs: draft.rohs,
             nota_radioactive_free: draft.radioactiveFree,
@@ -509,9 +516,12 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
                 <p className="mt-1 text-xs text-slate-500">Spunta le classi trovate nel certificato. Se sono presenti entrambe, lascia entrambe selezionate.</p>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
-                {["us_control_class_a", "us_control_class_b"].map((code) => {
+                {[
+                  { code: "us_control_class_a", field: "usClassA" },
+                  { code: "us_control_class_a_type1_bsh", field: "usClassAType1Bsh" },
+                  { code: "us_control_class_b", field: "usClassB" },
+                ].map(({ code, field }) => {
                   const template = systemNotesByCode[code];
-                  const field = code.endsWith("_a") ? "usClassA" : "usClassB";
                   const checked = draft[field];
                   return (
                     <label
