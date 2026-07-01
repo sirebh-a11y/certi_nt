@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import settings
 from app.core.integrations.models import ExternalConnection
 from app.core.pdf.converter import PDFConversionError, convert_docx_to_pdf
-from app.core.deps import is_quality_area_manager_or_admin
+from app.core.deps import is_quality_area_manager_or_admin, is_quality_area_user
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
@@ -2260,6 +2260,9 @@ def generate_quarta_taglio_certificate_pdf(
     certificate_id: int,
     actor: User,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
+    if not is_quality_area_user(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Qualità o IT possono generare il PDF finale")
+
     certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")

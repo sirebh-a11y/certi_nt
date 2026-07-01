@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiRequest, resolveApiAssetUrl } from "../../app/api";
-import { canReopenQualityFlow } from "../../app/access";
+import { canGenerateFinalCertificatePdf, canReopenQualityFlow } from "../../app/access";
 import { useAuth } from "../../app/auth";
 
 const STATUS_LABELS = {
@@ -664,6 +664,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     setActionState({ status: "idle", message: "" });
   }
 
+  const canGeneratePdf = canGenerateFinalCertificatePdf(user);
   const canReopenPdf = canReopenQualityFlow(user);
 
   return (
@@ -882,7 +883,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                       >
                         PDF
                       </a>
-                    ) : item.ddt && item.has_word && !item.has_pdf ? (
+                    ) : canGeneratePdf && item.ddt && item.has_word && !item.has_pdf ? (
                       <button
                         className="ml-3 font-semibold text-accent hover:underline"
                         onClick={() => {

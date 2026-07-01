@@ -47,6 +47,10 @@ export function canReopenQualityFlow(user) {
   return ["admin", "manager"].includes(user?.role) && isQualityAreaUser(user);
 }
 
+export function canGenerateFinalCertificatePdf(user) {
+  return isQualityAreaUser(user);
+}
+
 export function canAccessPage(user, pageKey) {
   if (!user || !pageKey) {
     return false;
