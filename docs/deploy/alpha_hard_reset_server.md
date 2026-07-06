@@ -1,8 +1,10 @@
-# Alpha server - pulizia hard dati di test
+# Alpha server - aggiornamento forte e pulizia hard dati di test
 
-Questo documento descrive la procedura da preparare per una pulizia hard del server alpha.
-Non e' una procedura ordinaria di aggiornamento: serve solo quando vogliamo azzerare i dati
-operativi di test e ripartire puliti.
+Questo documento descrive la procedura da usare quando vogliamo aggiornare il server alpha
+e, nello stesso intervento, azzerare i dati operativi di test.
+
+Non e' una procedura ordinaria di aggiornamento: serve solo quando vogliamo ripartire puliti
+senza perdere configurazioni, standard e dati base.
 
 ## Regola obbligatoria
 
@@ -29,6 +31,17 @@ La pulizia hard invece:
 - cancella i dati operativi di test;
 - svuota lo storage documentale collegato ai test;
 - lascia il server pronto per nuovi test alpha.
+
+Questa procedura puo' essere usata in due modi:
+
+1. **Pulizia hard senza aggiornare app**
+   - si mantiene la versione applicativa gia' installata;
+   - si cancellano solo i dati operativi di test.
+
+2. **Aggiornamento forte app + pulizia hard**
+   - prima si aggiorna il codice come nella procedura soft;
+   - poi si puliscono database operativo e storage;
+   - e' il caso da usare quando vogliamo installare una nuova alpha e ripartire con test puliti.
 
 ## Cosa deve restare
 
@@ -106,7 +119,7 @@ Storage:
 L'export verso eSolver non e' una vista SQL salvata.
 E' un endpoint API:
 
-- `/api/esolver-export/certificati-pdf`
+- `/api/export/esolver/certificati-pdf`
 
 Espone solo certificati PDF chiusi, con almeno:
 
@@ -176,11 +189,11 @@ tar -czf "/srv/certi_nt/backup/app_before_hard_reset_${TS}.tgz" \
   -C /srv/certi_nt app
 ```
 
-## Procedura operativa da preparare
+## Procedura operativa
 
-La procedura finale dovra' essere trasformata in script controllato, non lanciata a mano a pezzi.
+La procedura deve essere eseguita in modo controllato, non lanciata a mano a pezzi.
 
-Sequenza prevista:
+### Variante 1 - solo pulizia hard
 
 1. backup come sopra;
 2. stop temporaneo di frontend/backend, lasciando PostgreSQL attivo;
@@ -189,6 +202,25 @@ Sequenza prevista:
 5. svuotamento storage operativo;
 6. riavvio servizi;
 7. controlli finali.
+
+### Variante 2 - aggiornamento forte app + pulizia hard
+
+Usare quando vogliamo portare sul server una nuova alpha e ripartire senza dati operativi di test.
+
+Sequenza prevista:
+
+1. backup database, storage e app/env;
+2. aggiornamento codice come da procedura soft `alpha_soft_update_server.md`;
+3. verifica che i container siano ripartiti con la nuova versione;
+4. stop temporaneo di frontend/backend, lasciando PostgreSQL attivo;
+5. pulizia tabelle operative;
+6. eventuale pulizia utenti, solo variante B;
+7. svuotamento storage operativo;
+8. riavvio servizi;
+9. controlli finali.
+
+La pulizia hard va fatta solo dopo aver verificato che l'aggiornamento codice sia andato a buon fine.
+Se l'aggiornamento app fallisce, non procedere con la pulizia.
 
 Non usare mai:
 
@@ -309,4 +341,3 @@ Dopo pulizia hard:
 - i dati di test sono rimossi;
 - lo storage e' pulito;
 - la app e' pronta per un nuovo ciclo di test alpha.
-
