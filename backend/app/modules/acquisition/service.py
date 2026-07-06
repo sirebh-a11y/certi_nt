@@ -4351,56 +4351,12 @@ def _zalco_overlay_cell_bbox_from_ordered_words(
     height = int(word.get("height") or 0)
     if width <= 0 or height <= 0:
         return (0, 0, 0, 0)
-
-    ordered = sorted(
-        [candidate for candidate in ordered_words if int(candidate.get("width") or 0) > 0],
-        key=lambda candidate: int(candidate.get("left") or 0),
+    return (
+        max(0, left),
+        max(0, top),
+        min(image_width, left + width),
+        min(image_height, top + height),
     )
-    try:
-        index = next(candidate_index for candidate_index, candidate in enumerate(ordered) if candidate is word)
-    except StopIteration:
-        index = -1
-
-    center = left + width / 2
-    line_left = max(0, int(line_box.get("x0") or 0))
-    line_right = min(image_width, int(line_box.get("x1") or image_width))
-    if min_left is not None:
-        line_left = max(line_left, min_left)
-
-    pad = max(18, min(38, int(width * 0.8)))
-    if index > 0:
-        previous = ordered[index - 1]
-        previous_center = _chemistry_overlay_word_center(previous)
-        cell_left = int((previous_center + center) / 2)
-    else:
-        cell_left = left - pad
-    if 0 <= index < len(ordered) - 1:
-        next_word = ordered[index + 1]
-        next_center = _chemistry_overlay_word_center(next_word)
-        cell_right = int((center + next_center) / 2)
-    else:
-        cell_right = left + width + pad
-
-    cell_left = max(line_left, min(cell_left, left - 4))
-    cell_right = min(line_right, max(cell_right, left + width + 4))
-    if cell_right - cell_left < width + 12:
-        cell_left = max(line_left, left - 8)
-        cell_right = min(line_right, left + width + 8)
-    min_cell_width = max(width + 18, min(96, max(70, int(image_width * 0.045))))
-    if cell_right - cell_left < min_cell_width:
-        half_width = int(min_cell_width / 2)
-        cell_left = max(line_left, int(center) - half_width)
-        cell_right = min(line_right, int(center) + half_width)
-
-    line_top = int(line_box.get("y0") or top)
-    line_bottom = int(line_box.get("y1") or (top + height))
-    cell_top = max(0, min(line_top, top) - 10)
-    cell_bottom = min(image_height, max(line_bottom, top + height) + 10)
-    if cell_bottom - cell_top < 34:
-        middle = int((cell_top + cell_bottom) / 2)
-        cell_top = max(0, middle - 17)
-        cell_bottom = min(image_height, middle + 17)
-    return (cell_left, cell_top, cell_right, cell_bottom)
 
 
 def _normalize_zalco_overlay_anchor_text(value: str | None) -> str:

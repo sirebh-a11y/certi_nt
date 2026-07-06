@@ -2080,21 +2080,21 @@ def _find_existing_certificate_for_unit(
     open_candidates = [certificate for certificate in all_candidates if certificate.status != "pdf_final"]
 
     unit_ddt = _norm(unit.ddt)
-    unit_id_documento = _norm(unit.id_documento)
-    unit_id_riga_doc = _norm(unit.id_riga_doc)
-    unit_rif_lotto = _norm(unit.rif_lotto_alfanum)
+    unit_id_documento = _norm(getattr(unit, "id_documento", None))
+    unit_id_riga_doc = _norm(getattr(unit, "id_riga_doc", None))
+    unit_rif_lotto = _norm(getattr(unit, "rif_lotto_alfanum", None))
     has_esolver_identity = bool(unit_id_documento or unit_id_riga_doc or unit_rif_lotto)
     if has_esolver_identity:
         exact_identity = next(
             (
                 certificate
                 for certificate in all_candidates
-                if (not unit_id_documento or _norm(certificate.esolver_id_documento) == unit_id_documento)
-                and (not unit_id_riga_doc or _norm(certificate.esolver_id_riga_doc) == unit_id_riga_doc)
-                and (not unit_rif_lotto or _norm(certificate.esolver_rif_lotto_alfanum) == unit_rif_lotto)
-                and (unit_id_documento or _norm(certificate.esolver_id_documento) == "")
-                and (unit_id_riga_doc or _norm(certificate.esolver_id_riga_doc) == "")
-                and (unit_rif_lotto or _norm(certificate.esolver_rif_lotto_alfanum) == "")
+                if (not unit_id_documento or _norm(getattr(certificate, "esolver_id_documento", None)) == unit_id_documento)
+                and (not unit_id_riga_doc or _norm(getattr(certificate, "esolver_id_riga_doc", None)) == unit_id_riga_doc)
+                and (not unit_rif_lotto or _norm(getattr(certificate, "esolver_rif_lotto_alfanum", None)) == unit_rif_lotto)
+                and (unit_id_documento or _norm(getattr(certificate, "esolver_id_documento", None)) == "")
+                and (unit_id_riga_doc or _norm(getattr(certificate, "esolver_id_riga_doc", None)) == "")
+                and (unit_rif_lotto or _norm(getattr(certificate, "esolver_rif_lotto_alfanum", None)) == "")
             ),
             None,
         )
@@ -2107,9 +2107,9 @@ def _find_existing_certificate_for_unit(
                 for certificate in all_candidates
                 if unit_ddt
                 and _norm(certificate.ddt) == unit_ddt
-                and not _norm(certificate.esolver_id_documento)
-                and not _norm(certificate.esolver_id_riga_doc)
-                and not _norm(certificate.esolver_rif_lotto_alfanum)
+                and not _norm(getattr(certificate, "esolver_id_documento", None))
+                and not _norm(getattr(certificate, "esolver_id_riga_doc", None))
+                and not _norm(getattr(certificate, "esolver_rif_lotto_alfanum", None))
             ),
             None,
         )
