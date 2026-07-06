@@ -357,6 +357,24 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN cod_f3 TEXT")
         if "ddt" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN ddt TEXT")
+        if "esolver_id_documento" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN esolver_id_documento VARCHAR(128)")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_esolver_id_documento "
+                "ON quarta_taglio_final_certificates (esolver_id_documento)"
+            )
+        if "esolver_id_riga_doc" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN esolver_id_riga_doc VARCHAR(128)")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_esolver_id_riga_doc "
+                "ON quarta_taglio_final_certificates (esolver_id_riga_doc)"
+            )
+        if "esolver_rif_lotto_alfanum" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN esolver_rif_lotto_alfanum VARCHAR(128)")
+            certificate_statements.append(
+                "CREATE INDEX IF NOT EXISTS ix_quarta_taglio_final_certificates_esolver_rif_lotto_alfanum "
+                "ON quarta_taglio_final_certificates (esolver_rif_lotto_alfanum)"
+            )
         if "ordine_cliente" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN ordine_cliente TEXT")
         if "quantita" not in certificate_columns:

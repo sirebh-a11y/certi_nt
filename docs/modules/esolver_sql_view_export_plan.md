@@ -1,8 +1,37 @@
 # Vista SQL Certi verso eSolver - piano di lavoro
 
-Stato: piano/audit, non implementato.
+Stato: piano/audit storico + implementazione alpha parziale su endpoint HTTP.
 
 Regola operativa: non applicare modifiche a codice, database o server senza conferma esplicita di Silvano.
+
+## Aggiornamento alpha 2026-07-03
+
+Per rispondere rapidamente al punto di Walter senza introdurre subito una tabella figlia, in alpha e stato scelto un intervento diretto e prudente:
+
+- Certi continua a mostrare una sola riga per OL nella pagina `Certificazione / OL Quarta`;
+- il `Registro certificazione` puo invece creare righe distinte quando eSolver espone piu destinazioni reali per lo stesso OL/CodF3/DDT;
+- la distinzione ora usa anche `IdDocumento`, `IdRigaDoc` e `RifLottoAlfanum`;
+- l'endpoint HTTP espone questi tre campi, piu `Quantita`;
+- un Word/record in attesa DDT puo essere agganciato una sola volta a una riga eSolver; se arriva una seconda riga eSolver, nasce un nuovo record;
+- un PDF gia chiuso non viene sovrascritto in silenzio.
+
+Campi endpoint aggiornati:
+
+- `IdCerti`
+- `OL`
+- `DDT`
+- `IdDocumento`
+- `IdRigaDoc`
+- `RifLottoAlfanum`
+- `CodF3`
+- `NumeroCertificato`
+- `DataCertificato`
+- `Quantita`
+- `PdfUrl`
+- `Stato`
+- `UpdatedAt`
+
+Nota importante: la soluzione con tabella figlia resta il modello piu robusto per una fase successiva, ma non e stata introdotta in questa alpha per ridurre rischio e ampiezza dell'intervento.
 
 ## Obiettivo
 

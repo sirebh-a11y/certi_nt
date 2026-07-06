@@ -317,7 +317,20 @@ export default function IntegrationsPage() {
   }
 
   function renderCertiExport() {
-    const fields = ["OL", "DDT", "CodF3", "NumeroCertificato", "DataCertificato", "PdfUrl", "Stato", "UpdatedAt"];
+    const fields = [
+      "OL",
+      "DDT",
+      "IdDocumento",
+      "IdRigaDoc",
+      "RifLottoAlfanum",
+      "CodF3",
+      "NumeroCertificato",
+      "DataCertificato",
+      "Quantita",
+      "PdfUrl",
+      "Stato",
+      "UpdatedAt",
+    ];
     return (
       <section className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="border-b border-slate-100 pb-4">

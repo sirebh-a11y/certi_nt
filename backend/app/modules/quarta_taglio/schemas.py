@@ -123,6 +123,9 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     unit_key: str | None = None
     cod_f3: str | None = None
     ddt: str | None = None
+    esolver_id_documento: str | None = None
+    esolver_id_riga_doc: str | None = None
+    esolver_rif_lotto_alfanum: str | None = None
     ordine_cliente: str | None = None
     quantita: float | None = None
     cdq: str | None = None
@@ -206,6 +209,9 @@ class QuartaTaglioNoteResponse(BaseModel):
 
 
 class QuartaTaglioEsolverDdtRowResponse(BaseModel):
+    id_documento: str | None = None
+    id_riga_doc: str | None = None
+    rif_lotto_alfanum: str | None = None
     cod_f3: str | None = None
     orp: str | None = None
     rag_soc: str | None = None
@@ -220,6 +226,9 @@ class QuartaTaglioEsolverDdtRowResponse(BaseModel):
 class QuartaTaglioCertifiableUnitResponse(BaseModel):
     unit_key: str
     cod_odp: str
+    id_documento: str | None = None
+    id_riga_doc: str | None = None
+    rif_lotto_alfanum: str | None = None
     cod_f3: str | None = None
     ddt: str | None = None
     cliente: str | None = None

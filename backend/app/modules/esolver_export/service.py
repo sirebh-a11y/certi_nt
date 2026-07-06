@@ -25,9 +25,13 @@ def list_esolver_pdf_certificates(db: Session, *, public_base_url: str) -> Esolv
             id_certi=certificate.id,
             ol=certificate.cod_odp,
             ddt=certificate.ddt or "",
+            id_documento=certificate.esolver_id_documento,
+            id_riga_doc=certificate.esolver_id_riga_doc,
+            rif_lotto_alfanum=certificate.esolver_rif_lotto_alfanum,
             cod_f3=certificate.cod_f3 or "",
             numero_certificato=certificate.certificate_number or certificate.draft_number,
             data_certificato=certificate.cert_date,
+            quantita=certificate.quantita,
             pdf_url=(
                 f"{base_url}/api/quarta-taglio/certificates/{certificate.id}/pdf-file"
                 f"?download_token={certificate.download_token}"
@@ -45,9 +49,13 @@ def esolver_pdf_export_fields() -> list[str]:
     return [
         "OL",
         "DDT",
+        "IdDocumento",
+        "IdRigaDoc",
+        "RifLottoAlfanum",
         "CodF3",
         "NumeroCertificato",
         "DataCertificato",
+        "Quantita",
         "PdfUrl",
         "Stato",
         "UpdatedAt",

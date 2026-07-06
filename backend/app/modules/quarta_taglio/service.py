@@ -240,6 +240,9 @@ order by
 
 ESOLVER_DDT_QUERY_TEMPLATE = """
 select
+    cast(IdDocumento as varchar(128)) as IdDocumento,
+    cast(IdRigaDoc as varchar(128)) as IdRigaDoc,
+    cast(RifLottoAlfanum as varchar(128)) as RifLottoAlfanum,
     cast(CodF3 as varchar(128)) as CodF3,
     cast(ORP as varchar(128)) as ORP,
     cast(RagSoc as varchar(255)) as RagSoc,
@@ -256,6 +259,9 @@ order by DDT, IdDocumento, IdRigaDoc
 
 ESOLVER_DDT_BATCH_QUERY_TEMPLATE = """
 select
+    cast(IdDocumento as varchar(128)) as IdDocumento,
+    cast(IdRigaDoc as varchar(128)) as IdRigaDoc,
+    cast(RifLottoAlfanum as varchar(128)) as RifLottoAlfanum,
     cast(CodF3 as varchar(128)) as CodF3,
     cast(ORP as varchar(128)) as ORP,
     cast(RagSoc as varchar(255)) as RagSoc,
@@ -1913,6 +1919,9 @@ def _apply_certificate_register_unit_fields(
     certificate.unit_key = unit.unit_key
     certificate.cod_f3 = _clean_text(unit.cod_f3)
     certificate.ddt = _clean_text(unit.ddt)
+    certificate.esolver_id_documento = _clean_text(unit.id_documento)
+    certificate.esolver_id_riga_doc = _clean_text(unit.id_riga_doc)
+    certificate.esolver_rif_lotto_alfanum = _clean_text(unit.rif_lotto_alfanum)
     certificate_date = _certificate_datetime_from_ddt(unit.ddt)
     if certificate_date:
         certificate.cert_date = certificate_date
@@ -1924,6 +1933,23 @@ def _apply_certificate_register_unit_fields(
     certificate.cdq_key = certificate.cdq_key or _cdq_key_from_detail(detail)
     certificate.cdq_signature = _cdq_signature_from_detail(detail)
     certificate.cdq_values = _cdq_values_from_detail(detail)
+
+
+def _apply_certificate_esolver_identity_fields(
+    certificate: QuartaTaglioFinalCertificate,
+    *,
+    unit: QuartaTaglioCertifiableUnitResponse,
+) -> None:
+    """Attach missing eSolver row identity without changing closed certificate content."""
+    id_documento = _clean_text(unit.id_documento)
+    id_riga_doc = _clean_text(unit.id_riga_doc)
+    rif_lotto = _clean_text(unit.rif_lotto_alfanum)
+    if id_documento and not _clean_text(certificate.esolver_id_documento):
+        certificate.esolver_id_documento = id_documento
+    if id_riga_doc and not _clean_text(certificate.esolver_id_riga_doc):
+        certificate.esolver_id_riga_doc = id_riga_doc
+    if rif_lotto and not _clean_text(certificate.esolver_rif_lotto_alfanum):
+        certificate.esolver_rif_lotto_alfanum = rif_lotto
 
 
 def _has_numbered_certificate_for_ol(db: Session, *, cod_odp: str) -> bool:
@@ -1995,6 +2021,8 @@ def _sync_certifiable_unit_register(
             used_certificate_ids.add(certificate.id)
 
         if certificate.status == "pdf_final":
+            _apply_certificate_esolver_identity_fields(certificate, unit=unit)
+            db.add(certificate)
             synced.append(certificate)
             continue
         _apply_certificate_register_unit_fields(certificate, detail=detail, unit=unit)
@@ -2041,21 +2069,60 @@ def _find_existing_certificate_for_unit(
     if not unit_cod_f3:
         return None
 
-    candidates = [
+    all_candidates = [
         certificate
         for certificate in certificates
         if certificate.id not in used_certificate_ids
-        and certificate.status != "pdf_final"
         and _norm(certificate.cod_f3) == unit_cod_f3
     ]
-    if not candidates:
+    if not all_candidates:
         return None
+    open_candidates = [certificate for certificate in all_candidates if certificate.status != "pdf_final"]
 
     unit_ddt = _norm(unit.ddt)
-    exact_ddt = next((certificate for certificate in candidates if unit_ddt and _norm(certificate.ddt) == unit_ddt), None)
+    unit_id_documento = _norm(unit.id_documento)
+    unit_id_riga_doc = _norm(unit.id_riga_doc)
+    unit_rif_lotto = _norm(unit.rif_lotto_alfanum)
+    has_esolver_identity = bool(unit_id_documento or unit_id_riga_doc or unit_rif_lotto)
+    if has_esolver_identity:
+        exact_identity = next(
+            (
+                certificate
+                for certificate in all_candidates
+                if (not unit_id_documento or _norm(certificate.esolver_id_documento) == unit_id_documento)
+                and (not unit_id_riga_doc or _norm(certificate.esolver_id_riga_doc) == unit_id_riga_doc)
+                and (not unit_rif_lotto or _norm(certificate.esolver_rif_lotto_alfanum) == unit_rif_lotto)
+                and (unit_id_documento or _norm(certificate.esolver_id_documento) == "")
+                and (unit_id_riga_doc or _norm(certificate.esolver_id_riga_doc) == "")
+                and (unit_rif_lotto or _norm(certificate.esolver_rif_lotto_alfanum) == "")
+            ),
+            None,
+        )
+        if exact_identity is not None:
+            return exact_identity
+
+        legacy_exact_ddt = next(
+            (
+                certificate
+                for certificate in all_candidates
+                if unit_ddt
+                and _norm(certificate.ddt) == unit_ddt
+                and not _norm(certificate.esolver_id_documento)
+                and not _norm(certificate.esolver_id_riga_doc)
+                and not _norm(certificate.esolver_rif_lotto_alfanum)
+            ),
+            None,
+        )
+        if legacy_exact_ddt is not None:
+            return legacy_exact_ddt
+
+        missing_ddt = next((certificate for certificate in open_candidates if not _norm(certificate.ddt)), None)
+        return missing_ddt
+
+    exact_ddt = next((certificate for certificate in all_candidates if unit_ddt and _norm(certificate.ddt) == unit_ddt), None)
     if exact_ddt is not None:
         return exact_ddt
-    missing_ddt = next((certificate for certificate in candidates if not _norm(certificate.ddt)), None)
+    missing_ddt = next((certificate for certificate in open_candidates if not _norm(certificate.ddt)), None)
     return missing_ddt
 
 
@@ -4438,6 +4505,9 @@ def _esolver_rows_from_link(link: QuartaTaglioEsolverLink | None) -> list[Quarta
 def _serialize_esolver_ddt_row(row: dict[str, Any], *, cod_art_keys: set[str]) -> QuartaTaglioEsolverDdtRowResponse:
     cod_f3 = _clean_text(row.get("CodF3"))
     return QuartaTaglioEsolverDdtRowResponse(
+        id_documento=_clean_text(row.get("IdDocumento")),
+        id_riga_doc=_clean_text(row.get("IdRigaDoc")),
+        rif_lotto_alfanum=_clean_text(row.get("RifLottoAlfanum")),
         cod_f3=cod_f3,
         orp=_clean_text(row.get("ORP")),
         rag_soc=_clean_text(row.get("RagSoc")),
@@ -4598,6 +4668,9 @@ def _serialize_final_certificate_register_item(
         unit_key=certificate.unit_key,
         cod_f3=certificate.cod_f3,
         ddt=certificate.ddt,
+        esolver_id_documento=certificate.esolver_id_documento,
+        esolver_id_riga_doc=certificate.esolver_id_riga_doc,
+        esolver_rif_lotto_alfanum=certificate.esolver_rif_lotto_alfanum,
         ordine_cliente=certificate.ordine_cliente,
         quantita=_certificate_quantity_display(certificate),
         cdq=_certificate_cdq_display(certificate),
@@ -5346,20 +5419,32 @@ def _build_certifiable_units(
 ) -> list[QuartaTaglioCertifiableUnitResponse]:
     units: list[QuartaTaglioCertifiableUnitResponse] = []
     if esolver_rows:
-        grouped: dict[tuple[str, str, str, str], list[QuartaTaglioEsolverDdtRowResponse]] = defaultdict(list)
+        grouped: dict[tuple[str, str, str, str, str, str, str], list[QuartaTaglioEsolverDdtRowResponse]] = defaultdict(list)
         for row in esolver_rows:
             grouped[
                 (
                     _clean_text(row.cod_f3) or "",
                     _clean_text(row.ddt) or "",
+                    _clean_text(row.id_documento) or "",
+                    _clean_text(row.id_riga_doc) or "",
+                    _clean_text(row.rif_lotto_alfanum) or "",
                     _clean_text(row.odv_cli) or "",
                     _clean_text(row.odv_f3) or "",
                 )
             ].append(row)
         quarta_keys = {_norm(row.cod_art) for row in quarta_rows if _norm(row.cod_art)}
-        for (cod_f3, ddt, ordine_cliente, conferma_ordine), group_rows in sorted(
+        for (cod_f3, ddt, id_documento, id_riga_doc, rif_lotto_alfanum, ordine_cliente, conferma_ordine), group_rows in sorted(
             grouped.items(),
-            key=lambda item: (_norm(item[0][0]) not in quarta_keys, item[0][0], item[0][1], item[0][2], item[0][3]),
+            key=lambda item: (
+                _norm(item[0][0]) not in quarta_keys,
+                item[0][0],
+                item[0][1],
+                item[0][2],
+                item[0][3],
+                item[0][4],
+                item[0][5],
+                item[0][6],
+            ),
         ):
             status_value = "ready" if cod_f3 and ddt else "incomplete"
             units.append(
@@ -5368,10 +5453,16 @@ def _build_certifiable_units(
                         cod_odp=cod_odp,
                         cod_f3=cod_f3,
                         ddt=ddt,
+                        id_documento=id_documento,
+                        id_riga_doc=id_riga_doc,
+                        rif_lotto_alfanum=rif_lotto_alfanum,
                         ordine_cliente=ordine_cliente,
                         conferma_ordine=conferma_ordine,
                     ),
                     cod_odp=cod_odp,
+                    id_documento=id_documento or None,
+                    id_riga_doc=id_riga_doc or None,
+                    rif_lotto_alfanum=rif_lotto_alfanum or None,
                     cod_f3=cod_f3 or None,
                     ddt=ddt or None,
                     cliente=_join_unique(row.rag_soc for row in group_rows) or None,
@@ -5409,9 +5500,25 @@ def _certifiable_unit_key(
     cod_odp: str,
     cod_f3: str | None,
     ddt: str | None,
+    id_documento: str | None = None,
+    id_riga_doc: str | None = None,
+    rif_lotto_alfanum: str | None = None,
     ordine_cliente: str | None = None,
     conferma_ordine: str | None = None,
 ) -> str:
+    if _clean_text(id_documento) or _clean_text(id_riga_doc) or _clean_text(rif_lotto_alfanum):
+        return "|".join(
+            [
+                _clean_text(cod_odp) or "-",
+                _clean_text(cod_f3) or "-",
+                _clean_text(ddt) or "-",
+                _clean_text(id_documento) or "-",
+                _clean_text(id_riga_doc) or "-",
+                _clean_text(rif_lotto_alfanum) or "-",
+                _clean_text(ordine_cliente) or "-",
+                _clean_text(conferma_ordine) or "-",
+            ]
+        )
     return "|".join(
         [
             _clean_text(cod_odp) or "-",
