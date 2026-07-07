@@ -11,7 +11,7 @@ import pytesseract
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import cast
+from typing import Iterable, cast
 from uuid import uuid4
 from datetime import UTC, date, datetime, time as datetime_time
 
@@ -11098,7 +11098,10 @@ def detect_standard_notes(
                     openai_api_key=openai_api_key,
                     certificate_ai_cache=None,
                 )
-                _enrich_notes_with_lst_00_class_b(payload)
+                _enrich_notes_with_lst_00_class_b(
+                    payload,
+                    fallback_page_id=certificate_document.pages[0].id if certificate_document.pages else None,
+                )
                 vision_matches = cast(dict[str, dict[str, str | int]], payload.get("notes") or {})
             else:
                 vision_matches = _detect_note_matches_with_vision(
@@ -24569,8 +24572,11 @@ def _apply_aluminium_bozen_certificate_ai_payload(
     payload: dict[str, object],
     actor_id: int,
 ) -> None:
-    _enrich_notes_with_lst_00_class_b(payload)
     certificate_document = get_document(db, row.document_certificato_id)
+    _enrich_notes_with_lst_00_class_b(
+        payload,
+        fallback_page_id=certificate_document.pages[0].id if certificate_document.pages else None,
+    )
     raw_payload_text = _string_or_none(cast(dict[str, object], payload).get("debug_raw_output"))
     if raw_payload_text:
         _create_ai_payload_evidence(
@@ -27508,32 +27514,70 @@ def _extract_extended_class_a_snippet(text: str) -> str | None:
     return None
 
 
-def _enrich_notes_with_lst_00_class_b(payload: dict[str, object]) -> dict[str, object]:
+def _payload_page_id(value: object) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    page_id = value.get("page_id")
+    if isinstance(page_id, int):
+        return page_id if page_id > 0 else None
+    if isinstance(page_id, str) and page_id.strip().isdigit():
+        parsed = int(page_id.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _payload_text_candidates(value: object) -> list[str]:
+    if isinstance(value, dict):
+        candidates: list[str] = []
+        for key in ("snippet", "raw", "standardized", "final", "value", "evidence", "source_crop"):
+            text = _string_or_none(cast(str | int | None, value.get(key)))
+            if text is not None:
+                candidates.append(text)
+        return candidates
+    text = _string_or_none(cast(str | int | None, value))
+    return [text] if text is not None else []
+
+
+def _iter_lst_00_payload_sources(payload: dict[str, object]) -> Iterable[tuple[str, int | None, str]]:
+    for block_name in ("notes", "mechanical_requirement", "core_fields", "supplier_fields", "match_values"):
+        block_obj = payload.get(block_name)
+        if not isinstance(block_obj, dict):
+            continue
+        for value in block_obj.values():
+            candidates = _payload_text_candidates(value)
+            if candidates and _text_has_lst_00_us_control_implication(*candidates):
+                matched_snippet = next(
+                    (candidate for candidate in candidates if _text_has_lst_00_us_control_implication(candidate)),
+                    candidates[0],
+                )
+                yield matched_snippet, _payload_page_id(value), "chatgpt"
+
+    debug_raw_output = _string_or_none(cast(str | int | None, payload.get("debug_raw_output")))
+    if debug_raw_output and _text_has_lst_00_us_control_implication(debug_raw_output):
+        yield "LST 00", None, "chatgpt"
+
+
+def _enrich_notes_with_lst_00_class_b(
+    payload: dict[str, object],
+    *,
+    fallback_page_id: int | None = None,
+) -> dict[str, object]:
     notes_obj = payload.get("notes")
     notes = cast(dict[str, dict[str, str | int]], notes_obj if isinstance(notes_obj, dict) else {})
     if notes.get("nota_us_control_class_b"):
         return payload
 
-    requirement_matches = cast(dict[str, dict[str, str | int]], payload.get("mechanical_requirement") or {})
-    for match in requirement_matches.values():
-        if not isinstance(match, dict):
-            continue
-        snippet = _string_or_none(cast(str | int | None, match.get("snippet")))
-        raw = _string_or_none(cast(str | int | None, match.get("raw")))
-        standardized = _string_or_none(cast(str | int | None, match.get("standardized")))
-        final = _string_or_none(cast(str | int | None, match.get("final")))
-        if not _text_has_lst_00_us_control_implication(snippet, raw, standardized, final):
-            continue
-        page_id = match.get("page_id")
-        if page_id is None:
+    for snippet, page_id, method in _iter_lst_00_payload_sources(payload):
+        resolved_page_id = page_id or fallback_page_id
+        if resolved_page_id is None:
             continue
         enriched_notes = dict(notes)
         enriched_notes["nota_us_control_class_b"] = {
-            "page_id": int(page_id),
-            "snippet": snippet or raw or standardized or final or "LST 00",
+            "page_id": int(resolved_page_id),
+            "snippet": snippet or "LST 00",
             "standardized": "true",
             "final": "true",
-            "method": _string_or_none(cast(str | int | None, match.get("method"))) or "chatgpt",
+            "method": method,
         }
         payload["notes"] = enriched_notes
         return payload
@@ -28921,7 +28965,7 @@ def _detect_note_matches_with_vision(
             "Per nota_us_control_class_a_type1_bsh restituisci value true solo se il certificato richiama SAE AMS-STD-2154-E "
             "Class A Type 1 con single indication size >2mm e control of backwall echo drop > 50% BSH, anche con piccole varianti o refusi; "
             "in evidence riporta la frase visibile originale, non un true generico. "
-            "Per nota_us_control_class_b restituisci true se una nota ASTM/AMS indica chiaramente Class B. "
+            "Per nota_us_control_class_b restituisci true se una nota ASTM/AMS indica chiaramente Class B oppure se compare un richiamo LST 00. "
             "Se nel certificato compaiono sia Class A sia Class B, restituisci true per entrambe. "
             "Per nota_rohs restituisci true solo se la conformita RoHS e chiaramente dichiarata. "
             "Per nota_radioactive_free restituisci true solo se il certificato dichiara esplicitamente assenza di contaminazione radioattiva."
@@ -29020,7 +29064,9 @@ def _normalize_vision_note_matches(
                 final_value = "true"
         elif field_name in {"nota_us_control_class_a", "nota_us_control_class_b"}:
             expected_class = "A" if field_name.endswith("_a") else "B"
-            if _note_value_has_us_control_class(raw_value, evidence, expected_class):
+            if _note_value_has_us_control_class(raw_value, evidence, expected_class) or (
+                expected_class == "B" and _text_has_lst_00_us_control_implication(raw_value, evidence)
+            ):
                 final_value = "true"
         elif field_name == "nota_rohs":
             haystack = evidence.lower()
