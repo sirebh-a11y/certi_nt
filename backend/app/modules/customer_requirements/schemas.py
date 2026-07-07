@@ -22,9 +22,11 @@ class CustomerRequirementBase(BaseModel):
     requires_lot_traceability_text: bool = False
     requires_lot_traceability_photo: bool = False
     requires_dimensional: bool = False
+    requires_electrical_conductivity_forged: bool = False
     requires_marking: bool = False
     requires_macro_micro: bool = False
     requires_ndt: bool = False
+    specific_requirements: str | None = None
     note: str | None = None
 
     @field_validator("cod_f3", "cliente")
@@ -32,9 +34,9 @@ class CustomerRequirementBase(BaseModel):
     def normalize_required_text(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator("note")
+    @field_validator("specific_requirements", "note")
     @classmethod
-    def normalize_note(cls, value: str | None) -> str | None:
+    def normalize_optional_fields(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)
 
 
@@ -59,9 +61,11 @@ class CustomerRequirementResponse(BaseModel):
     requires_lot_traceability_text: bool
     requires_lot_traceability_photo: bool
     requires_dimensional: bool
+    requires_electrical_conductivity_forged: bool
     requires_marking: bool
     requires_macro_micro: bool
     requires_ndt: bool
+    specific_requirements: str | None
     note: str | None
     source_sheet: str | None
     source_row: int | None

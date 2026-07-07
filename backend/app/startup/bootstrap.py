@@ -68,6 +68,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
     ensure_supplier_installation_code_columns()
+    ensure_customer_requirement_columns()
     db: Session = SessionLocal()
     try:
         seed_departments(db)
@@ -140,6 +141,35 @@ def ensure_supplier_installation_code_columns() -> None:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+
+
+def ensure_customer_requirement_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("customer_requirements"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("customer_requirements")}
+    statements: list[str] = []
+    if "requires_electrical_conductivity_forged" not in columns:
+        statements.append(
+            "ALTER TABLE customer_requirements "
+            "ADD COLUMN requires_electrical_conductivity_forged BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    if "specific_requirements" not in columns:
+        statements.append("ALTER TABLE customer_requirements ADD COLUMN specific_requirements TEXT")
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text(
+                """
+                UPDATE customer_requirements
+                SET requires_electrical_conductivity_forged = TRUE
+                WHERE lower(trim(coalesce(note, ''))) = 'indicare conducibilità elettrica'
+                """
+            )
+        )
 
 
 def ensure_acquisition_processing_run_columns() -> None:

@@ -66,6 +66,7 @@ const CUSTOMER_REQUIREMENT_FIELDS = [
   { field: "requires_lot_traceability_text", label: "Tracciabilita Lotto (datario) Indicazione" },
   { field: "requires_lot_traceability_photo", label: "Tracciabilita Lotto (datario) Foto" },
   { field: "requires_dimensional", label: "Dimensionale (Dimensioni concordate con cliente)" },
+  { field: "requires_electrical_conductivity_forged", label: "Conducibilita elettrica (sul forgiato)" },
   { field: "requires_marking", label: "Marcature (Tracciabilita aggiuntive)" },
   { field: "requires_macro_micro", label: "Macrografie e/o Micrografie" },
   { field: "requires_ndt", label: "Tracciabilita Controllo NDT" },
@@ -1057,11 +1058,12 @@ export default function QuartaTaglioDetailPage() {
       {customerRequirement ? (
         <Panel title="Requisiti cliente">
           <div className="overflow-x-auto rounded-xl border border-rose-200 bg-rose-50">
-            <table className="w-full table-fixed border-collapse text-sm">
+            <table className="min-w-[1320px] table-fixed border-collapse text-sm">
               <colgroup>
                 {CUSTOMER_REQUIREMENT_FIELDS.map((field) => (
                   <col key={field.field} className="w-[92px]" />
                 ))}
+                <col className="w-[220px]" />
                 <col />
               </colgroup>
               <thead className="bg-rose-50">
@@ -1071,6 +1073,7 @@ export default function QuartaTaglioDetailPage() {
                       {field.label}
                     </th>
                   ))}
+                  <th className="px-3 py-2 align-bottom">Requisiti specifici</th>
                   <th className="px-3 py-2 align-bottom">Note</th>
                 </tr>
               </thead>
@@ -1081,6 +1084,7 @@ export default function QuartaTaglioDetailPage() {
                       <input className="h-4 w-4 accent-rose-700" checked={Boolean(customerRequirement[field.field])} readOnly type="checkbox" />
                     </td>
                   ))}
+                  <td className="px-3 py-3 text-sm font-medium text-rose-950">{customerRequirement.specific_requirements || "-"}</td>
                   <td className="px-3 py-3 text-sm font-medium text-rose-950">{customerRequirement.note || "-"}</td>
                 </tr>
               </tbody>

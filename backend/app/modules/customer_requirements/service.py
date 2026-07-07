@@ -18,6 +18,7 @@ from app.modules.customer_requirements.schemas import (
 
 
 SEED_PATH = Path(__file__).with_name("data") / "customer_requirements_seed.json"
+ELECTRICAL_CONDUCTIVITY_SEED_NOTE = "indicare conducibilità elettrica"
 
 
 def list_customer_requirements(db: Session) -> CustomerRequirementListResponse:
@@ -107,9 +108,11 @@ def seed_customer_requirements(db: Session) -> None:
                 requires_lot_traceability_text=bool(seed.get("requires_lot_traceability_text")),
                 requires_lot_traceability_photo=bool(seed.get("requires_lot_traceability_photo")),
                 requires_dimensional=bool(seed.get("requires_dimensional")),
+                requires_electrical_conductivity_forged=_seed_requires_electrical_conductivity(seed),
                 requires_marking=bool(seed.get("requires_marking")),
                 requires_macro_micro=bool(seed.get("requires_macro_micro")),
                 requires_ndt=bool(seed.get("requires_ndt")),
+                specific_requirements=seed.get("specific_requirements"),
                 note=seed.get("note"),
                 source_sheet=seed.get("source_sheet"),
                 source_row=seed.get("source_row"),
@@ -140,10 +143,18 @@ def _apply_payload(
     item.requires_lot_traceability_text = payload.requires_lot_traceability_text
     item.requires_lot_traceability_photo = payload.requires_lot_traceability_photo
     item.requires_dimensional = payload.requires_dimensional
+    item.requires_electrical_conductivity_forged = payload.requires_electrical_conductivity_forged
     item.requires_marking = payload.requires_marking
     item.requires_macro_micro = payload.requires_macro_micro
     item.requires_ndt = payload.requires_ndt
+    item.specific_requirements = payload.specific_requirements
     item.note = payload.note
+
+
+def _seed_requires_electrical_conductivity(seed: dict) -> bool:
+    if seed.get("requires_electrical_conductivity_forged"):
+        return True
+    return str(seed.get("note") or "").strip().casefold() == ELECTRICAL_CONDUCTIVITY_SEED_NOTE
 
 
 def _ensure_unique_cod_f3(db: Session, cod_f3: str) -> None:

@@ -14,16 +14,18 @@ const BOOLEAN_COLUMNS = [
   { field: "requires_lot_traceability_text", label: "Tracciabilità Lotto (datario) Indicazione" },
   { field: "requires_lot_traceability_photo", label: "Tracciabilità Lotto (datario) Foto" },
   { field: "requires_dimensional", label: "Dimensionale (Dimensioni concordate con cliente)" },
+  { field: "requires_electrical_conductivity_forged", label: "Conducibilità elettrica (sul forgiato)" },
   { field: "requires_marking", label: "Marcature (Tracciabilità aggiuntive)" },
   { field: "requires_macro_micro", label: "Macrografie e/o Micrografie" },
   { field: "requires_ndt", label: "Tracciabilità Controllo NDT" },
 ];
 
-const TEXT_FIELDS = ["cod_f3", "cliente", "note"];
+const TEXT_FIELDS = ["cod_f3", "cliente", "specific_requirements", "note"];
 const EDITABLE_FIELDS = [...TEXT_FIELDS, ...BOOLEAN_COLUMNS.map((column) => column.field)];
 const DEFAULT_DRAFT = {
   cod_f3: "",
   cliente: "",
+  specific_requirements: "",
   note: "",
   requires_chemical_analysis: false,
   requires_mechanical_mp: false,
@@ -32,6 +34,7 @@ const DEFAULT_DRAFT = {
   requires_lot_traceability_text: false,
   requires_lot_traceability_photo: false,
   requires_dimensional: false,
+  requires_electrical_conductivity_forged: false,
   requires_marking: false,
   requires_macro_micro: false,
   requires_ndt: false,
@@ -109,7 +112,7 @@ function rowSearchText(row, draft = null) {
   const flagText = BOOLEAN_COLUMNS.filter((column) => source[column.field])
     .map((column) => column.label)
     .join(" ");
-  return normalizeForSearch([source.cod_f3, source.cliente, source.note, flagText].join(" "));
+  return normalizeForSearch([source.cod_f3, source.cliente, source.specific_requirements, source.note, flagText].join(" "));
 }
 
 function matchesQuery(row, draft, query) {
@@ -157,6 +160,7 @@ function payloadFromDraft(draft) {
     ...draft,
     cod_f3: textValue(draft.cod_f3).trim(),
     cliente: textValue(draft.cliente).trim(),
+    specific_requirements: textValue(draft.specific_requirements).trim() || null,
     note: textValue(draft.note).trim() || null,
   };
 }
@@ -558,7 +562,7 @@ export default function CustomerRequirementsPage() {
         {showNewRow && (
           <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50/60 p-4">
             <p className="text-sm font-semibold text-slate-900">Nuovo requisito cliente</p>
-            <div className="mt-4 grid gap-3 xl:grid-cols-[180px_260px_1fr_auto]">
+            <div className="mt-4 grid gap-3 xl:grid-cols-[150px_220px_1fr_1fr_auto]">
               <input
                 className={inputClass()}
                 disabled={!canEdit}
@@ -572,6 +576,13 @@ export default function CustomerRequirementsPage() {
                 placeholder="Cliente"
                 value={newDraft.cliente}
                 onChange={(event) => updateNewDraft("cliente", event.target.value)}
+              />
+              <input
+                className={inputClass()}
+                disabled={!canEdit}
+                placeholder="Requisiti specifici"
+                value={newDraft.specific_requirements}
+                onChange={(event) => updateNewDraft("specific_requirements", event.target.value)}
               />
               <input
                 className={inputClass()}
@@ -657,15 +668,16 @@ export default function CustomerRequirementsPage() {
             className="incoming-grid-scroll overflow-x-hidden overflow-y-visible"
             onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           >
-          <table ref={tableRef} className="min-w-[1786px] table-fixed border-collapse text-sm">
+          <table ref={tableRef} className="min-w-[2420px] table-fixed border-collapse text-sm">
             <colgroup>
               <col className="w-[180px]" />
               <col className="w-[164px]" />
               {BOOLEAN_COLUMNS.map((column) => (
                 <col key={column.field} className="w-[54px]" />
               ))}
-              <col className="w-[616px]" />
-              <col className="w-[150px]" />
+              <col className="w-[450px]" />
+              <col className="w-[560px]" />
+              <col className="w-[260px]" />
             </colgroup>
             <thead className="sticky-list-head">
               <tr className="border-b border-slate-200 bg-slate-50">
@@ -681,6 +693,7 @@ export default function CustomerRequirementsPage() {
                     vertical
                   />
                 ))}
+                <SortableHeader field="specific_requirements" label="Requisiti specifici" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
                 <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Azioni</th>
               </tr>
@@ -688,7 +701,7 @@ export default function CustomerRequirementsPage() {
             <tbody>
               {loading && (
                 <tr>
-                  <td className="px-3 py-10 text-center text-slate-500" colSpan={BOOLEAN_COLUMNS.length + 4}>
+                  <td className="px-3 py-10 text-center text-slate-500" colSpan={BOOLEAN_COLUMNS.length + 5}>
                     Caricamento requisiti cliente...
                   </td>
                 </tr>
@@ -728,6 +741,14 @@ export default function CustomerRequirementsPage() {
                       ))}
                       <td className="px-3 py-3 align-top">
                         <textarea
+                          className={`${inputClass(textValue(row.specific_requirements) !== textValue(draft.specific_requirements))} min-h-10 resize-y`}
+                          disabled={!canEdit}
+                          value={draft.specific_requirements || ""}
+                          onChange={(event) => updateDraft(row.id, "specific_requirements", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <textarea
                           className={`${inputClass(textValue(row.note) !== textValue(draft.note))} min-h-10 resize-y`}
                           disabled={!canEdit}
                           value={draft.note || ""}
@@ -735,15 +756,17 @@ export default function CustomerRequirementsPage() {
                         />
                       </td>
                       <td className="px-3 py-3 text-right align-top">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                            type="button"
-                            disabled={!canEdit || !changed || savingId === row.id}
-                            onClick={() => setDrafts((current) => ({ ...current, [row.id]: buildDraft(row) }))}
-                          >
-                            Annulla
-                          </button>
+                        <div className="flex min-w-[236px] justify-end gap-2 whitespace-nowrap">
+                          {changed ? (
+                            <button
+                              className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                              type="button"
+                              disabled={!canEdit || savingId === row.id}
+                              onClick={() => setDrafts((current) => ({ ...current, [row.id]: buildDraft(row) }))}
+                            >
+                              Annulla modifiche
+                            </button>
+                          ) : null}
                           <button
                             className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
                             type="button"
@@ -767,7 +790,7 @@ export default function CustomerRequirementsPage() {
                 })}
               {!loading && visibleRows.length === 0 && (
                 <tr>
-                  <td className="px-3 py-10 text-center text-slate-500" colSpan={BOOLEAN_COLUMNS.length + 4}>
+                  <td className="px-3 py-10 text-center text-slate-500" colSpan={BOOLEAN_COLUMNS.length + 5}>
                     Nessun requisito cliente trovato con i filtri attuali.
                   </td>
                 </tr>
