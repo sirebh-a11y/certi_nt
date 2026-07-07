@@ -587,6 +587,16 @@ function addPropertyRow() {
             />
           </div>
 
+          <label className="mt-5 block text-sm font-medium text-slate-700">
+            Note standard
+            <textarea
+              className="mt-2 min-h-24 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-ink"
+              onChange={(event) => updateDraft("note", event.target.value)}
+              placeholder="Note interne per catalogazione o verifica dello standard"
+              value={draft.note}
+            />
+          </label>
+
           <EditableSection title="Chimica" description="Limiti min/max per elemento, senza unità nel DB." onAdd={addChemistryRow}>
             <div className="overflow-auto rounded-xl border border-slate-200">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
