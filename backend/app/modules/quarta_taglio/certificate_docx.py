@@ -17,7 +17,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT, WD_R
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor, Twips
+from docx.shared import Inches, Mm, Pt, RGBColor, Twips
 
 from app.core.users.models import User
 from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse
@@ -28,6 +28,8 @@ ASSET_ROOT = APP_ROOT / "assets" / "certificates"
 LOGO_PATH = ASSET_ROOT / "forgialluminio_logo.png"
 QUALITY_MANAGER_SIGNATURE_PATH = ASSET_ROOT / "quality_manager_signature.png"
 HEADER_WIDTH = Inches(7.1)
+A4_PAGE_WIDTH = Mm(210)
+A4_PAGE_HEIGHT = Mm(297)
 HEADER_LOGO_WIDTH = Inches(2.18)
 HEADER_LOGO_WIDTH_EMU = 1993392
 HEADER_LOGO_HEIGHT_EMU = 927741
@@ -224,6 +226,7 @@ def append_pdf_attachments_to_docx(
 
 def _set_document_sections_layout(document: Document) -> None:
     for section in document.sections:
+        _set_section_a4(section)
         section.top_margin = Inches(2.75)
         section.bottom_margin = Inches(0.75)
         section.left_margin = Inches(0.55)
@@ -232,6 +235,11 @@ def _set_document_sections_layout(document: Document) -> None:
         section.footer_distance = Inches(0.12)
         section.different_first_page_header_footer = False
         _remove_page_number_restart(section)
+
+
+def _set_section_a4(section) -> None:
+    section.page_width = A4_PAGE_WIDTH
+    section.page_height = A4_PAGE_HEIGHT
 
 
 def _apply_document_shell(
@@ -546,6 +554,7 @@ def _append_pdf_attachments(
             for page_index, page in enumerate(pdf_document, start=1):
                 if attachment_section is None:
                     attachment_section = document.add_section(WD_SECTION.NEW_PAGE)
+                    _set_section_a4(attachment_section)
                     attachment_section.top_margin = Inches(0.45)
                     attachment_section.bottom_margin = Inches(0.65)
                     attachment_section.left_margin = Inches(0.45)
@@ -742,6 +751,7 @@ def update_docx_content_controls(source_path: Path, output_path: Path, values: d
 
 def normalize_certificate_docx_layout(path: Path) -> None:
     """Apply the exact Word/PDF-safe header values selected in the audit tests."""
+    _ensure_docx_a4_page_size(path)
     tmp_path = path.with_suffix(f"{path.suffix}.layout.tmp")
     changed = False
     try:
@@ -762,6 +772,21 @@ def normalize_certificate_docx_layout(path: Path) -> None:
         tmp_path.replace(path)
     else:
         tmp_path.unlink(missing_ok=True)
+
+
+def _ensure_docx_a4_page_size(path: Path) -> None:
+    try:
+        document = Document(str(path))
+    except Exception:
+        return
+
+    changed = False
+    for section in document.sections:
+        if int(section.page_width) != int(A4_PAGE_WIDTH) or int(section.page_height) != int(A4_PAGE_HEIGHT):
+            _set_section_a4(section)
+            changed = True
+    if changed:
+        document.save(str(path))
 
 
 def _normalize_certificate_header_xml(xml: str) -> str:
@@ -1090,10 +1115,23 @@ def _add_signature_label_value(paragraph, label: str, value: object) -> None:
 
 
 def _alloy_label(detail: QuartaTaglioDetailResponse) -> str:
-    if detail.selected_standard and detail.selected_standard.label:
-        parts = [part.strip() for part in detail.selected_standard.label.split("·") if part.strip()]
-        return " ".join(parts[:3]) if parts else detail.selected_standard.label
+    if detail.selected_standard:
+        material_label = getattr(detail.selected_standard, "certificate_material_label", None)
+        if material_label:
+            return material_label
+        if detail.selected_standard.label:
+            return _fallback_certificate_material_label(detail.selected_standard.label)
     return "-"
+
+
+def _fallback_certificate_material_label(label: str) -> str:
+    parts = [part.strip() for part in label.split("·") if part.strip()]
+    if not parts:
+        return label
+    alloy = parts[0]
+    treatment = next((part for part in parts[1:] if re.fullmatch(r"[Tt]\d+[A-Za-z0-9-]*", part)), "")
+    alloy_label = alloy if alloy.upper().startswith("EN AW") else f"EN AW {alloy}"
+    return " ".join(part for part in (alloy_label, treatment) if part).strip()
 
 
 def _alloy_code(detail: QuartaTaglioDetailResponse) -> str:

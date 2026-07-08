@@ -3547,6 +3547,11 @@ def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> 
         id=standard.id,
         code=standard.code,
         label=_standard_label(standard),
+        lega_base=standard.lega_base,
+        lega_designazione=standard.lega_designazione,
+        variante_lega=standard.variante_lega,
+        trattamento_termico=standard.trattamento_termico,
+        certificate_material_label=_standard_certificate_material_label(standard),
         confidence="confermata",
         score=999,
         reasons=["confermato manualmente"],
@@ -4153,6 +4158,11 @@ def _suggest_standard_candidates(
                 id=standard.id,
                 code=standard.code,
                 label=_standard_label(standard),
+                lega_base=standard.lega_base,
+                lega_designazione=standard.lega_designazione,
+                variante_lega=standard.variante_lega,
+                trattamento_termico=standard.trattamento_termico,
+                certificate_material_label=_standard_certificate_material_label(standard),
                 confidence=confidence,
                 score=score,
                 reasons=reasons,
@@ -4240,6 +4250,14 @@ def _standard_alloy_label(standard: NormativeStandard) -> str:
     if variant and _norm(variant) not in _norm(label):
         label = f"{label} {variant}".strip()
     return label or standard.code
+
+
+def _standard_certificate_material_label(standard: NormativeStandard) -> str:
+    alloy = _standard_alloy_label(standard)
+    treatment = _clean_text(standard.trattamento_termico)
+    prefix = "" if alloy.upper().startswith("EN AW") else "EN AW"
+    parts = [prefix, alloy, treatment]
+    return " ".join(part for part in parts if part).strip()
 
 
 def _first_numeric(values: Any) -> float | None:
