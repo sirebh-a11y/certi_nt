@@ -82,6 +82,10 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
         for tag in expected_tags:
             self.assertIn(f'w:val="{tag}"', header_xml)
         self.assertEqual(header_xml.count("<w:sdt>"), len(expected_tags))
+        self.assertIn("T.D.:", header_xml)
+        self.assertIn("(D.d.T.):", header_xml)
+        self.assertIn("Quantity:", header_xml)
+        self.assertIn("Quantit", header_xml)
 
     def test_update_content_controls_changes_only_tagged_values(self) -> None:
         detail = QuartaTaglioDetailResponse(

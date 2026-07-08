@@ -22,7 +22,6 @@ const EDITABLE_FIELDS = [
   "qualita_data_ricezione",
   "qualita_data_accettazione",
   "qualita_data_richiesta",
-  "qualita_numero_analisi",
 ];
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -155,7 +154,6 @@ function mergeSavedQualityField(row, updatedRow, field) {
   return {
     ...row,
     [field]: updatedRow[field],
-    qualita_numero_analisi_da_ricontrollare: updatedRow.qualita_numero_analisi_da_ricontrollare,
     qualita_note_da_ricontrollare: updatedRow.qualita_note_da_ricontrollare,
     updated_at: updatedRow.updated_at,
   };
@@ -211,7 +209,6 @@ function searchableFieldValues(row, draft) {
     draft.qualita_data_ricezione,
     draft.qualita_data_accettazione,
     draft.qualita_data_richiesta,
-    draft.qualita_numero_analisi,
     row.qualita_valutazione,
     row.qualita_note,
   ]
@@ -273,8 +270,6 @@ function qualitySortValue(row, draft, field) {
       return row.ordine || "";
     case "data_richiesta":
       return draft.qualita_data_richiesta || "";
-    case "numero_analisi":
-      return draft.qualita_numero_analisi || "";
     case "valutazione":
       return EVALUATION_SORT_RANK[row.qualita_valutazione || ""] ?? 99;
     case "note":
@@ -818,7 +813,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1440px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -833,7 +828,6 @@ export default function QualityEvaluationPage() {
               <SortableHeader field="peso" label="Peso Kg" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="ordine" label="Vs. Odv" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="data_richiesta" label="Data richiesta" onSort={toggleSort} sortConfig={sortConfig} />
-              <SortableHeader field="numero_analisi" label="N° analisi" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="valutazione" label="Valutazione" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
             </tr>
@@ -905,19 +899,6 @@ export default function QualityEvaluationPage() {
                       title={autosaveTitle(cellStates[cellKey(row.id, "qualita_data_richiesta")])}
                       type="date"
                       value={draft.qualita_data_richiesta || ""}
-                    />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
-                      className={`w-24 rounded-lg border px-2 py-1.5 ${fieldClass({
-                        changed: textValue(row.qualita_numero_analisi) !== textValue(draft.qualita_numero_analisi),
-                        review: row.qualita_numero_analisi_da_ricontrollare,
-                        status: cellStates[cellKey(row.id, "qualita_numero_analisi")]?.status,
-                      })}`}
-                      onBlur={() => flushQualityCell(row.id, "qualita_numero_analisi")}
-                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_numero_analisi", event.target.value)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_numero_analisi")])}
-                      value={draft.qualita_numero_analisi || ""}
                     />
                   </td>
                   <td className="px-2 py-2">

@@ -31,11 +31,12 @@ HEADER_WIDTH = Inches(7.1)
 A4_PAGE_WIDTH = Mm(210)
 A4_PAGE_HEIGHT = Mm(297)
 HEADER_LOGO_WIDTH = Inches(2.18)
+HEADER_LOGO_HEIGHT = Inches(0.86)
 HEADER_LOGO_WIDTH_EMU = 1993392
-HEADER_LOGO_HEIGHT_EMU = 927741
+HEADER_LOGO_HEIGHT_EMU = 786384
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
-HEADER_FLOW_ROW_HEIGHT = Twips(395)
-HEADER_FLOW_LINE_SPACING = 220 / 240
+HEADER_FLOW_ROW_HEIGHT = Twips(355)
+HEADER_FLOW_LINE_SPACING = 205 / 240
 CHEMISTRY_TABLE_WIDTH_INCHES = 7.1
 CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES = 0.70
 
@@ -275,7 +276,7 @@ def _fill_document_header(header, *, detail: QuartaTaglioDetailResponse, draft_n
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_before = Pt(0)
         paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.add_run().add_picture(str(LOGO_PATH), width=HEADER_LOGO_WIDTH)
+        paragraph.add_run().add_picture(str(LOGO_PATH), width=HEADER_LOGO_WIDTH, height=HEADER_LOGO_HEIGHT)
     else:
         paragraph = center.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -838,13 +839,13 @@ def _normalize_header_flow_xml(xml: str) -> str:
     )
     xml = re.sub(
         r'<w:trHeight w:val="\d+" w:hRule="atLeast"\s*/>',
-        '<w:trHeight w:val="395" w:hRule="atLeast"/>',
+        '<w:trHeight w:val="355" w:hRule="atLeast"/>',
         xml,
         count=4,
     )
     return re.sub(
         r'(<w:spacing w:after="0" w:line=")\d+(" w:lineRule="auto"\s*/>)',
-        r'\g<1>220\g<2>',
+        r'\g<1>205\g<2>',
         xml,
     )
 
@@ -996,14 +997,14 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
             ("Drawing / Description Finished:", "Disegno / Descrizione del finito:", certificate_header.get("descrizione_finished"), "FINISHED_DESCRIPTION"),
         ),
         (
-            ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"), "CONFIRM_ORDER"),
-            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_raw"), "DDT_RAW"),
-            ("D.d.T.:", "D.d.T.:", certificate_header.get("ddt_finished"), "DDT_FINISHED"),
+            ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"), "CONFIRM_ORDER", True),
+            ("T.D.:", "(D.d.T.):", certificate_header.get("ddt_raw"), "DDT_RAW", True),
+            ("T.D.:", "(D.d.T.):", certificate_header.get("ddt_finished"), "DDT_FINISHED", True),
         ),
         (
-            ("", "", "", None),
-            ("Quantity:", "Quantità:", certificate_header.get("quantita_raw"), "QUANTITY_RAW"),
-            ("Quantity:", "Quantità:", certificate_header.get("quantita_finished"), "QUANTITY_FINISHED"),
+            ("", "", "", None, False),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_raw"), "QUANTITY_RAW", True),
+            ("Quantity:", "Quantità:", certificate_header.get("quantita_finished"), "QUANTITY_FINISHED", True),
         ),
     ]
     for cells_data in rows:
@@ -1011,13 +1012,30 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
         row.height = HEADER_FLOW_ROW_HEIGHT
         row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
         cells = row.cells
-        for cell, (english_label, italian_label, value, control_tag) in zip(cells, cells_data):
-            _fill_header_block_cell(cell, english_label, italian_label, value, control_tag=control_tag)
+        for cell, cell_data in zip(cells, cells_data):
+            english_label, italian_label, value, control_tag, *options = cell_data
+            inline_labels = bool(options[0]) if options else False
+            _fill_header_block_cell(
+                cell,
+                english_label,
+                italian_label,
+                value,
+                control_tag=control_tag,
+                inline_labels=inline_labels,
+            )
     _set_table_width(table, HEADER_WIDTH)
     _set_column_widths(table, HEADER_FLOW_COLUMN_WIDTHS)
 
 
-def _fill_header_block_cell(cell, english_label: str, italian_label: str, value: object, *, control_tag: str | None = None) -> None:
+def _fill_header_block_cell(
+    cell,
+    english_label: str,
+    italian_label: str,
+    value: object,
+    *,
+    control_tag: str | None = None,
+    inline_labels: bool = False,
+) -> None:
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     paragraph = cell.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1028,7 +1046,12 @@ def _fill_header_block_cell(cell, english_label: str, italian_label: str, value:
         label_run.bold = True
         label_run.font.name = "Arial"
         label_run.font.size = Pt(10)
-    if italian_label:
+    if italian_label and inline_labels:
+        separator = " " if english_label else ""
+        italian_run = paragraph.add_run(f"{separator}{italian_label}")
+        italian_run.font.name = "Arial"
+        italian_run.font.size = Pt(6.5)
+    elif italian_label:
         italian = cell.add_paragraph()
         italian.alignment = WD_ALIGN_PARAGRAPH.CENTER
         italian.paragraph_format.space_after = Pt(0)
