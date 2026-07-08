@@ -13,6 +13,7 @@ const navItems = [
   { type: "section", label: "Valutazione fornitori", key: "supplier-evaluation" },
   { label: "Valutazione", to: "/quality-evaluation", page: "qualityEvaluation", icon: "check" },
   { label: "KPI", to: "/supplier-kpi", page: "supplierKpi", icon: "chart" },
+  { label: "Calendario", to: "/supplier-calendar", page: "supplierCalendar", icon: "calendar" },
   { type: "section", label: "Strumenti qualità", key: "quality-tools" },
   { label: "Standards", to: "/standards", page: "standards", icon: "standards" },
   { label: "Requisiti Cliente", to: "/customer-requirements", page: "customerRequirements", icon: "requirements" },
@@ -90,6 +91,17 @@ function SidebarIcon({ name }) {
         <path d="M8 15v-3" />
         <path d="M12 15V8" />
         <path d="M16 15v-5" />
+      </>
+    ),
+    calendar: (
+      <>
+        <rect x="4" y="5" width="16" height="15" rx="2" />
+        <path d="M8 3v4" />
+        <path d="M16 3v4" />
+        <path d="M4 10h16" />
+        <path d="M8 14h.01" />
+        <path d="M12 14h.01" />
+        <path d="M16 14h.01" />
       </>
     ),
     standards: (

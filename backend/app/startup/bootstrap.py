@@ -54,6 +54,7 @@ from app.modules.standards.models import (  # noqa: F401
 from app.modules.standards.service import seed_normative_standards
 from app.modules.supplier_codes.models import SupplierInstallationCode  # noqa: F401
 from app.modules.supplier_codes.service import seed_supplier_installation_codes
+from app.modules.supplier_calendar.models import SupplierCalendarClosure  # noqa: F401
 from app.modules.suppliers.models import Supplier, SupplierAlias, SupplierEsolverLink  # noqa: F401
 from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_suppliers_from_csv
 

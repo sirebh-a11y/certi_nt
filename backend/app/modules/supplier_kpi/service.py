@@ -18,6 +18,7 @@ from app.modules.supplier_kpi.schemas import (
     SupplierKpiSummaryResponse,
     SupplierKpiSupplierBucket,
 )
+from app.modules.supplier_calendar.service import business_days_delta, load_non_working_dates_for_ranges
 
 MONTH_LABELS = {
     1: "Gen",
@@ -85,7 +86,7 @@ class _Accumulator:
     delays: list[int] = field(default_factory=list)
     control_times: list[int] = field(default_factory=list)
 
-    def add(self, row: AcquisitionRow) -> None:
+    def add(self, row: AcquisitionRow, non_working_dates: set[date] | None = None) -> None:
         self.total += 1
         self.kg += _parse_decimal(row.peso)
 
@@ -101,7 +102,9 @@ class _Accumulator:
         if row.qualita_data_ricezione and row.qualita_data_richiesta:
             self.delays.append((row.qualita_data_ricezione - row.qualita_data_richiesta).days)
         if row.qualita_data_ricezione and row.qualita_data_accettazione:
-            self.control_times.append(_business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione))
+            self.control_times.append(
+                business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione, non_working_dates)
+            )
 
     def to_metrics(self) -> SupplierKpiMetrics:
         return SupplierKpiMetrics(
@@ -126,6 +129,10 @@ def build_supplier_kpi_summary(
 ) -> SupplierKpiSummaryResponse:
     period_months = _period_months(month=month, quarter=quarter)
     rows = _filtered_kpi_rows(db, year=year, supplier_id=supplier_id, period_months=period_months)
+    non_working_dates = load_non_working_dates_for_ranges(
+        db,
+        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in rows],
+    )
 
     total_accumulator = _Accumulator()
     supplier_accumulators: dict[tuple[int | None, str], _Accumulator] = defaultdict(_Accumulator)
@@ -134,12 +141,12 @@ def build_supplier_kpi_summary(
     for row in rows:
         supplier_name = _supplier_name(row)
         supplier_key = (row.fornitore_id, supplier_name)
-        total_accumulator.add(row)
-        supplier_accumulators[supplier_key].add(row)
+        total_accumulator.add(row, non_working_dates)
+        supplier_accumulators[supplier_key].add(row, non_working_dates)
 
     for row in rows:
         if row.qualita_data_ricezione:
-            month_accumulators[row.qualita_data_ricezione.month].add(row)
+            month_accumulators[row.qualita_data_ricezione.month].add(row, non_working_dates)
 
     by_supplier = [
         SupplierKpiSupplierBucket(supplier_id=key[0], fornitore=key[1], metrics=accumulator.to_metrics())
@@ -190,6 +197,10 @@ def build_supplier_kpi_xlsx(
         supplier_id=supplier_id,
         period_months=period_months,
         include_values=True,
+    )
+    non_working_dates = load_non_working_dates_for_ranges(
+        db,
+        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in detail_rows],
     )
 
     sheets = [
@@ -254,7 +265,14 @@ def build_supplier_kpi_xlsx(
             ],
         ),
     ]
-    sheets.extend(_supplier_detail_sheets(detail_rows, period_label=period_label, supplier_label=supplier_label))
+    sheets.extend(
+        _supplier_detail_sheets(
+            detail_rows,
+            period_label=period_label,
+            supplier_label=supplier_label,
+            non_working_dates=non_working_dates,
+        )
+    )
     return _write_xlsx(sheets)
 
 
@@ -294,6 +312,7 @@ def _supplier_detail_sheets(
     *,
     period_label: str,
     supplier_label: str,
+    non_working_dates: set[date] | None = None,
 ) -> list[tuple[str, list[list[object]]]]:
     rows_by_supplier: dict[tuple[int | None, str], list[AcquisitionRow]] = defaultdict(list)
     for row in rows:
@@ -311,6 +330,7 @@ def _supplier_detail_sheets(
                     supplier_rows,
                     period_label=period_label,
                     supplier_label=name if supplier_label == "Tutti i fornitori" else supplier_label,
+                    non_working_dates=non_working_dates,
                 ),
             )
         )
@@ -322,6 +342,7 @@ def _supplier_detail_rows(
     *,
     period_label: str,
     supplier_label: str,
+    non_working_dates: set[date] | None = None,
 ) -> list[list[object]]:
     headers = [
         "N.",
@@ -362,7 +383,7 @@ def _supplier_detail_rows(
             _quality_label(row.qualita_valutazione),
             _clean_cell(row.qualita_note),
             _delay_days(row),
-            _control_time_days(row),
+            _control_time_days(row, non_working_dates),
             *[_read_value(row, "chimica", aliases) for _label, aliases in CHEMISTRY_EXPORT_FIELDS],
             *[_read_value(row, "proprieta", aliases) for _label, aliases in PROPERTY_EXPORT_FIELDS],
         ]
@@ -437,10 +458,10 @@ def _delay_days(row: AcquisitionRow) -> str:
     return str((row.qualita_data_ricezione - row.qualita_data_richiesta).days)
 
 
-def _control_time_days(row: AcquisitionRow) -> str:
+def _control_time_days(row: AcquisitionRow, non_working_dates: set[date] | None = None) -> str:
     if row.qualita_data_ricezione is None or row.qualita_data_accettazione is None:
         return "-"
-    return str(_business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione))
+    return str(business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione, non_working_dates))
 
 
 def _supplier_name(row: AcquisitionRow) -> str:
@@ -608,14 +629,3 @@ def _average(values: list[int]) -> float | None:
         return None
     return round(sum(values) / len(values), 2)
 
-
-def _business_days_delta(start: date, end: date) -> int:
-    if end < start:
-        return -_business_days_delta(end, start)
-    current = start
-    count = 0
-    while current <= end:
-        if current.weekday() < 5:
-            count += 1
-        current = date.fromordinal(current.toordinal() + 1)
-    return max(count - 1, 0)

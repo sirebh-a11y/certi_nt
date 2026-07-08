@@ -24,6 +24,7 @@ import EmailSettingsPage from "../pages/email/EmailSettingsPage";
 import IntegrationsPage from "../pages/integrations/IntegrationsPage";
 import LogsPage from "../pages/logs/LogsPage";
 import SupplierKpiPage from "../pages/kpi/SupplierKpiPage";
+import SupplierCalendarPage from "../pages/kpi/SupplierCalendarPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
 import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTaglioCertificatesRegisterPage";
@@ -148,6 +149,14 @@ function KpiRoute() {
   );
 }
 
+function SupplierCalendarRoute() {
+  return (
+    <AccessGuard page="supplierCalendar">
+      <SupplierCalendarPage />
+    </AccessGuard>
+  );
+}
+
 function ClientsRoute() {
   return (
     <AccessGuard page="clients">
@@ -208,6 +217,7 @@ export function AppRouter() {
           <Route path="/supplier-codes" element={<SupplierCodesRoute />} />
           <Route path="/quality-evaluation" element={<AccessGuard page="qualityEvaluation"><QualityEvaluationPage /></AccessGuard>} />
           <Route path="/supplier-kpi" element={<KpiRoute />} />
+          <Route path="/supplier-calendar" element={<SupplierCalendarRoute />} />
           <Route path="/quarta-taglio" element={<AccessGuard page="certification"><QuartaTaglioPage /></AccessGuard>} />
           <Route path="/quarta-taglio/certificati" element={<AccessGuard page="certificateRegister"><QuartaTaglioCertificatesRegisterPage /></AccessGuard>} />
           <Route path="/quarta-taglio/:codOdp" element={<AccessGuard page="certification"><QuartaTaglioDetailPage /></AccessGuard>} />

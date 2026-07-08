@@ -11,6 +11,7 @@ export default function AppShell() {
     isAcquisitionRoute ||
     location.pathname.startsWith("/quality-evaluation") ||
     location.pathname.startsWith("/supplier-kpi") ||
+    location.pathname.startsWith("/supplier-calendar") ||
     location.pathname.startsWith("/quarta-taglio") ||
     location.pathname.startsWith("/customer-requirements") ||
     location.pathname.startsWith("/supplier-codes") ||

@@ -9,6 +9,7 @@ const PAGE_ACCESS = {
   certificateRegister: { departments: ["all"] },
   qualityEvaluation: { departments: ["it", "qualita", "direzione"] },
   supplierKpi: { departments: ["it", "qualita", "direzione"] },
+  supplierCalendar: { departments: ["it", "qualita", "direzione"] },
   standards: { departments: ["it", "qualita", "laboratorio"] },
   customerRequirements: { departments: ["it", "qualita"] },
   notes: { departments: ["it", "qualita"] },
