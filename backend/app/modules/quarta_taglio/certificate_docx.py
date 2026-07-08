@@ -34,6 +34,8 @@ HEADER_LOGO_WIDTH = Inches(2.18)
 HEADER_LOGO_HEIGHT = Inches(0.75)
 HEADER_LOGO_WIDTH_EMU = 1993392
 HEADER_LOGO_HEIGHT_EMU = 685800
+FOOTER_FONT_SIZE = Pt(10)
+QUALITY_MANAGER_SIGNATURE_WIDTH = Inches(0.56)
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
 HEADER_FLOW_ROW_HEIGHT = Twips(355)
 HEADER_FLOW_LINE_SPACING = 205 / 240
@@ -228,10 +230,10 @@ def append_pdf_attachments_to_docx(
 def _set_document_sections_layout(document: Document) -> None:
     for section in document.sections:
         _set_section_a4(section)
-        section.top_margin = Inches(2.75)
-        section.bottom_margin = Inches(0.75)
-        section.left_margin = Inches(0.55)
-        section.right_margin = Inches(0.55)
+        section.top_margin = Inches(2.48)
+        section.bottom_margin = Inches(0.55)
+        section.left_margin = Inches(0.40)
+        section.right_margin = Inches(0.40)
         section.header_distance = Inches(0.48)
         section.footer_distance = Inches(0.12)
         section.different_first_page_header_footer = False
@@ -400,7 +402,7 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
         min_row[index].text = _format_chemistry_value(item.standard_min)
         max_row[index].text = _format_chemistry_value(item.standard_max)
         value_row[index].text = _format_chemistry_value(item.value)
-    _set_table_font(table, size=10)
+    _set_table_font(table, size=8)
     _set_table_cell_margins(table, left=25, right=25)
     for row in table.rows:
         for cell in row.cells:
@@ -479,10 +481,10 @@ def _fill_signature_footer(footer, *, certified_by: User, quality_manager: User 
     footer.is_linked_to_previous = False
     _clear_header_footer(footer)
 
-    table = footer.add_table(rows=1, cols=3, width=Inches(6.7))
+    table = footer.add_table(rows=1, cols=2, width=HEADER_WIDTH)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_table_borders(table)
-    _set_column_widths(table, [Inches(3.4), Inches(1.8), Inches(1.5)])
+    _set_column_widths(table, [Inches(3.55), Inches(3.55)])
     for cell in table.rows[0].cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
@@ -493,16 +495,15 @@ def _fill_signature_footer(footer, *, certified_by: User, quality_manager: User 
         _add_signature_label_value(operator_paragraph, "Operator:", certified_by.name)
 
     qm_paragraph = table.cell(0, 1).paragraphs[0]
-    qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     qm_paragraph.paragraph_format.space_after = Pt(0)
     _add_signature_label_value(qm_paragraph, "Quality Manager:", "")
-    signature_paragraph = table.cell(0, 2).paragraphs[0]
-    signature_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    signature_paragraph.paragraph_format.space_after = Pt(0)
     if QUALITY_MANAGER_SIGNATURE_PATH.exists():
-        signature_paragraph.add_run().add_picture(str(QUALITY_MANAGER_SIGNATURE_PATH), width=Inches(0.75))
+        qm_paragraph.add_run().add_picture(str(QUALITY_MANAGER_SIGNATURE_PATH), width=QUALITY_MANAGER_SIGNATURE_WIDTH)
     elif quality_manager:
-        signature_paragraph.add_run(quality_manager.name)
+        fallback_run = qm_paragraph.add_run(quality_manager.name)
+        fallback_run.font.name = "Times New Roman"
+        fallback_run.font.size = FOOTER_FONT_SIZE
 
 
 def _append_docx_body(
@@ -1129,12 +1130,12 @@ def _add_signature_label_value(paragraph, label: str, value: object) -> None:
     label_run = paragraph.add_run(f"{label} ")
     label_run.bold = True
     label_run.font.name = "Times New Roman"
-    label_run.font.size = Pt(12)
+    label_run.font.size = FOOTER_FONT_SIZE
     value_text = _empty_dash(value) if value not in (None, "") else ""
     if value_text:
         value_run = paragraph.add_run(value_text)
         value_run.font.name = "Times New Roman"
-        value_run.font.size = Pt(12)
+        value_run.font.size = FOOTER_FONT_SIZE
 
 
 def _alloy_label(detail: QuartaTaglioDetailResponse) -> str:
