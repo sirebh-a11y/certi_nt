@@ -26,6 +26,8 @@ from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, AcquisitionValueHistory, ReadValue
 from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
+    LEGACY_PDF_ATTACHMENT_PREFIX,
+    PDF_ATTACHMENT_PAGE_MARKER,
     append_pdf_attachments_to_docx,
     build_additional_page_template_docx,
     build_forgialluminio_draft_docx,
@@ -2510,7 +2512,7 @@ def _docx_contains_pdf_attachment_pages(path: Path) -> bool:
                 if not name.startswith("word/") or not name.endswith(".xml"):
                     continue
                 xml = archive.read(name).decode("utf-8", errors="ignore")
-                if "Attachment:" in xml:
+                if LEGACY_PDF_ATTACHMENT_PREFIX in xml or PDF_ATTACHMENT_PAGE_MARKER in xml:
                     return True
     except (OSError, zipfile.BadZipFile):
         return False

@@ -41,6 +41,8 @@ HEADER_FLOW_ROW_HEIGHT = Twips(355)
 HEADER_FLOW_LINE_SPACING = 205 / 240
 CHEMISTRY_TABLE_WIDTH_INCHES = 7.1
 CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES = 0.70
+PDF_ATTACHMENT_PAGE_MARKER = "CERTI_PDF_ATTACHMENT_PAGE"
+LEGACY_PDF_ATTACHMENT_PREFIX = "Attachment:"
 
 PROPERTY_HEADER_LABELS = {
     "HB": "HB",
@@ -574,7 +576,7 @@ def _append_pdf_attachments(
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 image_path = tmp_dir / f"{_safe_attachment_name(original_filename)}_{page_index}.png"
                 pixmap.save(image_path)
-                _add_pdf_attachment_page(document, image_path=image_path, original_filename=original_filename, section=attachment_section)
+                _add_pdf_attachment_page(document, image_path=image_path, section=attachment_section)
             pdf_document.close()
     document.save(str(base_docx_path))
 
@@ -594,7 +596,7 @@ def _strip_app_pdf_attachment_pages(path: Path) -> None:
         if not remove_after_attachment_title and child.tag.endswith("p"):
             texts = [node.text or "" for node in child.iter(qn("w:t"))]
             paragraph_text = "".join(texts).strip()
-            if paragraph_text.startswith("Attachment:"):
+            if paragraph_text.startswith(LEGACY_PDF_ATTACHMENT_PREFIX) or PDF_ATTACHMENT_PAGE_MARKER in paragraph_text:
                 remove_after_attachment_title = True
         if remove_after_attachment_title:
             body.remove(child)
@@ -604,15 +606,14 @@ def _strip_app_pdf_attachment_pages(path: Path) -> None:
         document.save(str(path))
 
 
-def _add_pdf_attachment_page(document: Document, *, image_path: Path, original_filename: str, section) -> None:
-    title = document.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    title.paragraph_format.space_before = Pt(0)
-    title.paragraph_format.space_after = Pt(3)
-    run = title.add_run(f"Attachment: {original_filename}")
-    run.bold = True
-    run.font.name = "Arial"
-    run.font.size = Pt(9)
+def _add_pdf_attachment_page(document: Document, *, image_path: Path, section) -> None:
+    marker = document.add_paragraph()
+    marker.paragraph_format.space_before = Pt(0)
+    marker.paragraph_format.space_after = Pt(0)
+    marker.paragraph_format.line_spacing = Pt(1)
+    marker_run = marker.add_run(PDF_ATTACHMENT_PAGE_MARKER)
+    marker_run.font.hidden = True
+    marker_run.font.size = Pt(1)
 
     with Image.open(image_path) as image:
         width_px, height_px = image.size
@@ -622,7 +623,7 @@ def _add_pdf_attachment_page(document: Document, *, image_path: Path, original_f
     usable_width = max(1.0, (int(section.page_width) - int(section.left_margin) - int(section.right_margin)) / 914400)
     usable_height = max(
         1.0,
-        (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.75,
+        (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.10,
     )
     aspect_ratio = width_px / height_px
     target_width = usable_width
