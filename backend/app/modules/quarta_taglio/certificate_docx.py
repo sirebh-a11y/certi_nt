@@ -418,7 +418,7 @@ def _add_chemistry_table(document: Document, *, detail: QuartaTaglioDetailRespon
 
 
 def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailResponse) -> None:
-    _add_bullet_section_title(document, "Mechanical properties: raw material acc. to EN 755-2")
+    _add_bullet_section_title(document, _mechanical_properties_title(detail))
     available_properties = {
         item.field: item
         for item in detail.properties
@@ -1154,9 +1154,23 @@ def _fallback_certificate_material_label(label: str) -> str:
     if not parts:
         return label
     alloy = parts[0]
-    treatment = next((part for part in parts[1:] if re.fullmatch(r"[Tt]\d+[A-Za-z0-9-]*", part)), "")
     alloy_label = alloy if alloy.upper().startswith("EN AW") else f"EN AW {alloy}"
-    return " ".join(part for part in (alloy_label, treatment) if part).strip()
+    return alloy_label.strip()
+
+
+def _mechanical_properties_title(detail: QuartaTaglioDetailResponse) -> str:
+    standard = detail.selected_standard
+    treatment = _text_value(getattr(standard, "trattamento_termico", None)) if standard else ""
+    norma = _text_value(getattr(standard, "norma", None)) if standard else ""
+    state_text = f" state {treatment}" if treatment else ""
+    norma_text = f" acc. to {norma}" if norma else ""
+    return f"Mechanical properties{state_text}: raw material{norma_text}"
+
+
+def _text_value(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _alloy_code(detail: QuartaTaglioDetailResponse) -> str:

@@ -21,9 +21,9 @@ const MONTHS = [
 
 const QUARTERS = [
   { value: "1", label: "Q1", hint: "Gen-Mar" },
-  { value: "2", label: "Q2", hint: "Apr-Giu" },
-  { value: "3", label: "Q3", hint: "Lug-Set" },
-  { value: "4", label: "Q4", hint: "Ott-Dic" },
+  { value: "2", label: "Q2", hint: "Gen-Giu" },
+  { value: "3", label: "Q3", hint: "Gen-Set" },
+  { value: "4", label: "Q4", hint: "Tutto anno" },
 ];
 
 function formatNumber(value, digits = 2) {

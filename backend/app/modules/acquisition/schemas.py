@@ -14,6 +14,7 @@ DocumentStatus = Literal["caricato", "indicizzato", "letto", "errore"]
 DocumentOrigin = Literal["utente", "import", "sistema"]
 DocumentUploadState = Literal["temporaneo", "persistente"]
 BlockName = Literal["ddt", "match", "chimica", "proprieta", "note"]
+StandardPreviewBlock = Literal["chimica", "proprieta"]
 EvidenceType = Literal["testo", "crop", "tabella", "cella", "bbox", "pagina_mascherata"]
 ExtractionMethod = Literal["pdf_text", "ocr", "regex", "parser_tabella", "chatgpt", "utente", "sistema"]
 TechnicalState = Literal["verde", "giallo", "rosso"]
@@ -480,6 +481,39 @@ class DocumentEvidenceResponse(BaseModel):
     confidenza: float | None
     data_creazione: datetime
     utente_creazione_id: int | None
+
+
+class AcquisitionStandardPreviewRequest(BaseModel):
+    block: StandardPreviewBlock
+    fields: dict[str, str | None] = Field(default_factory=dict)
+
+    @field_validator("fields")
+    @classmethod
+    def normalize_fields(cls, value: dict[str, str | None]) -> dict[str, str | None]:
+        normalized: dict[str, str | None] = {}
+        for key, item in (value or {}).items():
+            field = str(key).strip()
+            if not field:
+                continue
+            normalized[field] = normalize_optional_text(str(item)) if item is not None else None
+        return normalized
+
+
+class AcquisitionStandardPreviewIssue(BaseModel):
+    block: StandardPreviewBlock
+    field: str
+    value: str | None = None
+    limit: str | None = None
+    message: str
+
+
+class AcquisitionStandardPreviewResponse(BaseModel):
+    status: Literal["conforme", "non_conforme", "standard_mancante"]
+    block: StandardPreviewBlock
+    standard_id: int | None = None
+    standard_label: str | None = None
+    issues: list[AcquisitionStandardPreviewIssue] = Field(default_factory=list)
+    message: str | None = None
 
 
 class ReadValueUpsertRequest(BaseModel):

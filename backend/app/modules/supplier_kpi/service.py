@@ -37,9 +37,9 @@ MONTH_LABELS = {
 
 QUARTER_MONTHS = {
     1: (1, 2, 3),
-    2: (4, 5, 6),
-    3: (7, 8, 9),
-    4: (10, 11, 12),
+    2: (1, 2, 3, 4, 5, 6),
+    3: (1, 2, 3, 4, 5, 6, 7, 8, 9),
+    4: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
 }
 
 INVALID_SHEET_NAME_CHARS = set("[]:*?/\\")
@@ -357,7 +357,6 @@ def _supplier_detail_rows(
         "Peso Kg",
         "Vs. ODV",
         "Data richiesta",
-        "N. analisi",
         "Valutazione",
         "Note",
         "Ritardo giorni",
@@ -379,7 +378,6 @@ def _supplier_detail_rows(
             _clean_cell(row.peso),
             _clean_cell(row.ordine),
             _format_date(row.qualita_data_richiesta),
-            _clean_cell(row.qualita_numero_analisi),
             _quality_label(row.qualita_valutazione),
             _clean_cell(row.qualita_note),
             _delay_days(row),
@@ -628,4 +626,3 @@ def _average(values: list[int]) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 2)
-

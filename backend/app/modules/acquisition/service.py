@@ -51,6 +51,9 @@ from app.modules.acquisition.schemas import (
     AcquisitionQualityRowListResponse,
     AcquisitionQualityRowResponse,
     AcquisitionQualityUpdateRequest,
+    AcquisitionStandardPreviewIssue,
+    AcquisitionStandardPreviewRequest,
+    AcquisitionStandardPreviewResponse,
     AutonomousRunResponse,
     AutonomousRunStartRequest,
     AcquisitionRowCreateRequest,
@@ -115,6 +118,7 @@ from app.modules.acquisition.rematch_bridge import (
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
+from app.modules.standards.models import NormativeStandard
 from app.modules.document_reader.registry import resolve_supplier_template, resolve_supplier_template_by_key
 from app.modules.document_reader.matching import (
     aww_weights_are_compatible as reader_aww_weights_are_compatible,
@@ -696,6 +700,285 @@ def _normalize_property_capture_value(value: str | None) -> str | None:
     if token is None:
         return None
     return token.replace(".", ",")
+
+
+def _standard_preview_text(value: str | int | None) -> str | None:
+    return _string_or_none(value)
+
+
+def _standard_preview_key(value: str | None) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", (value or "").upper())
+
+
+def _standard_preview_normalize_alloy(value: str | None) -> str | None:
+    cleaned = _standard_preview_text(value)
+    if cleaned is None:
+        return None
+    upper = cleaned.upper()
+    upper = re.sub(r"\bEN\s*-?\s*AW\b", " ", upper)
+    upper = re.sub(r"\bAW\b", " ", upper)
+    tokens = re.findall(r"[0-9]{4}[A-Z]?", upper)
+    if not tokens:
+        return None
+    alloy = tokens[0]
+    alloy = re.sub(r"(T4|T42|T6|T62|T64|T651)$", "", alloy)
+    if re.fullmatch(r"\d{4}[A-Z]", alloy) and not alloy.endswith("A"):
+        alloy = alloy[:4]
+    return alloy or None
+
+
+def _standard_preview_extract_temper(*values: str | None) -> str | None:
+    for value in values:
+        cleaned = _standard_preview_text(value)
+        if cleaned is None:
+            continue
+        match = re.search(r"\bT(?:4|42|6|62|64|651)\b", cleaned.upper())
+        if match:
+            return match.group(0)
+    return None
+
+
+def _standard_preview_field_map(
+    row: AcquisitionRow,
+    block: str,
+    payload_fields: dict[str, str | None],
+) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for value in row.values or []:
+        if value.blocco != block:
+            continue
+        field = _standard_preview_text(value.campo)
+        if field is None:
+            continue
+        raw = value.valore_finale or value.valore_standardizzato or value.valore_grezzo
+        normalized = _normalize_property_capture_value(raw) if block == "proprieta" else _normalize_chemistry_capture_value(raw)
+        if normalized:
+            fields[field] = normalized
+
+    for field, raw in (payload_fields or {}).items():
+        cleaned_field = _standard_preview_text(field)
+        if cleaned_field is None:
+            continue
+        normalized = _normalize_property_capture_value(raw) if block == "proprieta" else _normalize_chemistry_capture_value(raw)
+        if normalized:
+            fields[cleaned_field] = normalized
+        elif _standard_preview_text(raw) is None:
+            fields.pop(cleaned_field, None)
+    return fields
+
+
+def _standard_preview_limit_label(min_value: float | None, max_value: float | None) -> str:
+    if min_value is not None and max_value is not None:
+        return f"{min_value:g} - {max_value:g}"
+    if min_value is not None:
+        return f">= {min_value:g}"
+    if max_value is not None:
+        return f"<= {max_value:g}"
+    return "-"
+
+
+def _standard_preview_value_is_inside(value: float, min_value: float | None, max_value: float | None) -> bool:
+    epsilon = 1e-9
+    if min_value is not None and value + epsilon < min_value:
+        return False
+    if max_value is not None and value - epsilon > max_value:
+        return False
+    return True
+
+
+def _standard_preview_label(standard: NormativeStandard) -> str:
+    parts = [
+        standard.lega_designazione or standard.lega_base,
+        standard.norma,
+        standard.trattamento_termico,
+        standard.tipo_prodotto,
+        standard.misura_tipo,
+    ]
+    return " · ".join(part for part in parts if _standard_preview_text(part))
+
+
+def _standard_preview_property_key(value: str | None) -> str:
+    normalized = _normalize_property_field_name(value) or value or ""
+    return _standard_preview_key(normalized.replace(",", "."))
+
+
+def _standard_preview_select_property_limit(limits: list, diameter: float | None):
+    if not limits:
+        return None
+    if diameter is None:
+        no_range = [item for item in limits if item.misura_min is None and item.misura_max is None]
+        return no_range[0] if no_range else limits[0]
+
+    matching = []
+    for item in limits:
+        min_diameter = item.misura_min
+        max_diameter = item.misura_max
+        if min_diameter is not None and diameter < min_diameter:
+            continue
+        if max_diameter is not None and diameter > max_diameter:
+            continue
+        matching.append(item)
+    if matching:
+        return sorted(
+            matching,
+            key=lambda item: (
+                item.misura_min is None and item.misura_max is None,
+                0 if item.misura_min is None or item.misura_max is None else abs(item.misura_max - item.misura_min),
+            ),
+        )[0]
+    no_range = [item for item in limits if item.misura_min is None and item.misura_max is None]
+    return no_range[0] if no_range else limits[0]
+
+
+def _standard_preview_find_candidate(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    block: str,
+) -> NormativeStandard | None:
+    row_alloy = (
+        _standard_preview_normalize_alloy(row.lega_designazione)
+        or _standard_preview_normalize_alloy(row.lega_base)
+        or _standard_preview_normalize_alloy(row.variante_lega)
+    )
+    if row_alloy is None:
+        return None
+    row_temper = _standard_preview_extract_temper(row.lega_designazione, row.lega_base, row.variante_lega)
+    standards = (
+        db.query(NormativeStandard)
+        .options(selectinload(NormativeStandard.chemistry_limits), selectinload(NormativeStandard.property_limits))
+        .filter(NormativeStandard.stato_validazione == "attivo")
+        .all()
+    )
+
+    candidates: list[tuple[int, int, NormativeStandard]] = []
+    for standard in standards:
+        limits_count = len(standard.chemistry_limits) if block == "chimica" else len(standard.property_limits)
+        if limits_count <= 0:
+            continue
+        standard_alloy = (
+            _standard_preview_normalize_alloy(standard.lega_designazione)
+            or _standard_preview_normalize_alloy(standard.lega_base)
+        )
+        if row_alloy and standard_alloy and row_alloy != standard_alloy:
+            continue
+
+        score = 0
+        if row_alloy and standard_alloy == row_alloy:
+            score += 100
+        if row_temper and _standard_preview_key(standard.trattamento_termico) == _standard_preview_key(row_temper):
+            score += 30
+        if standard.misura_tipo and "diametro" in standard.misura_tipo.lower() and parse_property_number(row.diametro) is not None:
+            score += 10
+        if standard.norma:
+            score += 5
+        candidates.append((score, limits_count, standard))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
+
+
+def preview_acquisition_row_standard_conformity(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionStandardPreviewRequest,
+) -> AcquisitionStandardPreviewResponse:
+    block = payload.block
+    fields = _standard_preview_field_map(row, block, payload.fields)
+    standard = _standard_preview_find_candidate(db, row=row, block=block)
+    if standard is None:
+        return AcquisitionStandardPreviewResponse(
+            status="standard_mancante",
+            block=block,
+            message="Standard non individuato automaticamente per questa riga.",
+        )
+
+    issues: list[AcquisitionStandardPreviewIssue] = []
+    compared = 0
+    if block == "chimica":
+        field_by_key = {_standard_preview_key(field): (field, value) for field, value in fields.items()}
+        for limit in standard.chemistry_limits:
+            element_key = _standard_preview_key(limit.elemento)
+            if element_key not in field_by_key:
+                continue
+            field, raw_value = field_by_key[element_key]
+            numeric_value = _safe_chemistry_float(raw_value)
+            if numeric_value is None:
+                issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=raw_value,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message="Valore non numerico.",
+                    )
+                )
+                continue
+            compared += 1
+            if not _standard_preview_value_is_inside(numeric_value, limit.min_value, limit.max_value):
+                issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=raw_value,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message=f"{field}: {raw_value} fuori limite {_standard_preview_limit_label(limit.min_value, limit.max_value)}",
+                    )
+                )
+    else:
+        diameter = parse_property_number(row.diametro)
+        limits_by_key: dict[str, list] = {}
+        for limit in standard.property_limits:
+            limits_by_key.setdefault(_standard_preview_property_key(limit.proprieta), []).append(limit)
+        for field, raw_value in fields.items():
+            limit = _standard_preview_select_property_limit(limits_by_key.get(_standard_preview_property_key(field), []), diameter)
+            if limit is None:
+                continue
+            normalized_value = _normalize_property_capture_value(raw_value)
+            numeric_value = parse_property_number(normalized_value)
+            if numeric_value is None:
+                issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=raw_value,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message="Valore non numerico.",
+                    )
+                )
+                continue
+            compared += 1
+            if not _standard_preview_value_is_inside(numeric_value, limit.min_value, limit.max_value):
+                issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=normalized_value,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message=f"{field}: {normalized_value} fuori limite {_standard_preview_limit_label(limit.min_value, limit.max_value)}",
+                    )
+                )
+
+    if compared <= 0:
+        return AcquisitionStandardPreviewResponse(
+            status="standard_mancante",
+            block=block,
+            standard_id=standard.id,
+            standard_label=_standard_preview_label(standard),
+            message="Standard individuato, ma nessun valore confrontabile nella riga.",
+        )
+
+    return AcquisitionStandardPreviewResponse(
+        status="non_conforme" if issues else "conforme",
+        block=block,
+        standard_id=standard.id,
+        standard_label=_standard_preview_label(standard),
+        issues=issues,
+        message="Controllo visivo eseguito sullo standard più coerente con il materiale.",
+    )
 
 
 def _extract_capture_candidates_from_crop(

@@ -123,7 +123,7 @@ function buildChemistryPersistedSignature(values) {
 }
 
 function buildEffectiveDraft(initialDraft, draft) {
-  const next = { ...draft };
+  const next = { ...initialDraft, ...draft };
   Object.entries(DERIVED_FIELDS).forEach(([target, parts]) => {
     if (normalizeDisplayValue(next[target])) {
       return;
@@ -135,6 +135,52 @@ function buildEffectiveDraft(initialDraft, draft) {
     next[target] = formatDerivedNumber(numbers[0] + numbers[1]);
   });
   return next;
+}
+
+function standardPreviewConfirmLabel(preview) {
+  return preview?.status === "conforme" ? "Conferma" : "Conferma comunque";
+}
+
+function StandardPreviewSummary({ preview }) {
+  if (!preview) {
+    return null;
+  }
+  const standardLabel = preview.standard_label || "standard non disponibile";
+
+  if (preview.status === "conforme") {
+    return (
+      <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+        <p className="font-semibold">Controllo standard OK</p>
+        <p className="mt-1">Ho applicato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+        <p className="mt-1 text-xs">La scelta ufficiale dello standard resta nella pagina Certificazione.</p>
+      </div>
+    );
+  }
+
+  if (preview.status === "non_conforme") {
+    return (
+      <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+        <p className="font-semibold">Controllo standard: valori fuori limite</p>
+        <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+        {preview.issues?.length ? (
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {preview.issues.map((issue, index) => (
+              <li key={`${issue.field}-${index}`}>{issue.message || `${issue.field}: valore da verificare`}</li>
+            ))}
+          </ul>
+        ) : null}
+        <p className="mt-2 text-xs">Puoi confermare comunque se la lettura è corretta, oppure tornare a modificare.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-semibold">Standard non individuato</p>
+      <p className="mt-1">{preview.message || "Non ho trovato uno standard coerente per controllare la chimica."}</p>
+      <p className="mt-1 text-xs">Puoi confermare comunque: la scelta ufficiale resta nella pagina Certificazione.</p>
+    </div>
+  );
 }
 
 function draftsEqual(left, right, fields) {
@@ -668,6 +714,8 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   const [overlayPreviewItems, setOverlayPreviewItems] = useState([]);
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [standardPreview, setStandardPreview] = useState(null);
+  const [standardPreviewLoading, setStandardPreviewLoading] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const workspaceRef = useRef(null);
   const persistedUserOverlayItems = useMemo(() => buildPersistedUserOverlayItems(row), [row]);
@@ -1003,10 +1051,35 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
   }
 
   async function handleConfirm() {
-    if (submitting || confirmDialogOpen) {
+    if (submitting || confirmDialogOpen || standardPreviewLoading) {
       return;
     }
-    setConfirmDialogOpen(true);
+    setStandardPreview(null);
+    setStandardPreviewLoading(true);
+    try {
+      const preview = await apiRequest(
+        `/acquisition/rows/${rowId}/standard-preview`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            block: "chimica",
+            fields: buildEffectiveDraft(sessionInitialDraft, draft),
+          }),
+        },
+        token,
+      );
+      setStandardPreview(preview);
+    } catch (requestError) {
+      setStandardPreview({
+        status: "standard_mancante",
+        block: "chimica",
+        message: requestError.message || "Controllo standard non disponibile.",
+        issues: [],
+      });
+    } finally {
+      setStandardPreviewLoading(false);
+      setConfirmDialogOpen(true);
+    }
   }
 
   async function handleConfirmAccepted() {
@@ -1016,6 +1089,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
       setConfirmDialogOpen(true);
       return;
     }
+    setStandardPreview(null);
     onDirtyChange?.(false);
     navigate(returnToListPath);
   }
@@ -1147,11 +1221,11 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
           </button>
           <button
             className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-            disabled={submitting}
+            disabled={submitting || standardPreviewLoading}
             onClick={handleConfirm}
             type="button"
           >
-            {submitting ? "Conferma..." : "Conferma"}
+            {submitting ? "Conferma..." : standardPreviewLoading ? "Verifica..." : "Conferma"}
           </button>
         </div>
       </div>
@@ -1261,10 +1335,14 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
             <p className="mt-2 text-sm leading-6 text-slate-600">
               Stai confermando questa pagina. I valori correnti verranno salvati e i valori iniziali di questa sessione andranno persi.
             </p>
+            <StandardPreviewSummary preview={standardPreview} />
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
                 className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                onClick={() => setConfirmDialogOpen(false)}
+                onClick={() => {
+                  setConfirmDialogOpen(false);
+                  setStandardPreview(null);
+                }}
                 type="button"
               >
                 Continua a modificare
@@ -1275,7 +1353,7 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
                 onClick={handleConfirmAccepted}
                 type="button"
               >
-                {submitting ? "Conferma..." : "Conferma"}
+                {submitting ? "Conferma..." : standardPreviewConfirmLabel(standardPreview)}
               </button>
             </div>
           </div>

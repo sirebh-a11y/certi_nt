@@ -177,6 +177,7 @@ class QuartaTaglioStandardCandidateResponse(BaseModel):
     lega_base: str | None = None
     lega_designazione: str | None = None
     variante_lega: str | None = None
+    norma: str | None = None
     trattamento_termico: str | None = None
     certificate_material_label: str | None = None
     confidence: str

@@ -20,6 +20,8 @@ from app.modules.acquisition.schemas import (
     AcquisitionRowListResponse,
     AcquisitionNotesSectionUpdateRequest,
     AcquisitionRowUpdateRequest,
+    AcquisitionStandardPreviewRequest,
+    AcquisitionStandardPreviewResponse,
     ChemistryCaptureRequest,
     ChemistryCaptureResponse,
     ChemistryOverlayPreviewResponse,
@@ -98,6 +100,7 @@ from app.modules.acquisition.service import (
     list_documents,
     process_row_minimal,
     preview_acquisition_row_delete,
+    preview_acquisition_row_standard_conformity,
     prepare_document_for_reader,
     refresh_certificate_first_row,
     reopen_final_validation,
@@ -669,6 +672,17 @@ def upsert_read_value_route(
 ) -> ReadValueResponse:
     row = get_acquisition_row(db, row_id)
     return upsert_read_value(db=db, row=row, payload=payload, actor_id=current_user.id)
+
+
+@router.post("/rows/{row_id}/standard-preview", response_model=AcquisitionStandardPreviewResponse)
+def preview_acquisition_row_standard_route(
+    row_id: int,
+    payload: AcquisitionStandardPreviewRequest,
+    _: CurrentUser,
+    db: DbSession,
+) -> AcquisitionStandardPreviewResponse:
+    row = get_acquisition_row(db, row_id)
+    return preview_acquisition_row_standard_conformity(db=db, row=row, payload=payload)
 
 
 @router.put("/rows/{row_id}/match", response_model=MatchResponse)
