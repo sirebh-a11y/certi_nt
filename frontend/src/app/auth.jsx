@@ -7,20 +7,46 @@ const AuthContext = createContext(null);
 const STORAGE_KEYS = {
   token: "certi_nt.token",
   user: "certi_nt.user",
+  userCacheVersion: "certi_nt.userCacheVersion",
   setupToken: "certi_nt.setupToken",
   acquisitionAiFlowActive: "certi_nt.acquisitionAiFlowActive",
 };
 
+const AUTH_USER_CACHE_VERSION = "2026-07-15-role-refresh";
 const SESSION_RENEW_INTERVAL_MS = 15 * 60 * 1000;
 const SESSION_RENEW_CHECK_MS = 60 * 1000;
 const USER_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
 
+function readStoredUser() {
+  if (localStorage.getItem(STORAGE_KEYS.userCacheVersion) !== AUTH_USER_CACHE_VERSION) {
+    localStorage.removeItem(STORAGE_KEYS.user);
+    return null;
+  }
+  const raw = localStorage.getItem(STORAGE_KEYS.user);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    localStorage.removeItem(STORAGE_KEYS.user);
+    return null;
+  }
+}
+
+function storeUser(currentUser) {
+  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(currentUser));
+  localStorage.setItem(STORAGE_KEYS.userCacheVersion, AUTH_USER_CACHE_VERSION);
+}
+
+function removeStoredUser() {
+  localStorage.removeItem(STORAGE_KEYS.user);
+  localStorage.removeItem(STORAGE_KEYS.userCacheVersion);
+}
+
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem(STORAGE_KEYS.token));
-  const [user, setUser] = useState(() => {
-    const raw = localStorage.getItem(STORAGE_KEYS.user);
-    return raw ? JSON.parse(raw) : null;
-  });
+  const [user, setUser] = useState(() => readStoredUser());
   const [setupToken, setSetupToken] = useState(() => localStorage.getItem(STORAGE_KEYS.setupToken));
   const [loading, setLoading] = useState(Boolean(token));
   const [acquisitionAiFlowActive, setAcquisitionAiFlowActiveState] = useState(
@@ -42,7 +68,7 @@ export function AuthProvider({ children }) {
       .then((data) => {
         if (!ignore && data?.user) {
           setUser(data.user);
-          localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(data.user));
+          storeUser(data.user);
         }
       })
       .catch(() => {
@@ -65,7 +91,7 @@ export function AuthProvider({ children }) {
     setToken(accessToken);
     setUser(currentUser);
     localStorage.setItem(STORAGE_KEYS.token, accessToken);
-    localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(currentUser));
+    storeUser(currentUser);
   }, []);
 
   const clearAuth = useCallback(() => {
@@ -74,7 +100,7 @@ export function AuthProvider({ children }) {
     setSetupToken(null);
     setAcquisitionAiFlowActiveState(false);
     localStorage.removeItem(STORAGE_KEYS.token);
-    localStorage.removeItem(STORAGE_KEYS.user);
+    removeStoredUser();
     localStorage.removeItem(STORAGE_KEYS.setupToken);
     localStorage.removeItem(STORAGE_KEYS.acquisitionAiFlowActive);
   }, []);
@@ -160,6 +186,43 @@ export function AuthProvider({ children }) {
     return () => window.clearInterval(intervalId);
   }, [acquisitionAiFlowActive, setAcquisitionAiFlowActive, token]);
 
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    let ignore = false;
+    async function refreshCurrentUser() {
+      try {
+        const data = await apiRequest("/auth/me", { cache: "no-store" }, token);
+        if (!ignore && data?.user) {
+          setUser(data.user);
+          storeUser(data.user);
+        }
+      } catch {
+        // Keep the current session on transient network/cache errors. Auth expiration is handled globally.
+      }
+    }
+
+    const handleFocus = () => {
+      void refreshCurrentUser();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshCurrentUser();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      ignore = true;
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [token]);
+
   async function login(email, password) {
     const data = await apiRequest("/auth/login", {
       method: "POST",
@@ -208,7 +271,7 @@ export function AuthProvider({ children }) {
     const me = await apiRequest("/auth/me", {}, token);
     if (me?.user) {
       setUser(me.user);
-      localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(me.user));
+      storeUser(me.user);
     }
   }
 

@@ -401,6 +401,7 @@ function ChemistryPdfPanel({
       const pages = (certificateDocument?.pages || []).filter((page) => page.image_url);
       if (!pages.length) {
         setPageImages([]);
+        setPageImageSizes({});
         return;
       }
       try {
@@ -423,6 +424,7 @@ function ChemistryPdfPanel({
       } catch (requestError) {
         if (!ignore) {
           setPageImages([]);
+          setPageImageSizes({});
           setError(requestError.message);
         }
       }

@@ -357,6 +357,7 @@ function PropertiesPdfPanel({
       const pages = (certificateDocument?.pages || []).filter((page) => page.image_url);
       if (!pages.length) {
         setPageImages([]);
+        setPageImageSizes({});
         return;
       }
       try {
@@ -375,6 +376,7 @@ function PropertiesPdfPanel({
       } catch (requestError) {
         if (!ignore) {
           setPageImages([]);
+          setPageImageSizes({});
           setError(requestError.message);
         }
       }

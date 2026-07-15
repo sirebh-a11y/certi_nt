@@ -15,6 +15,7 @@ export async function apiRequest(path, options = {}, token = null) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
+    cache: options.cache || "no-store",
   });
 
   if (response.status === 204) {
@@ -46,7 +47,7 @@ export async function fetchApiBlob(path, token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(resolveApiAssetUrl(path), { headers });
+  const response = await fetch(resolveApiAssetUrl(path), { headers, cache: "no-store" });
   if (!response.ok) {
     let error;
     try {

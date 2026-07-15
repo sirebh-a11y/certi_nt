@@ -128,6 +128,12 @@ from app.modules.document_reader.service import build_document_row_split_plan, b
 
 router = APIRouter()
 
+NO_STORE_FILE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 
 def _resolve_openai_api_key(current_user: CurrentUser) -> str | None:
     if current_user.openai_api_key_encrypted:
@@ -364,7 +370,12 @@ def get_document_file_route(document_id: int, _: CurrentUser, db: DbSession) -> 
     document = get_document(db, document_id)
     file_path = get_document_file_path(document)
     media_type = document.mime_type or "application/octet-stream"
-    return FileResponse(path=file_path, media_type=media_type, filename=document.nome_file_originale)
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=document.nome_file_originale,
+        headers=NO_STORE_FILE_HEADERS,
+    )
 
 
 @router.post("/documents/{document_id}/index", response_model=DocumentDetailResponse)
@@ -389,7 +400,7 @@ def get_document_page_image_route(page_id: int, _: CurrentUser, db: DbSession) -
     page = get_document_page(db, page_id)
     image_path = get_document_page_image_path(page)
     filename = image_path.name
-    return FileResponse(path=image_path, media_type="image/png", filename=filename)
+    return FileResponse(path=image_path, media_type="image/png", filename=filename, headers=NO_STORE_FILE_HEADERS)
 
 
 @router.post("/document-pages/{page_id}/chemistry-capture", response_model=ChemistryCaptureResponse)

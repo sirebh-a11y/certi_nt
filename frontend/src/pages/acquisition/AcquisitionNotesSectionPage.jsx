@@ -71,6 +71,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
       const pages = (certificateDocument?.pages || []).filter((page) => page.image_url);
       if (!pages.length) {
         setPageImages([]);
+        setPageImageSizes({});
         return;
       }
       try {
@@ -89,6 +90,7 @@ function NotePdfPanel({ certificateDocument, footerContent, overlayPreviewItems,
       } catch (requestError) {
         if (!ignore) {
           setPageImages([]);
+          setPageImageSizes({});
           setError(requestError.message);
         }
       }
