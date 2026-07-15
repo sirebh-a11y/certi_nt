@@ -508,7 +508,7 @@ class AcquisitionStandardPreviewIssue(BaseModel):
 
 
 class AcquisitionStandardPreviewResponse(BaseModel):
-    status: Literal["conforme", "non_conforme", "standard_mancante"]
+    status: Literal["conforme", "non_conforme", "standard_mancante", "valori_non_validi"]
     block: StandardPreviewBlock
     standard_id: int | None = None
     standard_label: str | None = None

@@ -141,11 +141,31 @@ function standardPreviewConfirmLabel(preview) {
   return preview?.status === "conforme" ? "Conferma" : "Conferma comunque";
 }
 
+function standardPreviewBlocksConfirm(preview) {
+  return preview?.status === "valori_non_validi";
+}
+
 function StandardPreviewSummary({ preview }) {
   if (!preview) {
     return null;
   }
   const standardLabel = preview.standard_label || "standard non disponibile";
+
+  if (preview.status === "valori_non_validi") {
+    return (
+      <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
+        <p className="font-semibold">Errore nei valori: conferma non possibile</p>
+        <p className="mt-1">Correggi prima i campi non numerici. La pagina non viene confermata con valori non leggibili.</p>
+        {preview.issues?.length ? (
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {preview.issues.map((issue, index) => (
+              <li key={`${issue.field}-${index}`}>{issue.message || `${issue.field}: valore non valido`}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  }
 
   if (preview.status === "conforme") {
     return (
@@ -160,7 +180,7 @@ function StandardPreviewSummary({ preview }) {
   if (preview.status === "non_conforme") {
     return (
       <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-        <p className="font-semibold">Controllo standard: valori fuori limite</p>
+        <p className="font-semibold">Controllo standard: verifica richiesta</p>
         <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
         {preview.issues?.length ? (
           <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -169,7 +189,7 @@ function StandardPreviewSummary({ preview }) {
             ))}
           </ul>
         ) : null}
-        <p className="mt-2 text-xs">Puoi confermare comunque se la lettura è corretta, oppure tornare a modificare.</p>
+        <p className="mt-2 text-xs">Puoi confermare comunque solo se la lettura è corretta, oppure tornare a modificare.</p>
       </div>
     );
   }
@@ -1347,14 +1367,16 @@ export default function AcquisitionChemistrySectionPage({ certificateDocument, r
               >
                 Continua a modificare
               </button>
-              <button
-                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-                disabled={submitting}
-                onClick={handleConfirmAccepted}
-                type="button"
-              >
-                {submitting ? "Conferma..." : standardPreviewConfirmLabel(standardPreview)}
-              </button>
+              {!standardPreviewBlocksConfirm(standardPreview) ? (
+                <button
+                  className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                  disabled={submitting}
+                  onClick={handleConfirmAccepted}
+                  type="button"
+                >
+                  {submitting ? "Conferma..." : standardPreviewConfirmLabel(standardPreview)}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>

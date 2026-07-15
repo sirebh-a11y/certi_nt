@@ -165,6 +165,7 @@ def _create_openai_response(client: OpenAI, **kwargs):
 
 
 CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
+PROPERTY_EXACT_NUMBER_PATTERN = re.compile(r"^-?\d+(?:[.,]\d+)?$")
 CHEMISTRY_CAPTURE_FIELD_ORDER = [
     "Si",
     "Fe",
@@ -685,6 +686,18 @@ def _safe_chemistry_float(value: str | None) -> float | None:
         return None
 
 
+def _is_missing_numeric_placeholder(value: str | None) -> bool:
+    cleaned = _string_or_none(value)
+    if cleaned is None:
+        return True
+    return cleaned.strip().lower() in {"-", "/", "n/a", "na", "nd", "n.d.", "non disponibile"}
+
+
+def _chemistry_value_has_limit_prefix(value: str | None) -> bool:
+    normalized = _normalize_chemistry_capture_value(value)
+    return bool(normalized and (normalized.startswith("<") or normalized.startswith("<=") or normalized.startswith("≤")))
+
+
 def _normalize_property_field_name(field_name: str | None) -> str | None:
     cleaned = _string_or_none(field_name)
     if cleaned is None:
@@ -700,6 +713,16 @@ def _normalize_property_capture_value(value: str | None) -> str | None:
     if token is None:
         return None
     return token.replace(".", ",")
+
+
+def _normalize_property_strict_value(value: str | None) -> str | None:
+    raw = _string_or_none(value)
+    if raw is None:
+        return None
+    compact = raw.replace(" ", "")
+    if not PROPERTY_EXACT_NUMBER_PATTERN.match(compact):
+        return None
+    return compact.replace(".", ",")
 
 
 def _standard_preview_text(value: str | int | None) -> str | None:
@@ -764,6 +787,34 @@ def _standard_preview_field_map(
             fields[cleaned_field] = normalized
         elif _standard_preview_text(raw) is None:
             fields.pop(cleaned_field, None)
+    return fields
+
+
+def _standard_preview_raw_field_map(
+    row: AcquisitionRow,
+    block: str,
+    payload_fields: dict[str, str | None],
+) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for value in row.values or []:
+        if value.blocco != block:
+            continue
+        field = _standard_preview_text(value.campo)
+        if field is None:
+            continue
+        raw = _standard_preview_text(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
+        if raw is not None:
+            fields[field] = raw
+
+    for field, raw in (payload_fields or {}).items():
+        cleaned_field = _standard_preview_text(field)
+        if cleaned_field is None:
+            continue
+        cleaned_raw = _standard_preview_text(raw)
+        if cleaned_raw is None:
+            fields.pop(cleaned_field, None)
+        else:
+            fields[cleaned_field] = cleaned_raw
     return fields
 
 
@@ -965,16 +1016,112 @@ def preview_acquisition_row_standard_conformity(
     payload: AcquisitionStandardPreviewRequest,
 ) -> AcquisitionStandardPreviewResponse:
     block = payload.block
+    raw_fields = _standard_preview_raw_field_map(row, block, payload.fields)
     fields = _standard_preview_field_map(row, block, payload.fields)
     standard = _standard_preview_find_candidate(db, row=row)
+
+    blocking_issues: list[AcquisitionStandardPreviewIssue] = []
+    warning_issues: list[AcquisitionStandardPreviewIssue] = []
+    for field, raw_value in raw_fields.items():
+        if _is_missing_numeric_placeholder(raw_value):
+            continue
+        if block == "chimica":
+            normalized_value = _normalize_chemistry_capture_value(raw_value)
+            if normalized_value is None:
+                blocking_issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=raw_value,
+                        message=f'{field}: "{raw_value}" non e un valore chimico valido. Inserire un numero, eventualmente con < o <=.',
+                    )
+                )
+            elif _chemistry_value_has_limit_prefix(raw_value):
+                warning_issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=normalized_value,
+                        message=f"{field}: valore {normalized_value} con simbolo di limite. Verificare manualmente: non e una misura esatta.",
+                    )
+                )
+        else:
+            normalized_value = _normalize_property_strict_value(raw_value)
+            if normalized_value is None:
+                blocking_issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=field,
+                        value=raw_value,
+                        message=f'{field}: "{raw_value}" non e un valore numerico valido. Inserire solo il numero.',
+                    )
+                )
+
     if standard is None:
+        if blocking_issues:
+            return AcquisitionStandardPreviewResponse(
+                status="valori_non_validi",
+                block=block,
+                issues=blocking_issues + warning_issues,
+                message="Correggere i valori non numerici prima di confermare.",
+            )
+        if warning_issues:
+            return AcquisitionStandardPreviewResponse(
+                status="non_conforme",
+                block=block,
+                issues=warning_issues,
+                message="Valori da verificare manualmente prima della conferma.",
+            )
         return AcquisitionStandardPreviewResponse(
             status="standard_mancante",
             block=block,
             message="Standard non individuato automaticamente per questa riga.",
         )
 
-    issues: list[AcquisitionStandardPreviewIssue] = []
+    if block == "chimica":
+        available_keys = {_standard_preview_key(field) for field in fields}
+        for limit in standard.chemistry_limits:
+            element_key = _standard_preview_key(limit.elemento)
+            if element_key not in available_keys:
+                warning_issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=limit.elemento,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message=f"{limit.elemento}: valore mancante, ma previsto dallo standard.",
+                    )
+                )
+    else:
+        diameter = parse_property_number(row.diametro)
+        available_keys = {_standard_preview_property_key(field) for field in fields}
+        limits_by_key: dict[str, list] = {}
+        for limit in standard.property_limits:
+            limits_by_key.setdefault(_standard_preview_property_key(limit.proprieta), []).append(limit)
+        for key, limits in limits_by_key.items():
+            limit = _standard_preview_select_property_limit(limits, diameter)
+            if limit is None or (limit.min_value is None and limit.max_value is None):
+                continue
+            if key not in available_keys:
+                warning_issues.append(
+                    AcquisitionStandardPreviewIssue(
+                        block=block,
+                        field=limit.proprieta,
+                        limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
+                        message=f"{limit.proprieta}: valore mancante, ma previsto dallo standard.",
+                    )
+                )
+
+    if blocking_issues:
+        return AcquisitionStandardPreviewResponse(
+            status="valori_non_validi",
+            block=block,
+            standard_id=standard.id,
+            standard_label=_standard_preview_label(standard),
+            issues=blocking_issues + warning_issues,
+            message="Correggere i valori non numerici prima di confermare.",
+        )
+
+    issues: list[AcquisitionStandardPreviewIssue] = list(warning_issues)
     compared = 0
     if block == "chimica":
         field_by_key = {_standard_preview_key(field): (field, value) for field, value in fields.items()}
@@ -1041,6 +1188,15 @@ def preview_acquisition_row_standard_conformity(
                 )
 
     if compared <= 0:
+        if issues:
+            return AcquisitionStandardPreviewResponse(
+                status="non_conforme",
+                block=block,
+                standard_id=standard.id,
+                standard_label=_standard_preview_label(standard),
+                issues=issues,
+                message="Valori da verificare manualmente prima della conferma.",
+            )
         return AcquisitionStandardPreviewResponse(
             status="standard_mancante",
             block=block,
