@@ -737,17 +737,21 @@ def _standard_preview_normalize_alloy(value: str | None) -> str | None:
     cleaned = _standard_preview_text(value)
     if cleaned is None:
         return None
-    upper = cleaned.upper()
-    upper = re.sub(r"\bEN\s*-?\s*AW\b", " ", upper)
-    upper = re.sub(r"\bAW\b", " ", upper)
-    tokens = re.findall(r"[0-9]{4}[A-Z]?", upper)
-    if not tokens:
+    compact = re.sub(r"[^0-9A-Za-z]", "", cleaned).upper()
+    compact = re.sub(r"^(ENAW|AW)", "", compact)
+    match = re.search(r"([0-9]{4})([A-Z]*)", compact)
+    if not match:
         return None
-    alloy = tokens[0]
-    alloy = re.sub(r"(T4|T42|T6|T62|T64|T651)$", "", alloy)
-    if re.fullmatch(r"\d{4}[A-Z]", alloy) and not alloy.endswith("A"):
-        alloy = alloy[:4]
-    return alloy or None
+    number, suffix = match.groups()
+    if number == "6082" and suffix.startswith("HF"):
+        return "6082H"
+    if number == "6082" and suffix.startswith("LF"):
+        return "6082L"
+    if suffix in {"", "F", "T4", "T42", "T6", "T62", "T64", "T651", "T76"}:
+        return number
+    if number == "6082" and suffix[:1] in {"H", "L"}:
+        return f"{number}{suffix[:1]}"
+    return f"{number}A" if suffix[:1] == "A" else number
 
 
 def _standard_preview_extract_temper(*values: str | None) -> str | None:
