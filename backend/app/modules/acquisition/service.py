@@ -830,20 +830,94 @@ def _standard_preview_select_property_limit(limits: list, diameter: float | None
     return no_range[0] if no_range else limits[0]
 
 
+def _standard_preview_row_value(row: AcquisitionRow, block: str, field: str) -> str | None:
+    target_block = _standard_preview_key(block)
+    target_field = _standard_preview_key(field)
+    for value in row.values or []:
+        if _standard_preview_key(value.blocco) != target_block:
+            continue
+        if _standard_preview_key(value.campo) != target_field:
+            continue
+        return value.valore_finale or value.valore_standardizzato or value.valore_grezzo
+    return None
+
+
+def _standard_preview_infer_product_type(row: AcquisitionRow) -> str | None:
+    haystack = " ".join(
+        filter(
+            None,
+            [
+                row.note_documento,
+                row.lega_designazione,
+                row.lega_base,
+                row.variante_lega,
+                _standard_preview_row_value(row, "ddt", "descrizione"),
+                _standard_preview_row_value(row, "ddt", "descrizione_articolo"),
+                _standard_preview_row_value(row, "ddt", "materiale"),
+            ],
+        )
+    ).upper()
+    if any(token in haystack for token in ("BARRA", "BARRE", "ROUND BAR", "BAR ")):
+        return "BARRE"
+    if any(token in haystack for token in ("PROFILO", "PROFILI", "PROFILE")):
+        return "PROFILI"
+    return None
+
+
+def _standard_preview_confirmed_standard(db: Session, *, row: AcquisitionRow) -> NormativeStandard | None:
+    row_cdq = _standard_preview_text(row.cdq)
+    if row_cdq is None:
+        return None
+    row_colata_key = _standard_preview_key(row.colata)
+
+    # Local import to avoid coupling acquisition startup to Quarta service imports.
+    from app.modules.quarta_taglio.models import QuartaTaglioRow, QuartaTaglioStandardSelection
+
+    quarta_rows = (
+        db.query(QuartaTaglioRow)
+        .filter(QuartaTaglioRow.cdq == row_cdq)
+        .limit(50)
+        .all()
+    )
+    if row_colata_key:
+        quarta_rows = [item for item in quarta_rows if _standard_preview_key(item.colata) == row_colata_key]
+    cod_odps = sorted({item.cod_odp for item in quarta_rows if item.cod_odp})
+    if len(cod_odps) != 1:
+        return None
+
+    selection = (
+        db.query(QuartaTaglioStandardSelection)
+        .join(NormativeStandard, QuartaTaglioStandardSelection.standard_id == NormativeStandard.id)
+        .options(selectinload(QuartaTaglioStandardSelection.standard).selectinload(NormativeStandard.chemistry_limits))
+        .options(selectinload(QuartaTaglioStandardSelection.standard).selectinload(NormativeStandard.property_limits))
+        .filter(
+            QuartaTaglioStandardSelection.cod_odp == cod_odps[0],
+            NormativeStandard.stato_validazione == "attivo",
+        )
+        .one_or_none()
+    )
+    return selection.standard if selection else None
+
+
 def _standard_preview_find_candidate(
     db: Session,
     *,
     row: AcquisitionRow,
-    block: str,
 ) -> NormativeStandard | None:
+    confirmed_standard = _standard_preview_confirmed_standard(db, row=row)
+    if confirmed_standard is not None:
+        return confirmed_standard
+
     row_alloy = (
-        _standard_preview_normalize_alloy(row.lega_designazione)
-        or _standard_preview_normalize_alloy(row.lega_base)
+        _standard_preview_normalize_alloy(row.lega_base)
+        or _standard_preview_normalize_alloy(row.lega_designazione)
         or _standard_preview_normalize_alloy(row.variante_lega)
     )
     if row_alloy is None:
         return None
     row_temper = _standard_preview_extract_temper(row.lega_designazione, row.lega_base, row.variante_lega)
+    measure_type = "diametro" if parse_property_number(row.diametro) is not None else None
+    product_type = _standard_preview_infer_product_type(row)
     standards = (
         db.query(NormativeStandard)
         .options(selectinload(NormativeStandard.chemistry_limits), selectinload(NormativeStandard.property_limits))
@@ -853,25 +927,29 @@ def _standard_preview_find_candidate(
 
     candidates: list[tuple[int, int, NormativeStandard]] = []
     for standard in standards:
-        limits_count = len(standard.chemistry_limits) if block == "chimica" else len(standard.property_limits)
-        if limits_count <= 0:
-            continue
         standard_alloy = (
-            _standard_preview_normalize_alloy(standard.lega_designazione)
-            or _standard_preview_normalize_alloy(standard.lega_base)
+            _standard_preview_normalize_alloy(standard.lega_base)
+            or _standard_preview_normalize_alloy(standard.lega_designazione)
         )
         if row_alloy and standard_alloy and row_alloy != standard_alloy:
             continue
 
         score = 0
         if row_alloy and standard_alloy == row_alloy:
-            score += 100
-        if row_temper and _standard_preview_key(standard.trattamento_termico) == _standard_preview_key(row_temper):
-            score += 30
-        if standard.misura_tipo and "diametro" in standard.misura_tipo.lower() and parse_property_number(row.diametro) is not None:
-            score += 10
-        if standard.norma:
+            score += 50
+        if measure_type and standard.misura_tipo:
+            if _standard_preview_key(standard.misura_tipo) != _standard_preview_key(measure_type):
+                continue
+            score += 20
+        if product_type and standard.tipo_prodotto:
+            if _standard_preview_key(standard.tipo_prodotto) != _standard_preview_key(product_type):
+                continue
+            score += 25
+        if standard.trattamento_termico:
             score += 5
+        if row_temper and _standard_preview_key(standard.trattamento_termico) == _standard_preview_key(row_temper):
+            score += 5
+        limits_count = len(standard.chemistry_limits) + len(standard.property_limits)
         candidates.append((score, limits_count, standard))
 
     if not candidates:
@@ -888,7 +966,7 @@ def preview_acquisition_row_standard_conformity(
 ) -> AcquisitionStandardPreviewResponse:
     block = payload.block
     fields = _standard_preview_field_map(row, block, payload.fields)
-    standard = _standard_preview_find_candidate(db, row=row, block=block)
+    standard = _standard_preview_find_candidate(db, row=row)
     if standard is None:
         return AcquisitionStandardPreviewResponse(
             status="standard_mancante",
