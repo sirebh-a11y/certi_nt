@@ -505,6 +505,7 @@ class AcquisitionStandardPreviewIssue(BaseModel):
     value: str | None = None
     limit: str | None = None
     message: str
+    severity: Literal["block", "warning", "info"] = "warning"
 
 
 class AcquisitionStandardPreviewResponse(BaseModel):

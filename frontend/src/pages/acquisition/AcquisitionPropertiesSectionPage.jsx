@@ -20,6 +20,33 @@ function normalizeDisplayValue(value) {
   return (value || "").trim();
 }
 
+const MISSING_NUMERIC_MARKERS = new Set(["-", "/", "n/a", "na", "nd", "n.d.", "non disponibile"]);
+
+function isMissingNumericValue(value) {
+  const raw = normalizeDisplayValue(value).toLowerCase();
+  return !raw || MISSING_NUMERIC_MARKERS.has(raw);
+}
+
+function isValidPropertyConfirmValue(value) {
+  if (isMissingNumericValue(value)) {
+    return true;
+  }
+  const compact = normalizeDisplayValue(value).replace(/\s+/g, "");
+  return /^-?\d+(?:[.,]\d+)?$/.test(compact);
+}
+
+function buildInvalidPropertyIssues(fields) {
+  return Object.entries(fields || {})
+    .filter(([, value]) => !isValidPropertyConfirmValue(value))
+    .map(([field, value]) => ({
+      block: "proprieta",
+      field,
+      value,
+      severity: "block",
+      message: `${formatPropertyFieldLabel(field)}: "${normalizeDisplayValue(value)}" non e un valore numerico valido. Inserire solo il numero.`,
+    }));
+}
+
 function formatPropertyFieldLabel(field) {
   return field === "Rp0.2 / Rm" ? "Rp0.2/Rm" : field;
 }
@@ -100,15 +127,19 @@ function StandardPreviewSummary({ preview }) {
     return null;
   }
   const standardLabel = preview.standard_label || "standard non disponibile";
+  const issues = preview.issues || [];
+  const blockingIssues = issues.filter((issue) => issue.severity === "block");
+  const warningIssues = issues.filter((issue) => issue.severity !== "block" && issue.severity !== "info");
+  const infoIssues = issues.filter((issue) => issue.severity === "info");
 
   if (preview.status === "valori_non_validi") {
     return (
       <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
         <p className="font-semibold">Errore nei valori: conferma non possibile</p>
         <p className="mt-1">Correggi prima i campi non numerici. La pagina non viene confermata con valori non leggibili.</p>
-        {preview.issues?.length ? (
+        {issues.length ? (
           <ul className="mt-2 list-disc space-y-1 pl-5">
-            {preview.issues.map((issue, index) => (
+            {issues.map((issue, index) => (
               <li key={`${issue.field}-${index}`}>{issue.message || `${formatPropertyFieldLabel(issue.field)}: valore non valido`}</li>
             ))}
           </ul>
@@ -128,18 +159,38 @@ function StandardPreviewSummary({ preview }) {
   }
 
   if (preview.status === "non_conforme") {
+    const onlyInformative = !blockingIssues.length && !warningIssues.length && infoIssues.length > 0;
+    const hardIssues = [...blockingIssues, ...warningIssues];
     return (
-      <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-        <p className="font-semibold">Controllo standard: verifica richiesta</p>
-        <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
-        {preview.issues?.length ? (
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            {preview.issues.map((issue, index) => (
-              <li key={`${issue.field}-${index}`}>{issue.message || `${formatPropertyFieldLabel(issue.field)}: valore da verificare`}</li>
-            ))}
-          </ul>
+      <div className="mt-4 space-y-2">
+        {hardIssues.length ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+            <p className="font-semibold">Controllo standard: verifica richiesta</p>
+            <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {hardIssues.map((issue, index) => (
+                <li key={`${issue.field}-hard-${index}`}>{issue.message || `${formatPropertyFieldLabel(issue.field)}: valore da verificare`}</li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs">Puoi confermare comunque solo se la lettura è corretta, oppure tornare a modificare.</p>
+          </div>
         ) : null}
-        <p className="mt-2 text-xs">Puoi confermare comunque solo se la lettura è corretta, oppure tornare a modificare.</p>
+        {infoIssues.length ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <p className="font-semibold">{onlyInformative ? "Controllo standard: valori mancanti" : "Valori mancanti previsti dallo standard"}</p>
+            <p className="mt-1">
+              {onlyInformative
+                ? `Ho usato solo come controllo visivo lo standard più coerente con il materiale: ${standardLabel}.`
+                : "Questi campi sono previsti dallo standard, ma non sono stati letti nel certificato."}
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {infoIssues.map((issue, index) => (
+                <li key={`${issue.field}-info-${index}`}>{issue.message || `${formatPropertyFieldLabel(issue.field)}: valore mancante`}</li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs">Avviso informativo: non blocca la conferma.</p>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -977,6 +1028,18 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
     if (submitting || confirmDialogOpen || standardPreviewLoading) {
       return;
     }
+    const fields = buildEffectiveDraft(sessionInitialDraft, draft);
+    const invalidIssues = buildInvalidPropertyIssues(fields);
+    if (invalidIssues.length) {
+      setStandardPreview({
+        status: "valori_non_validi",
+        block: "proprieta",
+        message: "Correggere i valori non numerici prima di confermare.",
+        issues: invalidIssues,
+      });
+      setConfirmDialogOpen(true);
+      return;
+    }
     setStandardPreview(null);
     setStandardPreviewLoading(true);
     try {
@@ -986,7 +1049,7 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
           method: "POST",
           body: JSON.stringify({
             block: "proprieta",
-            fields: buildEffectiveDraft(sessionInitialDraft, draft),
+            fields,
           }),
         },
         token,
@@ -994,10 +1057,17 @@ export default function AcquisitionPropertiesSectionPage({ certificateDocument, 
       setStandardPreview(preview);
     } catch (requestError) {
       setStandardPreview({
-        status: "standard_mancante",
+        status: "valori_non_validi",
         block: "proprieta",
-        message: requestError.message || "Controllo standard non disponibile.",
-        issues: [],
+        message: "Controllo standard non disponibile: non confermo in sicurezza.",
+        issues: [
+          {
+            block: "proprieta",
+            field: "Controllo standard",
+            severity: "block",
+            message: requestError.message || "Controllo standard non disponibile.",
+          },
+        ],
       });
     } finally {
       setStandardPreviewLoading(false);

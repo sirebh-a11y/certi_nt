@@ -1033,7 +1033,8 @@ def preview_acquisition_row_standard_conformity(
                         block=block,
                         field=field,
                         value=raw_value,
-                        message=f'{field}: "{raw_value}" non e un valore chimico valido. Inserire un numero, eventualmente con < o <=.',
+                        message=f'{field}: "{raw_value}" non e un valore chimico valido. Inserire solo un numero.',
+                        severity="block",
                     )
                 )
             elif _chemistry_value_has_limit_prefix(raw_value):
@@ -1042,7 +1043,8 @@ def preview_acquisition_row_standard_conformity(
                         block=block,
                         field=field,
                         value=normalized_value,
-                        message=f"{field}: valore {normalized_value} con simbolo di limite. Verificare manualmente: non e una misura esatta.",
+                        message=f"{field}: valore {normalized_value} da verificare manualmente. Controlla che la lettura sia corretta prima di confermare.",
+                        severity="warning",
                     )
                 )
         else:
@@ -1054,6 +1056,7 @@ def preview_acquisition_row_standard_conformity(
                         field=field,
                         value=raw_value,
                         message=f'{field}: "{raw_value}" non e un valore numerico valido. Inserire solo il numero.',
+                        severity="block",
                     )
                 )
 
@@ -1089,6 +1092,7 @@ def preview_acquisition_row_standard_conformity(
                         field=limit.elemento,
                         limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
                         message=f"{limit.elemento}: valore mancante, ma previsto dallo standard.",
+                        severity="info",
                     )
                 )
     else:
@@ -1108,6 +1112,7 @@ def preview_acquisition_row_standard_conformity(
                         field=limit.proprieta,
                         limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
                         message=f"{limit.proprieta}: valore mancante, ma previsto dallo standard.",
+                        severity="info",
                     )
                 )
 
@@ -1139,6 +1144,7 @@ def preview_acquisition_row_standard_conformity(
                         value=raw_value,
                         limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
                         message="Valore non numerico.",
+                        severity="block",
                     )
                 )
                 continue
@@ -1172,6 +1178,7 @@ def preview_acquisition_row_standard_conformity(
                         value=raw_value,
                         limit=_standard_preview_limit_label(limit.min_value, limit.max_value),
                         message="Valore non numerico.",
+                        severity="block",
                     )
                 )
                 continue
@@ -1186,6 +1193,16 @@ def preview_acquisition_row_standard_conformity(
                         message=f"{field}: {normalized_value} fuori limite {_standard_preview_limit_label(limit.min_value, limit.max_value)}",
                     )
                 )
+
+    if any(issue.severity == "block" for issue in issues):
+        return AcquisitionStandardPreviewResponse(
+            status="valori_non_validi",
+            block=block,
+            standard_id=standard.id,
+            standard_label=_standard_preview_label(standard),
+            issues=issues,
+            message="Correggere i valori non numerici prima di confermare.",
+        )
 
     if compared <= 0:
         if issues:
