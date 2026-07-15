@@ -52,6 +52,7 @@ Devono restare sempre:
 - configurazioni email salvate in app;
 - configurazioni AI/modelli, se presenti;
 - reparti;
+- calendario KPI fornitori, inclusi sabati/domeniche calcolati dall'app e chiusure aziendali salvate;
 - fornitori base/locali e collegamenti eSolver;
 - alias fornitori;
 - codici fornitori;
@@ -88,6 +89,7 @@ Dati caricamento e Incoming:
 - evidenze documento;
 - valori letti;
 - righe Incoming;
+- collegamenti note-riga Incoming;
 - match e candidati match;
 - blocchi manuali;
 - storico eventi e storico valori;
@@ -126,9 +128,13 @@ Espone solo certificati PDF chiusi, con almeno:
 - `IdCerti`;
 - `OL`;
 - `DDT`;
+- `IdDocumento`;
+- `IdRigaDoc`;
+- `RifLottoAlfanum`;
 - `CodF3`;
 - `NumeroCertificato`;
 - `DataCertificato`;
+- `Quantita`;
 - `PdfUrl`;
 - `Stato`;
 - `UpdatedAt`.
@@ -156,7 +162,7 @@ Controllo run AI:
 cd /srv/certi_nt/app
 docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
   psql -U certi_nt -d certi_nt \
-  -c "select id, status, started_at, updated_at from acquisition_processing_runs where status in ('in_coda', 'in_esecuzione') order by id desc;"
+  -c "select id, stato, fase_corrente, current_row_id, updated_at from acquisition_processing_runs where stato in ('in_coda', 'in_esecuzione') order by id desc limit 10;"
 ```
 
 Se esistono run in corso, fermarsi.
@@ -238,6 +244,7 @@ Lista logica da non cancellare:
 - `email_settings`;
 - `departments`;
 - `users` solo in variante A;
+- `supplier_calendar_closures`;
 - `ai_providers`;
 - `ai_models`;
 - `fornitori`;
@@ -259,6 +266,7 @@ Lista logica da cancellare:
 - `documenti_fornitore_pagine`;
 - `documenti_evidenze`;
 - `datimaterialeincoming`;
+- `acquisition_row_note_templates`;
 - `valori_letti_acquisition`;
 - `match_certificato`;
 - `match_certificato_candidati`;
@@ -278,6 +286,11 @@ Lista logica da cancellare:
 - `quarta_taglio_certificate_pdf_attachments`.
 
 Prima di scrivere lo script definitivo, verificare le foreign key reali e usare una transazione.
+Questo documento e' una procedura di governo, non uno script SQL gia' pronto da incollare.
+Ogni nuova tabella introdotta dall'app va classificata prima dell'esecuzione:
+
+- configurazione/base da preservare;
+- dato operativo di test da cancellare.
 
 ## Pulizia storage
 
