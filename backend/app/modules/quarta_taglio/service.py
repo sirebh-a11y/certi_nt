@@ -4198,18 +4198,38 @@ def _normalize_alloy_for_standard(value: Any) -> str | None:
     cleaned = _clean_text(value)
     if not cleaned:
         return None
-    compact = re.sub(r"[^0-9A-Za-z]", "", cleaned).upper()
-    match = re.search(r"([0-9]{4})([A-Z]*)", compact)
+    normalized = re.sub(r"\bEN\s*[- ]?\s*AW\b", " ", cleaned.upper())
+    normalized = re.sub(r"\bAW\b", " ", normalized)
+    tokens = re.findall(r"[0-9A-Z]+", normalized)
+    match = None
+    suffix_from_same_token = False
+    for index, token in enumerate(tokens):
+        token_match = re.match(r"^([0-9]{4})([A-Z0-9]*)$", token)
+        if not token_match:
+            continue
+        number, suffix = token_match.groups()
+        suffix_from_same_token = bool(suffix)
+        if not suffix and index + 1 < len(tokens):
+            next_token = tokens[index + 1]
+            if next_token in {"H", "L"} and len(tokens) <= 2:
+                suffix = next_token
+                suffix_from_same_token = True
+            elif next_token in {"F", "T4", "T42", "T6", "T62", "T64", "T651", "T76", "HF", "LF"}:
+                suffix = next_token
+        match = (number, suffix)
+        break
     if not match:
-        return compact
-    number, suffix = match.groups()
+        return re.sub(r"[^0-9A-Za-z]", "", cleaned).upper()
+    number, suffix = match
     if number == "6082" and suffix.startswith("HF"):
         return "6082H"
     if number == "6082" and suffix.startswith("LF"):
         return "6082L"
     if suffix in {"F", "T6", "T76", ""}:
         return number
-    return f"{number}{suffix[:1]}" if number == "6082" and suffix[:1] in {"H", "L"} else number
+    if number == "6082" and suffix_from_same_token and suffix[:1] in {"H", "L"}:
+        return f"{number}{suffix[:1]}"
+    return number
 
 
 def _infer_product_type(
