@@ -18177,6 +18177,29 @@ def _merge_certificate_only_row_into_ddt_row(
         target_row.qualita_data_richiesta = source_row.qualita_data_richiesta
         target_row.qualita_numero_analisi_da_ricontrollare = source_row.qualita_numero_analisi_da_ricontrollare
         target_row.qualita_note_da_ricontrollare = source_row.qualita_note_da_ricontrollare
+
+    # Quality confirmations and custom notes belong to the certificate side.
+    # Reassign the ORM relationships before deleting the certificate-only row,
+    # otherwise delete-orphan cascades remove them during the merge.
+    quality_blocks = {"chimica", "proprieta", "note"}
+    for event in list(source_row.history_events):
+        if event.blocco not in quality_blocks:
+            continue
+        source_row.history_events.remove(event)
+        target_row.history_events.append(event)
+
+    target_note_template_ids = {
+        link.note_template_id for link in target_row.custom_note_links
+    }
+    for link in list(source_row.custom_note_links):
+        source_row.custom_note_links.remove(link)
+        if link.note_template_id in target_note_template_ids:
+            db.delete(link)
+            continue
+        target_row.custom_note_links.append(link)
+        target_note_template_ids.add(link.note_template_id)
+
+    db.flush()
     _sync_row_from_match_values(db, target_row)
     _sync_row_statuses(db, target_row)
     db.add(target_row)
@@ -18201,6 +18224,7 @@ def _merge_certificate_only_row_into_ddt_row(
         {ManualMatchBlock.certificate_row_id: target_row.id},
         synchronize_session=False,
     )
+
     db.delete(source_row)
     db.commit()
     return True

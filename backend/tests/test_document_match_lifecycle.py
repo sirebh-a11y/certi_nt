@@ -9,6 +9,7 @@ from app.core.database import Base
 from app.core.departments.models import Department  # noqa: F401
 from app.core.users.models import User  # noqa: F401
 from app.modules.acquisition.models import (
+    AcquisitionHistoryEvent,
     AcquisitionRow,
     CertificateMatch,
     Document,
@@ -828,6 +829,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     fonte_documentale="sistema",
                 )
             )
+
         self.db.commit()
 
         validated = validate_final_row(
@@ -890,6 +892,55 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     fonte_documentale="sistema",
                 )
             )
+
+        source_only_note = NoteTemplate(
+            code="merge_source_only_note",
+            text="Nota presente solo sul certificato",
+            is_system=False,
+        )
+        shared_note = NoteTemplate(
+            code="merge_shared_note",
+            text="Nota gia presente anche sul DDT",
+            is_system=False,
+        )
+        self.db.add_all([source_only_note, shared_note])
+        self.db.flush()
+        self.db.add_all(
+            [
+                AcquisitionHistoryEvent(
+                    acquisition_row_id=source.id,
+                    blocco="chimica",
+                    azione="conferma_rapida_certificazione",
+                ),
+                AcquisitionHistoryEvent(
+                    acquisition_row_id=source.id,
+                    blocco="proprieta",
+                    azione="conferma_blocco",
+                ),
+                AcquisitionHistoryEvent(
+                    acquisition_row_id=source.id,
+                    blocco="note",
+                    azione="conferma_rapida_certificazione",
+                ),
+                AcquisitionHistoryEvent(
+                    acquisition_row_id=target.id,
+                    blocco="chimica",
+                    azione="evento_target_pre_esistente",
+                ),
+                AcquisitionRowNoteTemplate(
+                    acquisition_row_id=source.id,
+                    note_template_id=source_only_note.id,
+                ),
+                AcquisitionRowNoteTemplate(
+                    acquisition_row_id=source.id,
+                    note_template_id=shared_note.id,
+                ),
+                AcquisitionRowNoteTemplate(
+                    acquisition_row_id=target.id,
+                    note_template_id=shared_note.id,
+                ),
+            ]
+        )
         self.db.commit()
 
         merged = _merge_certificate_only_row_into_ddt_row(
@@ -909,6 +960,38 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(requirement_value.valore_finale, "WITH PROOF OF TEMPER T62; VALUES SPECIALLY AGREED")
         self.assertEqual(merged_row.qualita_valutazione, "accettato_con_riserva")
         self.assertEqual(merged_row.qualita_note, "Da usare con riserva")
+        self.assertIsNone(self.db.get(AcquisitionRow, source.id))
+
+        merged_events = (
+            self.db.query(AcquisitionHistoryEvent)
+            .filter(AcquisitionHistoryEvent.acquisition_row_id == target.id)
+            .all()
+        )
+        event_pairs = {(event.blocco, event.azione) for event in merged_events}
+        self.assertIn(("chimica", "conferma_rapida_certificazione"), event_pairs)
+        self.assertIn(("proprieta", "conferma_blocco"), event_pairs)
+        self.assertIn(("note", "conferma_rapida_certificazione"), event_pairs)
+        self.assertIn(("chimica", "evento_target_pre_esistente"), event_pairs)
+        quick_confirmed_blocks = {
+            event.blocco
+            for event in merged_events
+            if event.azione == "conferma_rapida_certificazione"
+        }
+        self.assertEqual(quick_confirmed_blocks, {"chimica", "note"})
+
+        merged_note_template_ids = [
+            note_template_id
+            for (note_template_id,) in (
+                self.db.query(AcquisitionRowNoteTemplate.note_template_id)
+                .filter(AcquisitionRowNoteTemplate.acquisition_row_id == target.id)
+                .order_by(AcquisitionRowNoteTemplate.note_template_id)
+                .all()
+            )
+        ]
+        self.assertEqual(
+            merged_note_template_ids,
+            sorted([source_only_note.id, shared_note.id]),
+        )
 
     def test_certificate_first_arconic_row_merges_when_matching_ddt_arrives_later(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")
