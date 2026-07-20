@@ -8,6 +8,7 @@ from app.modules.acquisition.service import (
     _is_radioactive_free_line,
     _normalize_vision_note_matches,
     _text_has_lst_00_us_control_implication,
+    _text_has_limited_us_control_scope,
 )
 
 
@@ -42,6 +43,60 @@ class NotesParserTest(unittest.TestCase):
 
         self.assertEqual(matches["nota_us_control_class_a"]["final"], "true")
         self.assertEqual(matches["nota_us_control_class_b"]["final"], "true")
+
+    def test_local_notes_ignore_class_a_limited_to_bar_ends(self):
+        matches = _detect_note_matches(
+            [
+                SimpleNamespace(
+                    id=8,
+                    testo_estratto=(
+                        "BILLETS 100% US TESTED ACCORDING TO AMS STD 2154 CLASS B\n"
+                        "100% ULTRASONIC INSPECTION ENDS OF BARS ACCORDIG TO AMS STD 2154 CLASS A"
+                    ),
+                    ocr_text=None,
+                )
+            ]
+        )
+
+        self.assertNotIn("nota_us_control_class_a", matches)
+        self.assertEqual(matches["nota_us_control_class_b"]["final"], "true")
+
+    def test_local_notes_ignore_class_b_limited_to_bar_ends(self):
+        matches = _detect_note_matches(
+            [
+                SimpleNamespace(
+                    id=10,
+                    testo_estratto=(
+                        "BARS 100% US TESTED ACCORDING TO AMS STD 2154 CLASS A\n"
+                        "ULTRASONIC INSPECTION OF BAR ENDS ACCORDING TO AMS STD 2154 CLASS B"
+                    ),
+                    ocr_text=None,
+                )
+            ]
+        )
+
+        self.assertEqual(matches["nota_us_control_class_a"]["final"], "true")
+        self.assertNotIn("nota_us_control_class_b", matches)
+
+    def test_limited_scope_detection_is_multilingual_and_does_not_reject_whole_material(self):
+        limited_examples = (
+            "100% ultrasonic inspection ends of bars class A",
+            "controllo US sulle estremita delle barre classe B",
+            "US-Prufung an den Stabenden Klasse A",
+            "controle US aux extremites des barres classe B",
+            "US inspectie aan de uiteinden van de staven class A",
+            "badanie US na konce pretow class B",
+        )
+        for example in limited_examples:
+            self.assertTrue(_text_has_limited_us_control_scope(example), example)
+
+        general_examples = (
+            "100% US testing on cast bars based on AMS-STD-2154 Class B",
+            "US inspection on the billets following AMS-STD 2154 class A",
+            "US-Prufung am abgedrehten Barren in Anlehnung an AMS-STD 2154 class A",
+        )
+        for example in general_examples:
+            self.assertFalse(_text_has_limited_us_control_scope(example), example)
 
     def test_detects_lst_00_as_implicit_us_control_class_b_from_text(self):
         matches = _detect_note_matches(
@@ -129,6 +184,58 @@ class NotesParserTest(unittest.TestCase):
 
         self.assertEqual(normalized["nota_us_control_class_a"]["final"], "true")
         self.assertEqual(normalized["nota_us_control_class_b"]["final"], "true")
+
+    def test_vision_note_payload_rejects_only_the_scope_limited_class(self):
+        normalized = _normalize_vision_note_matches(
+            {
+                "nota_us_control_class_a": {
+                    "value": "100% ULTRASONIC INSPECTION ENDS OF BARS ACCORDING TO AMS STD 2154 CLASS A",
+                    "evidence": "100% ULTRASONIC INSPECTION ENDS OF BARS ACCORDING TO AMS STD 2154 CLASS A",
+                    "source_crop": "notes",
+                },
+                "nota_us_control_class_b": {
+                    "value": "BILLETS 100% US TESTED ACCORDING TO AMS STD 2154 CLASS B",
+                    "evidence": "BILLETS 100% US TESTED ACCORDING TO AMS STD 2154 CLASS B",
+                    "source_crop": "notes",
+                },
+            },
+            {"notes": {"page_id": 5, "page_number": 1}},
+        )
+
+        self.assertNotIn("nota_us_control_class_a", normalized)
+        self.assertEqual(normalized["nota_us_control_class_b"]["final"], "true")
+
+    def test_vision_note_payload_requires_sentence_evidence_instead_of_true(self):
+        normalized = _normalize_vision_note_matches(
+            {
+                "nota_us_control_class_a": {
+                    "value": "true",
+                    "evidence": "true",
+                    "source_crop": "notes",
+                }
+            },
+            {"notes": {"page_id": 6, "page_number": 1}},
+        )
+
+        self.assertNotIn("nota_us_control_class_a", normalized)
+
+    def test_extended_class_a_is_rejected_when_limited_to_bar_ends(self):
+        sentence = (
+            "100% ultrasonic inspection ends of bars according to SAE AMS-STD-2154-E Class A Type 1, "
+            "single indication size >2mm and backwall echo drop > 50% BSH"
+        )
+        normalized = _normalize_vision_note_matches(
+            {
+                "nota_us_control_class_a_type1_bsh": {
+                    "value": sentence,
+                    "evidence": sentence,
+                    "source_crop": "notes",
+                }
+            },
+            {"notes": {"page_id": 11, "page_number": 1}},
+        )
+
+        self.assertNotIn("nota_us_control_class_a_type1_bsh", normalized)
 
     def test_legacy_vision_note_payload_is_split_when_both_classes_are_present(self):
         normalized = _normalize_vision_note_matches(

@@ -14555,6 +14555,7 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "Per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: "
                 "cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. "
                 "Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "Item and specification solo se collegato a requisito cliente/ordine/specifica; T62 o T42 solo se collegati a requisito cliente, ordine, specifica o valori concordati"
                 )
@@ -15144,7 +15145,7 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
                 "per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, "
                 "single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. "
                 "Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
-                "Se compaiono Class A e Class B restituisci entrambe. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "WITH PROOF OF TEMPER T62, WITH PROOF OF TEMPER T42, VALUES SPECIALLY AGREED, Exception to N° LST 00, TOL. FOLLOWING EN 603-3"
                 )
@@ -15467,7 +15468,8 @@ def _extract_metalba_certificate_payload_from_openai(
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come BARRA TONDA DIAM. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "Materiale secondo specifica LST00, Prove meccaniche su stato fisico T62, Prove meccaniche su stato fisico T42, richiami a specifica cliente o ordine"
                 )
@@ -22307,7 +22309,8 @@ def _extract_aluminium_bozen_certificate_payload_from_openai(
                 "restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; "
                 "se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "supplied in compliance with the requirements of the order, fornito in conformita ai requisiti dell'ordine, Materiale secondo Spec. N. LST 00, Collaudo stato T62, Collaudo stato T42"
                 )
@@ -22577,7 +22580,8 @@ def _extract_impol_certificate_payload_from_openai(
                 "diameter_raw: estrai il diametro dal blocco Product description se compare come DIA. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "BARS EXTRUDED ON TECHNICAL SPECIFICATION N° LST00, requirements in the order, in accordance with the requirements in the order, T62 o T42 collegati a specifica/ordine/prove meccaniche"
                 )
@@ -24440,7 +24444,8 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "weight_raw: estrai il peso raw del materiale. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
                 "Proprieta meccaniche: considera Rm, Rp0.2, A%, HB, IACS%, Rp0.2/Rm; non usare Min o Max; se ci sono piu righe misurate vere, restituisci tutte le righe misurate raw. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "Customer Special Requirements, Customer Specification, specifications and agreements of the order, T62 o T42 collegati a specifica cliente/ordine/proprieta meccaniche"
                 )
@@ -24672,8 +24677,8 @@ def _extract_aww_certificate_payload_from_openai(
                 "per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, "
                 "single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. "
                 "Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
-                "Se compaiono Class A e Class B restituisci entrambe. "
-                "Usa solo testo realmente visibile nel documento. Non inventare, non inferire e non normalizzare. "
+                + _us_control_scope_prompt()
+                + "Usa solo testo realmente visibile nel documento. Non inventare, non inferire e non normalizzare. "
                 "Se un campo non e chiaramente leggibile, restituisci null. "
                 + _mechanical_requirement_prompt(
                     "customer order, customer specification, customer requirement, T62 o T42 solo se collegati a requisito cliente/ordine/specifica o valori concordati"
@@ -25021,7 +25026,8 @@ def _extract_neuman_certificate_payload_from_openai(
                 "Usa i label e le unita vicine ([HB], [%], [MPa]) per associare correttamente i valori; "
                 "non trattare i limiti min/max come valori misurati. "
                 "Se non esiste una vera riga o un vero blocco misurato, restituisci measured_rows vuoto. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "after simulated heat treatment acc. customer requirements, in accordance with the contracted terms of order, T62 o T42 collegati a trattamento/requisiti cliente/prove meccaniche"
                 )
@@ -25344,6 +25350,19 @@ def _mechanical_requirement_prompt(example_patterns: str) -> str:
         "non usare esempi o pattern come risposta se non sono visibili; se piu frasi vicine sono collegate, riportale separate da ' | '; "
         "considera sia T62 sia T42 quando presenti; se non trovi evidenza chiara, restituisci null. "
         f"Esempi o pattern da riconoscere se visibili: {example_patterns}. "
+    )
+
+
+def _us_control_scope_prompt() -> str:
+    return (
+        "Controlli US: valuta separatamente Class A, Class A Type 1 BSH e Class B. "
+        "Valorizza il relativo campo _raw solo quando una frase visibile riferisce la classe all'intero materiale o prodotto fornito. "
+        "Se il controllo riguarda esclusivamente estremita, teste, code, porzioni finali, aree selezionate o controlli locali, restituisci null per quella classe. "
+        "Applica la stessa regola a formulazioni equivalenti in qualsiasi lingua. "
+        "La dicitura 100% si riferisce all'oggetto indicato: 100% INSPECTION ENDS OF BARS significa tutte le estremita, non tutto il materiale. "
+        "Restituisci entrambe le classi solo se ciascuna ha un'evidenza generale valida. "
+        "Se una classe compare in piu frasi, e' valida se almeno una frase riguarda chiaramente l'intero materiale. "
+        "Copia nel campo _raw la frase originale completa; non restituire true, traduzioni o deduzioni dalla sola norma AMS/ASTM. "
     )
 
 
@@ -25991,7 +26010,8 @@ def _extract_zalco_certificate_payload_from_openai(
                 "diameter_raw e' DIAMETER OR SIZES/FORMAT; weight_raw e' NET; cast_raw e' No. COULEE/CAST Nr. completo; "
                 "alloy_raw e' lega/stato visibile come 6082 HO. "
                 "Chimica: leggi solo riga valori misurati, non limiti e non testo legale. "
-                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. Se compaiono Class A e Class B restituisci entrambe. "
+                "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
+                + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
                     "customer requirement, customer order, customer specification, T62 o T42 collegati a proprieta meccaniche o stato fisico"
                 )
@@ -28056,6 +28076,38 @@ def _string_or_none(value: str | int | None) -> str | None:
     return string_value or None
 
 
+def _text_has_limited_us_control_scope(*values: str | None) -> bool:
+    text = " ".join(
+        _normalize_mojibake_numeric_text(value or "")
+        for value in values
+        if _string_or_none(value) is not None
+    ).casefold()
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return False
+
+    limited_scope_patterns = (
+        r"\bends?\s+of\s+(?:the\s+)?(?:bars?|billets?|rods?|logs?)\b",
+        r"\b(?:bars?|billets?|rods?|logs?)\s+ends?\b",
+        r"\bend\s+(?:portions?|sections?|areas?|zones?)\b",
+        r"\b(?:heads?|tails?)\s+of\s+(?:the\s+)?(?:bars?|billets?|rods?|logs?)\b",
+        r"\b(?:selected|specific|limited|local)\s+(?:areas?|zones?|points?|sections?|inspection|testing)\b",
+        r"\b(?:inspection|testing)\s+(?:of|on)\s+(?:selected|specific|limited|local)\s+(?:areas?|zones?|points?|sections?)\b",
+        r"\b(?:estremit[aà]|testate|teste|code)\s+(?:delle?|dei|degli)\s+(?:barre|billette|tondi|lingotti)\b",
+        r"\b(?:porzioni|zone|aree)\s+(?:terminali|finali|selezionate|limitate|locali)\b",
+        r"\bcontrollo\s+(?:locale|su\s+zone\s+selezionate|delle\s+sole\s+estremit[aà])\b",
+        r"\b(?:stabenden|stangenenden|barrenenden|endbereiche?)\b",
+        r"\benden\s+(?:der|von)\s+(?:st[aä]be|stangen|barren)\b",
+        r"\b(?:extr[eé]mit[eé]s?)\s+(?:des|de\s+la|de\s+l['’])\s+(?:barres?|billettes?)\b",
+        r"\b(?:zones?|parties?)\s+(?:s[eé]lectionn[eé]es?|locales?|terminales?)\b",
+        r"\b(?:uiteinden)\s+van\s+(?:de\s+)?(?:staven|baren|knuppels)\b",
+        r"\b(?:geselecteerde|lokale|beperkte)\s+(?:zones?|gebieden|inspectie)\b",
+        r"\bko[nń]ce\s+(?:pr[eę]t[oó]w|sztab|wlewko?w)\b",
+        r"\b(?:wybrane|lokalne|ograniczone)\s+(?:obszary|strefy|miejsca)\b",
+    )
+    return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in limited_scope_patterns)
+
+
 def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str | int]]:
     matches: dict[str, dict[str, str | int]] = {}
     for page in pages:
@@ -28070,10 +28122,20 @@ def _detect_note_matches(pages: list[DocumentPage]) -> dict[str, dict[str, str |
                 "final": "true",
             }
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-        for line in lines:
+        for line_index, line in enumerate(lines):
             normalized_line = line.lower()
             us_control_classes = _detect_us_control_classes(normalized_line)
+            scope_context = line
+            if line_index > 0 and not _text_has_limited_us_control_scope(line):
+                previous_line = lines[line_index - 1]
+                if (
+                    _text_has_limited_us_control_scope(previous_line)
+                    and not _detect_us_control_classes(previous_line.lower())
+                ):
+                    scope_context = f"{previous_line} {line}"
             for us_control_value in sorted(us_control_classes):
+                if _text_has_limited_us_control_scope(scope_context):
+                    continue
                 field_name = f"nota_us_control_class_{us_control_value.lower()}"
                 if field_name not in matches:
                     matches[field_name] = {
@@ -29689,6 +29751,8 @@ def _normalize_vision_note_matches(
         final_value: str | None = None
         if field_name == "nota_us_control_classe":
             for us_class in sorted(_detect_us_control_classes_from_note_value(raw_value, evidence)):
+                if not _note_value_has_general_us_control_class(raw_value, evidence, us_class):
+                    continue
                 normalized[f"nota_us_control_class_{us_class.lower()}"] = {
                     "page_id": page_id,
                     "snippet": evidence,
@@ -29698,13 +29762,20 @@ def _normalize_vision_note_matches(
                 }
             continue
         if field_name == EXTENDED_CLASS_A_NOTE_FIELD:
-            if _text_has_extended_class_a_type1_bsh(raw_value, evidence):
+            if (
+                _text_has_extended_class_a_type1_bsh(raw_value, evidence)
+                and not _text_has_limited_us_control_scope(raw_value, evidence)
+            ):
                 final_value = "true"
         elif field_name in {"nota_us_control_class_a", "nota_us_control_class_b"}:
             expected_class = "A" if field_name.endswith("_a") else "B"
-            if _note_value_has_us_control_class(raw_value, evidence, expected_class) or (
-                expected_class == "B" and _text_has_lst_00_us_control_implication(raw_value, evidence)
-            ):
+            has_general_class = _note_value_has_general_us_control_class(raw_value, evidence, expected_class)
+            has_general_lst_00_implication = (
+                expected_class == "B"
+                and _text_has_lst_00_us_control_implication(raw_value, evidence)
+                and not _text_has_limited_us_control_scope(raw_value, evidence)
+            )
+            if has_general_class or has_general_lst_00_implication:
                 final_value = "true"
         elif field_name == "nota_rohs":
             haystack = evidence.lower()
@@ -29807,11 +29878,37 @@ def _detect_us_control_classes_from_note_value(*values: str | None) -> set[str]:
     return classes
 
 
-def _note_value_has_us_control_class(raw_value: str | None, evidence: str, expected_class: str) -> bool:
-    normalized_raw = _normalize_mojibake_numeric_text(raw_value or "").strip().lower()
-    if normalized_raw == "true":
-        return True
-    return expected_class in _detect_us_control_classes_from_note_value(raw_value, evidence)
+def _note_value_has_general_us_control_class(
+    raw_value: str | None,
+    evidence: str,
+    expected_class: str,
+) -> bool:
+    seen: set[str] = set()
+    for value in (raw_value, evidence):
+        normalized = _normalize_mojibake_numeric_text(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        parts = [part.strip() for part in re.split(r"[|;\r\n]+", normalized) if part.strip()]
+        for index, part in enumerate(parts):
+            if expected_class not in _detect_us_control_classes_from_note_value(part):
+                continue
+            if part.strip().upper() in {"A", "B", "TRUE", "TRUE_A", "TRUE_B", "FALSE"}:
+                continue
+            scope_context = part
+            if index > 0:
+                previous = parts[index - 1]
+                if (
+                    not _detect_us_control_classes_from_note_value(previous)
+                    and (
+                        _text_has_limited_us_control_scope(previous)
+                        or re.search(r"\b(?:ultrasonic|inspection|testing|us\s+test)\b", previous, flags=re.IGNORECASE)
+                    )
+                ):
+                    scope_context = f"{previous} {part}"
+            if not _text_has_limited_us_control_scope(scope_context):
+                return True
+    return False
 
 
 def _parse_properties_from_spec_lines(lines: list[str], page_id: int) -> dict[str, dict[str, str | int]]:
