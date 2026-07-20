@@ -9422,9 +9422,20 @@ def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:
     quality_rows: list[AcquisitionQualityRowResponse] = []
     for row in rows:
         _ensure_row_supplier_link(db, row)
-        if row.validata_finale and _is_row_fully_confirmed_for_quality(db, row):
+        if _is_row_available_in_quality_register(db, row):
             quality_rows.append(serialize_quality_row(row))
     return AcquisitionQualityRowListResponse(items=quality_rows)
+
+
+def _is_row_available_in_quality_register(db: Session, row: AcquisitionRow) -> bool:
+    if row.validata_finale and _is_row_fully_confirmed_for_quality(db, row):
+        return True
+    match = row.certificate_match
+    return bool(
+        match is not None
+        and match.stato == "confermato"
+        and match.utente_conferma_id is not None
+    )
 
 
 def update_quality_row(
@@ -9434,8 +9445,11 @@ def update_quality_row(
     payload: AcquisitionQualityUpdateRequest,
     actor_id: int,
 ) -> AcquisitionQualityRowResponse:
-    if not row.validata_finale or not _is_row_fully_confirmed_for_quality(db, row):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quality evaluation requires a final validated row")
+    if not _is_row_available_in_quality_register(db, row):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Quality evaluation requires a user-confirmed match or a final validated row",
+        )
 
     fields_set = payload.model_fields_set
     field_names = (

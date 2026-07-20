@@ -355,9 +355,24 @@ export default function QualityEvaluationPage() {
   const saveVersionsRef = useRef({});
   const inFlightCellsRef = useRef({});
   const queuedSavesRef = useRef({});
+  const refreshingRef = useRef(false);
 
-  async function refresh() {
-    setLoading(true);
+  function hasPendingQualityChanges() {
+    const hasChangedDraft = rowsRef.current.some((row) =>
+      isRowChanged(row, latestDraftsRef.current[row.id] || buildDraft(row)),
+    );
+    const hasInFlightSave = Object.values(inFlightCellsRef.current).some(Boolean);
+    return hasChangedDraft || hasInFlightSave || Object.keys(queuedSavesRef.current).length > 0;
+  }
+
+  async function refresh({ silent = false } = {}) {
+    if (refreshingRef.current) {
+      return;
+    }
+    refreshingRef.current = true;
+    if (!silent) {
+      setLoading(true);
+    }
     setError("");
     try {
       const response = await apiRequest("/acquisition/quality-rows", {}, token);
@@ -368,12 +383,30 @@ export default function QualityEvaluationPage() {
     } catch (requestError) {
       setError(requestError.message);
     } finally {
-      setLoading(false);
+      refreshingRef.current = false;
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
     void refresh();
+  }, [token]);
+
+  useEffect(() => {
+    function refreshWhenVisible() {
+      if (document.visibilityState === "visible" && !hasPendingQualityChanges()) {
+        void refresh({ silent: true });
+      }
+    }
+
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [token]);
 
   useEffect(() => {
@@ -701,7 +734,7 @@ export default function QualityEvaluationPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione</p>
           <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione fornitori</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Registro delle sole righe completamente confermate. I campi di match sono bloccati; date e numero analisi sono gestiti qui. Valutazione e nota arrivano dalla validazione finale Incoming.
+            Registro delle righe con match confermato dall'utente. Date e numero analisi sono gestiti qui; valutazione e nota si aggiornano dalla lavorazione Incoming anche prima della chiusura.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -920,7 +953,7 @@ export default function QualityEvaluationPage() {
         </table>
         </div>
         {!loading && rows.length === 0 ? (
-          <p className="px-5 py-8 text-sm text-slate-500">Nessuna riga completamente confermata disponibile per la valutazione qualità.</p>
+          <p className="px-5 py-8 text-sm text-slate-500">Nessuna riga con match confermato disponibile per la valutazione qualità.</p>
         ) : null}
       </div>
     </section>

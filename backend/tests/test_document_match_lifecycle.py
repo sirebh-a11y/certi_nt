@@ -47,6 +47,7 @@ from app.modules.acquisition.service import (
     validate_final_row,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
+from app.modules.supplier_kpi.service import build_supplier_kpi_summary
 from app.modules.suppliers.models import Supplier
 
 
@@ -796,6 +797,110 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(updated.qualita_valutazione, "accettato_con_riserva")
         self.assertFalse(updated.qualita_numero_analisi_da_ricontrollare)
         self.assertTrue(updated.qualita_note_da_ricontrollare)
+
+    def test_quality_register_starts_at_user_confirmed_match_and_stays_out_of_kpi_until_closed(self):
+        supplier = Supplier(ragione_sociale="Early Quality Supplier")
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="early-ddt.pdf", storage_key="early-ddt.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="early-cert.pdf",
+            storage_key="early-cert.pdf",
+        )
+        proposed_certificate = Document(
+            tipo_documento="certificato",
+            nome_file_originale="proposed-cert.pdf",
+            storage_key="proposed-cert.pdf",
+        )
+        self.db.add_all([supplier, ddt_document, certificate_document, proposed_certificate])
+        self.db.flush()
+        ddt_document.fornitore_id = supplier.id
+        certificate_document.fornitore_id = supplier.id
+        proposed_certificate.fornitore_id = supplier.id
+
+        matched_row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="EARLY-1",
+            qualita_note="Nota iniziale",
+            validata_finale=False,
+            stato_workflow="in_lavorazione",
+        )
+        proposed_row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=proposed_certificate.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="PROPOSED-1",
+            validata_finale=False,
+        )
+        self.db.add_all([matched_row, proposed_row])
+        self.db.flush()
+        self.db.add_all(
+            [
+                CertificateMatch(
+                    acquisition_row_id=matched_row.id,
+                    document_certificato_id=certificate_document.id,
+                    stato="confermato",
+                    utente_conferma_id=1,
+                ),
+                CertificateMatch(
+                    acquisition_row_id=proposed_row.id,
+                    document_certificato_id=proposed_certificate.id,
+                    stato="proposto",
+                ),
+            ]
+        )
+        self.db.commit()
+
+        quality_rows = list_quality_rows(self.db).items
+        self.assertEqual([item.id for item in quality_rows], [matched_row.id])
+        self.assertIsNone(quality_rows[0].qualita_valutazione)
+        self.assertEqual(quality_rows[0].qualita_note, "Nota iniziale")
+
+        updated_quality = update_quality_row(
+            self.db,
+            row=get_acquisition_row(self.db, matched_row.id),
+            payload=AcquisitionQualityUpdateRequest(
+                qualita_data_ricezione=date(2026, 7, 20),
+                qualita_data_accettazione=date(2026, 7, 21),
+                qualita_data_richiesta=date(2026, 7, 18),
+                qualita_numero_analisi="EARLY-ANALYSIS",
+            ),
+            actor_id=1,
+        )
+        self.assertEqual(updated_quality.qualita_numero_analisi, "EARLY-ANALYSIS")
+        self.assertFalse(get_acquisition_row(self.db, matched_row.id).validata_finale)
+
+        save_quality_evaluation_note(
+            self.db,
+            row=get_acquisition_row(self.db, matched_row.id),
+            payload=AcquisitionQualityNoteUpdateRequest(qualita_note="Nota aggiornata prima della chiusura"),
+        )
+        refreshed_quality_rows = list_quality_rows(self.db).items
+        self.assertEqual([item.id for item in refreshed_quality_rows], [matched_row.id])
+        self.assertEqual(refreshed_quality_rows[0].qualita_note, "Nota aggiornata prima della chiusura")
+        self.assertIsNone(refreshed_quality_rows[0].qualita_valutazione)
+
+        kpi_summary = build_supplier_kpi_summary(self.db, year=2026)
+        self.assertEqual(kpi_summary.totals.lotti_totali, 0)
+        self.assertEqual(kpi_summary.totals.lotti_non_valutati, 0)
+
+        with self.assertRaises(HTTPException) as proposed_error:
+            update_quality_row(
+                self.db,
+                row=get_acquisition_row(self.db, proposed_row.id),
+                payload=AcquisitionQualityUpdateRequest(qualita_data_ricezione=date(2026, 7, 20)),
+                actor_id=1,
+            )
+        self.assertEqual(proposed_error.exception.status_code, 400)
+
+        persisted_match = get_acquisition_row(self.db, matched_row.id).certificate_match
+        persisted_match.stato = "proposto"
+        persisted_match.utente_conferma_id = None
+        self.db.commit()
+        self.assertEqual(list_quality_rows(self.db).items, [])
 
     def test_quality_evaluation_can_wait_for_ddt_when_certificate_blocks_are_green(self):
         supplier = Supplier(ragione_sociale="Test Supplier")
