@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterable, cast
 from uuid import uuid4
 from datetime import UTC, date, datetime, time as datetime_time
+from zoneinfo import ZoneInfo
 
 import fitz
 from fastapi import UploadFile
@@ -154,6 +155,11 @@ from app.modules.suppliers.models import Supplier, SupplierAlias
 
 logger = logging.getLogger(__name__)
 OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
+QUALITY_ACCEPTANCE_TIMEZONE = ZoneInfo("Europe/Rome")
+
+
+def _current_quality_acceptance_date() -> date:
+    return datetime.now(QUALITY_ACCEPTANCE_TIMEZONE).date()
 
 
 def _make_openai_client(openai_api_key: str) -> OpenAI:
@@ -11983,6 +11989,7 @@ def validate_final_row(
             detail="La nota valutazione è obbligatoria per accettato con riserva o respinto.",
         )
 
+    row.qualita_data_accettazione = _current_quality_acceptance_date()
     row.qualita_valutazione = payload.qualita_valutazione
     row.qualita_note = payload.qualita_note
     row.qualita_numero_analisi_da_ricontrollare = False

@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -939,16 +940,74 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
 
         self.db.commit()
 
-        validated = validate_final_row(
-            self.db,
-            row=get_acquisition_row(self.db, row.id),
-            payload=AcquisitionFinalValidationRequest(qualita_valutazione="accettato", qualita_note=None),
-            actor_id=1,
-        )
+        with patch(
+            "app.modules.acquisition.service._current_quality_acceptance_date",
+            return_value=date(2026, 7, 20),
+        ):
+            validated = validate_final_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionFinalValidationRequest(qualita_valutazione="accettato", qualita_note=None),
+                actor_id=1,
+            )
 
         self.assertEqual(validated.qualita_valutazione, "accettato")
+        self.assertEqual(
+            get_acquisition_row(self.db, row.id).qualita_data_accettazione,
+            date(2026, 7, 20),
+        )
         self.assertFalse(validated.validata_finale)
         self.assertEqual(validated.stato_workflow, "attesa_ddt")
+
+    def test_quality_evaluation_sets_acceptance_date_for_every_outcome(self):
+        expected_date = date(2026, 7, 20)
+
+        for evaluation in ("accettato", "accettato_con_riserva", "respinto"):
+            with self.subTest(evaluation=evaluation):
+                row = AcquisitionRow(
+                    cdq=f"ACCEPTANCE-DATE-{evaluation}",
+                    qualita_data_accettazione=date(2026, 7, 1),
+                )
+                self.db.add(row)
+                self.db.flush()
+                for block, field, value in [
+                    ("chimica", "Si", "0,9"),
+                    ("proprieta", "Rm", "350"),
+                    ("note", "nota_radioactive_free", "true"),
+                ]:
+                    self.db.add(
+                        ReadValue(
+                            acquisition_row_id=row.id,
+                            blocco=block,
+                            campo=field,
+                            valore_grezzo=value,
+                            valore_standardizzato=value,
+                            valore_finale=value,
+                            stato="confermato",
+                            metodo_lettura="sistema",
+                            fonte_documentale="sistema",
+                        )
+                    )
+                self.db.commit()
+
+                with patch(
+                    "app.modules.acquisition.service._current_quality_acceptance_date",
+                    return_value=expected_date,
+                ):
+                    validated = validate_final_row(
+                        self.db,
+                        row=get_acquisition_row(self.db, row.id),
+                        payload=AcquisitionFinalValidationRequest(
+                            qualita_valutazione=evaluation,
+                            qualita_note="Motivazione" if evaluation != "accettato" else None,
+                        ),
+                        actor_id=1,
+                    )
+
+                self.assertEqual(
+                    get_acquisition_row(self.db, row.id).qualita_data_accettazione,
+                    expected_date,
+                )
 
     def test_quality_note_autosave_only_changes_the_note(self):
         row = AcquisitionRow(
@@ -1001,7 +1060,8 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(get_acquisition_row(self.db, row.id).qualita_note, "Nota chiusa")
 
     def test_reserve_and_rejection_still_require_a_quality_note(self):
-        row = AcquisitionRow(cdq="MANDATORY-NOTE")
+        original_acceptance_date = date(2026, 7, 1)
+        row = AcquisitionRow(cdq="MANDATORY-NOTE", qualita_data_accettazione=original_acceptance_date)
         self.db.add(row)
         self.db.flush()
         for block, field, value in [
@@ -1038,6 +1098,10 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     )
                 self.assertEqual(missing_note_error.exception.status_code, 400)
                 self.assertIsNone(get_acquisition_row(self.db, row.id).qualita_valutazione)
+                self.assertEqual(
+                    get_acquisition_row(self.db, row.id).qualita_data_accettazione,
+                    original_acceptance_date,
+                )
 
     def test_certificate_first_merge_preserves_quality_evaluation_waiting_for_ddt(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")
