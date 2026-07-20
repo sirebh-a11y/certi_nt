@@ -46,6 +46,7 @@ from app.modules.acquisition.models import (
 )
 from app.modules.acquisition.schemas import (
     AcquisitionFinalValidationRequest,
+    AcquisitionQualityNoteUpdateRequest,
     AcquisitionNotesSectionUpdateRequest,
     AcquisitionHistoryEventResponse,
     AcquisitionQualityRowListResponse,
@@ -11984,6 +11985,19 @@ def validate_final_row(
         user_id=actor_id,
         nota_breve="documenti completi" if row.validata_finale else "attesa DDT/match",
     )
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def save_quality_evaluation_note(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionQualityNoteUpdateRequest,
+) -> AcquisitionRowDetailResponse:
+    _raise_if_quality_block_locked(row, "note")
+    row.qualita_note = payload.qualita_note
+    db.add(row)
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 

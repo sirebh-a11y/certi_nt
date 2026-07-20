@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
@@ -285,12 +285,21 @@ export default function AcquisitionDetailPage() {
   const [loadingDdtPreview, setLoadingDdtPreview] = useState(false);
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
   const [finalQualityNote, setFinalQualityNote] = useState("");
+  const [finalQualityNoteSaveState, setFinalQualityNoteSaveState] = useState("idle");
+  const finalQualityNoteRef = useRef("");
+  const finalQualityNoteRowIdRef = useRef(null);
+  const finalQualityNoteLockedRef = useRef(false);
+  const savedFinalQualityNoteRef = useRef("");
+  const queuedFinalQualityNoteRef = useRef("");
+  const finalQualityNoteSaveQueueRef = useRef(Promise.resolve());
+  const finalQualityNoteSaveVersionRef = useRef(0);
   const [finalValidationDialog, setFinalValidationDialog] = useState(null);
   const [finalValidationWarning, setFinalValidationWarning] = useState(null);
   const [reopenFinalDialogOpen, setReopenFinalDialogOpen] = useState(false);
   const [processingFinalReopen, setProcessingFinalReopen] = useState(false);
   const canSeeTechnicalDetail = user?.role === "admin";
   const canReopenFinalValidation = canReopenQualityFlow(user);
+  finalQualityNoteLockedRef.current = Boolean(row?.qualita_valutazione);
 
   function guardFinalValidatedEdit() {
     if (!row?.validata_finale) {
@@ -400,9 +409,120 @@ export default function AcquisitionDetailPage() {
     [row],
   );
 
+  function resetFinalQualityNoteDraft(value, noteRowId = row?.id) {
+    const nextNote = safeText(value);
+    const normalizedNote = nextNote.trim();
+    finalQualityNoteRef.current = nextNote;
+    finalQualityNoteRowIdRef.current = noteRowId || null;
+    savedFinalQualityNoteRef.current = normalizedNote;
+    queuedFinalQualityNoteRef.current = normalizedNote;
+    finalQualityNoteSaveVersionRef.current += 1;
+    setFinalQualityNote(nextNote);
+    setFinalQualityNoteSaveState("idle");
+  }
+
+  function saveFinalQualityNote(value = finalQualityNoteRef.current) {
+    const normalizedNote = safeText(value).trim();
+    const currentRowId = row?.id;
+    if (!currentRowId || String(currentRowId) !== String(rowId) || row?.qualita_valutazione) {
+      return Promise.resolve();
+    }
+    if (normalizedNote === queuedFinalQualityNoteRef.current) {
+      return finalQualityNoteSaveQueueRef.current;
+    }
+
+    queuedFinalQualityNoteRef.current = normalizedNote;
+    const saveVersion = finalQualityNoteSaveVersionRef.current + 1;
+    finalQualityNoteSaveVersionRef.current = saveVersion;
+    setFinalQualityNoteSaveState("saving");
+
+    const operation = finalQualityNoteSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => apiRequest(
+        `/acquisition/rows/${currentRowId}/quality-note`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ qualita_note: normalizedNote || null }),
+          keepalive: true,
+        },
+        token,
+      ))
+      .then(() => {
+        if (String(finalQualityNoteRowIdRef.current) === String(currentRowId)) {
+          savedFinalQualityNoteRef.current = normalizedNote;
+        }
+        if (finalQualityNoteSaveVersionRef.current === saveVersion) {
+          setFinalQualityNoteSaveState("saved");
+        }
+      })
+      .catch((requestError) => {
+        if (
+          String(finalQualityNoteRowIdRef.current) === String(currentRowId)
+          && queuedFinalQualityNoteRef.current === normalizedNote
+        ) {
+          queuedFinalQualityNoteRef.current = savedFinalQualityNoteRef.current;
+        }
+        if (finalQualityNoteSaveVersionRef.current === saveVersion) {
+          setFinalQualityNoteSaveState("error");
+          setError(requestError.message);
+        }
+        throw requestError;
+      });
+
+    finalQualityNoteSaveQueueRef.current = operation;
+    return operation;
+  }
+
   useEffect(() => {
-    setFinalQualityNote(row?.qualita_note || "");
-  }, [row?.id, row?.qualita_note]);
+    if (row?.id) {
+      resetFinalQualityNoteDraft(row.qualita_note || "", row.id);
+    }
+  }, [row?.id]);
+
+  useEffect(() => {
+    if (!row?.id || String(row.id) !== String(rowId) || row.qualita_valutazione) {
+      return undefined;
+    }
+    const normalizedNote = finalQualityNote.trim();
+    if (normalizedNote === queuedFinalQualityNoteRef.current) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      saveFinalQualityNote(normalizedNote).catch(() => undefined);
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [finalQualityNote, row?.id, row?.qualita_valutazione, rowId, token]);
+
+  useEffect(() => {
+    const activeRowId = rowId;
+    const flushNoteOnExit = () => {
+      const normalizedNote = finalQualityNoteRef.current.trim();
+      if (
+        !activeRowId
+        || String(finalQualityNoteRowIdRef.current) !== String(activeRowId)
+        || finalQualityNoteLockedRef.current
+        || normalizedNote === queuedFinalQualityNoteRef.current
+      ) {
+        return;
+      }
+      queuedFinalQualityNoteRef.current = normalizedNote;
+      void apiRequest(
+        `/acquisition/rows/${activeRowId}/quality-note`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ qualita_note: normalizedNote || null }),
+          keepalive: true,
+        },
+        token,
+      ).catch(() => undefined);
+    };
+
+    window.addEventListener("beforeunload", flushNoteOnExit);
+    return () => {
+      window.removeEventListener("beforeunload", flushNoteOnExit);
+      flushNoteOnExit();
+    };
+  }, [rowId, token]);
 
   useEffect(() => {
     if (!finalValidationDialog) {
@@ -931,6 +1051,7 @@ export default function AcquisitionDetailPage() {
     setProcessingFinalValidation(true);
     setError("");
     try {
+      await saveFinalQualityNote(cleanedNote);
       await apiRequest(
         `/acquisition/rows/${rowId}/validate-final`,
         {
@@ -961,7 +1082,7 @@ export default function AcquisitionDetailPage() {
         token,
       );
       setRow(rowData);
-      setFinalQualityNote(rowData.qualita_note || "");
+      resetFinalQualityNoteDraft(rowData.qualita_note || "", rowData.id);
       setReopenFinalDialogOpen(false);
     } catch (requestError) {
       setError(requestError.message);
@@ -1142,10 +1263,25 @@ export default function AcquisitionDetailPage() {
                     className="min-h-20 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
                     disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}
                     id="final-quality-note"
-                    onChange={(event) => setFinalQualityNote(event.target.value)}
+                    onBlur={() => saveFinalQualityNote().catch(() => undefined)}
+                    onChange={(event) => {
+                      finalQualityNoteRef.current = event.target.value;
+                      setFinalQualityNote(event.target.value);
+                    }}
                     placeholder="Obbligatoria per accettato con riserva o respinto."
                     value={finalQualityNote}
                   />
+                  {!row.qualita_valutazione ? (
+                    <p className={`mt-1 text-xs ${finalQualityNoteSaveState === "error" ? "text-rose-600" : "text-slate-500"}`} aria-live="polite">
+                      {finalQualityNoteSaveState === "saving"
+                        ? "Salvataggio nota..."
+                        : finalQualityNoteSaveState === "saved"
+                          ? "Nota salvata"
+                          : finalQualityNoteSaveState === "error"
+                            ? "Nota non salvata: riprova uscendo dal campo."
+                            : "La nota viene salvata automaticamente."}
+                    </p>
+                  ) : null}
                 </div>
               </div>
               {!row.qualita_valutazione ? (

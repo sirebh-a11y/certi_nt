@@ -22,6 +22,7 @@ from app.modules.acquisition.schemas import DocumentMatchDetachRequest
 from app.modules.acquisition.schemas import AcquisitionRowUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionFinalValidationRequest
+from app.modules.acquisition.schemas import AcquisitionQualityNoteUpdateRequest
 from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
@@ -38,6 +39,7 @@ from app.modules.acquisition.service import (
     get_acquisition_row,
     list_quality_rows,
     reopen_final_validation,
+    save_quality_evaluation_note,
     preview_acquisition_row_delete,
     update_quality_row,
     update_acquisition_row,
@@ -842,6 +844,95 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(validated.qualita_valutazione, "accettato")
         self.assertFalse(validated.validata_finale)
         self.assertEqual(validated.stato_workflow, "attesa_ddt")
+
+    def test_quality_note_autosave_only_changes_the_note(self):
+        row = AcquisitionRow(
+            cdq="AUTOSAVE-1",
+            qualita_note="Nota iniziale",
+            qualita_note_da_ricontrollare=True,
+            stato_tecnico="giallo",
+            stato_workflow="in_lavorazione",
+            priorita_operativa="media",
+            validata_finale=False,
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        updated = save_quality_evaluation_note(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityNoteUpdateRequest(qualita_note="  Ultima nota scritta  "),
+        )
+
+        persisted = get_acquisition_row(self.db, row.id)
+        self.assertEqual(updated.qualita_note, "Ultima nota scritta")
+        self.assertIsNone(updated.qualita_valutazione)
+        self.assertTrue(persisted.qualita_note_da_ricontrollare)
+        self.assertEqual(updated.stato_tecnico, "giallo")
+        self.assertEqual(updated.stato_workflow, "in_lavorazione")
+        self.assertEqual(updated.priorita_operativa, "media")
+        self.assertFalse(updated.validata_finale)
+        self.assertEqual(updated.history_events, [])
+
+    def test_quality_note_autosave_is_locked_after_quality_evaluation(self):
+        row = AcquisitionRow(
+            cdq="AUTOSAVE-LOCKED",
+            qualita_note="Nota chiusa",
+            qualita_valutazione="accettato",
+            stato_workflow="attesa_ddt",
+            validata_finale=False,
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as locked_error:
+            save_quality_evaluation_note(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionQualityNoteUpdateRequest(qualita_note="Tentativo modifica"),
+            )
+
+        self.assertEqual(locked_error.exception.status_code, 409)
+        self.assertEqual(get_acquisition_row(self.db, row.id).qualita_note, "Nota chiusa")
+
+    def test_reserve_and_rejection_still_require_a_quality_note(self):
+        row = AcquisitionRow(cdq="MANDATORY-NOTE")
+        self.db.add(row)
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="sistema",
+                    fonte_documentale="sistema",
+                )
+            )
+        self.db.commit()
+
+        for evaluation in ("accettato_con_riserva", "respinto"):
+            with self.subTest(evaluation=evaluation):
+                with self.assertRaises(HTTPException) as missing_note_error:
+                    validate_final_row(
+                        self.db,
+                        row=get_acquisition_row(self.db, row.id),
+                        payload=AcquisitionFinalValidationRequest(
+                            qualita_valutazione=evaluation,
+                            qualita_note=None,
+                        ),
+                        actor_id=1,
+                    )
+                self.assertEqual(missing_note_error.exception.status_code, 400)
+                self.assertIsNone(get_acquisition_row(self.db, row.id).qualita_valutazione)
 
     def test_certificate_first_merge_preserves_quality_evaluation_waiting_for_ddt(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")

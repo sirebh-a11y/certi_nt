@@ -818,6 +818,15 @@ class AcquisitionFinalValidationRequest(BaseModel):
         return normalize_optional_text(value)
 
 
+class AcquisitionQualityNoteUpdateRequest(BaseModel):
+    qualita_note: str | None = None
+
+    @field_validator("qualita_note")
+    @classmethod
+    def normalize_optional_quality_note(cls, value: str | None) -> str | None:
+        return normalize_optional_text(value)
+
+
 class AcquisitionNotesSectionUpdateRequest(BaseModel):
     nota_us_control_class_a: bool = False
     nota_us_control_class_a_type1_bsh: bool = False
