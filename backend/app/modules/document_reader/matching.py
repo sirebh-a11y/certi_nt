@@ -93,7 +93,7 @@ def detect_ddt_core_matches(
                 if ddt_number is not None:
                     matches["ddt"] = _build_match(page.id, line, ddt_number)
             if "cdq" not in matches:
-                explicit_cdq = _extract_explicit_cdq_from_line(normalized_line)
+                explicit_cdq = _extract_explicit_cdq_from_line(line)
                 if explicit_cdq is not None:
                     matches["cdq"] = _build_match(page.id, line, explicit_cdq)
             if supplier_key != "aww" and "diametro" not in matches:
@@ -304,10 +304,10 @@ def _extract_ddt_number_from_line(line: str) -> str | None:
 
 
 def _extract_explicit_cdq_from_line(line: str) -> str | None:
-    if "cdq" not in line:
+    if "cdq" not in line.casefold():
         return None
     explicit = _extract_by_keywords(line, ("cdq",))
-    if explicit is None or explicit in {"3.1", "31"}:
+    if explicit is None or explicit.upper() in {"3.1", "31"}:
         return None
     return explicit
 
@@ -327,18 +327,18 @@ def _extract_diameter_from_line(line: str) -> str | None:
 
 
 def _extract_by_keywords(line: str, keywords: tuple[str, ...]) -> str | None:
-    if not any(keyword in line for keyword in keywords):
+    if not any(keyword.casefold() in line.casefold() for keyword in keywords):
         return None
-    pattern = re.compile(r"(?:[:=\-]|\b)([a-z0-9][a-z0-9/-]{2,})\s*$")
+    pattern = re.compile(r"(?:[:=\-]|\b)([a-z0-9][a-z0-9/#-]{2,})\s*$", re.IGNORECASE)
     tail_match = pattern.search(line)
     if tail_match is not None:
-        return tail_match.group(1).upper()
+        return tail_match.group(1)
 
-    token_pattern = re.compile(r"([a-z0-9][a-z0-9/-]{2,})")
+    token_pattern = re.compile(r"([a-z0-9][a-z0-9/#-]{2,})", re.IGNORECASE)
     tokens = token_pattern.findall(line)
     for token in reversed(tokens):
-        if token not in {"cast", "charge", "batch", "colata", "heat", "cdq", "cert", "certificate"}:
-            return token.upper()
+        if token.casefold() not in {"cast", "charge", "batch", "colata", "heat", "cdq", "cert", "certificate"}:
+            return token
     return None
 
 
@@ -812,17 +812,17 @@ def _detect_impol_certificate_core_matches(
 
 
 def _extract_impol_certificate_number(line: str) -> str | None:
-    normalized_line = _normalize_mojibake_numeric_text(line).upper()
+    normalized_line = _normalize_mojibake_numeric_text(line)
     patterns = (
         r"^\s*NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
         r"\bCERTIFICATE\s+NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
         r"\bCERT\.?\s+NO\.?\s*:?\s*(\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?)\b",
     )
     for pattern in patterns:
-        match = re.search(pattern, normalized_line)
+        match = re.search(pattern, normalized_line, re.IGNORECASE)
         if match is not None:
-            token = re.sub(r"\s+", "", match.group(1).upper())
-            if token not in {"10204", "0000"}:
+            token = re.sub(r"\s+", "", match.group(1))
+            if token.upper() not in {"10204", "0000"}:
                 return token
     return None
 
@@ -1390,11 +1390,14 @@ def _parse_weight_number(value: str | None) -> float | None:
 
 
 def _extract_certificate_number(line: str) -> str | None:
-    pattern = re.compile(r"(?:cert(?:ificate)?|cdq)[^\w]{0,6}(?:n|no|nr|n°)?[^\w]{0,6}([a-z0-9][a-z0-9/-]{2,})")
+    pattern = re.compile(
+        r"(?:cert(?:ificate)?|cdq)[^\w]{0,6}(?:n|no|nr|n°)?[^\w]{0,6}([a-z0-9][a-z0-9/#-]{2,})",
+        re.IGNORECASE,
+    )
     match = pattern.search(line)
     if match is None:
         return None
-    return match.group(1).upper()
+    return match.group(1)
 
 
 def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[str, str | int] | None:
@@ -1403,18 +1406,18 @@ def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[
         return tally_sheet_payload
 
     anchored_patterns = (
-        r"\bCERT\.?\s*NO\.?\s*([0-9]{4,}[A-Z]?)\b",
-        r"\bNO\.?\s*CERT\.?\s*([0-9]{4,}[A-Z]?)\b",
-        r"\bNR\.?\s*CERT\.?\s*([0-9]{4,}[A-Z]?)\b",
-        r"\bCDQ\b[^\dA-Z]{0,6}([0-9]{4,}[A-Z]?)\b",
+        r"\bCERT\.?\s*NO\.?\s*([0-9]{4,}(?:[#/-][A-Z0-9]{1,2})?)\b",
+        r"\bNO\.?\s*CERT\.?\s*([0-9]{4,}(?:[#/-][A-Z0-9]{1,2})?)\b",
+        r"\bNR\.?\s*CERT\.?\s*([0-9]{4,}(?:[#/-][A-Z0-9]{1,2})?)\b",
+        r"\bCDQ\b[^\dA-Z]{0,6}([0-9]{4,}(?:[#/-][A-Z0-9]{1,2})?)\b",
     )
     for line in lines:
-        normalized_line = _normalize_mojibake_numeric_text(line).upper()
+        normalized_line = _normalize_mojibake_numeric_text(line)
         for pattern in anchored_patterns:
-            match = re.search(pattern, normalized_line)
+            match = re.search(pattern, normalized_line, re.IGNORECASE)
             if match is not None:
                 value = match.group(1)
-                if value not in {"10204", "0000"}:
+                if value.upper() not in {"10204", "0000"}:
                     return {"page_id": page_id, "snippet": line, "standardized": value, "final": value}
 
     direct = _extract_anchor_value_from_lines(
@@ -1430,17 +1433,17 @@ def _extract_certificate_number_payload(lines: list[str], page_id: int) -> dict[
             "no cert",
             "cdq",
         ),
-        pattern=r"\b[0-9]{4,}[A-Z]?\b",
+        pattern=r"\b[0-9]{4,}(?:[#/-][A-Z0-9]{1,2})?\b",
         exclude_tokens={"10204", "31", "3", "1"},
         lookahead=12,
+        preserve_case=True,
     )
     if direct is not None:
         snippet, value = direct
         return {"page_id": page_id, "snippet": snippet, "standardized": value, "final": value}
 
     for line in lines:
-        normalized_line = line.lower()
-        cert_number = _extract_certificate_number(normalized_line)
+        cert_number = _extract_certificate_number(line)
         if (
             cert_number is not None
             and cert_number not in {"IFICATE", "CERTIFICATE"}
@@ -1503,16 +1506,17 @@ def _extract_anchor_value_from_lines(
     pattern: str,
     exclude_tokens: set[str] | None = None,
     lookahead: int = 4,
+    preserve_case: bool = False,
 ) -> tuple[str, str] | None:
     compiled = re.compile(pattern, re.IGNORECASE)
     excluded = {token.upper() for token in (exclude_tokens or set())}
 
     def _first_candidate(value_line: str) -> str | None:
         for match in compiled.finditer(value_line):
-            token = match.group(0).strip().upper()
-            if token in excluded:
+            token = match.group(0).strip()
+            if token.upper() in excluded:
                 continue
-            return token
+            return token if preserve_case else token.upper()
         return None
 
     for index, line in enumerate(lines):
@@ -1741,7 +1745,11 @@ def _extract_aww_weight(lines: list[str], *, document_type: str) -> str | None:
 
 def _extract_aww_certificate_number(lines: list[str]) -> str | None:
     for line in lines:
-        match = re.search(r"\b(?:ZEUGNIS-NR|CERTIFICATE NO)\.?\s*[:.]?\s*([A-Z0-9-]{5,})\b", line.upper())
+        match = re.search(
+            r"\b(?:ZEUGNIS-NR|CERTIFICATE NO)\.?\s*[:.]?\s*([A-Z0-9-]{5,})\b",
+            line,
+            re.IGNORECASE,
+        )
         if match is not None:
             return match.group(1)
     return None
@@ -1839,23 +1847,22 @@ def _extract_aluminium_bozen_certificate_number(
     for index, line in enumerate(normalized_lines):
         if "CERT.NO" not in line and "CERT NO" not in line and "CERTNC" not in line:
             continue
-        window = normalized_lines[index : min(index + 4, len(normalized_lines))]
         raw_window = lines[index : min(index + 4, len(lines))]
         previous_four_digit_token: str | None = None
-        for offset, (raw_candidate, candidate) in enumerate(zip(raw_window, window, strict=False)):
-            for source in (raw_candidate.upper(), candidate):
-                for token in re.findall(r"\b\d{5,7}[A-Z]?\b", source):
-                    if token in {"10204"}:
-                        continue
-                    if re.fullmatch(r"20\d{2}", token):
-                        continue
-                    return " | ".join(raw_window[: offset + 1]), token
-                for token in re.findall(r"\b\d{4}\b", source):
-                    if re.fullmatch(r"20\d{2}", token):
-                        continue
-                    if previous_four_digit_token is not None and token.startswith(previous_four_digit_token[1:]):
-                        return " | ".join(raw_window[: offset + 1]), f"{previous_four_digit_token[0]}{token}"
-                    previous_four_digit_token = token
+        for offset, raw_candidate in enumerate(raw_window):
+            source = _normalize_mojibake_numeric_text(raw_candidate)
+            for token in re.findall(r"\b\d{5,7}[A-Z]?\b", source, re.IGNORECASE):
+                if token.upper() in {"10204"}:
+                    continue
+                if re.fullmatch(r"20\d{2}", token):
+                    continue
+                return " | ".join(raw_window[: offset + 1]), token
+            for token in re.findall(r"\b\d{4}\b", source):
+                if re.fullmatch(r"20\d{2}", token):
+                    continue
+                if previous_four_digit_token is not None and token.startswith(previous_four_digit_token[1:]):
+                    return " | ".join(raw_window[: offset + 1]), f"{previous_four_digit_token[0]}{token}"
+                previous_four_digit_token = token
     return None
 
 

@@ -12652,6 +12652,7 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             certificate_no_raw,
             r"\b\d{4,7}[A-Z]?\b",
             disallow={"10204"},
+            preserve_case=True,
         )
         if certificate_no is not None and _looks_like_invalid_cdq(certificate_no, certificate_no_raw):
             certificate_no = None
@@ -15304,7 +15305,12 @@ def _normalize_arconic_ddt_number(value: str | None) -> str | None:
 
 
 def _normalize_arconic_certificate_number(value: str | None) -> str | None:
-    return _extract_token_from_value_or_evidence(value, value, r"\bEEP[0-9A-Z-]+\b")
+    return _extract_token_from_value_or_evidence(
+        value,
+        value,
+        r"\bEEP[0-9A-Z-]+\b",
+        preserve_case=True,
+    )
 
 
 def _format_arconic_certificate_cdq(cert_number: str | None, package_ids: str | None) -> str | None:
@@ -22070,6 +22076,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
             evidence,
             r"\b\d{4,7}[A-Z]?\b",
             disallow={"10204"},
+            preserve_case=True,
         )
         if token is None or re.fullmatch(r"20\d{2}", token):
             return None
@@ -22743,10 +22750,11 @@ def _normalize_impol_certificate_number(value: str | None, evidence: str | None 
         evidence,
         r"\b\d{1,6}\s*(?:[#/-]\s*[A-Z0-9]{1,2})?\b",
         disallow={"10204"},
+        preserve_case=True,
     )
     if token is None:
         return None
-    return re.sub(r"\s+", "", token.upper())
+    return re.sub(r"\s+", "", token)
 
 
 def _normalize_impol_product_code(value: str | None) -> str | None:
@@ -26333,8 +26341,9 @@ def _sanitize_vision_ddt_fields(
         cert_value = _extract_token_from_value_or_evidence(
             cert_value,
             cert_evidence,
-            r"\b\d{4,7}[A-Z]?\b",
+            r"\b\d{4,7}(?:[#/-][A-Z0-9]{1,2})?\b",
             disallow={"10204"},
+            preserve_case=True,
         )
         if cert_value is not None and _looks_like_invalid_cdq(cert_value, cert_evidence):
             cert_value = None
@@ -26439,13 +26448,17 @@ def _extract_token_with_regex(
     pattern: str,
     *,
     disallow: set[str] | None = None,
+    preserve_case: bool = False,
 ) -> str | None:
     disallow_set = {token.upper() for token in (disallow or set())}
-    for match in re.finditer(pattern, text.upper()):
-        token = match.group(0).strip().upper()
-        if token in disallow_set:
+    source_text = text if preserve_case else text.upper()
+    flags = re.IGNORECASE if preserve_case else 0
+    for match in re.finditer(pattern, source_text, flags):
+        token = match.group(0).strip()
+        normalized_token = token.upper()
+        if normalized_token in disallow_set:
             continue
-        return token
+        return token if preserve_case else normalized_token
     return None
 
 
@@ -26455,13 +26468,24 @@ def _extract_token_from_value_or_evidence(
     pattern: str,
     *,
     disallow: set[str] | None = None,
+    preserve_case: bool = False,
 ) -> str | None:
     if value:
-        token = _extract_token_with_regex(value, pattern, disallow=disallow)
+        token = _extract_token_with_regex(
+            value,
+            pattern,
+            disallow=disallow,
+            preserve_case=preserve_case,
+        )
         if token is not None:
             return token
     if evidence:
-        return _extract_token_with_regex(evidence, pattern, disallow=disallow)
+        return _extract_token_with_regex(
+            evidence,
+            pattern,
+            disallow=disallow,
+            preserve_case=preserve_case,
+        )
     return None
 
 
