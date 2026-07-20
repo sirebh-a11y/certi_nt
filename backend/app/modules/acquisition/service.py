@@ -394,9 +394,28 @@ def serialize_autonomous_run(run: AutonomousProcessingRun) -> AutonomousRunRespo
     )
 
 
+def _quality_pending_closure_reason(
+    *,
+    qualita_valutazione: str | None,
+    document_ddt_id: int | None,
+    ddt_state: str,
+    match_state: str,
+) -> str | None:
+    if not qualita_valutazione:
+        return None
+    if document_ddt_id is None:
+        return "attesa_ddt"
+    if ddt_state != "verde":
+        return "ddt_da_confermare"
+    if match_state != "verde":
+        return "match_da_confermare"
+    return None
+
+
 def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowListItemResponse:
     supplier_key = _resolve_row_supplier_key(row)
     ddt_summary = _compute_ddt_field_summary(row)
+    block_states = _compute_block_states(row)
     return AcquisitionRowListItemResponse(
         id=row.id,
         document_ddt_id=row.document_ddt_id,
@@ -423,7 +442,13 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         validata_finale=row.validata_finale,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
-        block_states=_compute_block_states(row),
+        pending_closure_reason=_quality_pending_closure_reason(
+            qualita_valutazione=row.qualita_valutazione,
+            document_ddt_id=row.document_ddt_id,
+            ddt_state=block_states.get("ddt", "rosso"),
+            match_state=block_states.get("match", "rosso"),
+        ),
+        block_states=block_states,
         quick_confirmed_blocks=_quick_confirmed_blocks_from_row(row),
         match_state=row.certificate_match.stato if row.certificate_match is not None else "mancante",
         certificate_file_name=row.certificate_document.nome_file_originale if row.certificate_document else None,
@@ -9158,21 +9183,21 @@ def _gemba_ddt_core_state(item: AcquisitionRowListItemResponse) -> str:
     return "giallo" if any(field in pending for field in required) else "verde"
 
 
-def _gemba_document_matching_closed(item: AcquisitionRowListItemResponse) -> bool:
-    return _gemba_ddt_core_state(item) == "verde" and item.block_states.get("match") == "verde"
+def _gemba_is_evaluated_list_row(item: AcquisitionRowListItemResponse) -> bool:
+    return bool(item.validata_finale or item.qualita_valutazione)
 
 
-def _gemba_is_waiting_for_ddt(item: AcquisitionRowListItemResponse) -> bool:
-    return bool(item.qualita_valutazione) and not _gemba_document_matching_closed(item)
+def _gemba_is_open_list_row(item: AcquisitionRowListItemResponse) -> bool:
+    return not item.validata_finale
 
 
-def _gemba_quality_blocks_confirmed(item: AcquisitionRowListItemResponse) -> bool:
-    return all(item.block_states.get(block) == "verde" for block in ("chimica", "proprieta", "note"))
-
-
-def _gemba_is_confirmed_list_row(item: AcquisitionRowListItemResponse) -> bool:
-    has_documents = bool(item.document_ddt_id and item.document_certificato_id)
-    return bool(item.validata_finale or (item.qualita_valutazione and _gemba_quality_blocks_confirmed(item) and has_documents))
+def _gemba_pending_closure_search_text(item: AcquisitionRowListItemResponse) -> str | None:
+    labels = {
+        "attesa_ddt": "attesa ddt ddt mancante",
+        "ddt_da_confermare": "ddt da confermare ddt incompleto",
+        "match_da_confermare": "match da confermare attesa match",
+    }
+    return labels.get(item.pending_closure_reason)
 
 
 def _gemba_match_cell_label(item: AcquisitionRowListItemResponse) -> str:
@@ -9216,7 +9241,7 @@ def _gemba_searchable_values(item: AcquisitionRowListItemResponse) -> list[str]:
         item.ordine,
         item.qualita_valutazione,
         _gemba_quality_label(item.qualita_valutazione) if item.qualita_valutazione else None,
-        "attesa ddt attesa match" if _gemba_is_waiting_for_ddt(item) else None,
+        _gemba_pending_closure_search_text(item),
         item.qualita_note,
         _gemba_match_cell_label(item),
         _gemba_compact_match_reference(item),
@@ -9394,7 +9419,7 @@ def list_gemba_walk_rows(
     items = [
         item
         for item in items
-        if (_gemba_is_confirmed_list_row(item) if view == "confirmed" else not _gemba_is_confirmed_list_row(item))
+        if (_gemba_is_evaluated_list_row(item) if view == "confirmed" else _gemba_is_open_list_row(item))
     ]
     items = [
         item

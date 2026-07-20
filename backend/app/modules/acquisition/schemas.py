@@ -709,6 +709,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     validata_finale: bool
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
+    pending_closure_reason: str | None = None
     block_states: dict[str, str]
     quick_confirmed_blocks: dict[str, bool] = Field(default_factory=dict)
     match_state: str

@@ -1,5 +1,6 @@
 import { formatRowFieldDisplay } from "./fieldFormatting";
 import { normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
+import { pendingClosurePresentation } from "./pendingClosure";
 
 function stateClasses(state) {
   if (state === "verde") {
@@ -11,7 +12,7 @@ function stateClasses(state) {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
-function workflowLabel(value) {
+function workflowLabel(value, row) {
   if (value === "in_lavorazione") {
     return "In lavorazione";
   }
@@ -19,7 +20,7 @@ function workflowLabel(value) {
     return "Validata";
   }
   if (value === "attesa_ddt") {
-    return "Attesa DDT";
+    return pendingClosurePresentation(row)?.full || "In attesa di chiusura";
   }
   if (value === "riaperta") {
     return "Riaperta";
@@ -77,6 +78,7 @@ export default function AcquisitionRowSummaryCard({
   if (!row) {
     return null;
   }
+  const pendingClosure = pendingClosurePresentation(row);
 
   const headCellClass = compact
     ? "px-3 py-2"
@@ -129,13 +131,13 @@ export default function AcquisitionRowSummaryCard({
                   <td className={bodyCellClass}>
                     <div className="flex flex-wrap gap-1.5">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateClasses(row.stato_tecnico)}`}>Tecnico {row.stato_tecnico}</span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow)}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{workflowLabel(row.stato_workflow, row)}</span>
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${row.qualita_valutazione ? stateClasses(qualityEvaluationState(row.qualita_valutazione)) : stateClasses(canValidateFinal ? "giallo" : "rosso")}`}>
                         {row.qualita_valutazione ? qualityEvaluationLabel(row.qualita_valutazione) : canValidateFinal ? "Pronta da valutare" : "Non pronta"}
                       </span>
-                      {row.qualita_valutazione && !row.validata_finale ? (
+                      {pendingClosure ? (
                         <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                          Attesa DDT
+                          {pendingClosure.full}
                         </span>
                       ) : null}
                     </div>

@@ -135,7 +135,7 @@ export default function AcquisitionGembaWalkPrintPage() {
         <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
         <h1 className="mt-1 text-3xl font-bold">Gemba walk</h1>
         <p className="mt-2 text-sm font-medium">
-          Periodo: {formatDate(dateFrom)} - {formatDate(dateTo)} · Vista: {view === "confirmed" ? "Confermate" : "Aperte"} · Righe: {rows.length}
+          Periodo: {formatDate(dateFrom)} - {formatDate(dateTo)} · Vista: {view === "confirmed" ? "Valutate" : "Aperte"} · Righe: {rows.length}
         </p>
       </header>
 

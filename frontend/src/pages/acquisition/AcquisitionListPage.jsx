@@ -6,6 +6,7 @@ import { canEditQualitySetup } from "../../app/access";
 import { useAuth } from "../../app/auth";
 import { alloySearchText, normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "./fieldFormatting";
+import { pendingClosurePresentation, pendingClosureReason } from "./pendingClosure";
 
 const BLOCK_LABELS = {
   match: "Match",
@@ -284,20 +285,12 @@ function isQualityEvaluated(row) {
   return Boolean(row.qualita_valutazione);
 }
 
-function hasLinkedDdtAndCertificate(row) {
-  return Boolean(row.document_ddt_id && row.document_certificato_id);
+function isEvaluatedListRow(row) {
+  return Boolean(row.validata_finale || isQualityEvaluated(row));
 }
 
-function isQualityBlocksConfirmed(row) {
-  return ["chimica", "proprieta", "note"].every((block) => row.block_states?.[block] === "verde");
-}
-
-function isConfirmedListRow(row) {
-  return Boolean(row.validata_finale || (isQualityEvaluated(row) && isQualityBlocksConfirmed(row) && hasLinkedDdtAndCertificate(row)));
-}
-
-function isWaitingForDdt(row) {
-  return isQualityEvaluated(row) && !documentMatchingClosed(row);
+function isOpenListRow(row) {
+  return !row.validata_finale;
 }
 
 function compactNoteReference(row) {
@@ -328,7 +321,7 @@ function searchableFieldValues(row) {
     row.ordine,
     row.qualita_valutazione,
     qualityEvaluationLabel(row.qualita_valutazione),
-    isWaitingForDdt(row) ? "attesa ddt attesa match" : null,
+    pendingClosurePresentation(row)?.search,
     row.qualita_note,
     matchCellLabel(row),
     compactMatchReference(row),
@@ -600,9 +593,10 @@ function compactStateLabel(label, hasSecondary) {
 
 function RowStateCell({ row, onClick, onKeyDown }) {
   const activity = rowActivityState(row);
-  const secondary = isWaitingForDdt(row) ? "Attesa DDT" : "";
+  const pendingClosure = pendingClosurePresentation(row);
+  const secondary = pendingClosure?.compact || "";
   const label = compactStateLabel(activity.label, Boolean(secondary));
-  const title = secondary ? `${activity.label} - ${secondary}` : activity.label;
+  const title = pendingClosure ? `${activity.label} - ${pendingClosure.full}` : activity.label;
   const labelClassName = secondary
     ? "block truncate text-[10px] font-semibold leading-none"
     : "block truncate text-xs font-semibold leading-tight";
@@ -615,7 +609,7 @@ function RowStateCell({ row, onClick, onKeyDown }) {
           title={title}
         >
           <span className={labelClassName}>{label}</span>
-          {secondary ? <span className="mt-1 block truncate text-[9px] font-semibold uppercase leading-none opacity-90">{secondary}</span> : null}
+          {secondary ? <span className="mt-1 block truncate whitespace-nowrap text-[9px] font-semibold uppercase leading-none opacity-90">{secondary}</span> : null}
         </div>
       </CellShell>
     </div>
@@ -786,12 +780,8 @@ export default function AcquisitionListPage() {
     return () => pageScroller?.removeEventListener("scroll", handlePageScroll);
   }, [isCertificationScope]);
 
-  const visibleRows = useMemo(() => {
+  const filteredRows = useMemo(() => {
     let nextRows = rows;
-    if (!isCertificationScope) {
-      nextRows = nextRows.filter((row) => (showConfirmedOnly ? isConfirmedListRow(row) : !isConfirmedListRow(row)));
-    }
-
     if (queryOne.trim() || queryTwo.trim() || queryThree.trim()) {
       nextRows = nextRows.filter((row) => {
         const baseValues = searchableFieldValues(row);
@@ -809,7 +799,15 @@ export default function AcquisitionListPage() {
       });
     }
 
-    return [...nextRows].sort((left, right) => {
+    return nextRows;
+  }, [operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows]);
+
+  const visibleRows = useMemo(() => {
+    const rowsForView = isCertificationScope
+      ? filteredRows
+      : filteredRows.filter((row) => (showConfirmedOnly ? isEvaluatedListRow(row) : isOpenListRow(row)));
+
+    return [...rowsForView].sort((left, right) => {
       if (sortConfig.field) {
         const sorted = compareValues(
           rowFieldSortValue(left, sortConfig.field),
@@ -830,7 +828,7 @@ export default function AcquisitionListPage() {
       }
       return 0;
     });
-  }, [isCertificationScope, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rows, showConfirmedOnly, sortConfig]);
+  }, [filteredRows, isCertificationScope, showConfirmedOnly, sortConfig]);
 
   const displayedRows = useMemo(() => {
     if (rowLimit === "all") {
@@ -846,11 +844,13 @@ export default function AcquisitionListPage() {
   }, [rowLimit, visibleRows]);
 
   const summary = useMemo(() => {
-    const total = visibleRows.length;
-    const open = visibleRows.filter((row) => !row.validata_finale).length;
-    const waitingDdt = visibleRows.filter((row) => isWaitingForDdt(row)).length;
-    return { total, open, waitingDdt };
-  }, [visibleRows]);
+    const total = filteredRows.length;
+    const evaluated = filteredRows.filter((row) => isEvaluatedListRow(row)).length;
+    const open = filteredRows.filter((row) => isOpenListRow(row)).length;
+    const waitingDdt = filteredRows.filter((row) => pendingClosureReason(row) === "attesa_ddt").length;
+    const waitingMatch = filteredRows.filter((row) => pendingClosureReason(row) === "match_da_confermare").length;
+    return { total, evaluated, open, waitingDdt, waitingMatch };
+  }, [filteredRows]);
 
   useEffect(() => {
     function updateScrollMetrics() {
@@ -1177,9 +1177,11 @@ export default function AcquisitionListPage() {
       </div>
 
         <div className="flex flex-wrap gap-2">
-          <SummaryCell label="Righe" value={summary.total} />
+          <SummaryCell label="Righe filtrate" value={summary.total} />
+          <SummaryCell label="Valutate" value={summary.evaluated} />
           <SummaryCell label="Aperte" value={summary.open} />
           <SummaryCell label="Attesa DDT" value={summary.waitingDdt} />
+          <SummaryCell label="Attesa match" value={summary.waitingMatch} />
         </div>
 
       {certificationScope ? (
@@ -1283,14 +1285,14 @@ export default function AcquisitionListPage() {
             onClick={() => setShowConfirmedOnly((current) => !current)}
             type="button"
           >
-            {isCertificationScope ? "Righe OL" : showConfirmedOnly ? "Confermati" : "Aperte"}
+            {isCertificationScope ? "Righe OL" : showConfirmedOnly ? "Valutati" : "Aperti"}
           </button>
         </div>
         {!isCertificationScope ? (
           <div className="max-w-[360px] self-end pb-2 text-xs font-semibold text-rose-700">
             {showConfirmedOnly
-              ? "Include anche certificati già valutati ma ancora in attesa DDT/match."
-              : "Aperte include anche certificati valutati ma non ancora chiusi per DDT/match mancanti."}
+              ? "Include tutte le righe già valutate, anche se ancora aperte per DDT o match."
+              : "Include tutte le righe non ancora chiuse, anche se già valutate."}
           </div>
         ) : null}
         <div className="ml-auto min-w-[88px] max-w-[88px]">
