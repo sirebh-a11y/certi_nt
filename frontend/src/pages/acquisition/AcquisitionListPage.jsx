@@ -846,11 +846,11 @@ export default function AcquisitionListPage() {
   }, [rowLimit, visibleRows]);
 
   const summary = useMemo(() => {
-    const total = rows.length;
-    const open = rows.filter((row) => !row.validata_finale).length;
-    const waitingDdt = rows.filter((row) => isWaitingForDdt(row)).length;
+    const total = visibleRows.length;
+    const open = visibleRows.filter((row) => !row.validata_finale).length;
+    const waitingDdt = visibleRows.filter((row) => isWaitingForDdt(row)).length;
     return { total, open, waitingDdt };
-  }, [rows]);
+  }, [visibleRows]);
 
   useEffect(() => {
     function updateScrollMetrics() {
