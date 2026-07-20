@@ -23,6 +23,7 @@ from app.modules.acquisition.schemas import DocumentMatchDetachRequest
 from app.modules.acquisition.schemas import AcquisitionRowUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionQualityUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionFinalValidationRequest
+from app.modules.acquisition.schemas import AcquisitionQualityControlTypeUpdateRequest
 from app.modules.acquisition.schemas import AcquisitionQualityNoteUpdateRequest
 from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
@@ -40,6 +41,7 @@ from app.modules.acquisition.service import (
     get_acquisition_row,
     list_quality_rows,
     reopen_final_validation,
+    save_quality_control_type,
     save_quality_evaluation_note,
     preview_acquisition_row_delete,
     update_quality_row,
@@ -947,17 +949,46 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             validated = validate_final_row(
                 self.db,
                 row=get_acquisition_row(self.db, row.id),
-                payload=AcquisitionFinalValidationRequest(qualita_valutazione="accettato", qualita_note=None),
+                payload=AcquisitionFinalValidationRequest(
+                    qualita_tipo_controllo="diretta",
+                    qualita_valutazione="accettato",
+                    qualita_note=None,
+                ),
                 actor_id=1,
             )
 
         self.assertEqual(validated.qualita_valutazione, "accettato")
+        self.assertEqual(validated.qualita_tipo_controllo, "diretta")
         self.assertEqual(
             get_acquisition_row(self.db, row.id).qualita_data_accettazione,
             date(2026, 7, 20),
         )
         self.assertFalse(validated.validata_finale)
         self.assertEqual(validated.stato_workflow, "attesa_ddt")
+
+        with self.assertRaises(HTTPException) as locked_error:
+            validate_final_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionFinalValidationRequest(
+                    qualita_tipo_controllo="inversa",
+                    qualita_valutazione="accettato",
+                    qualita_note=None,
+                ),
+                actor_id=1,
+            )
+        self.assertEqual(locked_error.exception.status_code, 409)
+        self.assertEqual(get_acquisition_row(self.db, row.id).qualita_tipo_controllo, "diretta")
+
+        reopen_final_validation(self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
+        reopened = save_quality_control_type(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityControlTypeUpdateRequest(qualita_tipo_controllo="inversa"),
+            actor_id=1,
+        )
+        self.assertEqual(reopened.qualita_tipo_controllo, "inversa")
+        self.assertIsNone(reopened.qualita_valutazione)
 
     def test_quality_evaluation_sets_acceptance_date_for_every_outcome(self):
         expected_date = date(2026, 7, 20)
@@ -998,6 +1029,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                         self.db,
                         row=get_acquisition_row(self.db, row.id),
                         payload=AcquisitionFinalValidationRequest(
+                            qualita_tipo_controllo="inversa",
                             qualita_valutazione=evaluation,
                             qualita_note="Motivazione" if evaluation != "accettato" else None,
                         ),
@@ -1059,6 +1091,49 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(locked_error.exception.status_code, 409)
         self.assertEqual(get_acquisition_row(self.db, row.id).qualita_note, "Nota chiusa")
 
+    def test_quality_control_type_is_saved_without_changing_quality_state(self):
+        row = AcquisitionRow(cdq="CONTROL-TYPE", stato_workflow="in_lavorazione", validata_finale=False)
+        self.db.add(row)
+        self.db.commit()
+
+        updated = save_quality_control_type(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityControlTypeUpdateRequest(qualita_tipo_controllo="diretta"),
+            actor_id=1,
+        )
+
+        self.assertEqual(updated.qualita_tipo_controllo, "diretta")
+        self.assertIsNone(updated.qualita_valutazione)
+        self.assertFalse(updated.validata_finale)
+        self.assertEqual(updated.stato_workflow, "in_lavorazione")
+        self.assertIn(
+            ("quality", "tipo_controllo_qualita_aggiornato"),
+            {(event.blocco, event.azione) for event in updated.history_events},
+        )
+
+    def test_quality_control_type_is_locked_after_quality_evaluation(self):
+        row = AcquisitionRow(
+            cdq="CONTROL-TYPE-LOCKED",
+            qualita_tipo_controllo="diretta",
+            qualita_valutazione="accettato",
+            stato_workflow="attesa_ddt",
+            validata_finale=False,
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as locked_error:
+            save_quality_control_type(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionQualityControlTypeUpdateRequest(qualita_tipo_controllo="inversa"),
+                actor_id=1,
+            )
+
+        self.assertEqual(locked_error.exception.status_code, 409)
+        self.assertEqual(get_acquisition_row(self.db, row.id).qualita_tipo_controllo, "diretta")
+
     def test_reserve_and_rejection_still_require_a_quality_note(self):
         original_acceptance_date = date(2026, 7, 1)
         row = AcquisitionRow(cdq="MANDATORY-NOTE", qualita_data_accettazione=original_acceptance_date)
@@ -1091,6 +1166,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                         self.db,
                         row=get_acquisition_row(self.db, row.id),
                         payload=AcquisitionFinalValidationRequest(
+                            qualita_tipo_controllo="diretta",
                             qualita_valutazione=evaluation,
                             qualita_note=None,
                         ),
@@ -1118,6 +1194,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             cdq="EEP73062",
             colata="C70025341313",
             qualita_valutazione="accettato_con_riserva",
+            qualita_tipo_controllo="inversa",
             qualita_note="Da usare con riserva",
             stato_workflow="attesa_ddt",
             validata_finale=False,
@@ -1219,6 +1296,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         )
         self.assertEqual(requirement_value.valore_finale, "WITH PROOF OF TEMPER T62; VALUES SPECIALLY AGREED")
         self.assertEqual(merged_row.qualita_valutazione, "accettato_con_riserva")
+        self.assertEqual(merged_row.qualita_tipo_controllo, "inversa")
         self.assertEqual(merged_row.qualita_note, "Da usare con riserva")
         self.assertIsNone(self.db.get(AcquisitionRow, source.id))
 

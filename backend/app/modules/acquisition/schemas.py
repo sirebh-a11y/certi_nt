@@ -27,6 +27,7 @@ MatchSource = Literal["sistema", "chatgpt", "utente", "archivio"]
 CandidateState = Literal["candidato", "scartato", "scelto"]
 AutomationRunState = Literal["in_coda", "in_esecuzione", "completato", "errore"]
 QualityEvaluationState = Literal["accettato", "accettato_con_riserva", "respinto"]
+QualityControlType = Literal["diretta", "inversa"]
 
 
 def normalize_optional_text(value: str | None) -> str | None:
@@ -707,6 +708,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     stato_workflow: str
     priorita_operativa: str
     validata_finale: bool
+    qualita_tipo_controllo: QualityControlType | None
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
     pending_closure_reason: str | None = None
@@ -786,6 +788,7 @@ class AcquisitionQualityRowResponse(BaseModel):
     qualita_data_accettazione: date | None
     qualita_data_richiesta: date | None
     qualita_numero_analisi: str | None
+    qualita_tipo_controllo: QualityControlType | None
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
     qualita_numero_analisi_da_ricontrollare: bool
@@ -810,6 +813,7 @@ class AcquisitionQualityUpdateRequest(BaseModel):
 
 
 class AcquisitionFinalValidationRequest(BaseModel):
+    qualita_tipo_controllo: QualityControlType
     qualita_valutazione: QualityEvaluationState
     qualita_note: str | None = None
 
@@ -826,6 +830,10 @@ class AcquisitionQualityNoteUpdateRequest(BaseModel):
     @classmethod
     def normalize_optional_quality_note(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)
+
+
+class AcquisitionQualityControlTypeUpdateRequest(BaseModel):
+    qualita_tipo_controllo: QualityControlType
 
 
 class AcquisitionNotesSectionUpdateRequest(BaseModel):

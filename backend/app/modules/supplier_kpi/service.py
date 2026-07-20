@@ -357,6 +357,7 @@ def _supplier_detail_rows(
         "Peso Kg",
         "Vs. ODV",
         "Data richiesta",
+        "Tipo controllo",
         "Valutazione",
         "Note",
         "Ritardo giorni",
@@ -378,6 +379,7 @@ def _supplier_detail_rows(
             _clean_cell(row.peso),
             _clean_cell(row.ordine),
             _format_date(row.qualita_data_richiesta),
+            _quality_control_type_label(row.qualita_tipo_controllo),
             _quality_label(row.qualita_valutazione),
             _clean_cell(row.qualita_note),
             _delay_days(row),
@@ -448,6 +450,14 @@ def _quality_label(value: str | None) -> str:
         "respinto": "Respinto",
     }
     return labels.get(value or "", _clean_cell(value))
+
+
+def _quality_control_type_label(value: str | None) -> str:
+    labels = {
+        "diretta": "Diretta",
+        "inversa": "Inversa",
+    }
+    return labels.get(value or "", "")
 
 
 def _delay_days(row: AcquisitionRow) -> str:

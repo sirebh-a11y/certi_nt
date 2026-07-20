@@ -92,6 +92,10 @@ const QUALITY_EVALUATION_OPTIONS = [
   { value: "respinto", label: "Respinto", state: "rosso" },
 ];
 const QUALITY_EVALUATION_LABELS = Object.fromEntries(QUALITY_EVALUATION_OPTIONS.map((option) => [option.value, option.label]));
+const QUALITY_CONTROL_TYPE_OPTIONS = [
+  { value: "diretta", label: "Diretta" },
+  { value: "inversa", label: "Inversa" },
+];
 
 function isCertificationIncomingContext(search) {
   const params = new URLSearchParams(search || "");
@@ -286,6 +290,11 @@ export default function AcquisitionDetailPage() {
   const [ddtLinkPreview, setDdtLinkPreview] = useState(null);
   const [finalQualityNote, setFinalQualityNote] = useState("");
   const [finalQualityNoteSaveState, setFinalQualityNoteSaveState] = useState("idle");
+  const [qualityControlType, setQualityControlType] = useState("");
+  const [qualityControlTypeSaveState, setQualityControlTypeSaveState] = useState("idle");
+  const qualityControlTypeRef = useRef("");
+  const qualityControlTypeRowIdRef = useRef(null);
+  const qualityControlTypeSaveQueueRef = useRef(Promise.resolve());
   const finalQualityNoteRef = useRef("");
   const finalQualityNoteRowIdRef = useRef(null);
   const finalQualityNoteLockedRef = useRef(false);
@@ -476,6 +485,11 @@ export default function AcquisitionDetailPage() {
   useEffect(() => {
     if (row?.id) {
       resetFinalQualityNoteDraft(row.qualita_note || "", row.id);
+      const nextControlType = row.qualita_tipo_controllo || "";
+      qualityControlTypeRef.current = nextControlType;
+      qualityControlTypeRowIdRef.current = row.id;
+      setQualityControlType(nextControlType);
+      setQualityControlTypeSaveState("idle");
     }
   }, [row?.id]);
 
@@ -1040,6 +1054,14 @@ export default function AcquisitionDetailPage() {
 
   async function handleValidateFinal(qualityEvaluation) {
     const cleanedNote = safeText(finalQualityNote).trim();
+    const selectedControlType = qualityControlTypeRef.current;
+    if (!selectedControlType) {
+      setFinalValidationWarning({
+        title: "Tipo controllo richiesto",
+        message: "Prima di completare la valutazione devi scegliere Diretta oppure Inversa.",
+      });
+      return;
+    }
     if ((qualityEvaluation === "accettato_con_riserva" || qualityEvaluation === "respinto") && !cleanedNote) {
       setFinalValidationWarning({
         title: "Nota valutazione richiesta",
@@ -1052,11 +1074,13 @@ export default function AcquisitionDetailPage() {
     setError("");
     try {
       await saveFinalQualityNote(cleanedNote);
+      await qualityControlTypeSaveQueueRef.current.catch(() => undefined);
       await apiRequest(
         `/acquisition/rows/${rowId}/validate-final`,
         {
           method: "POST",
           body: JSON.stringify({
+            qualita_tipo_controllo: selectedControlType,
             qualita_valutazione: qualityEvaluation,
             qualita_note: cleanedNote || null,
           }),
@@ -1070,6 +1094,44 @@ export default function AcquisitionDetailPage() {
     } finally {
       setProcessingFinalValidation(false);
     }
+  }
+
+  function handleQualityControlTypeChange(value) {
+    if (row?.qualita_valutazione || processingFinalValidation || qualityControlTypeRef.current === value) {
+      return;
+    }
+    qualityControlTypeRef.current = value;
+    setQualityControlType(value);
+    setQualityControlTypeSaveState("saving");
+    setError("");
+    const controlTypeRowId = rowId;
+
+    const operation = qualityControlTypeSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => apiRequest(
+        `/acquisition/rows/${controlTypeRowId}/quality-control-type`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ qualita_tipo_controllo: value }),
+          keepalive: true,
+        },
+        token,
+      ))
+      .then((rowData) => {
+        if (String(qualityControlTypeRowIdRef.current) === String(controlTypeRowId) && qualityControlTypeRef.current === value) {
+          setRow(rowData);
+          setQualityControlTypeSaveState("saved");
+        }
+      })
+      .catch((requestError) => {
+        if (String(qualityControlTypeRowIdRef.current) === String(controlTypeRowId) && qualityControlTypeRef.current === value) {
+          setQualityControlTypeSaveState("error");
+          setError(requestError.message);
+        }
+        throw requestError;
+      });
+
+    qualityControlTypeSaveQueueRef.current = operation;
   }
 
   async function handleReopenFinalValidation() {
@@ -1213,7 +1275,7 @@ export default function AcquisitionDetailPage() {
                 <div className="max-w-2xl">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Valutazione qualità</div>
                   <p className="mt-2 text-sm text-slate-600">
-                    I dati tecnici restano confermati. Inserisci prima un giudizio nella nota valutazione: non è necessario se tutto è conforme, ma è obbligatorio per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
+                    I dati tecnici restano confermati. Scegli Diretta o Inversa e inserisci il giudizio nella nota valutazione: la nota non è necessaria se tutto è conforme, ma è obbligatoria per accettato con riserva o respinto. Poi premi uno dei pulsanti di valutazione.
                   </p>
                   <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -1256,6 +1318,42 @@ export default function AcquisitionDetailPage() {
                   ) : null}
                 </div>
                 <div className="min-w-[320px] flex-1 xl:max-w-xl">
+                  <fieldset className="mb-4" disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}>
+                    <legend className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Tipo controllo
+                    </legend>
+                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                      {QUALITY_CONTROL_TYPE_OPTIONS.map((option) => {
+                        const selected = qualityControlType === option.value;
+                        return (
+                          <button
+                            aria-pressed={selected}
+                            className={`rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed ${
+                              selected
+                                ? "bg-slate-900 text-white shadow-sm"
+                                : "bg-transparent text-slate-600 hover:bg-white disabled:hover:bg-transparent"
+                            }`}
+                            key={option.value}
+                            onClick={() => handleQualityControlTypeChange(option.value)}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {!row.qualita_valutazione ? (
+                      <p className={`mt-1 text-xs ${qualityControlTypeSaveState === "error" ? "text-rose-600" : "text-slate-500"}`} aria-live="polite">
+                        {qualityControlTypeSaveState === "saving"
+                          ? "Salvataggio tipo controllo..."
+                          : qualityControlTypeSaveState === "saved"
+                            ? "Tipo controllo salvato"
+                            : qualityControlTypeSaveState === "error"
+                              ? "Tipo controllo non salvato: riprova la selezione."
+                              : "Scelta obbligatoria per completare la valutazione."}
+                      </p>
+                    ) : null}
+                  </fieldset>
                   <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="final-quality-note">
                     Nota valutazione
                   </label>

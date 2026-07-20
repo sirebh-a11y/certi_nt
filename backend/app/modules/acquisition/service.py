@@ -47,6 +47,7 @@ from app.modules.acquisition.models import (
 )
 from app.modules.acquisition.schemas import (
     AcquisitionFinalValidationRequest,
+    AcquisitionQualityControlTypeUpdateRequest,
     AcquisitionQualityNoteUpdateRequest,
     AcquisitionNotesSectionUpdateRequest,
     AcquisitionHistoryEventResponse,
@@ -440,6 +441,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         stato_workflow=row.stato_workflow,
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
+        qualita_tipo_controllo=row.qualita_tipo_controllo,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
         pending_closure_reason=_quality_pending_closure_reason(
@@ -515,6 +517,7 @@ def serialize_quality_row(row: AcquisitionRow) -> AcquisitionQualityRowResponse:
         qualita_data_accettazione=row.qualita_data_accettazione,
         qualita_data_richiesta=row.qualita_data_richiesta,
         qualita_numero_analisi=row.qualita_numero_analisi,
+        qualita_tipo_controllo=row.qualita_tipo_controllo,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
         qualita_numero_analisi_da_ricontrollare=row.qualita_numero_analisi_da_ricontrollare,
@@ -11999,6 +12002,11 @@ def validate_final_row(
     payload: AcquisitionFinalValidationRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    if row.qualita_valutazione:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Valutazione qualità già confermata: usa prima Forza riapertura.",
+        )
     block_states = _compute_block_states_from_db(db, row)
     required_blocks = ("chimica", "proprieta", "note")
     not_ready = [block for block in required_blocks if block_states.get(block) != "verde"]
@@ -12014,6 +12022,12 @@ def validate_final_row(
             detail="La nota valutazione è obbligatoria per accettato con riserva o respinto.",
         )
 
+    _apply_quality_control_type(
+        db=db,
+        row=row,
+        value=payload.qualita_tipo_controllo,
+        actor_id=actor_id,
+    )
     row.qualita_data_accettazione = _current_quality_acceptance_date()
     row.qualita_valutazione = payload.qualita_valutazione
     row.qualita_note = payload.qualita_note
@@ -12044,6 +12058,50 @@ def save_quality_evaluation_note(
     _raise_if_quality_block_locked(row, "note")
     row.qualita_note = payload.qualita_note
     db.add(row)
+    db.commit()
+    return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
+
+
+def _apply_quality_control_type(
+    *,
+    db: Session,
+    row: AcquisitionRow,
+    value: str,
+    actor_id: int,
+) -> bool:
+    if row.qualita_tipo_controllo == value:
+        return False
+    row.qualita_tipo_controllo = value
+    db.add(row)
+    _record_history_event(
+        db=db,
+        acquisition_row_id=row.id,
+        blocco="quality",
+        azione="tipo_controllo_qualita_aggiornato",
+        user_id=actor_id,
+        nota_breve=value,
+    )
+    return True
+
+
+def save_quality_control_type(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionQualityControlTypeUpdateRequest,
+    actor_id: int,
+) -> AcquisitionRowDetailResponse:
+    if row.qualita_valutazione:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tipo controllo bloccato dopo la valutazione qualità: usa prima Forza riapertura.",
+        )
+    _apply_quality_control_type(
+        db=db,
+        row=row,
+        value=payload.qualita_tipo_controllo,
+        actor_id=actor_id,
+    )
     db.commit()
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -18236,7 +18294,10 @@ def _merge_certificate_only_row_into_ddt_row(
 
     if target_row.note_documento is None and source_row.note_documento is not None:
         target_row.note_documento = source_row.note_documento
+    if source_row.qualita_tipo_controllo and not target_row.qualita_tipo_controllo:
+        target_row.qualita_tipo_controllo = source_row.qualita_tipo_controllo
     if source_row.qualita_valutazione and not target_row.qualita_valutazione:
+        target_row.qualita_tipo_controllo = source_row.qualita_tipo_controllo or target_row.qualita_tipo_controllo
         target_row.qualita_valutazione = source_row.qualita_valutazione
         target_row.qualita_note = source_row.qualita_note
         target_row.qualita_numero_analisi = source_row.qualita_numero_analisi
@@ -18249,7 +18310,7 @@ def _merge_certificate_only_row_into_ddt_row(
     # Quality confirmations and custom notes belong to the certificate side.
     # Reassign the ORM relationships before deleting the certificate-only row,
     # otherwise delete-orphan cascades remove them during the merge.
-    quality_blocks = {"chimica", "proprieta", "note"}
+    quality_blocks = {"chimica", "proprieta", "note", "quality"}
     for event in list(source_row.history_events):
         if event.blocco not in quality_blocks:
             continue

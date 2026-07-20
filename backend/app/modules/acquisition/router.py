@@ -11,6 +11,7 @@ from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
     AutonomousRunStartRequest,
     AcquisitionFinalValidationRequest,
+    AcquisitionQualityControlTypeUpdateRequest,
     AcquisitionQualityNoteUpdateRequest,
     AcquisitionQualityRowListResponse,
     AcquisitionQualityRowResponse,
@@ -105,6 +106,7 @@ from app.modules.acquisition.service import (
     prepare_document_for_reader,
     refresh_certificate_first_row,
     reopen_final_validation,
+    save_quality_control_type,
     save_quality_evaluation_note,
     run_ai_intervention,
     save_notes_section,
@@ -835,6 +837,17 @@ def save_quality_evaluation_note_route(
 ) -> AcquisitionRowDetailResponse:
     row = get_acquisition_row(db, row_id)
     return save_quality_evaluation_note(db=db, row=row, payload=payload)
+
+
+@router.put("/rows/{row_id}/quality-control-type", response_model=AcquisitionRowDetailResponse)
+def save_quality_control_type_route(
+    row_id: int,
+    payload: AcquisitionQualityControlTypeUpdateRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> AcquisitionRowDetailResponse:
+    row = get_acquisition_row(db, row_id)
+    return save_quality_control_type(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/reopen-final-validation", response_model=AcquisitionRowDetailResponse)

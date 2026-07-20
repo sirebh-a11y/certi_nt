@@ -298,6 +298,8 @@ def ensure_acquisition_quality_columns() -> None:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_data_richiesta DATE")
     if "qualita_numero_analisi" not in columns:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_numero_analisi VARCHAR(128)")
+    if "qualita_tipo_controllo" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_tipo_controllo VARCHAR(16)")
     if "qualita_valutazione" not in columns:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_valutazione VARCHAR(32)")
     if "qualita_note" not in columns:

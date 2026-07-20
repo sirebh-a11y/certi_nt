@@ -19,6 +19,15 @@ const EVALUATION_SORT_RANK = {
   respinto: 3,
 };
 
+const CONTROL_TYPE_LABELS = {
+  diretta: "Diretta",
+  inversa: "Inversa",
+};
+
+function qualityControlTypeLabel(value) {
+  return CONTROL_TYPE_LABELS[value] || "Da indicare";
+}
+
 const EDITABLE_FIELDS = [
   "qualita_data_ricezione",
   "qualita_data_accettazione",
@@ -215,6 +224,8 @@ function searchableFieldValues(row, draft) {
     draft.qualita_data_ricezione,
     draft.qualita_data_accettazione,
     draft.qualita_data_richiesta,
+    row.qualita_tipo_controllo,
+    qualityControlTypeLabel(row.qualita_tipo_controllo),
     row.qualita_valutazione,
     row.qualita_note,
   ]
@@ -276,6 +287,8 @@ function qualitySortValue(row, draft, field) {
       return row.ordine || "";
     case "data_richiesta":
       return draft.qualita_data_richiesta || "";
+    case "tipo_controllo":
+      return qualityControlTypeLabel(row.qualita_tipo_controllo);
     case "valutazione":
       return EVALUATION_SORT_RANK[row.qualita_valutazione || ""] ?? 99;
     case "note":
@@ -852,7 +865,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1440px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -867,6 +880,7 @@ export default function QualityEvaluationPage() {
               <SortableHeader field="peso" label="Peso Kg" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="ordine" label="Vs. Odv" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="data_richiesta" label="Data richiesta" onSort={toggleSort} sortConfig={sortConfig} />
+              <SortableHeader field="tipo_controllo" label="Tipo controllo" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="valutazione" label="Valutazione" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
             </tr>
@@ -939,6 +953,9 @@ export default function QualityEvaluationPage() {
                       type="date"
                       value={draft.qualita_data_richiesta || ""}
                     />
+                  </td>
+                  <td className="px-2 py-2">
+                    <LockedCell widthClass="w-28">{qualityControlTypeLabel(row.qualita_tipo_controllo)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
                     <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>
