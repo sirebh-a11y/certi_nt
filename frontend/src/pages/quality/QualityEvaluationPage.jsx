@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { alloySearchText, normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "../acquisition/fieldFormatting";
 
 const EVALUATION_OPTIONS = [
@@ -102,8 +103,12 @@ function cellKey(rowId, field) {
   return `${rowId}:${field}`;
 }
 
-function composeLega(row) {
+function composeRawLega(row) {
   return [row.lega_base, row.variante_lega || row.lega_designazione].filter(Boolean).join(" ") || "-";
+}
+
+function composeLega(row) {
+  return normalizeAlloyForDisplay(composeRawLega(row));
 }
 
 function isRowChanged(row, draft) {
@@ -197,6 +202,7 @@ function searchableFieldValues(row, draft) {
   return [
     row.id,
     row.fornitore_nome,
+    alloySearchText(composeRawLega(row)),
     row.lega_designazione,
     row.lega_base,
     row.variante_lega,

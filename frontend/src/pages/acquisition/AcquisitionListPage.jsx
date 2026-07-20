@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { apiRequest } from "../../app/api";
 import { canEditQualitySetup } from "../../app/access";
 import { useAuth } from "../../app/auth";
+import { alloySearchText, normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
@@ -200,8 +201,12 @@ function matchSortValue(row) {
   return `${priority}-${label}-${compactMatchReference(row)}-${row.id}`;
 }
 
-function composeLega(row) {
+function composeRawLega(row) {
   return row.lega_designazione || row.lega_base || row.variante_lega || "-";
+}
+
+function composeLega(row) {
+  return normalizeAlloyForDisplay(composeRawLega(row));
 }
 
 function displaySupplierName(row) {
@@ -311,6 +316,7 @@ function searchableFieldValues(row) {
     row.id,
     row.fornitore_nome,
     row.fornitore_raw,
+    alloySearchText(composeRawLega(row)),
     row.lega_designazione,
     row.lega_base,
     row.variante_lega,

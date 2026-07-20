@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 
 function todayDateInputValue() {
@@ -24,6 +25,10 @@ function formatDate(value) {
 
 function displaySupplierName(row) {
   return row.fornitore_nome || row.fornitore_raw || "-";
+}
+
+function composeLega(row) {
+  return normalizeAlloyForDisplay(row.lega_designazione || row.lega_base || row.variante_lega || "-");
 }
 
 function matchLabel(row) {
@@ -164,7 +169,7 @@ export default function AcquisitionGembaWalkPrintPage() {
                 <tr key={row.id}>
                   <td className="border border-slate-300 px-2 py-2 font-semibold">{row.id}</td>
                   <td className="border border-slate-300 px-2 py-2">{displaySupplierName(row)}</td>
-                  <td className="border border-slate-300 px-2 py-2">{row.lega_designazione || row.lega_base || "-"}</td>
+                  <td className="border border-slate-300 px-2 py-2">{composeLega(row)}</td>
                   <td className="border border-slate-300 px-2 py-2">{formatRowFieldDisplay("diametro", row.diametro)}</td>
                   <td className="border border-slate-300 px-2 py-2">{row.cdq || "-"}</td>
                   <td className="border border-slate-300 px-2 py-2">{row.colata || "-"}</td>

@@ -1,4 +1,5 @@
 import { formatRowFieldDisplay } from "./fieldFormatting";
+import { normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 
 function stateClasses(state) {
   if (state === "verde") {
@@ -60,7 +61,8 @@ function displaySupplierName(row) {
 }
 
 function composeLega(row) {
-  return row?.lega_designazione || row?.lega_base || row?.variante_lega || "-";
+  const raw = row?.lega_designazione || row?.lega_base || row?.variante_lega || "-";
+  return normalizeAlloyForDisplay(raw);
 }
 
 export default function AcquisitionRowSummaryCard({
