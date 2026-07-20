@@ -406,9 +406,13 @@ def _quality_pending_closure_reason(
         return None
     if document_ddt_id is None:
         return "attesa_ddt"
-    if ddt_state != "verde":
+    ddt_pending = ddt_state != "verde"
+    match_pending = match_state != "verde"
+    if ddt_pending and match_pending:
+        return "ddt_match_da_confermare"
+    if ddt_pending:
         return "ddt_da_confermare"
-    if match_state != "verde":
+    if match_pending:
         return "match_da_confermare"
     return None
 
@@ -9199,6 +9203,7 @@ def _gemba_pending_closure_search_text(item: AcquisitionRowListItemResponse) -> 
         "attesa_ddt": "attesa ddt ddt mancante",
         "ddt_da_confermare": "ddt da confermare ddt incompleto",
         "match_da_confermare": "match da confermare attesa match",
+        "ddt_match_da_confermare": "ddt e match da confermare ddt incompleto attesa match",
     }
     return labels.get(item.pending_closure_reason)
 

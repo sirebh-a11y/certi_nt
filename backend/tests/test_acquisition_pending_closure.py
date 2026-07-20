@@ -26,6 +26,15 @@ class AcquisitionPendingClosureTest(unittest.TestCase):
                 ddt_state="giallo",
                 match_state="giallo",
             ),
+            "ddt_match_da_confermare",
+        )
+        self.assertEqual(
+            _quality_pending_closure_reason(
+                qualita_valutazione="accettato",
+                document_ddt_id=11,
+                ddt_state="giallo",
+                match_state="verde",
+            ),
             "ddt_da_confermare",
         )
         self.assertEqual(

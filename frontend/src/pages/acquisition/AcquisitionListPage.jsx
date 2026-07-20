@@ -602,7 +602,7 @@ function RowStateCell({ row, onClick, onKeyDown }) {
     : "block truncate text-xs font-semibold leading-tight";
 
   return (
-    <div className="min-w-[96px] py-1">
+    <div className="min-w-[120px] py-1">
       <CellShell interactive onClick={onClick} onKeyDown={onKeyDown}>
         <div
           className={`mx-2 flex h-[46px] w-[calc(100%-1rem)] flex-col justify-center overflow-hidden rounded-lg border px-1.5 pb-1 pt-1 ${stateSurfaceClasses(activity.tone)}`}
@@ -844,13 +844,18 @@ export default function AcquisitionListPage() {
   }, [rowLimit, visibleRows]);
 
   const summary = useMemo(() => {
-    const total = filteredRows.length;
-    const evaluated = filteredRows.filter((row) => isEvaluatedListRow(row)).length;
-    const open = filteredRows.filter((row) => isOpenListRow(row)).length;
-    const waitingDdt = filteredRows.filter((row) => pendingClosureReason(row) === "attesa_ddt").length;
-    const waitingMatch = filteredRows.filter((row) => pendingClosureReason(row) === "match_da_confermare").length;
-    return { total, evaluated, open, waitingDdt, waitingMatch };
-  }, [filteredRows]);
+    const total = visibleRows.length;
+    const evaluated = visibleRows.filter((row) => isEvaluatedListRow(row)).length;
+    const open = visibleRows.filter((row) => isOpenListRow(row)).length;
+    const waitingDdt = visibleRows.filter((row) => pendingClosureReason(row) === "attesa_ddt").length;
+    const ddtToConfirm = visibleRows.filter((row) =>
+      ["ddt_da_confermare", "ddt_match_da_confermare"].includes(pendingClosureReason(row)),
+    ).length;
+    const waitingMatch = visibleRows.filter((row) =>
+      ["match_da_confermare", "ddt_match_da_confermare"].includes(pendingClosureReason(row)),
+    ).length;
+    return { total, evaluated, open, waitingDdt, ddtToConfirm, waitingMatch };
+  }, [visibleRows]);
 
   useEffect(() => {
     function updateScrollMetrics() {
@@ -1177,11 +1182,12 @@ export default function AcquisitionListPage() {
       </div>
 
         <div className="flex flex-wrap gap-2">
-          <SummaryCell label="Righe filtrate" value={summary.total} />
+          <SummaryCell label="Righe" value={summary.total} />
           <SummaryCell label="Valutate" value={summary.evaluated} />
           <SummaryCell label="Aperte" value={summary.open} />
           <SummaryCell label="Attesa DDT" value={summary.waitingDdt} />
-          <SummaryCell label="Attesa match" value={summary.waitingMatch} />
+          <SummaryCell label="DDT da confermare" value={summary.ddtToConfirm} />
+          <SummaryCell label="Match da confermare" value={summary.waitingMatch} />
         </div>
 
       {certificationScope ? (
@@ -1675,7 +1681,7 @@ export default function AcquisitionListPage() {
 function SummaryCell({ label, value, note = null }) {
   return (
     <div className="rounded-lg border border-border bg-white px-2.5 py-2">
-      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-0.5 text-base font-semibold text-slate-900">{value}</div>
       {note ? <div className="mt-1 max-w-[240px] text-[10px] leading-4 text-slate-500">{note}</div> : null}
     </div>

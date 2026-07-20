@@ -14,23 +14,33 @@ const PENDING_CLOSURE_LABELS = {
     full: "Match da confermare",
     search: "match da confermare attesa match",
   },
+  ddt_match_da_confermare: {
+    compact: "DDT+Match da conf.",
+    full: "DDT e match da confermare",
+    search: "ddt e match da confermare ddt incompleto attesa match",
+  },
 };
 
 export function pendingClosureReason(row) {
   if (!row?.qualita_valutazione) {
     return null;
   }
-  if (row.pending_closure_reason in PENDING_CLOSURE_LABELS) {
-    return row.pending_closure_reason;
-  }
   if (!row.document_ddt_id) {
     return "attesa_ddt";
   }
-  if (row.block_states?.ddt !== "verde") {
+  const ddtPending = row.block_states?.ddt !== "verde";
+  const matchPending = row.block_states?.match !== "verde";
+  if (ddtPending && matchPending) {
+    return "ddt_match_da_confermare";
+  }
+  if (ddtPending) {
     return "ddt_da_confermare";
   }
-  if (row.block_states?.match !== "verde") {
+  if (matchPending) {
     return "match_da_confermare";
+  }
+  if (row.pending_closure_reason in PENDING_CLOSURE_LABELS) {
+    return row.pending_closure_reason;
   }
   return null;
 }
