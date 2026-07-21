@@ -47,14 +47,18 @@ ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.for
 
 1. Sviluppo e test in locale.
 2. Commit e push del repo app.
-3. Aggiornamento della cartella `alpha-produzione` nel repo deploy.
-4. Commit, push e tag del repo deploy.
-5. Creazione archivio `.tar` pulito dalla cartella `alpha-produzione`.
-6. Copia archivio sul server in `/srv/certi_nt/backup`.
-7. Backup dell'app server attuale.
-8. Sostituzione soft del codice, preservando `.env`, database e storage.
-9. Avvio Docker.
-10. Verifica.
+3. Registrazione del commit app esatto in `alpha-produzione/SOURCE_COMMIT`.
+4. Rigenerazione completa di `alpha-produzione` dal commit app, senza copie parziali e senza file non tracciati.
+5. Confronto integrale tra commit app e pacchetto deploy.
+6. Verifica che backend, footer e bundle frontend riportino la stessa versione.
+7. Test del contenuto del pacchetto deploy.
+8. Commit, push e tag del repo deploy.
+9. Creazione archivio `.tar` pulito dalla cartella `alpha-produzione`.
+10. Copia archivio sul server in `/srv/certi_nt/backup`.
+11. Backup dell'app server attuale.
+12. Sostituzione soft del codice, preservando `.env`, database e storage.
+13. Avvio Docker.
+14. Verifica del contenuto e delle versioni realmente installate.
 
 ## Prima di aggiornare
 
@@ -102,6 +106,219 @@ docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
 
 Se torna `(0 rows)`, non ci sono run attivi.
 
+## Allineamento obbligatorio tra app e pacchetto deploy
+
+Il pacchetto non deve essere aggiornato copiando soltanto i file dell'ultima modifica e non deve essere creato copiando la cartella di lavoro locale. Entrambi i metodi hanno gia prodotto pacchetti incompleti o contenenti file temporanei.
+
+La fonte del pacchetto deve essere un commit preciso e gia pubblicato del repo app. Quel commit deve essere scritto in:
+
+```text
+alpha-produzione/SOURCE_COMMIT
+```
+
+Sono ammessi nel pacchetto soltanto:
+
+- tutti i file tracciati dal commit app indicato in `SOURCE_COMMIT`, con contenuto identico;
+- `README_ALPHA.md`, specifico del repository deploy;
+- `SOURCE_COMMIT`, contenente l'hash completo del commit app.
+
+Qualsiasi altro file deve bloccare la creazione del tag.
+
+### Perche questo controllo e obbligatorio
+
+Audit del 21 luglio 2026:
+
+- il backend del pacchetto `alpha.9.5` riportava `0.1.0.alpha.9.5`, ma il footer riportava ancora `0.1.0.alpha.9.4`;
+- il pacchetto conteneva 518 file di lavoro sotto `backend/tmp` e `backend/tmp_eval`, per circa 244 MiB;
+- due file di documentazione non tracciati dal repo app erano entrati nel deploy;
+- nei pacchetti `alpha.9.1` e `alpha.9.2` erano rimasti temporaneamente file backend diversi dal commit app disponibile al momento del tag.
+
+Le cause individuate sono:
+
+- sincronizzazione manuale per elenco parziale di file;
+- copia dalla working tree invece che da un commit Git;
+- assenza dell'hash del commit sorgente nel pacchetto;
+- assenza di un confronto completo tra i due alberi Git;
+- verifica della sola versione backend, senza controllare footer e bundle frontend.
+
+### Generare il pacchetto da un commit pulito
+
+Da PowerShell usare una directory temporanea generata esclusivamente da `git archive`. Il comando include solo file tracciati dal commit scelto e non puo quindi includere PDF, immagini, cache o script temporanei presenti nella working tree.
+
+```powershell
+$appRepo = 'C:\Users\sireb\VScodeProjects\certi_nt'
+$deployRepo = 'C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy'
+$alphaDir = Join-Path $deployRepo 'alpha-produzione'
+$expectedAlphaDir = 'C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione'
+
+$sourceCommit = (git -C $appRepo rev-parse HEAD).Trim()
+$remoteCommit = (git -C $appRepo rev-parse origin/main).Trim()
+if ($sourceCommit -ne $remoteCommit) {
+    throw 'Il commit app locale non coincide con origin/main: fare push prima del deploy.'
+}
+git -C $appRepo diff --quiet
+if ($LASTEXITCODE -ne 0) {
+    throw 'Il repo app contiene modifiche tracciate non committate.'
+}
+git -C $appRepo diff --cached --quiet
+if ($LASTEXITCODE -ne 0) {
+    throw 'Il repo app contiene modifiche in staging non committate.'
+}
+
+$shortCommit = $sourceCommit.Substring(0, 12)
+$stageDir = Join-Path $deployRepo ".alpha-stage-$shortCommit"
+$sourceArchive = Join-Path $deployRepo ".alpha-source-$shortCommit.tar"
+if (Test-Path -LiteralPath $stageDir) {
+    throw "Directory temporanea gia presente: $stageDir"
+}
+if (Test-Path -LiteralPath $sourceArchive) {
+    throw "Archivio temporaneo gia presente: $sourceArchive"
+}
+
+New-Item -ItemType Directory -Path $stageDir | Out-Null
+git -C $appRepo archive --format=tar --output=$sourceArchive $sourceCommit
+if ($LASTEXITCODE -ne 0) { throw 'git archive del repo app fallito.' }
+tar -xf $sourceArchive -C $stageDir
+if ($LASTEXITCODE -ne 0) { throw 'Estrazione del commit app fallita.' }
+
+Copy-Item -LiteralPath (Join-Path $alphaDir 'README_ALPHA.md') -Destination $stageDir
+Set-Content -LiteralPath (Join-Path $stageDir 'SOURCE_COMMIT') -Value $sourceCommit -NoNewline
+
+$forbiddenPaths = @(
+    '.env',
+    'backend/tmp',
+    'backend/tmp_eval',
+    'backend/storage',
+    'frontend/node_modules',
+    'frontend/dist'
+)
+foreach ($relativePath in $forbiddenPaths) {
+    if (Test-Path -LiteralPath (Join-Path $stageDir $relativePath)) {
+        throw "Contenuto vietato nel pacchetto: $relativePath"
+    }
+}
+
+if ([IO.Path]::GetFullPath($alphaDir) -ne [IO.Path]::GetFullPath($expectedAlphaDir)) {
+    throw "Target alpha non valido: $alphaDir"
+}
+
+robocopy $stageDir $alphaDir /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+$copyExitCode = $LASTEXITCODE
+if ($copyExitCode -gt 7) {
+    throw "Sincronizzazione alpha fallita con codice robocopy $copyExitCode"
+}
+
+Remove-Item -LiteralPath $stageDir -Recurse -Force
+Remove-Item -LiteralPath $sourceArchive -Force
+git -C $deployRepo status --short
+```
+
+`robocopy /MIR` elimina dal solo percorso validato `alpha-produzione` i file che non appartengono al nuovo pacchetto. Non riutilizzare il comando cambiando il target senza ripetere il controllo del percorso assoluto.
+
+Prima di continuare, controllare che lo stato del repo deploy mostri soltanto l'allineamento previsto. In particolare non devono comparire file sotto `backend/tmp`, `backend/tmp_eval`, storage, cache o build locali.
+
+### Verificare integralmente i due alberi Git
+
+Dopo il commit locale del repo deploy, ma prima di tag e push, eseguire questo controllo. Non basta verificare soltanto i file modificati nell'ultimo commit.
+
+```powershell
+$appRepo = 'C:\Users\sireb\VScodeProjects\certi_nt'
+$deployRepo = 'C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy'
+$sourceCommit = (git -C $appRepo rev-parse HEAD).Trim()
+$deployCommit = (git -C $deployRepo rev-parse HEAD).Trim()
+
+function Read-GitTree([string]$repo, [string]$tree) {
+    $result = @{}
+    foreach ($line in (git -C $repo ls-tree -r $tree)) {
+        if ($line -match '^\d+ blob ([0-9a-f]+)\t(.+)$') {
+            $result[$Matches[2]] = $Matches[1]
+        }
+    }
+    return $result
+}
+
+$sourceTree = Read-GitTree $appRepo $sourceCommit
+$deployTree = Read-GitTree $deployRepo "${deployCommit}:alpha-produzione"
+$allowedDeployOnly = @('README_ALPHA.md', 'SOURCE_COMMIT')
+
+$missingFromDeploy = @(
+    $sourceTree.Keys |
+        Where-Object { -not $deployTree.ContainsKey($_) } |
+        Sort-Object
+)
+$differentContent = @(
+    $sourceTree.Keys |
+        Where-Object { $deployTree.ContainsKey($_) -and $sourceTree[$_] -ne $deployTree[$_] } |
+        Sort-Object
+)
+$unexpectedInDeploy = @(
+    $deployTree.Keys |
+        Where-Object { -not $sourceTree.ContainsKey($_) -and $allowedDeployOnly -notcontains $_ } |
+        Sort-Object
+)
+
+$recordedSource = (git -C $deployRepo show "${deployCommit}:alpha-produzione/SOURCE_COMMIT").Trim()
+if ($recordedSource -ne $sourceCommit) {
+    throw "SOURCE_COMMIT non valido: atteso $sourceCommit, trovato $recordedSource"
+}
+
+if ($missingFromDeploy.Count -or $differentContent.Count -or $unexpectedInDeploy.Count) {
+    $missingFromDeploy | ForEach-Object { Write-Host "Manca nel deploy: $_" }
+    $differentContent | ForEach-Object { Write-Host "Contenuto diverso: $_" }
+    $unexpectedInDeploy | ForEach-Object { Write-Host "File inatteso nel deploy: $_" }
+    throw 'Pacchetto deploy non allineato: non creare tag e non fare push.'
+}
+
+Write-Host "Pacchetto allineato al commit app $sourceCommit"
+```
+
+Il confronto usa gli hash Git dei blob, quindi rileva anche differenze non visibili con un semplice elenco di nomi.
+
+### Verificare versione backend, footer e bundle
+
+La stessa versione deve essere presente nel backend e nel footer prima della build:
+
+```powershell
+$backendFile = Join-Path $appRepo 'backend/app/main.py'
+$footerFile = Join-Path $appRepo 'frontend/src/components/layout/Footer.jsx'
+$backendMatch = Select-String -LiteralPath $backendFile -Pattern 'version="([^"]+)"'
+$footerMatch = Select-String -LiteralPath $footerFile -Pattern 'Versione sistema ([0-9A-Za-z._-]+)'
+
+if (-not $backendMatch -or -not $footerMatch) {
+    throw 'Versione backend o footer non trovata.'
+}
+
+$backendVersion = $backendMatch.Matches[0].Groups[1].Value
+$footerVersion = $footerMatch.Matches[0].Groups[1].Value
+if ($backendVersion -ne $footerVersion) {
+    throw "Versioni disallineate: backend=$backendVersion footer=$footerVersion"
+}
+```
+
+Costruire poi il frontend dal pacchetto, non dalla sola cartella app:
+
+```powershell
+Push-Location (Join-Path $deployRepo 'alpha-produzione/frontend')
+try {
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw 'Installazione dipendenze frontend del pacchetto fallita.' }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw 'Build frontend del pacchetto fallita.' }
+    $expectedText = "Versione sistema $footerVersion"
+    $bundleMatch = Get-ChildItem -LiteralPath 'dist' -Recurse -File |
+        Select-String -SimpleMatch $expectedText |
+        Select-Object -First 1
+    if (-not $bundleMatch) {
+        throw "Il bundle frontend non contiene: $expectedText"
+    }
+}
+finally {
+    Pop-Location
+}
+```
+
+Se uno qualsiasi di questi controlli fallisce, non creare il tag e non trasferire l'archivio.
+
 ## Creare archivio dal deploy repo
 
 Dal PC locale, nel repo deploy:
@@ -109,10 +326,41 @@ Dal PC locale, nel repo deploy:
 ```powershell
 cd C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy
 git status
+git add alpha-produzione
+git diff --cached --check
+git commit -m "Update alpha deploy package 0.1.0.alpha.X"
+```
+
+Eseguire ora il confronto integrale e i controlli versione descritti nella sezione precedente. Solo se terminano senza errori creare tag e archivio:
+
+```powershell
 git tag v0.1.0-alpha.X-deploy
+git archive --format=tar --output alpha-produzione-v0.1.0-alpha.X-deploy.tar v0.1.0-alpha.X-deploy:alpha-produzione
+
+$archive = 'alpha-produzione-v0.1.0-alpha.X-deploy.tar'
+$archiveEntries = @(tar -tf $archive)
+$forbiddenEntries = @(
+    $archiveEntries | Where-Object {
+        $_ -match '(^|/)(tmp|tmp_eval|storage|node_modules|dist|__pycache__)(/|$)' -or
+        $_ -eq '.env'
+    }
+)
+if ($forbiddenEntries.Count) {
+    $forbiddenEntries | ForEach-Object { Write-Host "Contenuto vietato nell'archivio: $_" }
+    throw 'Archivio deploy non pulito.'
+}
+if ($archiveEntries -notcontains 'SOURCE_COMMIT') {
+    throw "SOURCE_COMMIT manca dall'archivio deploy."
+}
+
+$archiveSize = (Get-Item -LiteralPath $archive).Length
+if ($archiveSize -gt 50MB) {
+    throw "Archivio insolitamente grande: $archiveSize byte. Verificare prima del trasferimento."
+}
+
+Get-FileHash -Algorithm SHA256 -LiteralPath $archive
 git push origin main
 git push origin v0.1.0-alpha.X-deploy
-git archive --format=tar --output alpha-produzione-v0.1.0-alpha.X-deploy.tar v0.1.0-alpha.X-deploy:alpha-produzione
 ```
 
 `X` va sostituito con il numero reale della versione.
@@ -123,6 +371,8 @@ In quel caso la versione applicativa resta `0.1.0.alpha.6`, mentre il suffisso `
 
 Gli archivi `.tar` creati localmente servono solo per il trasferimento sul server. Possono rimanere non tracciati nel repo deploy e non vanno aggiunti al commit.
 
+La soglia di 50 MiB e intenzionalmente superiore alla dimensione normale osservata del codice. Non aumentarla per far passare il controllo: prima identificare e documentare quali file hanno aumentato il pacchetto.
+
 ## Copiare archivio sul server
 
 Da PowerShell locale:
@@ -132,6 +382,19 @@ scp -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" `
   C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-alpha.X-deploy.tar `
   admcerti01@certi-test.forgialluminio.it:/srv/certi_nt/backup/
 ```
+
+Confrontare sempre SHA-256 locale e server prima di estrarre:
+
+```powershell
+(Get-FileHash -Algorithm SHA256 `
+  C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-alpha.X-deploy.tar).Hash
+
+ssh -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" `
+  admcerti01@certi-test.forgialluminio.it `
+  'sha256sum /srv/certi_nt/backup/alpha-produzione-v0.1.0-alpha.X-deploy.tar'
+```
+
+I due hash devono essere identici, ignorando maiuscole e minuscole. Se non coincidono, non proseguire.
 
 ## Backup prima dell'aggiornamento
 
@@ -174,6 +437,7 @@ Sul server:
 set -e
 TAG=v0.1.0-alpha.X-deploy
 ARCHIVE=alpha-produzione-${TAG}.tar
+EXPECTED_SOURCE_COMMIT=HASH_COMPLETO_COMMIT_APP
 TS=$(date +%Y%m%d_%H%M%S)
 
 cd /srv/certi_nt
@@ -181,14 +445,17 @@ test -f "backup/$ARCHIVE"
 test -f app/.env
 test -d data/postgres
 test -d data/storage
+test "$(tar -xOf "backup/$ARCHIVE" SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 
 tar -czf "backup/app_before_${TAG}_${TS}.tgz" app
 
 cd app
+test "$(pwd -P)" = "/srv/certi_nt/app"
 docker compose --env-file .env -f docker-compose.alpha.yml stop backend frontend
 
 find . -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf {} +
 tar -xf "../backup/$ARCHIVE" -C .
+test "$(cat SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 
 docker compose --env-file .env -f docker-compose.alpha.yml up -d --build
 docker compose --env-file .env -f docker-compose.alpha.yml ps
@@ -208,18 +475,55 @@ curl -I http://127.0.0.1:8080/
 curl -I http://127.0.0.1:8001/docs
 ```
 
-Controllare anche la versione backend:
+Controllare che i file installati corrispondano all'archivio. Le differenze di UID e GID sono normali nel passaggio da archivio Windows a server Linux; qualsiasi altra differenza deve bloccare la chiusura del deploy:
+
+```bash
+set -e
+TAG=v0.1.0-alpha.X-deploy
+ARCHIVE=alpha-produzione-${TAG}.tar
+EXPECTED_SOURCE_COMMIT=HASH_COMPLETO_COMMIT_APP
+
+cd /srv/certi_nt/app
+test "$(cat SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
+test ! -e backend/tmp
+test ! -e backend/tmp_eval
+
+content_differences=$(
+  tar --compare \
+    --file="/srv/certi_nt/backup/$ARCHIVE" \
+    --directory=/srv/certi_nt/app 2>&1 |
+  grep -Ev ': (Uid|Gid) differs$' || true
+)
+if [ -n "$content_differences" ]; then
+  printf '%s\n' "$content_differences"
+  exit 1
+fi
+```
+
+Controllare insieme versione backend e versione realmente incorporata nel bundle frontend servito da Nginx:
 
 ```bash
 cd /srv/certi_nt/app
-docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
-  python -c "from app.main import app; print(app.version)"
+BACKEND_VERSION=$(
+  docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
+    python -c "from app.main import app; print(app.version)"
+)
+FRONTEND_VERSION=$(
+  docker compose --env-file .env -f docker-compose.alpha.yml exec -T frontend \
+    grep -Roh 'Versione sistema 0.1.0.alpha.[0-9.]*' /usr/share/nginx/html |
+    sed 's/^Versione sistema //' |
+    sort -u
+)
+
+printf 'Backend: %s\nFrontend: %s\n' "$BACKEND_VERSION" "$FRONTEND_VERSION"
+test "$BACKEND_VERSION" = "$FRONTEND_VERSION"
 ```
 
-Deve tornare la versione appena installata, per esempio:
+Entrambi devono riportare la versione appena installata, per esempio:
 
 ```text
-0.1.0.alpha.7
+Backend: 0.1.0.alpha.9.5
+Frontend: 0.1.0.alpha.9.5
 ```
 
 ### Controlli HTTP pubblici
@@ -318,6 +622,12 @@ Il rischio e questo: il codice nuovo parte aspettandosi una colonna che nel DB s
 
 Non fare:
 
+- preparare `alpha-produzione` copiando soltanto i file dell'ultimo commit;
+- copiare nel deploy la working tree locale invece del contenuto di un commit Git;
+- creare o pubblicare il tag prima del confronto integrale tra app e deploy;
+- accettare file deploy aggiuntivi diversi da `README_ALPHA.md` e `SOURCE_COMMIT`;
+- includere `backend/tmp`, `backend/tmp_eval`, `.env`, storage, cache, `node_modules` o `dist` nell'archivio;
+- verificare soltanto `app.version` senza controllare anche il bundle frontend servito;
 - cancellare `/srv/certi_nt/data`;
 - cancellare `/srv/certi_nt/data/postgres`;
 - cancellare `/srv/certi_nt/data/storage`;
