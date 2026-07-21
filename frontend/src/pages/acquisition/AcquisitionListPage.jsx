@@ -1581,11 +1581,32 @@ export default function AcquisitionListPage() {
               </div>
               <div>
                 <span className="font-semibold">Documento:</span>{" "}
-                {deletePreview.will_delete_document ? "verra eliminato con la riga" : "rimane perche condiviso con altre righe"}
+                {deletePreview.will_delete_document ? "verra eliminato con la riga" : "rimane perche condiviso o collegato"}
               </div>
               {deletePreview.shared_document ? (
+                <div className="space-y-1">
+                  {deletePreview.other_rows_count ? (
+                    <div><span className="font-semibold">Altre righe:</span> {deletePreview.other_rows_count}</div>
+                  ) : null}
+                  {deletePreview.match_references_count ? (
+                    <div><span className="font-semibold">Match o candidati:</span> {deletePreview.match_references_count}</div>
+                  ) : null}
+                  {deletePreview.child_documents_count ? (
+                    <div><span className="font-semibold">Documenti derivati:</span> {deletePreview.child_documents_count}</div>
+                  ) : null}
+                </div>
+              ) : null}
+              {deletePreview.manual_blocks_cleanup_count ? (
                 <div>
-                  <span className="font-semibold">Righe collegate:</span> {deletePreview.linked_rows_count}
+                  <span className="font-semibold">
+                    Collegamenti manuali interni {deletePreview.will_delete_document ? "da rimuovere" : "da disattivare"}:
+                  </span>{" "}
+                  {deletePreview.manual_blocks_cleanup_count}
+                </div>
+              ) : null}
+              {deletePreview.document_file_available === false ? (
+                <div className="font-semibold text-amber-700">
+                  File fisici mancanti: {deletePreview.missing_files_count}. La pulizia dei record puo comunque proseguire.
                 </div>
               ) : null}
             </div>

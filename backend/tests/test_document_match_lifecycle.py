@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
@@ -12,6 +13,7 @@ from app.core.users.models import User  # noqa: F401
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
     AcquisitionRow,
+    AutonomousProcessingRun,
     CertificateMatch,
     Document,
     DocumentEvidence,
@@ -1556,6 +1558,245 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertIsNotNone(self.db.get(AcquisitionRow, second_row.id))
         self.assertIsNotNone(self.db.get(Document, document.id))
         self.assertEqual(self.db.query(Document).filter(Document.hash_file == "hash-condiviso").count(), 1)
+
+    def test_delete_detached_certificate_row_removes_manual_block_and_keeps_ddt(self):
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert.pdf",
+            storage_key="cert.pdf",
+        )
+        self.db.add_all([ddt_document, certificate_document])
+        self.db.flush()
+        matched_row = AcquisitionRow(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            cdq="26-1820",
+        )
+        self.db.add(matched_row)
+        self.db.commit()
+
+        detached = detach_document_match(
+            self.db,
+            row=get_acquisition_row(self.db, matched_row.id),
+            payload=DocumentMatchDetachRequest(motivo_breve="Separazione di prova"),
+            actor_id=1,
+        )
+        certificate_row_id = detached.certificate_row.id
+        preview = preview_acquisition_row_delete(
+            self.db,
+            row=get_acquisition_row(self.db, certificate_row_id),
+        )
+
+        self.assertTrue(preview.will_delete_document)
+        self.assertEqual(preview.manual_blocks_cleanup_count, 1)
+
+        delete_single_document_acquisition_row(
+            self.db,
+            row=get_acquisition_row(self.db, certificate_row_id),
+            actor_id=1,
+        )
+
+        self.assertIsNone(self.db.get(AcquisitionRow, certificate_row_id))
+        self.assertIsNone(self.db.get(Document, certificate_document.id))
+        self.assertIsNotNone(self.db.get(AcquisitionRow, matched_row.id))
+        self.assertIsNotNone(self.db.get(Document, ddt_document.id))
+        self.assertEqual(self.db.query(ManualMatchBlock).count(), 0)
+
+    def test_delete_single_ddt_row_keeps_ddt_shared_with_another_row(self):
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt-shared.pdf", storage_key="ddt-shared.pdf")
+        self.db.add(ddt_document)
+        self.db.flush()
+        first_row = AcquisitionRow(document_ddt_id=ddt_document.id, cdq="1001")
+        second_row = AcquisitionRow(document_ddt_id=ddt_document.id, cdq="1002")
+        self.db.add_all([first_row, second_row])
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, first_row.id))
+
+        self.assertTrue(preview.shared_document)
+        self.assertEqual(preview.other_rows_count, 1)
+        self.assertFalse(preview.will_delete_document)
+
+        delete_single_document_acquisition_row(
+            self.db,
+            row=get_acquisition_row(self.db, first_row.id),
+            actor_id=1,
+        )
+
+        self.assertIsNone(self.db.get(AcquisitionRow, first_row.id))
+        self.assertIsNotNone(self.db.get(AcquisitionRow, second_row.id))
+        self.assertIsNotNone(self.db.get(Document, ddt_document.id))
+
+    def test_delete_shared_certificate_row_deactivates_its_block_but_keeps_document(self):
+        ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt-block.pdf", storage_key="ddt-block.pdf")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert-shared.pdf",
+            storage_key="cert-shared.pdf",
+        )
+        self.db.add_all([ddt_document, certificate_document])
+        self.db.flush()
+        first_row = AcquisitionRow(document_certificato_id=certificate_document.id, cdq="1001")
+        second_row = AcquisitionRow(document_certificato_id=certificate_document.id, cdq="1002")
+        self.db.add_all([first_row, second_row])
+        self.db.flush()
+        block = ManualMatchBlock(
+            document_ddt_id=ddt_document.id,
+            document_certificato_id=certificate_document.id,
+            certificate_row_id=first_row.id,
+            motivo_breve="Blocco di prova",
+            attivo=True,
+        )
+        self.db.add(block)
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, first_row.id))
+
+        self.assertTrue(preview.shared_document)
+        self.assertFalse(preview.will_delete_document)
+        self.assertEqual(preview.manual_blocks_cleanup_count, 1)
+
+        delete_single_document_acquisition_row(
+            self.db,
+            row=get_acquisition_row(self.db, first_row.id),
+            actor_id=1,
+        )
+
+        self.db.refresh(block)
+        self.assertFalse(block.attivo)
+        self.assertIsNone(block.certificate_row_id)
+        self.assertIsNotNone(self.db.get(Document, certificate_document.id))
+        self.assertIsNotNone(self.db.get(AcquisitionRow, second_row.id))
+
+    def test_delete_row_keeps_parent_document_when_it_has_children(self):
+        parent = Document(tipo_documento="certificato", nome_file_originale="parent.pdf", storage_key="parent.pdf")
+        self.db.add(parent)
+        self.db.flush()
+        child = Document(
+            tipo_documento="certificato",
+            nome_file_originale="child.pdf",
+            storage_key="child.pdf",
+            documento_padre_id=parent.id,
+        )
+        row = AcquisitionRow(document_certificato_id=parent.id, cdq="parent")
+        self.db.add_all([child, row])
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, row.id))
+
+        self.assertTrue(preview.shared_document)
+        self.assertEqual(preview.child_documents_count, 1)
+        self.assertFalse(preview.will_delete_document)
+
+        delete_single_document_acquisition_row(self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
+
+        self.assertIsNotNone(self.db.get(Document, parent.id))
+        self.assertIsNotNone(self.db.get(Document, child.id))
+
+    def test_delete_row_is_blocked_while_ai_run_uses_it(self):
+        document = Document(tipo_documento="ddt", nome_file_originale="active.pdf", storage_key="active.pdf")
+        self.db.add(document)
+        self.db.flush()
+        row = AcquisitionRow(document_ddt_id=document.id, cdq="active")
+        self.db.add(row)
+        self.db.flush()
+        run = AutonomousProcessingRun(
+            current_row_id=row.id,
+            stato="in_esecuzione",
+            fase_corrente="ddt",
+        )
+        self.db.add(run)
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, row.id))
+
+        self.assertFalse(preview.can_delete)
+        self.assertIn("elaborazione AI attiva", preview.blocked_reason)
+
+    def test_delete_row_is_blocked_when_document_is_queued_for_ai(self):
+        document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="queued.pdf",
+            storage_key="queued.pdf",
+        )
+        self.db.add(document)
+        self.db.flush()
+        row = AcquisitionRow(document_certificato_id=document.id, cdq="queued")
+        self.db.add(row)
+        self.db.flush()
+        run = AutonomousProcessingRun(
+            certificate_document_ids=f"[{document.id}]",
+            stato="in_coda",
+            fase_corrente="avvio",
+        )
+        self.db.add(run)
+        self.db.commit()
+
+        preview = preview_acquisition_row_delete(self.db, row=get_acquisition_row(self.db, row.id))
+
+        self.assertFalse(preview.can_delete)
+        self.assertIn("elaborazione AI attiva", preview.blocked_reason)
+
+    def test_storage_files_are_deleted_only_after_successful_database_commit(self):
+        document = Document(
+            tipo_documento="ddt",
+            nome_file_originale="ordered.pdf",
+            storage_key="ordered.pdf",
+        )
+        self.db.add(document)
+        self.db.flush()
+        page = DocumentPage(
+            document_id=document.id,
+            numero_pagina=1,
+            immagine_pagina_storage_key="ordered-page.png",
+        )
+        row = AcquisitionRow(document_ddt_id=document.id, cdq="ordered")
+        self.db.add_all([page, row])
+        self.db.commit()
+
+        original_commit = self.db.commit
+        with patch("app.modules.acquisition.service._delete_storage_key_if_present") as delete_storage_file:
+            def commit_after_file_safety_check():
+                delete_storage_file.assert_not_called()
+                original_commit()
+
+            with patch.object(self.db, "commit", side_effect=commit_after_file_safety_check):
+                delete_single_document_acquisition_row(
+                    self.db,
+                    row=get_acquisition_row(self.db, row.id),
+                    actor_id=1,
+                )
+
+        self.assertEqual(delete_storage_file.call_count, 2)
+        delete_storage_file.assert_any_call("ordered.pdf")
+        delete_storage_file.assert_any_call("ordered-page.png")
+
+    def test_database_failure_rolls_back_without_deleting_files(self):
+        document = Document(tipo_documento="certificato", nome_file_originale="rollback.pdf", storage_key="rollback.pdf")
+        self.db.add(document)
+        self.db.flush()
+        page = DocumentPage(document_id=document.id, numero_pagina=1, immagine_pagina_storage_key="rollback-page.png")
+        row = AcquisitionRow(document_certificato_id=document.id, cdq="rollback")
+        self.db.add_all([page, row])
+        self.db.commit()
+
+        with (
+            patch.object(self.db, "commit", side_effect=IntegrityError("DELETE", {}, Exception("vincolo"))),
+            patch("app.modules.acquisition.service._delete_storage_key_if_present") as delete_storage_file,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                delete_single_document_acquisition_row(
+                    self.db,
+                    row=get_acquisition_row(self.db, row.id),
+                    actor_id=1,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Nessun file e stato eliminato", raised.exception.detail)
+        delete_storage_file.assert_not_called()
+        self.assertIsNotNone(self.db.get(AcquisitionRow, row.id))
+        self.assertIsNotNone(self.db.get(Document, document.id))
 
     def test_delete_single_document_row_blocks_matched_and_quality_rows(self):
         ddt_document = Document(tipo_documento="ddt", nome_file_originale="ddt.pdf", storage_key="ddt.pdf")

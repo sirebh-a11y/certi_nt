@@ -753,8 +753,14 @@ class AcquisitionRowDeletePreviewResponse(BaseModel):
     side: DocumentSide | None = None
     document_id: int | None = None
     file_name: str | None = None
+    document_file_available: bool | None = None
+    missing_files_count: int = 0
     blocked_reason: str | None = None
     linked_rows_count: int = 0
+    other_rows_count: int = 0
+    match_references_count: int = 0
+    child_documents_count: int = 0
+    manual_blocks_cleanup_count: int = 0
     shared_document: bool = False
     will_delete_document: bool = False
     normal_reload_available: bool = False

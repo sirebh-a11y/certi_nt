@@ -23,6 +23,7 @@ from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from pypdf import PdfReader
 from sqlalchemy import inspect as sqlalchemy_inspect, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -9586,8 +9587,21 @@ def _row_is_used_by_quarta_taglio(db: Session, row_id: int) -> bool:
         return True
 
 
-def _document_link_count_excluding_row(db: Session, *, document_id: int, row_id: int) -> int:
-    rows_count = (
+@dataclass(frozen=True)
+class _DocumentDeleteUsage:
+    other_rows_count: int
+    match_references_count: int
+    child_documents_count: int
+    manual_blocks_count: int
+    row_manual_blocks_count: int
+
+    @property
+    def blocking_references_count(self) -> int:
+        return self.other_rows_count + self.match_references_count + self.child_documents_count
+
+
+def _document_delete_usage(db: Session, *, document_id: int, row_id: int) -> _DocumentDeleteUsage:
+    other_rows_count = (
         db.query(AcquisitionRow.id)
         .filter(
             AcquisitionRow.id != row_id,
@@ -9608,7 +9622,76 @@ def _document_link_count_excluding_row(db: Session, *, document_id: int, row_id:
         .filter(CertificateMatchCandidate.document_certificato_id == document_id)
         .count()
     )
-    return int(rows_count + matches_count + candidates_count)
+    child_documents_count = (
+        db.query(Document.id)
+        .filter(Document.documento_padre_id == document_id)
+        .count()
+    )
+    manual_blocks_count = (
+        db.query(ManualMatchBlock.id)
+        .filter(
+            or_(
+                ManualMatchBlock.document_ddt_id == document_id,
+                ManualMatchBlock.document_certificato_id == document_id,
+            )
+        )
+        .count()
+    )
+    row_manual_blocks_count = (
+        db.query(ManualMatchBlock.id)
+        .filter(
+            or_(
+                ManualMatchBlock.source_row_id == row_id,
+                ManualMatchBlock.certificate_row_id == row_id,
+            )
+        )
+        .count()
+    )
+    return _DocumentDeleteUsage(
+        other_rows_count=int(other_rows_count),
+        match_references_count=int(matches_count + candidates_count),
+        child_documents_count=int(child_documents_count),
+        manual_blocks_count=int(manual_blocks_count),
+        row_manual_blocks_count=int(row_manual_blocks_count),
+    )
+
+
+def _row_or_document_is_used_by_active_processing_run(db: Session, *, row_id: int, document_id: int) -> bool:
+    active_runs = (
+        db.query(AutonomousProcessingRun)
+        .filter(AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")))
+        .all()
+    )
+    for run in active_runs:
+        if run.current_row_id == row_id:
+            return True
+        run_document_ids = {
+            *_run_document_ids_from_storage(run.ddt_document_ids),
+            *_run_document_ids_from_storage(run.certificate_document_ids),
+        }
+        if document_id in run_document_ids:
+            return True
+    return False
+
+
+def _document_storage_availability(document: Document | None) -> tuple[bool | None, int]:
+    if document is None:
+        return None, 0
+    storage_keys = [document.storage_key]
+    storage_keys.extend(
+        page.immagine_pagina_storage_key
+        for page in document.pages
+        if page.immagine_pagina_storage_key
+    )
+    missing_files_count = 0
+    for storage_key in storage_keys:
+        try:
+            _resolve_storage_path(storage_key)
+        except HTTPException:
+            # A missing or no longer valid storage path must be reported in the
+            # preview, but it must not prevent the database cleanup.
+            missing_files_count += 1
+    return missing_files_count == 0, missing_files_count
 
 
 def _build_delete_preview(
@@ -9618,8 +9701,11 @@ def _build_delete_preview(
     document: Document | None,
     can_delete: bool,
     blocked_reason: str | None,
-    linked_rows_count: int = 0,
+    usage: _DocumentDeleteUsage | None = None,
 ) -> AcquisitionRowDeletePreviewResponse:
+    resolved_usage = usage or _DocumentDeleteUsage(0, 0, 0, 0, 0)
+    document_file_available, missing_files_count = _document_storage_availability(document)
+    linked_rows_count = resolved_usage.blocking_references_count
     shared_document = linked_rows_count > 0
     will_delete_document = can_delete and document is not None and not shared_document
     if blocked_reason:
@@ -9629,9 +9715,11 @@ def _build_delete_preview(
             "La riga e il documento verranno eliminati. Il file potra essere ricaricato "
             "dal caricamento normale."
         )
+        if resolved_usage.manual_blocks_count:
+            message += " Verranno rimossi anche i collegamenti manuali interni relativi al documento."
     else:
         message = (
-            "La riga verra eliminata, ma il documento resta perche usato anche da altre righe. "
+            "La riga verra eliminata, ma il documento resta perche ha altri collegamenti. "
             "Per aggiungere righe dallo stesso PDF usa il fallback manuale."
         )
     return AcquisitionRowDeletePreviewResponse(
@@ -9640,8 +9728,18 @@ def _build_delete_preview(
         side=side if side in {"ddt", "certificato"} else None,
         document_id=document.id if document is not None else None,
         file_name=document.nome_file_originale if document is not None else None,
+        document_file_available=document_file_available,
+        missing_files_count=missing_files_count,
         blocked_reason=blocked_reason,
         linked_rows_count=linked_rows_count,
+        other_rows_count=resolved_usage.other_rows_count,
+        match_references_count=resolved_usage.match_references_count,
+        child_documents_count=resolved_usage.child_documents_count,
+        manual_blocks_cleanup_count=(
+            resolved_usage.manual_blocks_count
+            if will_delete_document
+            else resolved_usage.row_manual_blocks_count
+        ),
         shared_document=shared_document,
         will_delete_document=will_delete_document,
         normal_reload_available=will_delete_document,
@@ -9687,34 +9785,50 @@ def preview_acquisition_row_delete(db: Session, *, row: AcquisitionRow) -> Acqui
             can_delete=False,
             blocked_reason="Riga gia collegata a Certificazione: non puo essere eliminata da Incoming.",
         )
+    if _row_or_document_is_used_by_active_processing_run(
+        db,
+        row_id=current_row.id,
+        document_id=document.id,
+    ):
+        return _build_delete_preview(
+            row=current_row,
+            side=side,
+            document=document,
+            can_delete=False,
+            blocked_reason="Riga in uso da una elaborazione AI attiva: attendi la fine del run prima di eliminarla.",
+        )
 
-    linked_count = _document_link_count_excluding_row(db, document_id=document_id, row_id=current_row.id)
+    usage = _document_delete_usage(db, document_id=document_id, row_id=current_row.id)
     return _build_delete_preview(
         row=current_row,
         side=side,
         document=document,
         can_delete=True,
         blocked_reason=None,
-        linked_rows_count=linked_count,
+        usage=usage,
     )
 
 
-def _delete_evidence_records(db: Session, evidences: list[DocumentEvidence]) -> None:
+def _delete_evidence_records(db: Session, evidences: list[DocumentEvidence]) -> list[str]:
+    storage_keys: list[str] = []
     if not evidences:
-        return
+        return storage_keys
     evidence_by_id = {evidence.id: evidence for evidence in evidences if evidence.id is not None}
     if not evidence_by_id:
-        return
+        return storage_keys
     db.query(ReadValue).filter(ReadValue.document_evidence_id.in_(evidence_by_id.keys())).update(
         {ReadValue.document_evidence_id: None},
         synchronize_session=False,
     )
     for evidence in evidence_by_id.values():
-        _delete_storage_key_if_present(evidence.storage_key_derivato)
+        if evidence.storage_key_derivato:
+            storage_keys.append(evidence.storage_key_derivato)
         db.delete(evidence)
+    return storage_keys
 
 
-def _delete_document_record_and_files(db: Session, document: Document) -> None:
+def _delete_document_record(db: Session, document: Document) -> list[str]:
+    storage_keys: list[str] = []
     current_document = (
         db.query(Document)
         .options(joinedload(Document.pages), joinedload(Document.evidences))
@@ -9722,7 +9836,7 @@ def _delete_document_record_and_files(db: Session, document: Document) -> None:
         .one_or_none()
     )
     if current_document is None:
-        return
+        return storage_keys
     page_ids = [page.id for page in current_document.pages]
     all_evidences = list(current_document.evidences)
     if page_ids:
@@ -9731,12 +9845,22 @@ def _delete_document_record_and_files(db: Session, document: Document) -> None:
             .filter(DocumentEvidence.document_page_id.in_(page_ids))
             .all()
         )
-    _delete_evidence_records(db, all_evidences)
+    storage_keys.extend(_delete_evidence_records(db, all_evidences))
     for page in current_document.pages:
-        _delete_storage_key_if_present(page.immagine_pagina_storage_key)
+        if page.immagine_pagina_storage_key:
+            storage_keys.append(page.immagine_pagina_storage_key)
         db.delete(page)
-    _delete_storage_key_if_present(current_document.storage_key)
+    storage_keys.append(current_document.storage_key)
     db.delete(current_document)
+    return storage_keys
+
+
+def _delete_storage_keys_after_commit(storage_keys: list[str]) -> None:
+    for storage_key in dict.fromkeys(storage_keys):
+        try:
+            _delete_storage_key_if_present(storage_key)
+        except Exception:
+            logger.exception("Unable to delete storage file after database commit: %s", storage_key)
 
 
 def _unlink_manual_blocks_for_deleted_row(db: Session, row_id: int) -> None:
@@ -9759,6 +9883,21 @@ def _unlink_manual_blocks_for_deleted_row(db: Session, row_id: int) -> None:
         db.add(block)
 
 
+def _delete_manual_blocks_for_document(db: Session, document_id: int) -> None:
+    blocks = (
+        db.query(ManualMatchBlock)
+        .filter(
+            or_(
+                ManualMatchBlock.document_ddt_id == document_id,
+                ManualMatchBlock.document_certificato_id == document_id,
+            )
+        )
+        .all()
+    )
+    for block in blocks:
+        db.delete(block)
+
+
 def delete_single_document_acquisition_row(
     db: Session,
     *,
@@ -9774,15 +9913,34 @@ def delete_single_document_acquisition_row(
     if document is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Documento collegato non trovato")
 
-    _unlink_manual_blocks_for_deleted_row(db, current_row.id)
-    _delete_evidence_records(db, list(current_row.evidences))
-    db.delete(current_row)
-    db.flush()
+    storage_keys: list[str] = []
+    try:
+        storage_keys.extend(_delete_evidence_records(db, list(current_row.evidences)))
+        if preview.will_delete_document:
+            _delete_manual_blocks_for_document(db, document.id)
+        else:
+            _unlink_manual_blocks_for_deleted_row(db, current_row.id)
+        db.delete(current_row)
+        db.flush()
 
-    if preview.will_delete_document:
-        _delete_document_record_and_files(db, document)
+        if preview.will_delete_document:
+            storage_keys.extend(_delete_document_record(db, document))
 
-    db.commit()
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Eliminazione non completata: la riga o il documento sono ancora utilizzati. "
+                "Nessun file e stato eliminato."
+            ),
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    _delete_storage_keys_after_commit(storage_keys)
     return preview
 
 
