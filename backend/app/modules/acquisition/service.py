@@ -8556,9 +8556,23 @@ def _send_autonomous_run_notification(
     failed_items: list[dict[str, str]] | None = None,
 ) -> None:
     recipients = []
-    for email in [run.notification_email, actor_email, run.admin_notification_email]:
+    email_config = get_effective_email_settings(db)
+    always_cc_email = _string_or_none(email_config.mail_always_cc_email)
+    recipient_candidates = [
+        (run.notification_email, False),
+        (actor_email, False),
+        (run.admin_notification_email, True),
+    ]
+    for email, is_admin_recipient in recipient_candidates:
         normalized = _string_or_none(email)
-        if normalized and normalized not in recipients:
+        if (
+            normalized
+            and is_admin_recipient
+            and always_cc_email
+            and normalized.casefold() == always_cc_email.casefold()
+        ):
+            continue
+        if normalized and all(normalized.casefold() != recipient.casefold() for recipient in recipients):
             recipients.append(normalized)
     if not recipients:
         return

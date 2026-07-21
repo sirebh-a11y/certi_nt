@@ -47,6 +47,7 @@ SMTP_HOST
 SMTP_PORT  
 SMTP_USER  
 SMTP_PASSWORD  
+MAIL_ALWAYS_CC_EMAIL (opzionale)
 
 TLS: abilitato  
 
@@ -70,6 +71,7 @@ SMTP_PORT=587
 SMTP_USER=noreply@azienda.it  
 SMTP_PASSWORD=CHANGE_ME  
 SMTP_TLS=true  
+MAIL_ALWAYS_CC_EMAIL=archivio@azienda.it
 
 Regole:
 
@@ -84,6 +86,8 @@ Regole:
 - la modalità (development / production) deve essere configurata tramite variabile ENV  
 - il sistema deve selezionare automaticamente il provider corretto  
 - il servizio email deve essere separato dalla logica utenti  
+- se `MAIL_ALWAYS_CC_EMAIL` è valorizzato, tutte le email inviate dal servizio comune devono includerlo in `Cc`
+- se il destinatario principale coincide con il CC globale, deve essere inviata una sola copia
 
 ---
 
@@ -99,4 +103,4 @@ Il sistema deve implementare:
 ## Dati email
 
 from_email: noreply@certi.local  
-from_name: CERTI_nt System   
+from_name: CERTI_nt System

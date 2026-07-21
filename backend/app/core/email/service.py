@@ -26,6 +26,9 @@ class EmailService:
         message = EmailMessage()
         message["From"] = f"{config.mail_from_name} <{config.mail_from_email}>"
         message["To"] = payload.to_email
+        cc_email = (config.mail_always_cc_email or "").strip()
+        if cc_email and cc_email.casefold() != payload.to_email.casefold():
+            message["Cc"] = cc_email
         message["Subject"] = payload.subject
         message.set_content(payload.body)
 

@@ -20,6 +20,7 @@ class EffectiveEmailSettings:
     smtp_tls: bool
     mail_from_email: str
     mail_from_name: str
+    mail_always_cc_email: str | None
     acquisition_notification_admin_email: str | None
 
 
@@ -39,6 +40,7 @@ def get_effective_email_settings(db: Session | None = None) -> EffectiveEmailSet
             smtp_tls=row.smtp_tls,
             mail_from_email=row.mail_from_email,
             mail_from_name=row.mail_from_name,
+            mail_always_cc_email=row.mail_always_cc_email,
             acquisition_notification_admin_email=row.acquisition_notification_admin_email,
         )
 
@@ -51,6 +53,7 @@ def get_effective_email_settings(db: Session | None = None) -> EffectiveEmailSet
         smtp_tls=settings.smtp_tls,
         mail_from_email=settings.mail_from_email,
         mail_from_name=settings.mail_from_name,
+        mail_always_cc_email=settings.mail_always_cc_email,
         acquisition_notification_admin_email=settings.acquisition_notification_admin_email,
     )
 
@@ -67,6 +70,7 @@ def serialize_email_settings(db: Session) -> EmailSettingsResponse:
         smtp_tls=effective.smtp_tls,
         mail_from_email=effective.mail_from_email,
         mail_from_name=effective.mail_from_name,
+        mail_always_cc_email=effective.mail_always_cc_email,
         acquisition_notification_admin_email=effective.acquisition_notification_admin_email,
         updated_at=row.updated_at if row is not None else None,
     )
@@ -84,6 +88,7 @@ def update_email_settings(db: Session, payload: EmailSettingsUpdateRequest, acto
             smtp_tls=payload.smtp_tls,
             mail_from_email=str(payload.mail_from_email),
             mail_from_name=payload.mail_from_name,
+            mail_always_cc_email=str(payload.mail_always_cc_email) if payload.mail_always_cc_email else None,
             acquisition_notification_admin_email=str(payload.acquisition_notification_admin_email) if payload.acquisition_notification_admin_email else None,
         )
 
@@ -93,6 +98,7 @@ def update_email_settings(db: Session, payload: EmailSettingsUpdateRequest, acto
     row.smtp_tls = payload.smtp_tls
     row.mail_from_email = str(payload.mail_from_email)
     row.mail_from_name = payload.mail_from_name
+    row.mail_always_cc_email = str(payload.mail_always_cc_email) if payload.mail_always_cc_email else None
     row.acquisition_notification_admin_email = (
         str(payload.acquisition_notification_admin_email) if payload.acquisition_notification_admin_email else None
     )

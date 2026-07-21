@@ -12,6 +12,7 @@ const emptyDraft = {
   smtp_tls: true,
   mail_from_email: "",
   mail_from_name: "",
+  mail_always_cc_email: "",
   acquisition_notification_admin_email: "",
 };
 
@@ -25,6 +26,7 @@ function buildDraft(data) {
     smtp_tls: Boolean(data.smtp_tls),
     mail_from_email: data.mail_from_email || "",
     mail_from_name: data.mail_from_name || "",
+    mail_always_cc_email: data.mail_always_cc_email || "",
     acquisition_notification_admin_email: data.acquisition_notification_admin_email || "",
   };
 }
@@ -90,6 +92,7 @@ export default function EmailSettingsPage() {
           body: JSON.stringify({
             ...draft,
             smtp_port: Number(draft.smtp_port),
+            mail_always_cc_email: draft.mail_always_cc_email || null,
             acquisition_notification_admin_email: draft.acquisition_notification_admin_email || null,
             smtp_password: draft.smtp_password || null,
           }),
@@ -233,6 +236,17 @@ export default function EmailSettingsPage() {
               <label className="grid gap-2 text-sm font-medium text-slate-700">
                 Nome mittente
                 <input value={draft.mail_from_name} onChange={(event) => updateDraft({ mail_from_name: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium text-slate-700 md:col-span-2">
+                Email CC sempre
+                <input
+                  placeholder="Opzionale"
+                  value={draft.mail_always_cc_email}
+                  onChange={(event) => updateDraft({ mail_always_cc_email: event.target.value })}
+                />
+                <span className="text-xs font-normal text-slate-500">
+                  Riceve in copia tutte le email inviate dall'applicazione.
+                </span>
               </label>
               <label className="grid gap-2 text-sm font-medium text-slate-700 md:col-span-2">
                 Email admin per report Assistente AI

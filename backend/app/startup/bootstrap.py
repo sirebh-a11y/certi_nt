@@ -62,6 +62,7 @@ from app.modules.suppliers.service import seed_supplier_aliases_from_csv, seed_s
 def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     Base.metadata.create_all(bind=engine)
     ensure_document_upload_columns()
+    ensure_email_settings_columns()
     ensure_acquisition_upload_batch_columns()
     ensure_acquisition_processing_run_columns()
     ensure_acquisition_quality_columns()
@@ -107,6 +108,17 @@ def ensure_document_upload_columns() -> None:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+
+
+def ensure_email_settings_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("email_settings"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("email_settings")}
+    if "mail_always_cc_email" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE email_settings ADD COLUMN mail_always_cc_email VARCHAR(255)"))
 
 
 def ensure_supplier_columns() -> None:

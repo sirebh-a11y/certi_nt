@@ -12,6 +12,7 @@ class EmailSettingsResponse(BaseModel):
     smtp_tls: bool
     mail_from_email: str
     mail_from_name: str
+    mail_always_cc_email: str | None
     acquisition_notification_admin_email: str | None
     updated_at: datetime | None
 
@@ -25,6 +26,7 @@ class EmailSettingsUpdateRequest(BaseModel):
     smtp_tls: bool
     mail_from_email: str
     mail_from_name: str = Field(min_length=1, max_length=255)
+    mail_always_cc_email: str | None = None
     acquisition_notification_admin_email: str | None = None
 
     @field_validator("smtp_host", "smtp_user", "mail_from_name", mode="before")
@@ -40,7 +42,7 @@ class EmailSettingsUpdateRequest(BaseModel):
             raise ValueError("Email non valida")
         return normalized
 
-    @field_validator("acquisition_notification_admin_email")
+    @field_validator("mail_always_cc_email", "acquisition_notification_admin_email")
     @classmethod
     def validate_email(cls, value: str | None) -> str | None:
         if value is None or value == "":
