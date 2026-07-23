@@ -32,3 +32,35 @@ class ExternalConnection(Base):
     last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class EsolverExportPublicationSettings(Base):
+    __tablename__ = "esolver_export_publication_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    external_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    database_name: Mapped[str] = mapped_column(String(128), default="certi_nt", nullable=False)
+    schema_name: Mapped[str] = mapped_column(String(128), default="esolver_export", nullable=False)
+    view_name: Mapped[str] = mapped_column(String(128), default="certi_certificati_pdf", nullable=False)
+    reader_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    allowed_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ssl_mode: Mapped[str] = mapped_column(String(64), default="DA_FORNIRE_IT", nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    last_view_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_view_test_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_view_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_permissions_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_permissions_test_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_permissions_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    external_validation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    external_validation_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_validation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

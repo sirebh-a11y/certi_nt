@@ -12,7 +12,9 @@ from app.core.departments.service import seed_departments
 from app.core.email.models import EmailSettings  # noqa: F401
 from app.core.logs.service import log_service
 from app.core.integrations.models import ExternalConnection  # noqa: F401
-from app.core.integrations.service import seed_external_connections
+from app.core.integrations.models import EsolverExportPublicationSettings  # noqa: F401
+from app.core.integrations.service import seed_esolver_export_publication_settings, seed_external_connections
+from app.core.config import settings
 from app.core.roles.constants import ROLE_ADMIN
 from app.core.security.passwords import hash_password
 from app.core.users.models import User
@@ -46,6 +48,7 @@ from app.modules.quarta_taglio.models import (  # noqa: F401
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
 )
+from app.modules.esolver_export.view import ensure_esolver_export_view
 from app.modules.standards.models import (  # noqa: F401
     NormativeStandard,
     NormativeStandardChemistry,
@@ -69,6 +72,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_supplier_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
+    ensure_esolver_export_view(engine, public_base_url=settings.certi_public_base_url)
     ensure_supplier_installation_code_columns()
     ensure_customer_requirement_columns()
     db: Session = SessionLocal()
@@ -77,6 +81,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
         bootstrap_admin_user(db)
         seed_ai_configuration(db)
         seed_external_connections(db)
+        seed_esolver_export_publication_settings(db)
         ensure_supplier_columns()
         seed_suppliers_from_csv(db)
         seed_supplier_aliases_from_csv(db)

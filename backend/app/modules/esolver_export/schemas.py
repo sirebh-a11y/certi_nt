@@ -19,6 +19,8 @@ class EsolverPdfCertificateExportItem(BaseModel):
     pdf_url: str = Field(alias="PdfUrl")
     stato: str = Field(alias="Stato")
     updated_at: datetime = Field(alias="UpdatedAt")
+    pdf_version: int = Field(alias="PdfVersion")
+    closed_at: datetime = Field(alias="ClosedAt")
 
 
 class EsolverPdfCertificateExportResponse(BaseModel):

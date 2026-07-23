@@ -47,31 +47,59 @@ function connectionStatus(item) {
   return item.password_configured ? "Configurata" : "Password mancante";
 }
 
+function buildSqlViewDraft(item = {}) {
+  return {
+    enabled: item.enabled || false,
+    external_host: item.external_host || "",
+    external_port: item.external_port || "",
+    database_name: item.database_name || "certi_nt",
+    schema_name: item.schema_name || "esolver_export",
+    view_name: item.view_name || "certi_certificati_pdf",
+    reader_username: item.reader_username || "",
+    allowed_source: item.allowed_source || "",
+    ssl_mode: item.ssl_mode || "DA_FORNIRE_IT",
+    notes: item.notes || "",
+  };
+}
+
 export default function IntegrationsPage() {
   const { token } = useAuth();
   const [items, setItems] = useState([]);
   const [drafts, setDrafts] = useState({});
+  const [publication, setPublication] = useState(null);
+  const [sqlViewDraft, setSqlViewDraft] = useState(buildSqlViewDraft());
   const [loading, setLoading] = useState(true);
   const [savingCode, setSavingCode] = useState("");
   const [testingCode, setTestingCode] = useState("");
+  const [publicationAction, setPublicationAction] = useState("");
   const [message, setMessage] = useState("");
 
   async function refresh() {
-    const data = await apiRequest("/integrations", {}, token);
+    const [data, publicationData] = await Promise.all([
+      apiRequest("/integrations", {}, token),
+      apiRequest("/integrations/export-publication", {}, token),
+    ]);
     setItems(data.items || []);
     setDrafts(Object.fromEntries((data.items || []).map((item) => [item.code, buildDraft(item)])));
+    setPublication(publicationData);
+    setSqlViewDraft(buildSqlViewDraft(publicationData.sql_view));
   }
 
   useEffect(() => {
     let ignore = false;
     setLoading(true);
-    apiRequest("/integrations", {}, token)
-      .then((data) => {
+    Promise.all([
+      apiRequest("/integrations", {}, token),
+      apiRequest("/integrations/export-publication", {}, token),
+    ])
+      .then(([data, publicationData]) => {
         if (ignore) {
           return;
         }
         setItems(data.items || []);
         setDrafts(Object.fromEntries((data.items || []).map((item) => [item.code, buildDraft(item)])));
+        setPublication(publicationData);
+        setSqlViewDraft(buildSqlViewDraft(publicationData.sql_view));
       })
       .catch((requestError) => {
         if (!ignore) {
@@ -91,10 +119,13 @@ export default function IntegrationsPage() {
 
   const summary = useMemo(
     () => ({
-      configured: items.filter((item) => item.password_configured).length,
-      total: items.length,
+      configured:
+        items.filter((item) => item.password_configured).length +
+        (publication?.endpoint?.password_configured ? 1 : 0) +
+        (publication?.sql_view?.reader_password_configured ? 1 : 0),
+      total: 4,
     }),
-    [items],
+    [items, publication],
   );
 
   function updateDraft(code, patch) {
@@ -182,6 +213,70 @@ export default function IntegrationsPage() {
     } finally {
       setTestingCode("");
     }
+  }
+
+  async function runPublicationAction(action, request) {
+    setMessage("");
+    setPublicationAction(action);
+    try {
+      const response = await request();
+      await refresh();
+      setMessage(response.message || "Configurazione vista eSolver aggiornata");
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setPublicationAction("");
+    }
+  }
+
+  async function saveSqlView(event) {
+    event.preventDefault();
+    await runPublicationAction("save", () =>
+      apiRequest(
+        "/integrations/export-publication/sql-view",
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            enabled: sqlViewDraft.enabled,
+            external_port: sqlViewDraft.external_port ? Number(sqlViewDraft.external_port) : null,
+            external_host: sqlViewDraft.external_host || null,
+            reader_username: sqlViewDraft.reader_username || null,
+            allowed_source: sqlViewDraft.allowed_source || null,
+            ssl_mode: sqlViewDraft.ssl_mode,
+            notes: sqlViewDraft.notes,
+          }),
+        },
+        token,
+      ),
+    );
+  }
+
+  async function testSqlView() {
+    await runPublicationAction("test-view", () =>
+      apiRequest("/integrations/export-publication/sql-view/test", { method: "POST" }, token),
+    );
+  }
+
+  async function testSqlViewPermissions() {
+    await runPublicationAction("test-permissions", () =>
+      apiRequest("/integrations/export-publication/sql-view/test-permissions", { method: "POST" }, token),
+    );
+  }
+
+  async function setExternalValidation(validated) {
+    await runPublicationAction("external-validation", () =>
+      apiRequest(
+        "/integrations/export-publication/sql-view/external-validation",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            validated,
+            message: validated ? "Verifica esterna confermata da IT" : "Verifica esterna da completare",
+          }),
+        },
+        token,
+      ),
+    );
   }
 
   function renderConnection(item) {
@@ -317,20 +412,8 @@ export default function IntegrationsPage() {
   }
 
   function renderCertiExport() {
-    const fields = [
-      "OL",
-      "DDT",
-      "IdDocumento",
-      "IdRigaDoc",
-      "RifLottoAlfanum",
-      "CodF3",
-      "NumeroCertificato",
-      "DataCertificato",
-      "Quantita",
-      "PdfUrl",
-      "Stato",
-      "UpdatedAt",
-    ];
+    const endpoint = publication?.endpoint;
+    const fields = endpoint?.fields || [];
     return (
       <section className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="border-b border-slate-100 pb-4">
@@ -342,15 +425,17 @@ export default function IntegrationsPage() {
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Utente</div>
-            <div className="mt-1 font-semibold text-slate-950">Certi</div>
+            <div className="mt-1 font-semibold text-slate-950">{endpoint?.username || "-"}</div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Password</div>
-            <div className="mt-1 font-semibold text-slate-950">Certi</div>
+            <div className="mt-1 font-semibold text-slate-950">
+              {endpoint?.password_configured ? "•••••••• (configurata)" : "Mancante"}
+            </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-1 2xl:col-span-2">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Endpoint</div>
-            <div className="mt-1 break-all font-mono text-sm text-slate-950">/api/export/esolver/certificati-pdf</div>
+            <div className="mt-1 break-all font-mono text-sm text-slate-950">{endpoint?.public_url || endpoint?.path || "-"}</div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 md:col-span-2 xl:col-span-1 2xl:col-span-2">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Regola</div>
@@ -376,6 +461,156 @@ export default function IntegrationsPage() {
     );
   }
 
+  function renderSqlView() {
+    const view = publication?.sql_view;
+    const busy = Boolean(publicationAction);
+    return (
+      <form className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={saveSqlView}>
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">vista PostgreSQL</p>
+            <h3 className="mt-1 text-xl font-semibold text-slate-950">Vista per eSolver</h3>
+            <p className="mt-1 text-sm text-slate-500">Pubblicazione di sola lettura predisposta per l’IT.</p>
+          </div>
+          <StatusBadge
+            active={Boolean(view?.reader_password_configured)}
+            trueLabel="Password configurata"
+            falseLabel="Password da IT"
+          />
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            <input
+              checked={sqlViewDraft.enabled}
+              className="h-4 w-4 rounded border-slate-300 p-0 text-accent focus:ring-2 focus:ring-accent/20"
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, enabled: event.target.checked }))}
+              type="checkbox"
+            />
+            Pubblicazione abilitata
+          </label>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Host esterno</label>
+            <input
+              placeholder="DA FORNIRE IT"
+              value={sqlViewDraft.external_host}
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, external_host: event.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Porta esterna</label>
+            <input
+              min="1"
+              max="65535"
+              placeholder="DA FORNIRE IT"
+              type="number"
+              value={sqlViewDraft.external_port}
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, external_port: event.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Database</label>
+            <input
+              disabled
+              value={sqlViewDraft.database_name}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Schema</label>
+            <input
+              disabled
+              value={sqlViewDraft.schema_name}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Vista</label>
+            <input
+              disabled
+              value={sqlViewDraft.view_name}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Utente sola lettura</label>
+            <input
+              placeholder="DA FORNIRE IT"
+              value={sqlViewDraft.reader_username}
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, reader_username: event.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Password</label>
+            <input
+              disabled
+              value={view?.reader_password_configured ? "•••••••• (configurata sul server)" : "DA CONFIGURARE SUL SERVER"}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Origine autorizzata</label>
+            <input
+              placeholder="IP/CIDR DA FORNIRE IT"
+              value={sqlViewDraft.allowed_source}
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, allowed_source: event.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-slate-700">Modalità SSL</label>
+            <input
+              value={sqlViewDraft.ssl_mode}
+              onChange={(event) => setSqlViewDraft((current) => ({ ...current, ssl_mode: event.target.value }))}
+            />
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <label className="mb-2 block text-sm font-medium text-slate-700">Note e dati mancanti</label>
+          <textarea
+            className="min-h-24"
+            value={sqlViewDraft.notes}
+            onChange={(event) => setSqlViewDraft((current) => ({ ...current, notes: event.target.value }))}
+          />
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+            <div className="font-semibold text-slate-900">Vista</div>
+            <div className="mt-1 text-xs text-slate-600">{view?.last_view_test_status || "Non testata"}</div>
+            <div className="mt-1 text-xs text-slate-500">{view?.last_view_test_message || "-"}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+            <div className="font-semibold text-slate-900">Permessi</div>
+            <div className="mt-1 text-xs text-slate-600">{view?.last_permissions_test_status || "Non testati"}</div>
+            <div className="mt-1 text-xs text-slate-500">{view?.last_permissions_test_message || "-"}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+            <div className="font-semibold text-slate-900">Verifica eSolver</div>
+            <div className="mt-1 text-xs text-slate-600">{view?.external_validation_status || "pending"}</div>
+            <div className="mt-1 text-xs text-slate-500">{view?.external_validation_message || "-"}</div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-3 border-t border-slate-100 pt-4">
+          <button className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold" disabled={busy} onClick={testSqlView} type="button">
+            Test vista
+          </button>
+          <button className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold" disabled={busy} onClick={testSqlViewPermissions} type="button">
+            Test permessi
+          </button>
+          <button
+            className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold"
+            disabled={busy}
+            onClick={() => setExternalValidation(view?.external_validation_status !== "ok")}
+            type="button"
+          >
+            {view?.external_validation_status === "ok" ? "Riapri verifica esterna" : "Conferma verifica esterna"}
+          </button>
+          <button className="ml-auto rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60" disabled={busy} type="submit">
+            {publicationAction === "save" ? "Salvataggio..." : "Salva configurazione"}
+          </button>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <section className="rounded-3xl border border-border bg-panel p-6 shadow-lg shadow-slate-200/40 xl:p-8">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -394,9 +629,10 @@ export default function IntegrationsPage() {
       {loading ? <p className="mt-6 text-sm text-slate-500">Caricamento integrazioni...</p> : null}
       {message ? <p className="mt-6 text-sm text-slate-600">{message}</p> : null}
 
-      <div className="mt-8 grid items-stretch gap-6 xl:grid-cols-3">
+      <div className="mt-8 grid items-stretch gap-6 xl:grid-cols-2">
         {[...items].sort((left, right) => CONNECTION_ORDER.indexOf(left.code) - CONNECTION_ORDER.indexOf(right.code)).map(renderConnection)}
         {renderCertiExport()}
+        {renderSqlView()}
       </div>
     </section>
   );
