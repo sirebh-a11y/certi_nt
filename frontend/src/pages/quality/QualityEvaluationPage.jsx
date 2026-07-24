@@ -127,7 +127,7 @@ function isRowChanged(row, draft) {
   return EDITABLE_FIELDS.some((field) => textValue(row[field]) !== textValue(draft[field]));
 }
 
-function fieldClass({ changed = false, review = false, status = "" } = {}) {
+function fieldClass({ changed = false, missing = false, review = false, status = "" } = {}) {
   if (status === "error") {
     return "border-rose-400 bg-rose-50 text-rose-900";
   }
@@ -140,7 +140,7 @@ function fieldClass({ changed = false, review = false, status = "" } = {}) {
   if (review) {
     return "border-rose-300 bg-rose-50 text-rose-900";
   }
-  if (changed) {
+  if (changed || missing) {
     return "border-amber-300 bg-amber-50 text-ink";
   }
   return "border-slate-200 bg-white text-ink";
@@ -935,11 +935,15 @@ export default function QualityEvaluationPage() {
                     <input
                       className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_ricezione) !== textValue(draft.qualita_data_ricezione),
+                        missing: !draft.qualita_data_ricezione,
                         status: cellStates[cellKey(row.id, "qualita_data_ricezione")]?.status,
                       })}`}
                       onBlur={() => flushQualityCell(row.id, "qualita_data_ricezione")}
                       onChange={(event) => updateDraftAndAutosave(row.id, "qualita_data_ricezione", event.target.value, 300)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_data_ricezione")])}
+                      title={
+                        autosaveTitle(cellStates[cellKey(row.id, "qualita_data_ricezione")])
+                        || (!draft.qualita_data_ricezione ? "Data da inserire" : undefined)
+                      }
                       type="date"
                       value={draft.qualita_data_ricezione || ""}
                     />
@@ -948,11 +952,15 @@ export default function QualityEvaluationPage() {
                     <input
                       className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_accettazione) !== textValue(draft.qualita_data_accettazione),
+                        missing: !draft.qualita_data_accettazione,
                         status: cellStates[cellKey(row.id, "qualita_data_accettazione")]?.status,
                       })}`}
                       onBlur={() => flushQualityCell(row.id, "qualita_data_accettazione")}
                       onChange={(event) => updateDraftAndAutosave(row.id, "qualita_data_accettazione", event.target.value, 300)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_data_accettazione")])}
+                      title={
+                        autosaveTitle(cellStates[cellKey(row.id, "qualita_data_accettazione")])
+                        || (!draft.qualita_data_accettazione ? "Data da inserire" : undefined)
+                      }
                       type="date"
                       value={draft.qualita_data_accettazione || ""}
                     />
@@ -985,11 +993,15 @@ export default function QualityEvaluationPage() {
                     <input
                       className={`w-[132px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_data_richiesta) !== textValue(draft.qualita_data_richiesta),
+                        missing: !draft.qualita_data_richiesta,
                         status: cellStates[cellKey(row.id, "qualita_data_richiesta")]?.status,
                       })}`}
                       onBlur={() => flushQualityCell(row.id, "qualita_data_richiesta")}
                       onChange={(event) => updateDraftAndAutosave(row.id, "qualita_data_richiesta", event.target.value, 300)}
-                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_data_richiesta")])}
+                      title={
+                        autosaveTitle(cellStates[cellKey(row.id, "qualita_data_richiesta")])
+                        || (!draft.qualita_data_richiesta ? "Data da inserire" : undefined)
+                      }
                       type="date"
                       value={draft.qualita_data_richiesta || ""}
                     />
