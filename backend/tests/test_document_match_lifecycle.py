@@ -32,6 +32,7 @@ from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
     _billet_material_suggestion,
+    _material_form_assessment,
     _ensure_proposed_match_for_coupled_row,
     _manual_match_block_exists,
     _merge_certificate_only_row_into_ddt_row,
@@ -1166,6 +1167,66 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
 
         self.assertFalse(suggested)
         self.assertIsNone(evidence)
+
+    def test_material_form_assessment_marks_missing_ai_product_description_as_unidentified(self):
+        row = AcquisitionRow(cdq="UNIDENTIFIED-MATERIAL-FORM")
+        row.evidences = [
+            DocumentEvidence(
+                document_id=1,
+                blocco="match",
+                tipo_evidenza="ai_payload",
+                metodo_estrazione="chatgpt",
+                testo_grezzo=(
+                    '{"core":{"alloy_raw":"EN AW-6082","diameter_raw":"228 mm"},'
+                    '"notes_raw":{"nota_us_control_class_a_raw":'
+                    '"US-Inspection on the billets following AMS-STD 2154 class A"}}'
+                ),
+            )
+        ]
+
+        suggested, evidence, unidentified = _material_form_assessment(row)
+
+        self.assertFalse(suggested)
+        self.assertIsNone(evidence)
+        self.assertTrue(unidentified)
+
+    def test_material_form_assessment_recognizes_bar_without_billet_warning(self):
+        row = AcquisitionRow(cdq="ROUND-BAR")
+        row.values = [
+            ReadValue(
+                blocco="ddt",
+                campo="product_description_raw",
+                valore_finale="AL ROUND BARS FOR FORGING EN AW 6082 F",
+                stato="proposto",
+                metodo_lettura="chatgpt",
+                fonte_documentale="ddt",
+            )
+        ]
+
+        suggested, evidence, unidentified = _material_form_assessment(row)
+
+        self.assertFalse(suggested)
+        self.assertIsNone(evidence)
+        self.assertFalse(unidentified)
+
+    def test_material_form_assessment_prefers_explicit_bar_over_process_billet_wording(self):
+        row = AcquisitionRow(cdq="BAR-FROM-BILLET")
+        row.values = [
+            ReadValue(
+                blocco="ddt",
+                campo="product_description_raw",
+                valore_finale="EXTRUDED ROUND BAR PRODUCED FROM ALUMINIUM BILLET",
+                stato="proposto",
+                metodo_lettura="chatgpt",
+                fonte_documentale="ddt",
+            )
+        ]
+
+        suggested, evidence, unidentified = _material_form_assessment(row)
+
+        self.assertFalse(suggested)
+        self.assertIsNone(evidence)
+        self.assertFalse(unidentified)
 
     def test_quality_note_autosave_only_changes_the_note(self):
         row = AcquisitionRow(

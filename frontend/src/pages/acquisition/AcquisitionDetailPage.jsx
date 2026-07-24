@@ -1335,6 +1335,13 @@ export default function AcquisitionDetailPage() {
                           Verifica il documento e, se confermato, scegli Non applicabile - billetta.
                         </div>
                       </div>
+                    ) : row.materiale_forma_non_identificata ? (
+                      <div className="mb-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                        <div className="text-xs font-medium">Tipo di materiale non identificato nel certificato.</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500">
+                          Verifica se si tratta di billetta oppure di materiale estruso.
+                        </div>
+                      </div>
                     ) : null}
                     <div className="inline-flex flex-wrap rounded-xl border border-slate-200 bg-slate-50 p-1">
                       {QUALITY_CONTROL_TYPE_OPTIONS.map((option) => {

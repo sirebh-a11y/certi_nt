@@ -470,13 +470,18 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
 
 def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetailResponse:
     base = serialize_acquisition_row_list_item(row)
-    materiale_billetta_suggerito, materiale_billetta_evidenza = _billet_material_suggestion(row)
+    (
+        materiale_billetta_suggerito,
+        materiale_billetta_evidenza,
+        materiale_forma_non_identificata,
+    ) = _material_form_assessment(row)
     return AcquisitionRowDetailResponse(
         **base.model_dump(),
         ddt_document=serialize_document_summary(row.ddt_document) if row.ddt_document is not None else None,
         certificate_document=serialize_document_summary(row.certificate_document) if row.certificate_document else None,
         materiale_billetta_suggerito=materiale_billetta_suggerito,
         materiale_billetta_evidenza=materiale_billetta_evidenza,
+        materiale_forma_non_identificata=materiale_forma_non_identificata,
         evidences=[serialize_evidence(evidence) for evidence in row.evidences],
         values=[serialize_read_value(value) for value in row.values],
         custom_note_templates=[
@@ -511,8 +516,14 @@ _BILLET_PRODUCT_PATTERN = re.compile(
     r"\b(?:billets?|billett(?:a|e|es)|(?:strangpress|press)bolzen)\b",
     re.IGNORECASE,
 )
-_EXTRUDED_PRODUCT_PATTERN = re.compile(
-    r"\b(?:estrus(?:o|a|i|e)|extruded|extrudiert)\b",
+_NON_BILLET_PRODUCT_FORM_PATTERN = re.compile(
+    r"\b(?:"
+    r"estrus(?:o|a|i|e)|extrud(?:ed|ate|ates|ation|ations|iert|é|ée|és|ées)|"
+    r"extrus(?:ion|ions)|extrusi(?:on|ón|ones)|strangpress\w*|"
+    r"bars?|barra|barre|rods?|"
+    r"profiles?|profili|profilo|profilati|profilés?|"
+    r"sections?|sezioni|stange|stangen"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -581,14 +592,23 @@ def _billet_material_description_candidates(row: AcquisitionRow) -> list[str]:
     return candidates
 
 
-def _billet_material_suggestion(row: AcquisitionRow) -> tuple[bool, str | None]:
+def _material_form_assessment(row: AcquisitionRow) -> tuple[bool, str | None, bool]:
     candidates = _billet_material_description_candidates(row)
     billet_evidence = next((value for value in candidates if _BILLET_PRODUCT_PATTERN.search(value)), None)
-    if billet_evidence is None:
-        return False, None
-    if any(_EXTRUDED_PRODUCT_PATTERN.search(value) for value in candidates):
-        return False, None
-    return True, billet_evidence[:500]
+    non_billet_evidence = next(
+        (value for value in candidates if _NON_BILLET_PRODUCT_FORM_PATTERN.search(value)),
+        None,
+    )
+    if billet_evidence is not None and non_billet_evidence is None:
+        return True, billet_evidence[:500], False
+    if non_billet_evidence is not None:
+        return False, None, False
+    return False, None, True
+
+
+def _billet_material_suggestion(row: AcquisitionRow) -> tuple[bool, str | None]:
+    suggested, evidence, _ = _material_form_assessment(row)
+    return suggested, evidence
 
 
 def _quick_confirmed_blocks_from_row(row: AcquisitionRow) -> dict[str, bool]:
