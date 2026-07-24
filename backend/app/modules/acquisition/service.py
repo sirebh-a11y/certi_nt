@@ -9624,11 +9624,28 @@ def update_quality_row(
         )
 
     fields_set = payload.model_fields_set
+    if "qualita_tipo_controllo" in fields_set and payload.qualita_tipo_controllo is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Il tipo estrusione non può essere vuoto.",
+        )
+    if (
+        "qualita_note" in fields_set
+        and row.qualita_valutazione in {"accettato_con_riserva", "respinto"}
+        and not payload.qualita_note
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nota valutazione è obbligatoria per accettato con riserva o respinto.",
+        )
+
     field_names = (
         "qualita_data_ricezione",
         "qualita_data_accettazione",
         "qualita_data_richiesta",
         "qualita_numero_analisi",
+        "qualita_tipo_controllo",
+        "qualita_note",
     )
     changed_fields: list[str] = []
     for field_name in field_names:

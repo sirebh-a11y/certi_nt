@@ -909,6 +909,166 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.db.commit()
         self.assertEqual(list_quality_rows(self.db).items, [])
 
+    def test_quality_register_can_edit_control_type_and_note_after_closure_without_reopening(self):
+        supplier = Supplier(ragione_sociale="Closed Quality Supplier")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="closed-quality-cert.pdf",
+            storage_key="closed-quality-cert.pdf",
+        )
+        self.db.add_all([supplier, certificate_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="CLOSED-QUALITY-1",
+            qualita_tipo_controllo="diretta",
+            qualita_valutazione="accettato",
+            qualita_note="Nota iniziale",
+            qualita_data_accettazione=date(2026, 7, 20),
+            validata_finale=True,
+            stato_tecnico="verde",
+            stato_workflow="validata_quality",
+            priorita_operativa="bassa",
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                utente_conferma_id=1,
+            )
+        )
+        self.db.commit()
+
+        updated = update_quality_row(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityUpdateRequest(
+                qualita_tipo_controllo="inversa",
+                qualita_note="Nota corretta dopo la chiusura",
+            ),
+            actor_id=1,
+        )
+
+        self.assertEqual(updated.qualita_tipo_controllo, "inversa")
+        self.assertEqual(updated.qualita_note, "Nota corretta dopo la chiusura")
+        self.assertEqual(updated.qualita_valutazione, "accettato")
+        self.assertEqual(updated.qualita_data_accettazione, date(2026, 7, 20))
+        persisted = get_acquisition_row(self.db, row.id)
+        self.assertTrue(persisted.validata_finale)
+        self.assertEqual(persisted.stato_tecnico, "verde")
+        self.assertEqual(persisted.stato_workflow, "validata_quality")
+        self.assertEqual(persisted.priorita_operativa, "bassa")
+
+        cleared_note = update_quality_row(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionQualityUpdateRequest(qualita_note=None),
+            actor_id=1,
+        )
+
+        self.assertIsNone(cleared_note.qualita_note)
+        self.assertEqual(cleared_note.qualita_valutazione, "accettato")
+        self.assertTrue(get_acquisition_row(self.db, row.id).validata_finale)
+
+    def test_quality_register_keeps_mandatory_note_for_closed_reserve_or_rejection(self):
+        supplier = Supplier(ragione_sociale="Closed Reserve Supplier")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="closed-reserve-cert.pdf",
+            storage_key="closed-reserve-cert.pdf",
+        )
+        self.db.add_all([supplier, certificate_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="CLOSED-RESERVE-1",
+            qualita_tipo_controllo="diretta",
+            qualita_valutazione="accettato_con_riserva",
+            qualita_note="Motivazione obbligatoria",
+            validata_finale=True,
+            stato_workflow="validata_quality",
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                utente_conferma_id=1,
+            )
+        )
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as missing_note_error:
+            update_quality_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionQualityUpdateRequest(qualita_note=None),
+                actor_id=1,
+            )
+
+        self.assertEqual(missing_note_error.exception.status_code, 400)
+        persisted = get_acquisition_row(self.db, row.id)
+        self.assertEqual(persisted.qualita_note, "Motivazione obbligatoria")
+        self.assertEqual(persisted.qualita_valutazione, "accettato_con_riserva")
+        self.assertTrue(persisted.validata_finale)
+
+    def test_quality_register_does_not_allow_empty_control_type(self):
+        supplier = Supplier(ragione_sociale="Quality Type Supplier")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="quality-type-cert.pdf",
+            storage_key="quality-type-cert.pdf",
+        )
+        self.db.add_all([supplier, certificate_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="QUALITY-TYPE-1",
+            qualita_tipo_controllo="diretta",
+            qualita_valutazione="accettato",
+            validata_finale=True,
+            stato_workflow="validata_quality",
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                utente_conferma_id=1,
+            )
+        )
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as missing_type_error:
+            update_quality_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionQualityUpdateRequest(qualita_tipo_controllo=None),
+                actor_id=1,
+            )
+
+        self.assertEqual(missing_type_error.exception.status_code, 400)
+        persisted = get_acquisition_row(self.db, row.id)
+        self.assertEqual(persisted.qualita_tipo_controllo, "diretta")
+        self.assertEqual(persisted.qualita_valutazione, "accettato")
+        self.assertTrue(persisted.validata_finale)
+
     def test_quality_evaluation_can_wait_for_ddt_when_certificate_blocks_are_green(self):
         supplier = Supplier(ragione_sociale="Test Supplier")
         certificate_document = Document(tipo_documento="certificato", nome_file_originale="cert.pdf", storage_key="cert-only.pdf")

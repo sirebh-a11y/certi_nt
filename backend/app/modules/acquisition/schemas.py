@@ -814,8 +814,10 @@ class AcquisitionQualityUpdateRequest(BaseModel):
     qualita_data_accettazione: date | None = None
     qualita_data_richiesta: date | None = None
     qualita_numero_analisi: str | None = Field(default=None, max_length=128)
+    qualita_tipo_controllo: QualityControlType | None = None
+    qualita_note: str | None = None
 
-    @field_validator("qualita_numero_analisi")
+    @field_validator("qualita_numero_analisi", "qualita_note")
     @classmethod
     def normalize_optional_quality_fields(cls, value: str | None) -> str | None:
         return normalize_optional_text(value)

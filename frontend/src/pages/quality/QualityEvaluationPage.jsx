@@ -22,7 +22,7 @@ const EVALUATION_SORT_RANK = {
 const CONTROL_TYPE_LABELS = {
   diretta: "Diretta",
   inversa: "Inversa",
-  billetta: "Billetta",
+  billetta: "Non applicabile - billetta",
 };
 
 function qualityControlTypeLabel(value) {
@@ -33,6 +33,8 @@ const EDITABLE_FIELDS = [
   "qualita_data_ricezione",
   "qualita_data_accettazione",
   "qualita_data_richiesta",
+  "qualita_tipo_controllo",
+  "qualita_note",
 ];
 
 const AUTOSAVE_DELAY_MS = 800;
@@ -470,6 +472,37 @@ export default function QualityEvaluationPage() {
     [],
   );
 
+  useEffect(() => {
+    function flushQualityChangesOnExit() {
+      rowsRef.current.forEach((row) => {
+        const draft = latestDraftsRef.current[row.id] || buildDraft(row);
+        const payload = Object.fromEntries(
+          EDITABLE_FIELDS
+            .filter((field) => textValue(row[field]) !== textValue(draft[field]))
+            .map((field) => [field, payloadValue(draft[field])]),
+        );
+        if (!Object.keys(payload).length) {
+          return;
+        }
+        void apiRequest(
+          `/acquisition/quality-rows/${row.id}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+            keepalive: true,
+          },
+          token,
+        ).catch(() => undefined);
+      });
+    }
+
+    window.addEventListener("beforeunload", flushQualityChangesOnExit);
+    return () => {
+      window.removeEventListener("beforeunload", flushQualityChangesOnExit);
+      flushQualityChangesOnExit();
+    };
+  }, [token]);
+
   const changedRows = useMemo(
     () => rows.filter((row) => isRowChanged(row, drafts[row.id] || buildDraft(row))).length,
     [drafts, rows],
@@ -624,6 +657,11 @@ export default function QualityEvaluationPage() {
       return;
     }
 
+    if (delay <= 0) {
+      void saveQualityCell(rowId, field, value, version, false);
+      return;
+    }
+
     saveTimersRef.current[key] = window.setTimeout(() => {
       void saveQualityCell(rowId, field, value, version, false);
     }, delay);
@@ -657,6 +695,7 @@ export default function QualityEvaluationPage() {
         {
           method: "PATCH",
           body: JSON.stringify({ [field]: payloadValue(value) }),
+          keepalive: true,
         },
         token,
       );
@@ -748,7 +787,7 @@ export default function QualityEvaluationPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione</p>
           <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione fornitori</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Registro delle righe con match confermato dall'utente. Date e numero analisi sono gestiti qui; valutazione e nota si aggiornano dalla lavorazione Incoming anche prima della chiusura.
+            Registro delle righe con match confermato dall'utente. Tipo estrusione e nota valutazione possono essere corretti qui anche dopo la chiusura, senza riaprire la riga.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -866,7 +905,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1540px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1740px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -881,7 +920,7 @@ export default function QualityEvaluationPage() {
               <SortableHeader field="peso" label="Peso Kg" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="ordine" label="Vs. Odv" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="data_richiesta" label="Data richiesta" onSort={toggleSort} sortConfig={sortConfig} />
-              <SortableHeader field="tipo_controllo" label="Tipo controllo" onSort={toggleSort} sortConfig={sortConfig} />
+              <SortableHeader field="tipo_controllo" label="Tipo estrusione" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="valutazione" label="Valutazione" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
             </tr>
@@ -956,13 +995,46 @@ export default function QualityEvaluationPage() {
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell widthClass="w-28">{qualityControlTypeLabel(row.qualita_tipo_controllo)}</LockedCell>
+                    <select
+                      className={`w-[190px] rounded-lg border px-2 py-1.5 text-[13px] ${fieldClass({
+                        changed: textValue(row.qualita_tipo_controllo) !== textValue(draft.qualita_tipo_controllo),
+                        review: !draft.qualita_tipo_controllo,
+                        status: cellStates[cellKey(row.id, "qualita_tipo_controllo")]?.status,
+                      })}`}
+                      onBlur={() => flushQualityCell(row.id, "qualita_tipo_controllo")}
+                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_tipo_controllo", event.target.value, 0)}
+                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_tipo_controllo")])}
+                      value={draft.qualita_tipo_controllo || ""}
+                    >
+                      <option disabled value="">Da indicare</option>
+                      <option value="diretta">Diretta</option>
+                      <option value="inversa">Inversa</option>
+                      <option value="billetta">Non applicabile - billetta</option>
+                    </select>
                   </td>
                   <td className="px-2 py-2">
                     <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell wide>{row.qualita_note}</LockedCell>
+                    <input
+                      className={`w-[240px] rounded-lg border px-2 py-1.5 text-[13px] ${fieldClass({
+                        changed: textValue(row.qualita_note) !== textValue(draft.qualita_note),
+                        review:
+                          ["accettato_con_riserva", "respinto"].includes(row.qualita_valutazione)
+                          && !String(draft.qualita_note || "").trim(),
+                        status: cellStates[cellKey(row.id, "qualita_note")]?.status,
+                      })}`}
+                      onBlur={() => flushQualityCell(row.id, "qualita_note")}
+                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_note", event.target.value)}
+                      placeholder={
+                        ["accettato_con_riserva", "respinto"].includes(row.qualita_valutazione)
+                          ? "Nota obbligatoria"
+                          : "Nota valutazione"
+                      }
+                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_note")]) || draft.qualita_note || undefined}
+                      type="text"
+                      value={draft.qualita_note || ""}
+                    />
                   </td>
                 </tr>
               );
