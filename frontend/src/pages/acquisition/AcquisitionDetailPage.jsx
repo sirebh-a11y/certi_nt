@@ -95,6 +95,7 @@ const QUALITY_EVALUATION_LABELS = Object.fromEntries(QUALITY_EVALUATION_OPTIONS.
 const QUALITY_CONTROL_TYPE_OPTIONS = [
   { value: "diretta", label: "Diretta" },
   { value: "inversa", label: "Inversa" },
+  { value: "billetta", label: "Non applicabile - billetta" },
 ];
 
 function isCertificationIncomingContext(search) {
@@ -1058,7 +1059,7 @@ export default function AcquisitionDetailPage() {
     if (!selectedControlType) {
       setFinalValidationWarning({
         title: "Tipo estrusione richiesta",
-        message: "Prima di completare la valutazione devi scegliere Diretta oppure Inversa.",
+        message: "Prima di completare la valutazione devi scegliere Diretta, Inversa oppure Non applicabile - billetta.",
       });
       return;
     }
@@ -1322,7 +1323,20 @@ export default function AcquisitionDetailPage() {
                     <legend className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       Tipo estrusione
                     </legend>
-                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                    {row.materiale_billetta_suggerito ? (
+                      <div className="mb-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sky-900">
+                        <div className="text-xs font-semibold">Possibile billetta rilevata dall&apos;AI</div>
+                        {row.materiale_billetta_evidenza ? (
+                          <div className="mt-1 text-xs leading-5">
+                            Descrizione prodotto: “{row.materiale_billetta_evidenza}”
+                          </div>
+                        ) : null}
+                        <div className="mt-1 text-xs text-sky-700">
+                          Verifica il documento e, se confermato, scegli Non applicabile - billetta.
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="inline-flex flex-wrap rounded-xl border border-slate-200 bg-slate-50 p-1">
                       {QUALITY_CONTROL_TYPE_OPTIONS.map((option) => {
                         const selected = qualityControlType === option.value;
                         return (

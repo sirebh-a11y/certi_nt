@@ -31,6 +31,7 @@ from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
+    _billet_material_suggestion,
     _ensure_proposed_match_for_coupled_row,
     _manual_match_block_exists,
     _merge_certificate_only_row_into_ddt_row,
@@ -1042,6 +1043,129 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     get_acquisition_row(self.db, row.id).qualita_data_accettazione,
                     expected_date,
                 )
+
+    def test_billet_can_be_confirmed_without_direct_or_inverse_extrusion(self):
+        row = AcquisitionRow(cdq="BILLET-QUALITY")
+        self.db.add(row)
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="sistema",
+                    fonte_documentale="sistema",
+                )
+            )
+        self.db.commit()
+
+        validated = validate_final_row(
+            self.db,
+            row=get_acquisition_row(self.db, row.id),
+            payload=AcquisitionFinalValidationRequest(
+                qualita_tipo_controllo="billetta",
+                qualita_valutazione="accettato",
+                qualita_note=None,
+            ),
+            actor_id=1,
+        )
+
+        self.assertEqual(validated.qualita_tipo_controllo, "billetta")
+        self.assertEqual(validated.qualita_valutazione, "accettato")
+
+    def test_billet_suggestion_uses_only_ai_product_description(self):
+        row = AcquisitionRow(cdq="BILLET-SUGGESTION")
+        row.values = [
+            ReadValue(
+                blocco="ddt",
+                campo="product_description_raw",
+                valore_finale="ALUMINIUM BILLET EN AW 2618A",
+                stato="proposto",
+                metodo_lettura="chatgpt",
+                fonte_documentale="ddt",
+            )
+        ]
+
+        suggested, evidence = _billet_material_suggestion(row)
+
+        self.assertTrue(suggested)
+        self.assertEqual(evidence, "ALUMINIUM BILLET EN AW 2618A")
+
+    def test_billet_ut_note_does_not_trigger_suggestion_for_extruded_material(self):
+        row = AcquisitionRow(cdq="EXTRUDED-NOT-BILLET")
+        row.values = [
+            ReadValue(
+                blocco="ddt",
+                campo="product_description_raw",
+                valore_finale="ESTRUSO A.A. 6082 F BARRA TONDA",
+                stato="proposto",
+                metodo_lettura="chatgpt",
+                fonte_documentale="ddt",
+            ),
+            ReadValue(
+                blocco="note",
+                campo="nota_us_control_class_b",
+                valore_finale="Billette controllate UT Classe B secondo AMS STD 2154",
+                stato="confermato",
+                metodo_lettura="chatgpt",
+                fonte_documentale="certificato",
+            ),
+        ]
+
+        suggested, evidence = _billet_material_suggestion(row)
+
+        self.assertFalse(suggested)
+        self.assertIsNone(evidence)
+
+    def test_billet_suggestion_reads_product_field_but_ignores_ai_notes(self):
+        row = AcquisitionRow(cdq="AI-PAYLOAD-BILLET")
+        row.evidences = [
+            DocumentEvidence(
+                document_id=1,
+                blocco="match",
+                tipo_evidenza="ai_payload",
+                metodo_estrazione="chatgpt",
+                testo_grezzo=(
+                    '{"core":{"product_description_raw":"ROUND ALUMINIUM BILLET 2618A"},'
+                    '"notes_raw":{"nota_us_control_class_b_raw":"Billets tested class B"}}'
+                ),
+            )
+        ]
+
+        suggested, evidence = _billet_material_suggestion(row)
+
+        self.assertTrue(suggested)
+        self.assertEqual(evidence, "ROUND ALUMINIUM BILLET 2618A")
+
+    def test_billet_ai_note_does_not_override_extruded_product_description(self):
+        row = AcquisitionRow(cdq="AI-PAYLOAD-EXTRUDED")
+        row.evidences = [
+            DocumentEvidence(
+                document_id=1,
+                blocco="match",
+                tipo_evidenza="ai_payload",
+                metodo_estrazione="chatgpt",
+                testo_grezzo=(
+                    '{"core":{"product_description_raw":"ESTRUSO A.A. 6082 F BARRA TONDA"},'
+                    '"notes_raw":{"nota_us_control_class_b_raw":'
+                    '"Billette controllate UT Classe B secondo AMS STD 2154"}}'
+                ),
+            )
+        ]
+
+        suggested, evidence = _billet_material_suggestion(row)
+
+        self.assertFalse(suggested)
+        self.assertIsNone(evidence)
 
     def test_quality_note_autosave_only_changes_the_note(self):
         row = AcquisitionRow(

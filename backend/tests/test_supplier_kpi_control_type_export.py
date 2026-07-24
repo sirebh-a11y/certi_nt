@@ -9,6 +9,7 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
     def test_every_supplier_detail_sheet_contains_control_type(self):
         direct_supplier = Supplier(id=1, ragione_sociale="Fornitore Diretta")
         inverse_supplier = Supplier(id=2, ragione_sociale="Fornitore Inversa")
+        billet_supplier = Supplier(id=3, ragione_sociale="Fornitore Billetta")
         rows = [
             AcquisitionRow(
                 id=11,
@@ -24,6 +25,13 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
                 qualita_tipo_controllo="inversa",
                 qualita_valutazione="respinto",
             ),
+            AcquisitionRow(
+                id=13,
+                fornitore_id=billet_supplier.id,
+                supplier=billet_supplier,
+                qualita_tipo_controllo="billetta",
+                qualita_valutazione="accettato",
+            ),
         ]
 
         sheets = _supplier_detail_sheets(
@@ -32,7 +40,7 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
             supplier_label="Tutti i fornitori",
         )
 
-        self.assertEqual(len(sheets), 2)
+        self.assertEqual(len(sheets), 3)
         exported_types = set()
         for _sheet_name, table in sheets:
             headers = table[4]
@@ -40,12 +48,12 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
             self.assertEqual(headers[control_type_index - 1], "Data richiesta")
             self.assertEqual(headers[control_type_index + 1], "Valutazione")
             exported_types.add(table[5][control_type_index])
-        self.assertEqual(exported_types, {"Diretta", "Inversa"})
+        self.assertEqual(exported_types, {"Diretta", "Inversa", "Billetta"})
 
     def test_historical_row_exports_blank_control_type(self):
-        supplier = Supplier(id=3, ragione_sociale="Fornitore Storico")
+        supplier = Supplier(id=4, ragione_sociale="Fornitore Storico")
         row = AcquisitionRow(
-            id=13,
+            id=14,
             fornitore_id=supplier.id,
             supplier=supplier,
             qualita_tipo_controllo=None,

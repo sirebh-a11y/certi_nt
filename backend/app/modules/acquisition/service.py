@@ -470,10 +470,13 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
 
 def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetailResponse:
     base = serialize_acquisition_row_list_item(row)
+    materiale_billetta_suggerito, materiale_billetta_evidenza = _billet_material_suggestion(row)
     return AcquisitionRowDetailResponse(
         **base.model_dump(),
         ddt_document=serialize_document_summary(row.ddt_document) if row.ddt_document is not None else None,
         certificate_document=serialize_document_summary(row.certificate_document) if row.certificate_document else None,
+        materiale_billetta_suggerito=materiale_billetta_suggerito,
+        materiale_billetta_evidenza=materiale_billetta_evidenza,
         evidences=[serialize_evidence(evidence) for evidence in row.evidences],
         values=[serialize_read_value(value) for value in row.values],
         custom_note_templates=[
@@ -491,6 +494,101 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         history_events=[serialize_history_event(event) for event in row.history_events],
         value_history=[serialize_value_history(entry) for entry in row.value_history],
     )
+
+
+_MATERIAL_DESCRIPTION_KEYS = {
+    "articledescriptionraw",
+    "customeritemdescriptionraw",
+    "descrizionemateriale",
+    "descrizioneprodotto",
+    "materialdescriptionraw",
+    "materialraw",
+    "productdescription",
+    "productdescriptionraw",
+    "productraw",
+}
+_BILLET_PRODUCT_PATTERN = re.compile(
+    r"\b(?:billets?|billett(?:a|e|es)|(?:strangpress|press)bolzen)\b",
+    re.IGNORECASE,
+)
+_EXTRUDED_PRODUCT_PATTERN = re.compile(
+    r"\b(?:estrus(?:o|a|i|e)|extruded|extrudiert)\b",
+    re.IGNORECASE,
+)
+
+
+def _material_description_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _iter_ai_material_descriptions(payload: object) -> Iterable[str]:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if _material_description_key(key) in _MATERIAL_DESCRIPTION_KEYS and isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    yield cleaned
+                continue
+            if isinstance(value, (dict, list)):
+                yield from _iter_ai_material_descriptions(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            yield from _iter_ai_material_descriptions(value)
+
+
+def _billet_material_description_candidates(row: AcquisitionRow) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _append(value: object) -> None:
+        cleaned = str(value or "").strip()
+        key = cleaned.casefold()
+        if not cleaned or key in seen:
+            return
+        seen.add(key)
+        candidates.append(cleaned)
+
+    for value in getattr(row, "values", None) or []:
+        if _material_description_key(value.campo) not in _MATERIAL_DESCRIPTION_KEYS:
+            continue
+        if value.metodo_lettura != "chatgpt":
+            continue
+        _append(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
+
+    evidences: list[DocumentEvidence] = list(getattr(row, "evidences", None) or [])
+    for document in (getattr(row, "ddt_document", None), getattr(row, "certificate_document", None)):
+        if document is not None:
+            evidences.extend(getattr(document, "evidences", None) or [])
+
+    processed_evidence_ids: set[int] = set()
+    for evidence in evidences:
+        if evidence.id is not None and evidence.id in processed_evidence_ids:
+            continue
+        if evidence.id is not None:
+            processed_evidence_ids.add(evidence.id)
+        if evidence.tipo_evidenza != "ai_payload" or evidence.metodo_estrazione != "chatgpt":
+            continue
+        raw_payload = (evidence.testo_grezzo or "").strip()
+        if not raw_payload.startswith(("{", "[")):
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for description in _iter_ai_material_descriptions(payload):
+            _append(description)
+
+    return candidates
+
+
+def _billet_material_suggestion(row: AcquisitionRow) -> tuple[bool, str | None]:
+    candidates = _billet_material_description_candidates(row)
+    billet_evidence = next((value for value in candidates if _BILLET_PRODUCT_PATTERN.search(value)), None)
+    if billet_evidence is None:
+        return False, None
+    if any(_EXTRUDED_PRODUCT_PATTERN.search(value) for value in candidates):
+        return False, None
+    return True, billet_evidence[:500]
 
 
 def _quick_confirmed_blocks_from_row(row: AcquisitionRow) -> dict[str, bool]:
@@ -12271,7 +12369,7 @@ def save_quality_control_type(
     if row.qualita_valutazione:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Tipo controllo bloccato dopo la valutazione qualità: usa prima Forza riapertura.",
+            detail="Tipo estrusione bloccato dopo la valutazione qualità: usa prima Forza riapertura.",
         )
     _apply_quality_control_type(
         db=db,

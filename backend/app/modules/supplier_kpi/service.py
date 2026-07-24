@@ -456,6 +456,7 @@ def _quality_control_type_label(value: str | None) -> str:
     labels = {
         "diretta": "Diretta",
         "inversa": "Inversa",
+        "billetta": "Billetta",
     }
     return labels.get(value or "", "")
 

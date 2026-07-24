@@ -22,6 +22,7 @@ const EVALUATION_SORT_RANK = {
 const CONTROL_TYPE_LABELS = {
   diretta: "Diretta",
   inversa: "Inversa",
+  billetta: "Billetta",
 };
 
 function qualityControlTypeLabel(value) {

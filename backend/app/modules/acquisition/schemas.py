@@ -27,7 +27,7 @@ MatchSource = Literal["sistema", "chatgpt", "utente", "archivio"]
 CandidateState = Literal["candidato", "scartato", "scelto"]
 AutomationRunState = Literal["in_coda", "in_esecuzione", "completato", "errore"]
 QualityEvaluationState = Literal["accettato", "accettato_con_riserva", "respinto"]
-QualityControlType = Literal["diretta", "inversa"]
+QualityControlType = Literal["diretta", "inversa", "billetta"]
 
 
 def normalize_optional_text(value: str | None) -> str | None:
@@ -734,6 +734,8 @@ class ManualDocumentUploadResponse(BaseModel):
 class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
     ddt_document: DocumentSummaryResponse | None
     certificate_document: DocumentSummaryResponse | None
+    materiale_billetta_suggerito: bool = False
+    materiale_billetta_evidenza: str | None = None
     evidences: list[DocumentEvidenceResponse]
     values: list[ReadValueResponse]
     custom_note_templates: list[NoteTemplateResponse]
