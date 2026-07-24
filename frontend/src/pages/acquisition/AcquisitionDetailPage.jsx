@@ -1057,7 +1057,7 @@ export default function AcquisitionDetailPage() {
     const selectedControlType = qualityControlTypeRef.current;
     if (!selectedControlType) {
       setFinalValidationWarning({
-        title: "Tipo controllo richiesto",
+        title: "Tipo estrusione richiesta",
         message: "Prima di completare la valutazione devi scegliere Diretta oppure Inversa.",
       });
       return;
@@ -1320,7 +1320,7 @@ export default function AcquisitionDetailPage() {
                 <div className="min-w-[320px] flex-1 xl:max-w-xl">
                   <fieldset className="mb-4" disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}>
                     <legend className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Tipo controllo
+                      Tipo estrusione
                     </legend>
                     <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
                       {QUALITY_CONTROL_TYPE_OPTIONS.map((option) => {
@@ -1345,11 +1345,11 @@ export default function AcquisitionDetailPage() {
                     {!row.qualita_valutazione ? (
                       <p className={`mt-1 text-xs ${qualityControlTypeSaveState === "error" ? "text-rose-600" : "text-slate-500"}`} aria-live="polite">
                         {qualityControlTypeSaveState === "saving"
-                          ? "Salvataggio tipo controllo..."
+                          ? "Salvataggio tipo estrusione..."
                           : qualityControlTypeSaveState === "saved"
-                            ? "Tipo controllo salvato"
+                            ? "Tipo estrusione salvato"
                             : qualityControlTypeSaveState === "error"
-                              ? "Tipo controllo non salvato: riprova la selezione."
+                              ? "Tipo estrusione non salvato: riprova la selezione."
                               : "Scelta obbligatoria per completare la valutazione."}
                       </p>
                     ) : null}
