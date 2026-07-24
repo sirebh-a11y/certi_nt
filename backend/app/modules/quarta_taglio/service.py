@@ -80,6 +80,7 @@ from app.modules.suppliers.models import Supplier
 
 
 FINAL_CERTIFICATE_REGISTER_REFRESH_FRESHNESS_MINUTES = 15
+QUALITY_RESERVATION_STATUS_MESSAGE = "CDQ accettato con riserva"
 
 
 @dataclass(frozen=True)
@@ -580,7 +581,7 @@ def get_quarta_taglio_detail(
             details=row.status_details,
         )
         for row in rows
-        if row.status_color != "green"
+        if row.status_color != "green" and not _is_quality_reservation_only(row)
     ]
 
     standard_candidates = _suggest_standard_candidates(db, app_rows=app_rows, materials=materials)
@@ -669,7 +670,8 @@ def get_quarta_taglio_detail(
             if quick_confirm_notes_applied
             else "Standard modificato: controlla in Incoming chimica e proprietà dei CDQ collegati."
         )
-    ready = group.status_color == "green" and esolver_status == "ok"
+    has_quality_reservations = any(_is_quality_reservation_only(row) for row in rows)
+    ready = _incoming_rows_ready_for_certification(rows) and esolver_status == "ok"
     detail_status_color = group.status_color if esolver_status == "ok" else _max_status_color(group.status_color, _esolver_block_color(esolver_status))
     des_art = _join_unique((row.des_art for row in rows), separator=" | ")
     descrizione_proposta, disegno_proposta, disegno_confidenza = _split_des_art(des_art)
@@ -736,7 +738,13 @@ def get_quarta_taglio_detail(
         cod_odp=group.cod_odp,
         ready=ready,
         status_color=detail_status_color,
-        status_message="Certificato pronto da preparare" if ready else "Dati ancora mancanti per creare il certificato",
+        status_message=(
+            "Certificato pronto da preparare; uno o più CDQ accettati con riserva"
+            if ready and has_quality_reservations
+            else "Certificato pronto da preparare"
+            if ready
+            else "Dati ancora mancanti per creare il certificato"
+        ),
         can_create_word=can_create_word,
         word_creation_blockers=word_creation_blockers,
         header={
@@ -4649,7 +4657,8 @@ def _evaluate_cdq(
         details = [f"Riga app #{row.id}: solo DDT, manca certificato fornitore" for row in exact_rows]
         return "red", "CDQ/colata presenti solo su DDT", details, [row.id for row in exact_rows]
 
-    details: list[str] = []
+    blocking_details: list[str] = []
+    reservation_details: list[str] = []
     exact_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
         db,
         cod_odp=cod_odp,
@@ -4660,7 +4669,7 @@ def _evaluate_cdq(
     )
     matching_ids = [row.id for row in exact_rows]
     if ambiguity_message:
-        details.append(ambiguity_message)
+        blocking_details.append(ambiguity_message)
 
     for row in exact_rows:
         if row.qualita_valutazione == "respinto":
@@ -4670,14 +4679,21 @@ def _evaluate_cdq(
         block_states = _compute_block_states_from_db(db, row)
         for block, label in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
             if block_states.get(block) != "verde":
-                details.append(f"Riga app #{row.id}: manca conferma {label}")
+                blocking_details.append(f"Riga app #{row.id}: manca conferma {label}")
         if row.qualita_valutazione is None:
-            details.append(f"Riga app #{row.id}: qualità non valutata")
+            blocking_details.append(f"Riga app #{row.id}: qualità non valutata")
         elif row.qualita_valutazione == "accettato_con_riserva":
-            details.append(f"Riga app #{row.id}: accettato con riserva")
+            reservation_details.append(f"Riga app #{row.id}: accettato con riserva")
 
-    if details:
-        return "yellow", "CDQ trovato, ma iter non completo", sorted(set(details)), matching_ids
+    if blocking_details:
+        return (
+            "yellow",
+            "CDQ trovato, ma iter non completo",
+            sorted(set(blocking_details + reservation_details)),
+            matching_ids,
+        )
+    if reservation_details:
+        return "yellow", QUALITY_RESERVATION_STATUS_MESSAGE, sorted(set(reservation_details)), matching_ids
     return "green", "CDQ coerente e completo", [], matching_ids
 
 
@@ -5721,8 +5737,18 @@ def _group_status_message(color: str, rows: list[QuartaTaglioRow]) -> str:
     if color == "red":
         return "Uno o più CDQ bloccano la certificazione"
     if color == "yellow":
+        if _incoming_rows_ready_for_certification(rows):
+            return "Uno o più CDQ accettati con riserva"
         return "Uno o più CDQ da completare"
     return "Tutti i CDQ coerenti e completi"
+
+
+def _incoming_rows_ready_for_certification(rows: list[QuartaTaglioRow]) -> bool:
+    return all(row.status_color == "green" or _is_quality_reservation_only(row) for row in rows)
+
+
+def _is_quality_reservation_only(row: QuartaTaglioRow) -> bool:
+    return row.status_color == "yellow" and row.status_message == QUALITY_RESERVATION_STATUS_MESSAGE
 
 
 def _max_status_color(left: str, right: str) -> str:
