@@ -31,19 +31,6 @@ function composeLega(row) {
   return normalizeAlloyForDisplay(row.lega_designazione || row.lega_base || row.variante_lega || "-");
 }
 
-function matchLabel(row) {
-  if (row.document_ddt_id && row.document_certificato_id) {
-    return "Match";
-  }
-  if (row.document_certificato_id) {
-    return "Solo certificato";
-  }
-  if (row.document_ddt_id) {
-    return "Solo DDT";
-  }
-  return "-";
-}
-
 export default function AcquisitionGembaWalkPrintPage() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
@@ -159,7 +146,6 @@ export default function AcquisitionGembaWalkPrintPage() {
                 <th className="border border-slate-300 px-2 py-2">DDT</th>
                 <th className="border border-slate-300 px-2 py-2">Peso Kg</th>
                 <th className="border border-slate-300 px-2 py-2">Vs. Odv</th>
-                <th className="border border-slate-300 px-2 py-2">Match</th>
                 <th className="border border-slate-300 px-2 py-2 text-center">Spunta</th>
                 <th className="min-w-[220px] border border-slate-300 px-2 py-2">Note</th>
               </tr>
@@ -176,7 +162,6 @@ export default function AcquisitionGembaWalkPrintPage() {
                   <td className="border border-slate-300 px-2 py-2">{row.ddt || "-"}</td>
                   <td className="border border-slate-300 px-2 py-2">{formatRowFieldDisplay("peso", row.peso)}</td>
                   <td className="border border-slate-300 px-2 py-2">{row.ordine || "-"}</td>
-                  <td className="border border-slate-300 px-2 py-2">{matchLabel(row)}</td>
                   <td className="border border-slate-300 px-2 py-2 text-center text-lg">□</td>
                   <td className="border border-slate-300 px-2 py-2">&nbsp;</td>
                 </tr>
