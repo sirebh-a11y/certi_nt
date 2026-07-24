@@ -29,6 +29,31 @@ Server:
 - storage documenti: `/srv/certi_nt/data/storage`
 - backup: `/srv/certi_nt/backup`
 
+## Parametri infrastrutturali Alpha verificati
+
+Informazioni confermate da IT:
+
+- DNS: `certi-test.forgialluminio.it` → `10.10.1.10`;
+- frontend Alpha pubblicato localmente sulla porta host `8080`;
+- backend Alpha pubblicato localmente sulla porta host `8001`;
+- PostgreSQL disponibile soltanto nella rete Docker interna, senza porta host pubblicata;
+- Nginx esistente instrada l'host `certi-test.forgialluminio.it` al frontend;
+- Nginx instrada `certi-test.forgialluminio.it/api` al backend;
+- pubblicazione applicativa attuale in HTTP, senza HTTPS;
+- backup della VM ogni quattro ore, dalle 07:00 alle 19:00.
+
+Parametri Nginx confermati da IT:
+
+```nginx
+client_max_body_size 200m;
+proxy_connect_timeout 300s;
+proxy_send_timeout 300s;
+proxy_read_timeout 300s;
+```
+
+Queste impostazioni appartengono alla configurazione server gestita da IT e devono restare
+intatte durante un deploy soft.
+
 SSH dal PC locale, usando PowerShell:
 
 ```powershell
@@ -36,6 +61,9 @@ ssh -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" admcerti01@certi-test
 ```
 
 La chiave da usare qui e la chiave privata locale `certi_nt_admcerti01_ed25519`, non il file `.pub`.
+
+Non inserire password SSH in questo documento, nel repository o nei pacchetti di deploy.
+L'accesso deve usare la chiave locale oppure un secret gestito fuori dal repository.
 
 Se PowerShell crea problemi di quoting con comandi lunghi, usare anche la forma con path esplicito:
 

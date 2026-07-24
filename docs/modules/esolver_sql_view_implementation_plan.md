@@ -284,11 +284,16 @@ del server. Completare soltanto i valori ancora assegnati a IT/Matteo o Nemesi.
 |---|---|
 | Ambiente | `Alpha` - verificato |
 | Hostname applicazione CERTI | `certi-test.forgialluminio.it` - verificato |
+| DNS applicazione | `certi-test.forgialluminio.it` → `10.10.1.10` - verificato da IT |
 | Base URL applicazione/PDF | `http://certi-test.forgialluminio.it` - verificato |
+| Pubblicazione applicazione | Nginx in HTTP, senza HTTPS - verificato da IT |
+| Porta frontend Alpha sul server | `8080` - verificato da IT |
+| Porta backend Alpha sul server | `8001` - verificato da IT |
 | Motore database | `PostgreSQL 16` - verificato |
 | Host PostgreSQL interno Docker | `postgres` - verificato |
 | Porta PostgreSQL interna Docker | `5432` - verificato |
-| Host o IP PostgreSQL da comunicare a Nemesi | proposto `certi-test.forgialluminio.it`, da confermare con IT |
+| Pubblicazione PostgreSQL attuale | nessuna porta pubblicata dal compose - verificato |
+| Host o IP PostgreSQL da comunicare a Nemesi | candidato `10.10.1.10` / `certi-test.forgialluminio.it`, utilizzabile solo dopo pubblicazione e conferma IT |
 | Porta PostgreSQL esterna | `DA_FORNIRE_IT` |
 | Nome database | `certi_nt` - verificato |
 | Nome schema | `esolver_export` salvo diversa indicazione |
@@ -303,6 +308,15 @@ del server. Completare soltanto i valori ancora assegnati a IT/Matteo o Nemesi.
 | Modalità SSL | `DA_FORNIRE_IT` |
 | Certificato CA/client, se previsto | `DA_FORNIRE_IT` |
 | Referente tecnico | Matteo / Nemesi, dettaglio da completare |
+
+La configurazione HTTP/HTTPS dell'applicazione e la configurazione SSL di PostgreSQL sono
+indipendenti. Il fatto che CERTI Alpha sia pubblicato in HTTP non definisce se la connessione
+PostgreSQL di Nemesi debba usare SSL.
+
+Il DNS ora identifica con certezza il server applicativo, ma non rende PostgreSQL raggiungibile:
+nel compose Alpha il servizio `postgres` non pubblica alcuna porta sull'host. Prima di comunicare
+`10.10.1.10` a Nemesi come endpoint database, IT deve pubblicare una porta controllata, limitarla
+all'origine autorizzata e confermare il percorso di rete.
 
 ### Dati ESOLVER già noti ma relativi al flusso opposto
 
@@ -746,7 +760,7 @@ Aggiornato il 23 luglio 2026.
 
 | Dato/attività | Stato |
 | --- | --- |
-| Host/IP PostgreSQL raggiungibile da Nemesi | `DA_FORNIRE_IT` |
+| Host/IP PostgreSQL raggiungibile da Nemesi | candidato `10.10.1.10`, `DA_CONFERMARE_IT` dopo pubblicazione porta |
 | Porta PostgreSQL esterna | `DA_FORNIRE_IT` |
 | Username PostgreSQL read-only | `DA_FORNIRE_IT` |
 | Password PostgreSQL read-only | `DA_CONFIGURARE_SUL_SERVER` |
