@@ -123,6 +123,10 @@ function composeLega(row) {
   return normalizeAlloyForDisplay(composeRawLega(row));
 }
 
+function qualitySupplierName(row) {
+  return row?.fornitore_nome || row?.fornitore_raw || "-";
+}
+
 function isRowChanged(row, draft) {
   return EDITABLE_FIELDS.some((field) => textValue(row[field]) !== textValue(draft[field]));
 }
@@ -213,7 +217,7 @@ function compareValues(left, right, direction) {
 function searchableFieldValues(row, draft) {
   return [
     row.id,
-    row.fornitore_nome,
+    qualitySupplierName(row),
     alloySearchText(composeRawLega(row)),
     row.lega_designazione,
     row.lega_base,
@@ -273,7 +277,7 @@ function qualitySortValue(row, draft, field) {
     case "data_accettazione":
       return draft.qualita_data_accettazione || "";
     case "fornitore":
-      return row.fornitore_nome || "";
+      return qualitySupplierName(row);
     case "lega":
       return composeLega(row);
     case "diametro":
@@ -335,9 +339,12 @@ function LockedCell({ children, strong = false, wide = false, widthClass = "", t
 }
 
 function SupplierCell({ row }) {
+  const supplierName = qualitySupplierName(row);
   return (
     <div className="w-36">
-      <div className="truncate text-[14px] font-semibold leading-tight text-slate-950">{row.fornitore_nome || "-"}</div>
+      <div className="truncate text-[14px] font-semibold leading-tight text-slate-950" title={supplierName}>
+        {supplierName}
+      </div>
     </div>
   );
 }

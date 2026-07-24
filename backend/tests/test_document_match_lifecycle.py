@@ -909,6 +909,38 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.db.commit()
         self.assertEqual(list_quality_rows(self.db).items, [])
 
+    def test_quality_register_exposes_raw_supplier_when_no_master_supplier_is_linked(self):
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="raw-supplier-cert.pdf",
+            storage_key="raw-supplier-cert.pdf",
+        )
+        row = AcquisitionRow(
+            document_certificato_id=None,
+            fornitore_raw="RECH SILVANO",
+            cdq="RAW-SUPPLIER-1",
+            validata_finale=False,
+            stato_workflow="in_lavorazione",
+        )
+        self.db.add_all([certificate_document, row])
+        self.db.flush()
+        row.document_certificato_id = certificate_document.id
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                utente_conferma_id=1,
+            )
+        )
+        self.db.commit()
+
+        quality_rows = list_quality_rows(self.db).items
+
+        self.assertEqual([item.id for item in quality_rows], [row.id])
+        self.assertIsNone(quality_rows[0].fornitore_nome)
+        self.assertEqual(quality_rows[0].fornitore_raw, "RECH SILVANO")
+
     def test_quality_register_can_edit_control_type_and_note_after_closure_without_reopening(self):
         supplier = Supplier(ragione_sociale="Closed Quality Supplier")
         certificate_document = Document(

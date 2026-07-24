@@ -627,6 +627,7 @@ def serialize_quality_row(row: AcquisitionRow) -> AcquisitionQualityRowResponse:
     return AcquisitionQualityRowResponse(
         id=row.id,
         fornitore_nome=row.supplier.ragione_sociale if row.supplier is not None else None,
+        fornitore_raw=row.fornitore_raw,
         lega_base=row.lega_base,
         lega_designazione=row.lega_designazione,
         variante_lega=row.variante_lega,

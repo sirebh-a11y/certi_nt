@@ -784,6 +784,7 @@ class AcquisitionQualityRowResponse(BaseModel):
 
     id: int
     fornitore_nome: str | None
+    fornitore_raw: str | None
     lega_base: str | None
     lega_designazione: str | None
     variante_lega: str | None
