@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from html import escape
 from io import BytesIO
+from math import ceil
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -43,6 +44,11 @@ QUARTER_MONTHS = {
 }
 
 INVALID_SHEET_NAME_CHARS = set("[]:*?/\\")
+MIN_EXCEL_COLUMN_WIDTH = 8.0
+MAX_EXCEL_COLUMN_WIDTH = 48.0
+EXCEL_COLUMN_WIDTH_PADDING = 2.0
+DEFAULT_EXCEL_ROW_HEIGHT = 15.0
+MAX_EXCEL_ROW_HEIGHT = 409.0
 
 CHEMISTRY_EXPORT_FIELDS = [
     ("Si", ("si",)),
@@ -66,12 +72,12 @@ CHEMISTRY_EXPORT_FIELDS = [
 ]
 
 PROPERTY_EXPORT_FIELDS = [
-    ("Rm", ("rm",)),
-    ("Rp0.2", ("rp0.2", "rp02", "rp0,2", "rp 0.2", "rp 0,2")),
-    ("A%", ("a%", "a", "a5", "a5%")),
     ("HB", ("hb",)),
+    ("Rp0,2", ("rp0.2", "rp02", "rp0,2", "rp 0.2", "rp 0,2")),
+    ("Rm", ("rm",)),
+    ("A", ("a%", "a", "a5", "a5%")),
+    ("Rp0,2/Rm", ("rp0.2/rm", "rp02/rm", "rp0,2/rm", "rp_rm", "rp/rm")),
     ("IACS%", ("iacs%", "iacs")),
-    ("Rp0.2/Rm", ("rp0.2/rm", "rp02/rm", "rp0,2/rm", "rp_rm", "rp/rm")),
 ]
 
 
@@ -583,7 +589,8 @@ def _write_xlsx(sheets: list[tuple[str, list[list[object]]]]) -> bytes:
   <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
   <dxfs count="0"/>
@@ -594,17 +601,60 @@ def _write_xlsx(sheets: list[tuple[str, list[list[object]]]]) -> bytes:
 
 
 def _sheet_xml(rows: list[list[object]]) -> str:
+    column_widths = _column_widths(rows)
+    xml_columns = "".join(
+        f'<col min="{column_index}" max="{column_index}" width="{width:.2f}" customWidth="1"/>'
+        for column_index, width in enumerate(column_widths, start=1)
+    )
     xml_rows = []
     for row_index, row in enumerate(rows, start=1):
         cells = []
+        row_line_count = 1
         for column_index, value in enumerate(row, start=1):
             cell_ref = f"{_column_name(column_index)}{row_index}"
-            cells.append(f'<c r="{cell_ref}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>')
-        xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+            text_value = str(value)
+            line_count = _wrapped_line_count(text_value, column_widths[column_index - 1])
+            row_line_count = max(row_line_count, line_count)
+            style_attribute = ' s="1"' if line_count > 1 else ""
+            cells.append(f'<c r="{cell_ref}"{style_attribute} t="inlineStr"><is><t>{escape(text_value)}</t></is></c>')
+        row_attributes = f' r="{row_index}"'
+        if row_line_count > 1:
+            row_height = min(MAX_EXCEL_ROW_HEIGHT, DEFAULT_EXCEL_ROW_HEIGHT * row_line_count)
+            row_attributes += f' ht="{row_height:.2f}" customHeight="1"'
+        xml_rows.append(f'<row{row_attributes}>{"".join(cells)}</row>')
+    columns_section = f"<cols>{xml_columns}</cols>" if xml_columns else ""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  {columns_section}
   <sheetData>{''.join(xml_rows)}</sheetData>
 </worksheet>"""
+
+
+def _column_widths(rows: list[list[object]]) -> list[float]:
+    column_count = max((len(row) for row in rows), default=0)
+    widths: list[float] = []
+    for column_index in range(column_count):
+        longest_line = max(
+            (
+                max((len(line) for line in str(row[column_index]).splitlines()), default=0)
+                for row in rows
+                if column_index < len(row)
+            ),
+            default=0,
+        )
+        widths.append(
+            min(
+                MAX_EXCEL_COLUMN_WIDTH,
+                max(MIN_EXCEL_COLUMN_WIDTH, longest_line + EXCEL_COLUMN_WIDTH_PADDING),
+            )
+        )
+    return widths
+
+
+def _wrapped_line_count(value: str, column_width: float) -> int:
+    usable_width = max(1, int(column_width - 1))
+    lines = value.splitlines() or [""]
+    return sum(max(1, ceil(len(line) / usable_width)) for line in lines)
 
 
 def _column_name(index: int) -> str:
