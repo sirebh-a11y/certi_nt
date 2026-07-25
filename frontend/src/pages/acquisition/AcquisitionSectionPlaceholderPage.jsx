@@ -38,6 +38,7 @@ export default function AcquisitionSectionPlaceholderPage() {
   const isCertificationScope = isCertificationIncomingContext(location.search);
   const returnToListPath = isCertificationScope ? `/acquisition${location.search}` : "/acquisition";
   const backToListLabel = isCertificationScope ? "Torna alle righe Incoming OL" : "Torna alla griglia";
+  const aiProcessingLocked = row?.ai_processing_status === "in_lavorazione";
 
   async function loadRow() {
     setLoading(true);
@@ -108,6 +109,23 @@ export default function AcquisitionSectionPlaceholderPage() {
   }, [rowId, token]);
 
   useEffect(() => {
+    if (!aiProcessingLocked) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      apiRequest(`/acquisition/rows/${rowId}`, {}, token)
+        .then((rowData) => {
+          setRow(rowData);
+          if (rowData.ai_processing_status !== "in_lavorazione") {
+            loadRow().catch(() => undefined);
+          }
+        })
+        .catch((requestError) => setError(requestError.message));
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [aiProcessingLocked, rowId, token]);
+
+  useEffect(() => {
     if (!["document-matching", "chemistry", "properties", "notes"].includes(sectionKey)) {
       return undefined;
     }
@@ -165,6 +183,14 @@ export default function AcquisitionSectionPlaceholderPage() {
       </div>
       {loading ? <p className="text-sm text-slate-500">Caricamento riga...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+      {aiProcessingLocked ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+          <span className="font-semibold">Assistente AI ancora in lavorazione.</span>
+          <span className="ml-2 text-sky-800">
+            La sezione è consultabile ma temporaneamente non modificabile; si abiliterà automaticamente quando la riga sarà pronta.
+          </span>
+        </div>
+      ) : null}
       {row ? (
         <div className="rounded-2xl border border-slate-600 bg-slate-700 p-3">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
@@ -184,8 +210,9 @@ export default function AcquisitionSectionPlaceholderPage() {
           </div>
         </div>
       ) : null}
-      {row && sectionKey === "document-matching" ? (
-        <AcquisitionDocumentMatchingSectionPage
+      <div className={aiProcessingLocked ? "pointer-events-none opacity-80" : ""} aria-disabled={aiProcessingLocked}>
+        {row && sectionKey === "document-matching" ? (
+          <AcquisitionDocumentMatchingSectionPage
           certificateDocument={certificateDocument}
           ddtDocument={ddtDocument}
           onDirtyChange={setSectionDirty}
@@ -198,10 +225,10 @@ export default function AcquisitionSectionPlaceholderPage() {
           row={row}
           rowId={rowId}
           token={token}
-        />
-      ) : null}
-      {row && sectionKey === "chemistry" ? (
-        <AcquisitionChemistrySectionPage
+          />
+        ) : null}
+        {row && sectionKey === "chemistry" ? (
+          <AcquisitionChemistrySectionPage
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
@@ -209,10 +236,10 @@ export default function AcquisitionSectionPlaceholderPage() {
           row={row}
           rowId={rowId}
           token={token}
-        />
-      ) : null}
-      {row && sectionKey === "properties" ? (
-        <AcquisitionPropertiesSectionPage
+          />
+        ) : null}
+        {row && sectionKey === "properties" ? (
+          <AcquisitionPropertiesSectionPage
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
@@ -220,10 +247,10 @@ export default function AcquisitionSectionPlaceholderPage() {
           row={row}
           rowId={rowId}
           token={token}
-        />
-      ) : null}
-      {row && sectionKey === "notes" ? (
-        <AcquisitionNotesSectionPage
+          />
+        ) : null}
+        {row && sectionKey === "notes" ? (
+          <AcquisitionNotesSectionPage
           certificateDocument={certificateDocument}
           onDirtyChange={setSectionDirty}
           onRefreshRow={loadRow}
@@ -231,8 +258,9 @@ export default function AcquisitionSectionPlaceholderPage() {
           row={row}
           rowId={rowId}
           token={token}
-        />
-      ) : null}
+          />
+        ) : null}
+      </div>
 
       {exitDialogOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">

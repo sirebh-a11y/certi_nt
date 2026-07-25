@@ -591,12 +591,27 @@ function compactStateLabel(label, hasSecondary) {
   return label;
 }
 
-function RowStateCell({ row, onClick, onKeyDown }) {
+function RowStateCell({ row, onClick, onKeyDown, activeAiRunId = null }) {
   const activity = rowActivityState(row);
   const pendingClosure = pendingClosurePresentation(row);
-  const secondary = pendingClosure?.compact || "";
+  const aiProcessing = row.ai_processing_status === "in_lavorazione";
+  const aiError = row.ai_processing_status === "errore";
+  const aiReady = row.ai_processing_status === "pronta" && row.ai_processing_run_id === activeAiRunId;
+  const secondary = aiProcessing
+    ? "AI in lavorazione"
+    : aiError
+      ? "AI incompleta"
+      : aiReady
+        ? "Pronta"
+        : pendingClosure?.compact || "";
   const label = compactStateLabel(activity.label, Boolean(secondary));
-  const title = pendingClosure ? `${activity.label} - ${pendingClosure.full}` : activity.label;
+  const title = aiProcessing
+    ? `${activity.label} - Assistente AI ancora in lavorazione. Riga temporaneamente non modificabile.`
+    : aiError
+      ? `${activity.label} - ${row.ai_processing_error || "Elaborazione AI incompleta: controllo manuale richiesto."}`
+      : pendingClosure
+        ? `${activity.label} - ${pendingClosure.full}`
+        : activity.label;
   const labelClassName = secondary
     ? "block truncate text-[10px] font-semibold leading-none"
     : "block truncate text-xs font-semibold leading-tight";
@@ -609,7 +624,16 @@ function RowStateCell({ row, onClick, onKeyDown }) {
           title={title}
         >
           <span className={labelClassName}>{label}</span>
-          {secondary ? <span className="mt-1 block truncate whitespace-nowrap text-[9px] font-semibold uppercase leading-none opacity-90">{secondary}</span> : null}
+          {secondary ? (
+            <span
+              className={`mt-1 block truncate whitespace-nowrap text-[9px] font-semibold uppercase leading-none ${
+                aiProcessing ? "text-sky-800" : aiError ? "text-amber-800" : "opacity-90"
+              }`}
+            >
+              {aiProcessing ? <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" /> : null}
+              {secondary}
+            </span>
+          ) : null}
         </div>
       </CellShell>
     </div>
@@ -660,6 +684,7 @@ export default function AcquisitionListPage() {
   const isCertificationScope = Boolean(certificationScope);
   const initialListStateRef = useRef(certificationScope ? DEFAULT_LIST_STATE : loadPersistedListState());
   const [rows, setRows] = useState([]);
+  const [activeAiRun, setActiveAiRun] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
@@ -720,10 +745,14 @@ export default function AcquisitionListPage() {
       ? `/acquisition/rows?row_ids=${encodeURIComponent(certificationScope.rowIds.join(","))}`
       : "/acquisition/rows";
 
-    apiRequest(endpoint, {}, token)
-      .then((data) => {
+    Promise.all([
+      apiRequest(endpoint, {}, token),
+      apiRequest("/acquisition/automation/runs/active", {}, token).catch(() => null),
+    ])
+      .then(([data, activeRun]) => {
         if (!ignore) {
           setRows(data.items || []);
+          setActiveAiRun(activeRun);
         }
       })
       .catch((requestError) => {
@@ -741,6 +770,40 @@ export default function AcquisitionListPage() {
       ignore = true;
     };
   }, [certificationScope, token]);
+
+  const hasRowsInAiProcessing = rows.some((row) => row.ai_processing_status === "in_lavorazione");
+  const activeAiRunId = activeAiRun?.id || null;
+
+  useEffect(() => {
+    if (!activeAiRun && !hasRowsInAiProcessing) {
+      return undefined;
+    }
+    const endpoint = certificationScope
+      ? `/acquisition/rows?row_ids=${encodeURIComponent(certificationScope.rowIds.join(","))}`
+      : "/acquisition/rows";
+    let ignore = false;
+    const intervalId = window.setInterval(() => {
+      Promise.all([
+        apiRequest(endpoint, {}, token),
+        apiRequest("/acquisition/automation/runs/active", {}, token).catch(() => null),
+      ])
+        .then(([data, activeRun]) => {
+          if (!ignore) {
+            setRows(data.items || []);
+            setActiveAiRun(activeRun);
+          }
+        })
+        .catch((requestError) => {
+          if (!ignore) {
+            setError(requestError.message);
+          }
+        });
+    }, 2500);
+    return () => {
+      ignore = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeAiRunId, certificationScope, hasRowsInAiProcessing, token]);
 
   useEffect(() => {
     if (isCertificationScope) {
@@ -1164,6 +1227,11 @@ export default function AcquisitionListPage() {
     }
   }
 
+  const activeRunRows = activeAiRunId
+    ? rows.filter((row) => row.ai_processing_run_id === activeAiRunId)
+    : [];
+  const activeRunReadyCount = activeRunRows.filter((row) => row.ai_processing_status === "pronta").length;
+
   return (
     <section className="space-y-2" ref={sectionRef}>
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
@@ -1189,6 +1257,22 @@ export default function AcquisitionListPage() {
           <SummaryCell label="DDT da confermare" value={summary.ddtToConfirm} />
           <SummaryCell label="Match da confermare" value={summary.waitingMatch} />
         </div>
+
+      {activeAiRun || hasRowsInAiProcessing ? (
+        <div className="flex flex-col gap-1 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <span className="font-semibold">Assistente AI attivo.</span>
+            <span className="ml-2 text-sky-800">
+              Puoi lavorare sulle righe indicate come Pronta; quelle in lavorazione restano consultabili ma non modificabili.
+            </span>
+          </div>
+          {activeAiRun ? (
+            <span className="whitespace-nowrap text-xs font-semibold uppercase tracking-[0.12em] text-sky-800">
+              {activeRunReadyCount} pronte · {activeRunRows.filter((row) => row.ai_processing_status === "in_lavorazione").length} in corso
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {certificationScope ? (
         <div className="flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 xl:flex-row xl:items-center xl:justify-between">
@@ -1366,12 +1450,18 @@ export default function AcquisitionListPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayedRows.map((row) => (
-                  <tr className="relative align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70" key={row.id}>
+                  <tr
+                    className={`relative align-top hover:bg-slate-50/70 focus-within:bg-slate-50/70 ${
+                      row.ai_processing_status === "in_lavorazione" ? "bg-sky-50/60" : ""
+                    }`}
+                    key={row.id}
+                  >
                     <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-700">
                       <div>{row.id}</div>
                       {isIncomingResolveScope ? (
                         <button
                           className="mt-2 rounded-lg border border-sky-300 bg-white px-2 py-1 text-[11px] font-semibold text-sky-800 hover:bg-sky-50"
+                          disabled={row.ai_processing_status === "in_lavorazione"}
                           onClick={() => setResolveCandidate(row)}
                           type="button"
                         >
@@ -1493,13 +1583,18 @@ export default function AcquisitionListPage() {
                       />
                     </td>
                     <td className="px-0 py-0">
-                      <RowStateCell row={row} onClick={() => openRow(row.id)} onKeyDown={(event) => handleRowKeyDown(event, row.id)} />
+                      <RowStateCell
+                        activeAiRunId={activeAiRunId}
+                        row={row}
+                        onClick={() => openRow(row.id)}
+                        onKeyDown={(event) => handleRowKeyDown(event, row.id)}
+                      />
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5">
                       {canRequestRowDelete(row, user) ? (
                         <button
                           className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={deleteLoading}
+                          disabled={deleteLoading || row.ai_processing_status === "in_lavorazione"}
                           onClick={(event) => {
                             event.stopPropagation();
                             openDeletePreview(row);

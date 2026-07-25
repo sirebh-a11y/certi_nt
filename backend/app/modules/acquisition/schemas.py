@@ -26,6 +26,7 @@ MatchState = Literal["proposto", "confermato", "cambiato"]
 MatchSource = Literal["sistema", "chatgpt", "utente", "archivio"]
 CandidateState = Literal["candidato", "scartato", "scelto"]
 AutomationRunState = Literal["in_coda", "in_esecuzione", "completato", "errore"]
+AiProcessingState = Literal["in_lavorazione", "pronta", "errore"]
 QualityEvaluationState = Literal["accettato", "accettato_con_riserva", "respinto"]
 QualityControlType = Literal["diretta", "inversa", "billetta"]
 
@@ -708,6 +709,9 @@ class AcquisitionRowListItemResponse(BaseModel):
     stato_workflow: str
     priorita_operativa: str
     validata_finale: bool
+    ai_processing_status: AiProcessingState | None = None
+    ai_processing_run_id: int | None = None
+    ai_processing_error: str | None = None
     qualita_tipo_controllo: QualityControlType | None
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None

@@ -446,6 +446,9 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         stato_workflow=row.stato_workflow,
         priorita_operativa=row.priorita_operativa,
         validata_finale=row.validata_finale,
+        ai_processing_status=row.ai_processing_status,
+        ai_processing_run_id=row.ai_processing_run_id,
+        ai_processing_error=row.ai_processing_error,
         qualita_tipo_controllo=row.qualita_tipo_controllo,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
@@ -7081,6 +7084,11 @@ def update_document_supplier(
     payload: DocumentSupplierUpdateRequest,
     actor_email: str,
 ) -> DocumentResponse:
+    if document.stato_elaborazione == "in_lavorazione":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Documento ancora in lavorazione dall'Assistente AI.",
+        )
     supplier = _get_supplier(db, payload.fornitore_id) if payload.fornitore_id is not None else None
     if document.fornitore_id == payload.fornitore_id:
         return serialize_document(document)
@@ -7653,7 +7661,13 @@ def create_rows_from_document_split_plan(
     document: Document,
     actor_id: int,
     actor_email: str,
+    ai_processing_run_id: int | None = None,
 ) -> DocumentSplitRowsCreateResponse:
+    if ai_processing_run_id is None and document.stato_elaborazione == "in_lavorazione":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Documento ancora in lavorazione dall'Assistente AI.",
+        )
     document = prepare_document_for_reader(db, document)
 
     plan = build_document_row_split_plan(document)
@@ -7706,6 +7720,15 @@ def create_rows_from_document_split_plan(
             supplier_key=supplier_key,
         )
         if certificate_first_row is not None:
+            if ai_processing_run_id is not None:
+                _set_row_ai_processing_state(
+                    db,
+                    certificate_first_row,
+                    processing_status="in_lavorazione",
+                    run_id=ai_processing_run_id,
+                )
+            else:
+                ensure_acquisition_row_ai_editable(db, certificate_first_row)
             certificate_first_row.document_ddt_id = document.id
             certificate_first_row.fornitore_id = document.fornitore_id
             certificate_first_row.fornitore_raw = document.supplier.ragione_sociale if document.supplier is not None else None
@@ -7746,6 +7769,7 @@ def create_rows_from_document_split_plan(
             ),
             actor_id=actor_id,
             actor_email=actor_email,
+            ai_processing_run_id=ai_processing_run_id,
         )
         row = get_acquisition_row(db, created_row.id)
         _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
@@ -8363,6 +8387,10 @@ def start_autonomous_run(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="There is already an autonomous processing run in progress",
         )
+    _ensure_documents_not_used_by_other_active_run(
+        db,
+        document_ids={*ddt_document_ids, *certificate_document_ids},
+    )
 
     if upload_batch_id is not None:
         batch = _get_or_create_upload_batch(db, upload_batch_id=upload_batch_id, actor_id=actor_id)
@@ -8421,6 +8449,31 @@ def _documents_for_upload_batch(db: Session, *, upload_batch_id: str, actor_id: 
     ddt_ids = [row.id for row in rows if row.tipo_documento == "ddt"]
     certificate_ids = [row.id for row in rows if row.tipo_documento == "certificato"]
     return ddt_ids, certificate_ids
+
+
+def _ensure_documents_not_used_by_other_active_run(
+    db: Session,
+    *,
+    document_ids: set[int],
+    excluded_run_id: int | None = None,
+) -> None:
+    if not document_ids:
+        return
+    active_runs_query = db.query(AutonomousProcessingRun).filter(
+        AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione"))
+    )
+    if excluded_run_id is not None:
+        active_runs_query = active_runs_query.filter(AutonomousProcessingRun.id != excluded_run_id)
+    for active_run in active_runs_query.all():
+        active_document_ids = {
+            *_run_document_ids_from_storage(active_run.ddt_document_ids),
+            *_run_document_ids_from_storage(active_run.certificate_document_ids),
+        }
+        if document_ids.intersection(active_document_ids):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Uno o più documenti sono già in lavorazione in un altro run AI.",
+            )
 
 
 def _wait_for_upload_batch_documents(
@@ -8756,6 +8809,7 @@ def run_autonomous_processing(
     use_ai_intervention: bool,
 ) -> None:
     db = SessionLocal()
+    db.info[AI_PROCESSING_SESSION_RUN_KEY] = run_id
     failed_notification_items: list[dict[str, str]] = []
     try:
         run = get_autonomous_run(db, run_id)
@@ -8787,6 +8841,11 @@ def run_autonomous_processing(
             )
         if not ddt_document_ids and not certificate_document_ids:
             raise RuntimeError("Nessun documento disponibile nel batch per avviare Assistente AI")
+        _ensure_documents_not_used_by_other_active_run(
+            db,
+            document_ids={*ddt_document_ids, *certificate_document_ids},
+            excluded_run_id=run.id,
+        )
         _set_documents_processing_state(
             db,
             [*ddt_document_ids, *certificate_document_ids],
@@ -8904,6 +8963,7 @@ def run_autonomous_processing(
                             actor_id=actor_id,
                             actor_email=actor_email,
                             openai_api_key=openai_api_key,
+                            run_id=run.id,
                         ),
                     )
                     if created_count:
@@ -8922,6 +8982,21 @@ def run_autonomous_processing(
                             f"Intervento AI DDT non riuscito su {ddt_document.nome_file_originale}"
                         ),
                     )
+                    unfinished_rows = (
+                        db.query(AcquisitionRow)
+                        .filter(
+                            AcquisitionRow.ai_processing_run_id == run.id,
+                            AcquisitionRow.ai_processing_status == "in_lavorazione",
+                            AcquisitionRow.document_ddt_id == ddt_document.id,
+                        )
+                        .all()
+                    )
+                    for unfinished_row in unfinished_rows:
+                        unfinished_row.ai_processing_status = "errore"
+                        unfinished_row.ai_processing_error = str(exc.detail)
+                        db.add(unfinished_row)
+                    if unfinished_rows:
+                        db.commit()
                     rows = []
             else:
                 rows, created_count = _ensure_autonomous_rows(
@@ -8929,6 +9004,7 @@ def run_autonomous_processing(
                     ddt_document=ddt_document,
                     actor_id=actor_id,
                     actor_email=actor_email,
+                    run_id=run.id,
                 )
                 if created_count:
                     _save_run(db, run, righe_create=run.righe_create + created_count)
@@ -8936,6 +9012,7 @@ def run_autonomous_processing(
             for row in rows:
                 row = get_acquisition_row(db, row.id)
                 _save_run(db, run, current_row_id=row.id)
+                row_processing_error: str | None = None
 
                 try:
                     if not (use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)):
@@ -9047,6 +9124,7 @@ def run_autonomous_processing(
                             _save_run(db, run, note_rilevate=run.note_rilevate + 1)
                 except Exception as exc:  # pragma: no cover - defensive safeguard for batch loop
                     db.rollback()
+                    row_processing_error = str(exc)
                     document_name = (
                         row.ddt_document.nome_file_originale
                         if row.ddt_document is not None
@@ -9072,6 +9150,13 @@ def run_autonomous_processing(
                         righe_processate=run.righe_processate + 1,
                         current_row_id=row.id,
                     )
+                    _set_row_ai_processing_state(
+                        db,
+                        get_acquisition_row(db, row.id),
+                        processing_status="errore" if row_processing_error else "pronta",
+                        run_id=run.id,
+                        error=row_processing_error,
+                    )
 
         if explicit_certificate_documents:
             _save_run(
@@ -9088,6 +9173,7 @@ def run_autonomous_processing(
                 openai_api_key=openai_api_key,
                 use_ai_intervention=use_ai_intervention,
                 certificate_ai_cache=certificate_ai_cache,
+                run_id=run.id,
             )
             if created_certificate_rows:
                 _save_run(
@@ -9119,10 +9205,29 @@ def run_autonomous_processing(
                 db=db,
                 supplier_ids=rematch_supplier_ids,
                 actor_id=actor_id,
+                run_id=run.id,
+                protected_row_ids={
+                    row_id
+                    for (row_id,) in (
+                        db.query(AcquisitionRow.id)
+                        .filter(
+                            AcquisitionRow.ai_processing_run_id == run.id,
+                            AcquisitionRow.ai_processing_status == "pronta",
+                        )
+                        .all()
+                    )
+                },
             )
             if cross_run_matches:
                 _save_run(db, run, match_proposti=run.match_proposti + cross_run_matches)
 
+        _set_run_processing_rows_state(
+            db,
+            run_id=run.id,
+            from_status="in_lavorazione",
+            to_status="pronta",
+            error=None,
+        )
         final_row_count = _count_final_rows_for_run_documents(
             db,
             ddt_document_ids=ddt_document_ids,
@@ -9211,6 +9316,13 @@ def run_autonomous_processing(
                 ultimo_errore=str(exc),
                 finished_at=datetime.now(UTC),
             )
+            _set_run_processing_rows_state(
+                db,
+                run_id=run.id,
+                from_status="in_lavorazione",
+                to_status="errore",
+                error=f"Run interrotto: {exc}",
+            )
             failed_batch_id = _normalize_upload_batch_id(run.upload_batch_id) or _normalize_upload_batch_id(upload_batch_id)
             if failed_batch_id is not None:
                 batch = db.get(AcquisitionUploadBatch, failed_batch_id)
@@ -9228,6 +9340,7 @@ def run_autonomous_processing(
             )
         log_service.record("acquisition", f"Autonomous processing failed: run {run_id}", actor_email)
     finally:
+        db.info.pop(AI_PROCESSING_SESSION_RUN_KEY, None)
         db.close()
 
 
@@ -9601,6 +9714,8 @@ def list_quality_rows(db: Session) -> AcquisitionQualityRowListResponse:
 
 
 def _is_row_available_in_quality_register(db: Session, row: AcquisitionRow) -> bool:
+    if row.ai_processing_status == "in_lavorazione":
+        return False
     if row.validata_finale and _is_row_fully_confirmed_for_quality(db, row):
         return True
     match = row.certificate_match
@@ -9618,6 +9733,7 @@ def update_quality_row(
     payload: AcquisitionQualityUpdateRequest,
     actor_id: int,
 ) -> AcquisitionQualityRowResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if not _is_row_available_in_quality_register(db, row):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -9694,6 +9810,94 @@ def get_acquisition_row(db: Session, row_id: int) -> AcquisitionRow:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acquisition row not found")
     _ensure_row_supplier_link(db, row)
     return row
+
+
+AI_PROCESSING_SESSION_RUN_KEY = "acquisition_ai_processing_run_id"
+AI_PROCESSING_LOCK_MESSAGE = (
+    "Riga ancora in lavorazione dall'Assistente AI. "
+    "Attendi che nello Stato compaia Pronta prima di modificarla."
+)
+
+
+def ensure_acquisition_row_ai_editable(db: Session, row: AcquisitionRow) -> None:
+    current_state = (
+        db.query(AcquisitionRow.ai_processing_status, AcquisitionRow.ai_processing_run_id)
+        .filter(AcquisitionRow.id == row.id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if current_state is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acquisition row not found")
+    processing_status, processing_run_id = current_state
+    internal_run_id = db.info.get(AI_PROCESSING_SESSION_RUN_KEY)
+    if processing_status == "in_lavorazione" and internal_run_id != processing_run_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AI_PROCESSING_LOCK_MESSAGE)
+
+
+def _set_row_ai_processing_state(
+    db: Session,
+    row: AcquisitionRow,
+    *,
+    processing_status: str,
+    run_id: int,
+    error: str | None = None,
+    commit: bool = True,
+) -> AcquisitionRow:
+    if processing_status == "in_lavorazione":
+        current_state = (
+            db.query(AcquisitionRow.ai_processing_status, AcquisitionRow.ai_processing_run_id)
+            .filter(AcquisitionRow.id == row.id)
+            .with_for_update()
+            .one()
+        )
+        current_status, current_run_id = current_state
+        if current_status == "in_lavorazione" and current_run_id not in {None, run_id}:
+            other_run_is_active = (
+                db.query(AutonomousProcessingRun.id)
+                .filter(
+                    AutonomousProcessingRun.id == current_run_id,
+                    AutonomousProcessingRun.stato.in_(("in_coda", "in_esecuzione")),
+                )
+                .first()
+                is not None
+            )
+            if other_run_is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Riga gia in lavorazione da un altro run AI.",
+                )
+    row.ai_processing_status = processing_status
+    row.ai_processing_run_id = run_id
+    row.ai_processing_error = error
+    db.add(row)
+    if commit:
+        db.commit()
+        return get_acquisition_row(db, row.id)
+    return row
+
+
+def _set_run_processing_rows_state(
+    db: Session,
+    *,
+    run_id: int,
+    from_status: str,
+    to_status: str,
+    error: str | None = None,
+) -> None:
+    rows = (
+        db.query(AcquisitionRow)
+        .filter(
+            AcquisitionRow.ai_processing_run_id == run_id,
+            AcquisitionRow.ai_processing_status == from_status,
+        )
+        .all()
+    )
+    for row in rows:
+        row.ai_processing_status = to_status
+        row.ai_processing_error = error
+        db.add(row)
+    if rows:
+        db.commit()
 
 
 def _single_document_side_for_delete(row: AcquisitionRow) -> tuple[str, int] | None:
@@ -10040,6 +10244,7 @@ def delete_single_document_acquisition_row(
     row: AcquisitionRow,
     actor_id: int,
 ) -> AcquisitionRowDeletePreviewResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     preview = preview_acquisition_row_delete(db, row=row)
     if not preview.can_delete:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=preview.blocked_reason or preview.message)
@@ -10085,6 +10290,8 @@ def create_acquisition_row(
     payload: AcquisitionRowCreateRequest,
     actor_id: int,
     actor_email: str,
+    *,
+    ai_processing_run_id: int | None = None,
 ) -> AcquisitionRowDetailResponse:
     ddt_document = _get_document_of_type(db, payload.document_ddt_id, "ddt") if payload.document_ddt_id is not None else None
     certificate_document = None
@@ -10119,6 +10326,9 @@ def create_acquisition_row(
         stato_workflow=payload.stato_workflow,
         priorita_operativa=payload.priorita_operativa,
         validata_finale=payload.validata_finale,
+        ai_processing_status="in_lavorazione" if ai_processing_run_id is not None else None,
+        ai_processing_run_id=ai_processing_run_id,
+        ai_processing_error=None,
     )
     db.add(row)
     db.flush()
@@ -10148,6 +10358,7 @@ def update_acquisition_row(
     actor_id: int,
     actor_email: str,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if row.validata_finale:
         _raise_final_validation_locked()
     updates = payload.model_dump(exclude_unset=True)
@@ -10237,6 +10448,7 @@ def confirm_document_side_fields(
     payload: DocumentSideFieldsConfirmRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     current_row = get_acquisition_row(db, row.id)
     if payload.side == "ddt" and current_row.document_ddt_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no DDT document")
@@ -10291,6 +10503,11 @@ def create_manual_document_row(
     actor_id: int,
     actor_email: str,
 ) -> AcquisitionRowDetailResponse:
+    if document.stato_elaborazione == "in_lavorazione":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Documento ancora in lavorazione dall'Assistente AI.",
+        )
     if document.tipo_documento != payload.side:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -10473,6 +10690,7 @@ def detach_document_match(
     payload: DocumentMatchDetachRequest,
     actor_id: int,
 ) -> DocumentMatchDetachResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_ddt_id is None or current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Row must have both DDT and certificate documents")
@@ -10606,8 +10824,10 @@ def link_document_match_candidate(
     payload: DocumentLinkCandidateRequest,
     actor_id: int,
 ) -> DocumentLinkCandidateResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     current_row = get_acquisition_row(db, row.id)
     candidate_row = get_acquisition_row(db, payload.candidate_row_id)
+    ensure_acquisition_row_ai_editable(db, candidate_row)
     if current_row.id == candidate_row.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row must be different from current row")
     if not _rows_have_same_supplier_identity(current_row, candidate_row):
@@ -11397,6 +11617,7 @@ def refresh_certificate_first_row(
     row: AcquisitionRow,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acquisition row has no certificate document")
@@ -11657,6 +11878,7 @@ def save_notes_section(
     payload: AcquisitionNotesSectionUpdateRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, "note")
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="note")
 
@@ -11797,6 +12019,7 @@ def create_evidence(
     payload: DocumentEvidenceCreateRequest,
     actor_id: int,
 ) -> DocumentEvidenceResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, payload.blocco)
     document = get_document(db, payload.document_id)
     if payload.document_page_id is not None:
@@ -11842,6 +12065,7 @@ def upsert_read_value(
     payload: ReadValueUpsertRequest,
     actor_id: int,
 ) -> ReadValueResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, payload.blocco)
     if payload.document_evidence_id is not None:
         evidence = db.get(DocumentEvidence, payload.document_evidence_id)
@@ -11882,6 +12106,7 @@ def upsert_match(
     payload: MatchUpsertRequest,
     actor_id: int,
 ) -> MatchResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if row.validata_finale:
         _raise_final_validation_locked()
     certificate_document = _get_document_of_type(db, payload.document_certificato_id, "certificato")
@@ -11990,6 +12215,7 @@ def detect_standard_notes(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, "note")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
@@ -12095,6 +12321,7 @@ def detect_chemistry(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, "chimica")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
@@ -12209,6 +12436,7 @@ def detect_properties(
     actor_id: int,
     openai_api_key: str | None = None,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, "proprieta")
     certificate_document_id = row.document_certificato_id
     if certificate_document_id is None:
@@ -12315,6 +12543,7 @@ def validate_final_row(
     payload: AcquisitionFinalValidationRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if row.qualita_valutazione:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -12368,6 +12597,7 @@ def save_quality_evaluation_note(
     row: AcquisitionRow,
     payload: AcquisitionQualityNoteUpdateRequest,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _raise_if_quality_block_locked(row, "note")
     row.qualita_note = payload.qualita_note
     db.add(row)
@@ -12404,6 +12634,7 @@ def save_quality_control_type(
     payload: AcquisitionQualityControlTypeUpdateRequest,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if row.qualita_valutazione:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -12424,6 +12655,7 @@ def reopen_final_validation(
     row: AcquisitionRow,
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     if not row.validata_finale and row.qualita_valutazione is None:
         return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
@@ -12446,6 +12678,7 @@ def reopen_final_validation(
 
 
 def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="campi_core")
     extracted_count = 0
     supplier_candidates = [
@@ -12583,6 +12816,7 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
 
 
 def process_row_minimal(db: Session, row: AcquisitionRow, actor_id: int) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     extract_core_fields(db=db, row=row, actor_id=actor_id)
     refreshed_row = get_acquisition_row(db, row.id)
     if refreshed_row.document_certificato_id is not None:
@@ -16038,6 +16272,7 @@ def extract_ddt_fields_with_vision(
     actor_id: int,
     openai_api_key: str,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     _reopen_row_if_validated(db, row, actor_id=actor_id, reason="ddt_vision")
     ddt_document = get_document(db, row.document_ddt_id)
     if not ddt_document.pages:
@@ -16224,6 +16459,7 @@ def run_ai_intervention(
     actor_id: int,
     openai_api_key: str,
 ) -> AcquisitionRowDetailResponse:
+    ensure_acquisition_row_ai_editable(db, row)
     supplier_key = _resolve_row_supplier_key(row)
     if not _supplier_supports_ai_vision_pipeline(supplier_key):
         raise HTTPException(
@@ -16809,6 +17045,7 @@ def _ensure_autonomous_rows(
     ddt_document: Document,
     actor_id: int,
     actor_email: str,
+    run_id: int,
 ) -> tuple[list[AcquisitionRow], int]:
     existing_rows = (
         db.query(AcquisitionRow)
@@ -16817,7 +17054,16 @@ def _ensure_autonomous_rows(
         .all()
     )
     if existing_rows:
-        return [get_acquisition_row(db, row.id) for row in existing_rows], 0
+        claimed_rows = [
+            _set_row_ai_processing_state(
+                db,
+                get_acquisition_row(db, row.id),
+                processing_status="in_lavorazione",
+                run_id=run_id,
+            )
+            for row in existing_rows
+        ]
+        return claimed_rows, 0
 
     document = prepare_document_for_reader(db, ddt_document)
     plan = build_document_row_split_plan(document)
@@ -16827,6 +17073,7 @@ def _ensure_autonomous_rows(
             document=document,
             actor_id=actor_id,
             actor_email=actor_email,
+            ai_processing_run_id=run_id,
         )
         return [get_acquisition_row(db, item.id) for item in split_result.created_rows], split_result.created_count
 
@@ -16840,6 +17087,7 @@ def _ensure_autonomous_rows(
         ),
         actor_id=actor_id,
         actor_email=actor_email,
+        ai_processing_run_id=run_id,
     )
     return [get_acquisition_row(db, created.id)], 1
 
@@ -16851,6 +17099,7 @@ def _ensure_autonomous_rows_with_ai(
     actor_id: int,
     actor_email: str,
     openai_api_key: str,
+    run_id: int,
 ) -> tuple[list[AcquisitionRow], int]:
     existing_rows = (
         db.query(AcquisitionRow)
@@ -16859,7 +17108,16 @@ def _ensure_autonomous_rows_with_ai(
         .all()
     )
     if existing_rows:
-        return [get_acquisition_row(db, row.id) for row in existing_rows], 0
+        claimed_rows = [
+            _set_row_ai_processing_state(
+                db,
+                get_acquisition_row(db, row.id),
+                processing_status="in_lavorazione",
+                run_id=run_id,
+            )
+            for row in existing_rows
+        ]
+        return claimed_rows, 0
 
     template = resolve_supplier_template(
         ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None,
@@ -16872,6 +17130,7 @@ def _ensure_autonomous_rows_with_ai(
             ddt_document=ddt_document,
             actor_id=actor_id,
             actor_email=actor_email,
+            run_id=run_id,
         )
 
     ddt_document = _ensure_document_page_images(db, _index_document_from_path(db, ddt_document) if not ddt_document.pages else ddt_document)
@@ -16921,6 +17180,12 @@ def _ensure_autonomous_rows_with_ai(
             supplier_key=supplier_key,
         )
         if certificate_first_row is not None:
+            _set_row_ai_processing_state(
+                db,
+                certificate_first_row,
+                processing_status="in_lavorazione",
+                run_id=run_id,
+            )
             certificate_first_row.document_ddt_id = ddt_document.id
             certificate_first_row.fornitore_id = ddt_document.fornitore_id
             certificate_first_row.fornitore_raw = ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None
@@ -16971,6 +17236,7 @@ def _ensure_autonomous_rows_with_ai(
             ),
             actor_id=actor_id,
             actor_email=actor_email,
+            ai_processing_run_id=run_id,
         )
         row = get_acquisition_row(db, created_row.id)
         _persist_split_candidate_values(db=db, row=row, candidate=candidate, actor_id=actor_id)
@@ -17003,6 +17269,7 @@ def _ensure_certificate_first_rows(
     actor_email: str,
     openai_api_key: str | None,
     use_ai_intervention: bool,
+    run_id: int,
     certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> tuple[int, int]:
     created_count = 0
@@ -17182,6 +17449,12 @@ def _ensure_certificate_first_rows(
         )
         if linked_row is not None:
             if linked_row.document_certificato_id is None:
+                linked_row = _set_row_ai_processing_state(
+                    db,
+                    linked_row,
+                    processing_status="in_lavorazione",
+                    run_id=run_id,
+                )
                 upsert_match(
                     db=db,
                     row=linked_row,
@@ -17229,6 +17502,12 @@ def _ensure_certificate_first_rows(
         )
         if duplicate_row is not None:
             if duplicate_row.document_certificato_id is None:
+                duplicate_row = _set_row_ai_processing_state(
+                    db,
+                    duplicate_row,
+                    processing_status="in_lavorazione",
+                    run_id=run_id,
+                )
                 upsert_match(
                     db=db,
                     row=duplicate_row,
@@ -17282,6 +17561,7 @@ def _ensure_certificate_first_rows(
             ),
             actor_id=actor_id,
             actor_email=actor_email,
+            ai_processing_run_id=run_id,
         )
         created_row_model = get_acquisition_row(db, created_row.id)
         if not (use_ai_intervention and openai_api_key):
@@ -18375,12 +18655,49 @@ def _run_cross_run_auto_rematch(
     db: Session,
     supplier_ids: set[int],
     actor_id: int,
+    run_id: int,
+    protected_row_ids: set[int] | None = None,
 ) -> int:
     applied = 0
     for plan in _plan_cross_run_auto_rematch(db=db, supplier_ids=supplier_ids):
+        if protected_row_ids and plan.row_id in protected_row_ids:
+            continue
+        eligible_candidates = tuple(
+            candidate
+            for candidate in plan.candidates
+            if not protected_row_ids or candidate.source_row_id not in protected_row_ids
+        )
+        if not eligible_candidates:
+            continue
         row = get_acquisition_row(db, plan.row_id)
         if _row_is_locked_for_auto_rematch(row):
             continue
+        row = _set_row_ai_processing_state(
+            db,
+            row,
+            processing_status="in_lavorazione",
+            run_id=run_id,
+        )
+        if _row_is_locked_for_auto_rematch(row):
+            _set_row_ai_processing_state(
+                db,
+                row,
+                processing_status="pronta",
+                run_id=run_id,
+            )
+            continue
+        best_candidate = eligible_candidates[0]
+        source_row_claimed = False
+        if not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
+            source_row = db.get(AcquisitionRow, best_candidate.source_row_id)
+            if source_row is not None:
+                _set_row_ai_processing_state(
+                    db,
+                    source_row,
+                    processing_status="in_lavorazione",
+                    run_id=run_id,
+                )
+                source_row_claimed = True
         candidates = [
             MatchCandidateRequest(
                 document_certificato_id=candidate.document_id,
@@ -18389,35 +18706,49 @@ def _run_cross_run_auto_rematch(
                 fonte_proposta="sistema",
                 stato="scelto" if rank == 1 else "candidato",
             )
-            for rank, candidate in enumerate(plan.candidates[:3], start=1)
+            for rank, candidate in enumerate(eligible_candidates[:3], start=1)
         ]
         upsert_match(
             db=db,
             row=row,
             payload=MatchUpsertRequest(
-                document_certificato_id=plan.document_id,
+                document_certificato_id=best_candidate.document_id,
                 stato="proposto",
-                motivo_breve=plan.reason,
+                motivo_breve=_cross_run_candidate_reason(best_candidate.score),
                 fonte_proposta="sistema",
                 candidates=candidates,
             ),
             actor_id=actor_id,
         )
-        best_candidate = plan.candidates[0] if plan.candidates else None
-        if best_candidate is not None and best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
+        if best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
             _copy_certificate_side_blocks_between_rows(
                 db=db,
                 source_row_id=best_candidate.source_row_id,
                 target_row_id=row.id,
                 actor_id=actor_id,
             )
-        if best_candidate is not None and not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
+        if not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
             _merge_certificate_only_row_into_ddt_row(
                 db=db,
                 target_row=get_acquisition_row(db, row.id),
                 source_row_id=best_candidate.source_row_id,
                 actor_id=actor_id,
             )
+        _set_row_ai_processing_state(
+            db,
+            get_acquisition_row(db, row.id),
+            processing_status="pronta",
+            run_id=run_id,
+        )
+        if source_row_claimed:
+            remaining_source_row = db.get(AcquisitionRow, best_candidate.source_row_id)
+            if remaining_source_row is not None:
+                _set_row_ai_processing_state(
+                    db,
+                    remaining_source_row,
+                    processing_status="pronta",
+                    run_id=run_id,
+                )
         applied += 1
     return applied
 
@@ -19717,6 +20048,9 @@ def _sync_row_statuses(db: Session, row: AcquisitionRow, block_states: dict[str,
 
     if all(state == "verde" for state in required_states):
         row.stato_tecnico = "verde"
+        if row.ai_processing_status == "errore":
+            row.ai_processing_status = "pronta"
+            row.ai_processing_error = None
     elif any(state == "rosso" for state in required_states):
         row.stato_tecnico = "rosso"
     else:

@@ -31,9 +31,11 @@ from app.modules.acquisition.schemas import DocumentSideFieldsConfirmRequest
 from app.modules.acquisition.schemas import MatchUpsertRequest
 from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
+    AI_PROCESSING_SESSION_RUN_KEY,
     _billet_material_suggestion,
     _material_form_assessment,
     _ensure_proposed_match_for_coupled_row,
+    _ensure_documents_not_used_by_other_active_run,
     _manual_match_block_exists,
     _merge_certificate_only_row_into_ddt_row,
     _plan_cross_run_auto_rematch,
@@ -1789,8 +1791,25 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
         self.assertEqual(plans[0].row_id, ddt_row.id)
         self.assertEqual(plans[0].document_id, certificate_document.id)
 
-        applied = _run_cross_run_auto_rematch(db=self.db, supplier_ids={supplier.id}, actor_id=1)
+        self.db.info[AI_PROCESSING_SESSION_RUN_KEY] = 901
+        try:
+            protected_applied = _run_cross_run_auto_rematch(
+                db=self.db,
+                supplier_ids={supplier.id},
+                actor_id=1,
+                run_id=901,
+                protected_row_ids={certificate_row.id, ddt_row.id},
+            )
+            applied = _run_cross_run_auto_rematch(
+                db=self.db,
+                supplier_ids={supplier.id},
+                actor_id=1,
+                run_id=901,
+            )
+        finally:
+            self.db.info.pop(AI_PROCESSING_SESSION_RUN_KEY, None)
 
+        self.assertEqual(protected_applied, 0)
         self.assertEqual(applied, 1)
         rows = self.db.query(AcquisitionRow).filter(AcquisitionRow.fornitore_id == supplier.id).all()
         self.assertEqual(len(rows), 1)
@@ -2090,6 +2109,108 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
 
         self.assertFalse(preview.can_delete)
         self.assertIn("elaborazione AI attiva", preview.blocked_reason)
+
+    def test_ai_processing_row_blocks_user_update_and_allows_own_run(self):
+        row = AcquisitionRow(
+            cdq="AI-LOCK",
+            lega_base="6082",
+            ai_processing_status="in_lavorazione",
+            ai_processing_run_id=77,
+        )
+        self.db.add(row)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as blocked:
+            update_acquisition_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionRowUpdateRequest(lega_base="7075"),
+                actor_id=1,
+                actor_email="quality@example.com",
+            )
+
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertIn("Assistente AI", blocked.exception.detail)
+        self.assertEqual(self.db.get(AcquisitionRow, row.id).lega_base, "6082")
+
+        self.db.info[AI_PROCESSING_SESSION_RUN_KEY] = 77
+        try:
+            updated = update_acquisition_row(
+                self.db,
+                row=get_acquisition_row(self.db, row.id),
+                payload=AcquisitionRowUpdateRequest(lega_base="7075"),
+                actor_id=1,
+                actor_email="ai@example.com",
+            )
+        finally:
+            self.db.info.pop(AI_PROCESSING_SESSION_RUN_KEY, None)
+
+        self.assertEqual(updated.lega_base, "7075")
+        self.assertEqual(updated.ai_processing_status, "in_lavorazione")
+
+    def test_ai_processing_row_is_hidden_from_quality_until_ready(self):
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="ai-quality.pdf",
+            storage_key="ai-quality.pdf",
+        )
+        self.db.add(certificate_document)
+        self.db.flush()
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            cdq="AI-QUALITY",
+            ai_processing_status="in_lavorazione",
+            ai_processing_run_id=88,
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add(
+            CertificateMatch(
+                acquisition_row_id=row.id,
+                document_certificato_id=certificate_document.id,
+                stato="confermato",
+                fonte_proposta="utente",
+                utente_conferma_id=1,
+            )
+        )
+        self.db.commit()
+
+        self.assertEqual(list_quality_rows(self.db).items, [])
+
+        row.ai_processing_status = "pronta"
+        self.db.add(row)
+        self.db.commit()
+
+        self.assertEqual([item.id for item in list_quality_rows(self.db).items], [row.id])
+
+    def test_same_document_cannot_be_claimed_by_two_active_ai_runs(self):
+        document = Document(
+            tipo_documento="ddt",
+            nome_file_originale="shared-run.pdf",
+            storage_key="shared-run.pdf",
+        )
+        self.db.add(document)
+        self.db.flush()
+        active_run = AutonomousProcessingRun(
+            ddt_document_ids=f"[{document.id}]",
+            stato="in_esecuzione",
+            fase_corrente="ddt",
+        )
+        self.db.add(active_run)
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as blocked:
+            _ensure_documents_not_used_by_other_active_run(
+                self.db,
+                document_ids={document.id},
+            )
+
+        self.assertEqual(blocked.exception.status_code, 409)
+        _ensure_documents_not_used_by_other_active_run(
+            self.db,
+            document_ids={document.id},
+            excluded_run_id=active_run.id,
+        )
 
     def test_delete_row_is_blocked_when_document_is_queued_for_ai(self):
         document = Document(

@@ -309,7 +309,8 @@ export default function AcquisitionDetailPage() {
   const [processingFinalReopen, setProcessingFinalReopen] = useState(false);
   const canSeeTechnicalDetail = user?.role === "admin";
   const canReopenFinalValidation = canReopenQualityFlow(user);
-  finalQualityNoteLockedRef.current = Boolean(row?.qualita_valutazione);
+  const aiProcessingLocked = row?.ai_processing_status === "in_lavorazione";
+  finalQualityNoteLockedRef.current = Boolean(row?.qualita_valutazione) || aiProcessingLocked;
 
   function guardFinalValidatedEdit() {
     if (!row?.validata_finale) {
@@ -434,7 +435,7 @@ export default function AcquisitionDetailPage() {
   function saveFinalQualityNote(value = finalQualityNoteRef.current) {
     const normalizedNote = safeText(value).trim();
     const currentRowId = row?.id;
-    if (!currentRowId || String(currentRowId) !== String(rowId) || row?.qualita_valutazione) {
+    if (!currentRowId || String(currentRowId) !== String(rowId) || row?.qualita_valutazione || aiProcessingLocked) {
       return Promise.resolve();
     }
     if (normalizedNote === queuedFinalQualityNoteRef.current) {
@@ -495,7 +496,7 @@ export default function AcquisitionDetailPage() {
   }, [row?.id]);
 
   useEffect(() => {
-    if (!row?.id || String(row.id) !== String(rowId) || row.qualita_valutazione) {
+    if (!row?.id || String(row.id) !== String(rowId) || row.qualita_valutazione || aiProcessingLocked) {
       return undefined;
     }
     const normalizedNote = finalQualityNote.trim();
@@ -506,7 +507,7 @@ export default function AcquisitionDetailPage() {
       saveFinalQualityNote(normalizedNote).catch(() => undefined);
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [finalQualityNote, row?.id, row?.qualita_valutazione, rowId, token]);
+  }, [aiProcessingLocked, finalQualityNote, row?.id, row?.qualita_valutazione, rowId, token]);
 
   useEffect(() => {
     const activeRowId = rowId;
@@ -1097,6 +1098,16 @@ export default function AcquisitionDetailPage() {
     }
   }
 
+  useEffect(() => {
+    if (!aiProcessingLocked) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      refreshRow(true).catch((requestError) => setError(requestError.message));
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [aiProcessingLocked, rowId, token]);
+
   function handleQualityControlTypeChange(value) {
     if (row?.qualita_valutazione || processingFinalValidation || qualityControlTypeRef.current === value) {
       return;
@@ -1230,19 +1241,19 @@ export default function AcquisitionDetailPage() {
           </div>
           {canSeeTechnicalDetail ? (
             <div className="flex flex-wrap gap-2">
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={aiProcessingLocked || processingVision || !row?.ddt_document} onClick={handleProcessDdtVision} type="button">
                 {processingVision ? "Vision..." : "Vision DDT"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingChemistry || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectChemistry} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={aiProcessingLocked || processingChemistry || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectChemistry} type="button">
                 {processingChemistry ? "Chimica..." : "Rileva chimica"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingProperties || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectProperties} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={aiProcessingLocked || processingProperties || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectProperties} type="button">
                 {processingProperties ? "Proprietà..." : "Rileva proprietà"}
               </button>
-              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={processingNotes || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectNotes} type="button">
+              <button className="rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60" disabled={aiProcessingLocked || processingNotes || !row?.certificate_document || Boolean(row?.qualita_valutazione)} onClick={handleDetectNotes} type="button">
                 {processingNotes ? "Note..." : "Rileva note"}
               </button>
-              <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={processing || !row?.ddt_document || Boolean(row?.qualita_valutazione)} onClick={handleProcessMinimal} type="button">
+              <button className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60" disabled={aiProcessingLocked || processing || !row?.ddt_document || Boolean(row?.qualita_valutazione)} onClick={handleProcessMinimal} type="button">
                 {processing ? "Processo..." : "Processo minimo"}
               </button>
             </div>
@@ -1251,6 +1262,14 @@ export default function AcquisitionDetailPage() {
 
         {loading ? <p className="mt-4 text-sm text-slate-500">Caricamento riga...</p> : null}
         {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+        {aiProcessingLocked ? (
+          <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+            <span className="font-semibold">Assistente AI ancora in lavorazione.</span>
+            <span className="ml-2 text-sky-800">
+              Puoi consultare i dati e i documenti; i comandi si abiliteranno automaticamente quando la riga sarà pronta.
+            </span>
+          </div>
+        ) : null}
 
         {row ? (
           <div className="mt-4 space-y-4">
@@ -1308,7 +1327,7 @@ export default function AcquisitionDetailPage() {
                       {canReopenFinalValidation ? (
                         <button
                           className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-                          disabled={processingFinalReopen}
+                          disabled={aiProcessingLocked || processingFinalReopen}
                           onClick={() => setReopenFinalDialogOpen(true)}
                           type="button"
                         >
@@ -1319,7 +1338,7 @@ export default function AcquisitionDetailPage() {
                   ) : null}
                 </div>
                 <div className="min-w-[320px] flex-1 xl:max-w-xl">
-                  <fieldset className="mb-4" disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}>
+                  <fieldset className="mb-4" disabled={aiProcessingLocked || Boolean(row.qualita_valutazione) || processingFinalValidation}>
                     <legend className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       Tipo estrusione
                     </legend>
@@ -1380,7 +1399,7 @@ export default function AcquisitionDetailPage() {
                   </label>
                   <textarea
                     className="min-h-20 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-slate-700 disabled:bg-slate-50 disabled:text-slate-500"
-                    disabled={Boolean(row.qualita_valutazione) || processingFinalValidation}
+                    disabled={aiProcessingLocked || Boolean(row.qualita_valutazione) || processingFinalValidation}
                     id="final-quality-note"
                     onBlur={() => saveFinalQualityNote().catch(() => undefined)}
                     onChange={(event) => {
@@ -1414,7 +1433,7 @@ export default function AcquisitionDetailPage() {
                             ? "bg-amber-600 hover:bg-amber-700"
                             : "bg-rose-700 hover:bg-rose-800"
                       }`}
-                      disabled={processingFinalValidation || !canValidateFinal}
+                      disabled={aiProcessingLocked || processingFinalValidation || !canValidateFinal}
                       key={option.value}
                       onClick={() => handleValidateFinal(option.value)}
                       type="button"
@@ -1448,55 +1467,57 @@ export default function AcquisitionDetailPage() {
                   />
                 </div>
 
-                <MatchPanel
-                  certificateFirstDraft={certificateFirstDraft}
-                  availableCertificates={availableCertificates}
-                  certificateDocument={certificateDocument}
-                  ddtLinkPreview={ddtLinkPreview}
-                  isCertificateFirstRow={isCertificateFirstRow}
-                  loadingDdtPreview={loadingDdtPreview}
-                  match={row.certificate_match}
-                  matchDraft={matchDraft}
-                  onConfirmMatch={() => handleUpsertMatch("confermato")}
-                  onRefreshCertificateFirst={handleRefreshCertificateFirst}
-                  onReloadDdtPreview={handleReloadDdtPreview}
-                  onDraftChange={setMatchDraft}
-                  onSaveCertificateFirstFields={handleSaveCertificateFirstFields}
-                  onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
-                  onUpdateCertificateFirstDraft={updateCertificateFirstDraft}
-                  processingMatch={processingMatch}
-                  refreshingCertificateFirst={refreshingCertificateFirst}
-                  savingCertificateFirst={savingCertificateFirst}
-                />
+                <fieldset className="space-y-4 disabled:opacity-80" disabled={aiProcessingLocked}>
+                  <MatchPanel
+                    certificateFirstDraft={certificateFirstDraft}
+                    availableCertificates={availableCertificates}
+                    certificateDocument={certificateDocument}
+                    ddtLinkPreview={ddtLinkPreview}
+                    isCertificateFirstRow={isCertificateFirstRow}
+                    loadingDdtPreview={loadingDdtPreview}
+                    match={row.certificate_match}
+                    matchDraft={matchDraft}
+                    onConfirmMatch={() => handleUpsertMatch("confermato")}
+                    onRefreshCertificateFirst={handleRefreshCertificateFirst}
+                    onReloadDdtPreview={handleReloadDdtPreview}
+                    onDraftChange={setMatchDraft}
+                    onSaveCertificateFirstFields={handleSaveCertificateFirstFields}
+                    onSaveMatch={() => handleUpsertMatch(row.certificate_match ? "cambiato" : "proposto")}
+                    onUpdateCertificateFirstDraft={updateCertificateFirstDraft}
+                    processingMatch={processingMatch}
+                    refreshingCertificateFirst={refreshingCertificateFirst}
+                    savingCertificateFirst={savingCertificateFirst}
+                  />
 
-                <div className="space-y-4">
-                  {ORDERED_BLOCKS.map((block) => (
-                    <BlockPanel
-                      key={block}
-                      block={block}
-                      label={BLOCK_LABELS[block] || block}
-                      values={valuesByBlock[block] || []}
-                      expectedFields={
-                        block === "ddt"
-                          ? DDT_CORE_FIELDS
-                          : block === "note"
-                            ? NOTE_CORE_FIELDS
-                            : block === "chimica"
-                              ? CHEMISTRY_FIELD_ORDER
-                              : []
-                      }
-                      chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
-                      propertyFieldOrder={PROPERTY_FIELD_ORDER}
-                      draftValues={draftValues}
-                      onCreateManualValue={handleCreateManualValue}
-                      onDraftChange={updateDraft}
-                      onSaveValue={handleSaveValue}
-                      onSetNullValue={handleSetNullValue}
-                      onConfirmValue={handleConfirmValue}
-                      savingFieldKey={savingFieldKey}
-                    />
-                  ))}
-                </div>
+                  <div className="space-y-4">
+                    {ORDERED_BLOCKS.map((block) => (
+                      <BlockPanel
+                        key={block}
+                        block={block}
+                        label={BLOCK_LABELS[block] || block}
+                        values={valuesByBlock[block] || []}
+                        expectedFields={
+                          block === "ddt"
+                            ? DDT_CORE_FIELDS
+                            : block === "note"
+                              ? NOTE_CORE_FIELDS
+                              : block === "chimica"
+                                ? CHEMISTRY_FIELD_ORDER
+                                : []
+                        }
+                        chemistryFieldOrder={CHEMISTRY_FIELD_ORDER}
+                        propertyFieldOrder={PROPERTY_FIELD_ORDER}
+                        draftValues={draftValues}
+                        onCreateManualValue={handleCreateManualValue}
+                        onDraftChange={updateDraft}
+                        onSaveValue={handleSaveValue}
+                        onSetNullValue={handleSetNullValue}
+                        onConfirmValue={handleConfirmValue}
+                        savingFieldKey={savingFieldKey}
+                      />
+                    ))}
+                  </div>
+                </fieldset>
 
                 <div className="rounded-2xl border border-border bg-white p-4">
                   <div className="mb-3 text-base font-semibold text-slate-900">Storico recente</div>

@@ -147,6 +147,9 @@ class AcquisitionRow(Base):
     stato_workflow: Mapped[str] = mapped_column(String(32), default="nuova", nullable=False)
     priorita_operativa: Mapped[str] = mapped_column(String(32), default="media", nullable=False)
     validata_finale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    ai_processing_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    ai_processing_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    ai_processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

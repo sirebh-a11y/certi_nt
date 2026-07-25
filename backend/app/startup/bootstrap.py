@@ -70,6 +70,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_processing_run_columns()
     ensure_acquisition_quality_columns()
     ensure_acquisition_supplier_columns()
+    ensure_acquisition_ai_processing_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
     ensure_esolver_export_view(engine, public_base_url=settings.certi_public_base_url)
@@ -276,6 +277,20 @@ def recover_interrupted_acquisition_runs(db: Session) -> None:
         run.ultimo_errore = "Interrotto da riavvio server"
         run.finished_at = now
         db.add(run)
+        (
+            db.query(AcquisitionRow)
+            .filter(
+                AcquisitionRow.ai_processing_run_id == run.id,
+                AcquisitionRow.ai_processing_status == "in_lavorazione",
+            )
+            .update(
+                {
+                    AcquisitionRow.ai_processing_status: "errore",
+                    AcquisitionRow.ai_processing_error: "Run interrotto da riavvio server",
+                },
+                synchronize_session=False,
+            )
+        )
         if run.upload_batch_id:
             batch = db.get(AcquisitionUploadBatch, run.upload_batch_id)
             if batch is not None:
@@ -346,6 +361,34 @@ def ensure_acquisition_supplier_columns() -> None:
     if "fornitore_esolver_cod_clifor" not in columns:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN fornitore_esolver_cod_clifor VARCHAR(64)")
         statements.append("CREATE INDEX IF NOT EXISTS ix_datimaterialeincoming_fornitore_esolver_cod_clifor ON datimaterialeincoming (fornitore_esolver_cod_clifor)")
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def ensure_acquisition_ai_processing_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("datimaterialeincoming"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("datimaterialeincoming")}
+    statements: list[str] = []
+    if "ai_processing_status" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN ai_processing_status VARCHAR(32)")
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_datimaterialeincoming_ai_processing_status "
+            "ON datimaterialeincoming (ai_processing_status)"
+        )
+    if "ai_processing_run_id" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN ai_processing_run_id INTEGER")
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_datimaterialeincoming_ai_processing_run_id "
+            "ON datimaterialeincoming (ai_processing_run_id)"
+        )
+    if "ai_processing_error" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN ai_processing_error TEXT")
 
     if statements:
         with engine.begin() as connection:

@@ -90,6 +90,7 @@ from app.modules.acquisition.service import (
     list_quality_rows,
     extract_ddt_fields_with_vision,
     extract_core_fields,
+    ensure_acquisition_row_ai_editable,
     get_acquisition_row,
     get_document,
     get_document_file_path,
@@ -143,6 +144,12 @@ def _resolve_openai_api_key(current_user: CurrentUser) -> str | None:
     if current_user.openai_api_key_encrypted:
         return decrypt_secret(current_user.openai_api_key_encrypted)
     return settings.openai_api_key
+
+
+def _get_ai_editable_row(db: DbSession, row_id: int):
+    row = get_acquisition_row(db, row_id)
+    ensure_acquisition_row_ai_editable(db, row)
+    return row
 
 
 @router.post("/automation/runs", response_model=AutonomousRunResponse)
@@ -569,7 +576,7 @@ def update_quality_row_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionQualityRowResponse:
-    return update_quality_row(db=db, row=get_acquisition_row(db, row_id), payload=payload, actor_id=current_user.id)
+    return update_quality_row(db=db, row=_get_ai_editable_row(db, row_id), payload=payload, actor_id=current_user.id)
 
 
 @router.post("/rows", response_model=AcquisitionRowDetailResponse)
@@ -594,7 +601,7 @@ def delete_single_document_acquisition_row_route(
     db: DbSession,
 ) -> AcquisitionRowDeletePreviewResponse:
     require_quality_area_admin(current_user)
-    return delete_single_document_acquisition_row(db=db, row=get_acquisition_row(db, row_id), actor_id=current_user.id)
+    return delete_single_document_acquisition_row(db=db, row=_get_ai_editable_row(db, row_id), actor_id=current_user.id)
 
 
 @router.get("/rows/{row_id}", response_model=AcquisitionRowDetailResponse)
@@ -619,7 +626,7 @@ def update_acquisition_row_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return update_acquisition_row(db=db, row=row, payload=payload, actor_id=current_user.id, actor_email=current_user.email)
 
 
@@ -630,7 +637,7 @@ def save_notes_section_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return save_notes_section(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -641,7 +648,7 @@ def confirm_document_side_fields_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return confirm_document_side_fields(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -652,7 +659,7 @@ def detach_document_match_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> DocumentMatchDetachResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return detach_document_match(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -663,7 +670,7 @@ def link_document_match_candidate_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> DocumentLinkCandidateResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return link_document_match_candidate(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -674,7 +681,7 @@ def create_evidence_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> DocumentEvidenceResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return create_evidence(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -685,7 +692,7 @@ def upsert_read_value_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> ReadValueResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return upsert_read_value(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -707,7 +714,7 @@ def upsert_match_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> MatchResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return upsert_match(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -717,7 +724,7 @@ def detect_standard_notes_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return detect_standard_notes(db=db, row=row, actor_id=current_user.id)
 
 
@@ -727,7 +734,7 @@ def detect_chemistry_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return detect_chemistry(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
@@ -737,7 +744,7 @@ def detect_properties_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return detect_properties(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
@@ -747,7 +754,7 @@ def extract_core_fields_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return extract_core_fields(db=db, row=row, actor_id=current_user.id)
 
 
@@ -760,7 +767,7 @@ def extract_ddt_vision_route(
     openai_api_key = _resolve_openai_api_key(current_user)
     if not openai_api_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return extract_ddt_fields_with_vision(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
@@ -770,7 +777,7 @@ def process_row_minimal_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return process_row_minimal(db=db, row=row, actor_id=current_user.id)
 
 
@@ -780,7 +787,7 @@ def refresh_certificate_first_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return refresh_certificate_first_row(db=db, row=row, actor_id=current_user.id)
 
 
@@ -813,7 +820,7 @@ def run_ai_intervention_route(
     openai_api_key = _resolve_openai_api_key(current_user)
     if not openai_api_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return run_ai_intervention(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
@@ -824,7 +831,7 @@ def validate_final_row_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return validate_final_row(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -835,7 +842,7 @@ def save_quality_evaluation_note_route(
     _: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return save_quality_evaluation_note(db=db, row=row, payload=payload)
 
 
@@ -846,7 +853,7 @@ def save_quality_control_type_route(
     current_user: CurrentUser,
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return save_quality_control_type(db=db, row=row, payload=payload, actor_id=current_user.id)
 
 
@@ -857,5 +864,5 @@ def reopen_final_validation_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     require_quality_area_manager_or_admin(current_user)
-    row = get_acquisition_row(db, row_id)
+    row = _get_ai_editable_row(db, row_id)
     return reopen_final_validation(db=db, row=row, actor_id=current_user.id)

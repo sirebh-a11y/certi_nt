@@ -13,7 +13,7 @@ from xml.sax.saxutils import escape
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
@@ -3027,6 +3027,12 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
             selectinload(AcquisitionRow.custom_note_links).joinedload(AcquisitionRowNoteTemplate.note_template),
         )
         .filter(AcquisitionRow.id.in_(row_ids))
+        .filter(
+            or_(
+                AcquisitionRow.ai_processing_status.is_(None),
+                AcquisitionRow.ai_processing_status != "in_lavorazione",
+            )
+        )
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
     )
@@ -3135,6 +3141,12 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
     app_rows = (
         db.query(AcquisitionRow)
         .filter(AcquisitionRow.cdq.in_(sorted(cdq_values)))
+        .filter(
+            or_(
+                AcquisitionRow.ai_processing_status.is_(None),
+                AcquisitionRow.ai_processing_status != "in_lavorazione",
+            )
+        )
         .order_by(AcquisitionRow.cdq.asc(), AcquisitionRow.colata.asc(), AcquisitionRow.id.asc())
         .all()
     )
