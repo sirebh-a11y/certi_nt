@@ -33,12 +33,14 @@ from app.modules.acquisition.schemas import ReadValueUpsertRequest
 from app.modules.acquisition.service import (
     AI_PROCESSING_SESSION_RUN_KEY,
     _billet_material_suggestion,
+    _compute_block_states_from_db,
     _material_form_assessment,
     _ensure_proposed_match_for_coupled_row,
     _ensure_documents_not_used_by_other_active_run,
     _manual_match_block_exists,
     _merge_certificate_only_row_into_ddt_row,
     _plan_cross_run_auto_rematch,
+    _process_certificate_side_blocks,
     _run_cross_run_auto_rematch,
     _score_certificate_candidate,
     confirm_document_side_fields,
@@ -1711,6 +1713,188 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             merged_note_template_ids,
             sorted([source_only_note.id, shared_note.id]),
         )
+
+    def test_certificate_first_ai_reprocessing_keeps_confirmed_quality_blocks(self):
+        supplier = Supplier(ragione_sociale="Impol d.o.o.", reader_template_key="impol")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert-confirmed.pdf",
+            storage_key="cert-confirmed.pdf",
+        )
+        ddt_document = Document(
+            tipo_documento="ddt",
+            nome_file_originale="ddt-later.pdf",
+            storage_key="ddt-later.pdf",
+        )
+        self.db.add_all([supplier, certificate_document, ddt_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        ddt_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+            cdq="17394#a",
+        )
+        self.db.add(row)
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,91"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco=block,
+                    campo=field,
+                    valore_grezzo=value,
+                    valore_standardizzato=value,
+                    valore_finale=value,
+                    stato="confermato",
+                    metodo_lettura="utente",
+                    fonte_documentale="utente",
+                )
+            )
+        self.db.commit()
+
+        row.document_ddt_id = ddt_document.id
+        self.db.add(row)
+        self.db.commit()
+
+        ai_payload = {
+            "core_fields": {
+                "numero_certificato_certificato": {
+                    "value": "17394#a",
+                    "evidence": "Certificate 17394#a",
+                }
+            },
+            "chemistry": {
+                "Si": {"raw": "0,99", "standardized": "0,99", "final": "0,99", "snippet": "Si 0,99"}
+            },
+            "properties": {
+                "Rm": {"raw": "999", "standardized": "999", "final": "999", "snippet": "Rm 999"}
+            },
+            "notes": {
+                "nota_radioactive_free": {
+                    "raw": None,
+                    "standardized": None,
+                    "final": None,
+                    "snippet": "No radioactive-free statement",
+                }
+            },
+        }
+        with patch(
+            "app.modules.acquisition.service._get_supplier_certificate_ai_payload",
+            return_value=ai_payload,
+        ):
+            _process_certificate_side_blocks(
+                db=self.db,
+                row=get_acquisition_row(self.db, row.id),
+                actor_id=1,
+                openai_api_key="test-key",
+                use_ai_intervention=True,
+                certificate_ai_cache={},
+            )
+
+        self.db.commit()
+        refreshed = get_acquisition_row(self.db, row.id)
+        values = {(value.blocco, value.campo): value for value in refreshed.values}
+        self.assertEqual(values[("chimica", "Si")].valore_finale, "0,91")
+        self.assertEqual(values[("proprieta", "Rm")].valore_finale, "350")
+        self.assertEqual(values[("note", "nota_radioactive_free")].valore_finale, "true")
+        block_states = _compute_block_states_from_db(self.db, refreshed)
+        self.assertEqual(
+            {block: block_states[block] for block in ("chimica", "proprieta", "note")},
+            {"chimica": "verde", "proprieta": "verde", "note": "verde"},
+        )
+        self.assertTrue(
+            all(
+                values[(block, field)].stato == "confermato"
+                for block, field in [
+                    ("chimica", "Si"),
+                    ("proprieta", "Rm"),
+                    ("note", "nota_radioactive_free"),
+                ]
+            )
+        )
+
+    def test_certificate_first_ai_reprocessing_preserves_confirmed_fields_in_open_block(self):
+        supplier = Supplier(ragione_sociale="Impol d.o.o.", reader_template_key="impol")
+        certificate_document = Document(
+            tipo_documento="certificato",
+            nome_file_originale="cert-partial.pdf",
+            storage_key="cert-partial.pdf",
+        )
+        self.db.add_all([supplier, certificate_document])
+        self.db.flush()
+        certificate_document.fornitore_id = supplier.id
+        row = AcquisitionRow(
+            document_certificato_id=certificate_document.id,
+            fornitore_id=supplier.id,
+            fornitore_raw=supplier.ragione_sociale,
+        )
+        self.db.add(row)
+        self.db.flush()
+        self.db.add_all(
+            [
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco="chimica",
+                    campo="Si",
+                    valore_finale="0,91",
+                    stato="confermato",
+                    metodo_lettura="utente",
+                    fonte_documentale="utente",
+                ),
+                ReadValue(
+                    acquisition_row_id=row.id,
+                    blocco="chimica",
+                    campo="Fe",
+                    valore_finale="0,20",
+                    stato="proposto",
+                    metodo_lettura="chatgpt",
+                    fonte_documentale="certificato",
+                ),
+            ]
+        )
+        self.db.commit()
+
+        ai_payload = {
+            "core_fields": {
+                "numero_certificato_certificato": {
+                    "value": "17394#a",
+                    "evidence": "Certificate 17394#a",
+                }
+            },
+            "chemistry": {
+                "Si": {"raw": "0,99", "standardized": "0,99", "final": "0,99", "snippet": "Si 0,99"},
+                "Fe": {"raw": "0,25", "standardized": "0,25", "final": "0,25", "snippet": "Fe 0,25"},
+                "Cu": {"raw": "0,10", "standardized": "0,10", "final": "0,10", "snippet": "Cu 0,10"},
+            }
+        }
+        with patch(
+            "app.modules.acquisition.service._get_supplier_certificate_ai_payload",
+            return_value=ai_payload,
+        ):
+            _process_certificate_side_blocks(
+                db=self.db,
+                row=get_acquisition_row(self.db, row.id),
+                actor_id=1,
+                openai_api_key="test-key",
+                use_ai_intervention=True,
+                certificate_ai_cache={},
+            )
+
+        self.db.commit()
+        refreshed = get_acquisition_row(self.db, row.id)
+        chemistry = {value.campo: value for value in refreshed.values if value.blocco == "chimica"}
+        self.assertEqual(chemistry["Si"].valore_finale, "0,91")
+        self.assertEqual(chemistry["Si"].stato, "confermato")
+        self.assertEqual(chemistry["Fe"].valore_finale, "0.25")
+        self.assertEqual(chemistry["Fe"].stato, "proposto")
+        self.assertEqual(chemistry["Cu"].valore_finale, "0.10")
+        self.assertEqual(chemistry["Cu"].stato, "proposto")
 
     def test_certificate_first_arconic_row_merges_when_matching_ddt_arrives_later(self):
         supplier = Supplier(ragione_sociale="Arconic Extrusions Hannover GmbH")

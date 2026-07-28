@@ -16578,6 +16578,12 @@ def _process_certificate_side_blocks(
 
     supplier_key = _resolve_row_supplier_key(current_row)
     if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(supplier_key):
+        current_block_states = _compute_block_states_from_db(db, current_row)
+        confirmed_blocks = {
+            block
+            for block in ("chimica", "proprieta", "note")
+            if current_block_states.get(block) == "verde"
+        }
         payload = _get_supplier_certificate_ai_payload(
             db=db,
             supplier_key=supplier_key,
@@ -16590,6 +16596,7 @@ def _process_certificate_side_blocks(
             row=current_row,
             payload=payload,
             actor_id=actor_id,
+            confirmed_blocks=confirmed_blocks,
         )
         current_row = get_acquisition_row(db, current_row.id)
         if current_row.certificate_document is not None:
@@ -25932,8 +25939,10 @@ def _apply_aluminium_bozen_certificate_ai_payload(
     row: AcquisitionRow,
     payload: dict[str, object],
     actor_id: int,
+    confirmed_blocks: set[str] | None = None,
 ) -> None:
     certificate_document = get_document(db, row.document_certificato_id)
+    protected_blocks = confirmed_blocks or set()
     _enrich_notes_with_lst_00_class_b(
         payload,
         fallback_page_id=certificate_document.pages[0].id if certificate_document.pages else None,
@@ -25984,11 +25993,24 @@ def _apply_aluminium_bozen_certificate_ai_payload(
 
     for block_name, confidence in (("chemistry", 0.76), ("properties", 0.74), ("notes", 0.74)):
         block_key = {"chemistry": "chimica", "properties": "proprieta", "notes": "note"}[block_name]
+        if block_key in protected_blocks:
+            continue
         matches = cast(dict[str, dict[str, str | int]], payload.get(block_name) or {})
         if not matches:
             continue
         _prune_unconfirmed_block_values(db=db, row_id=row.id, block=block_key, keep_fields=set(matches.keys()))
         for field_name, match in matches.items():
+            existing_value = (
+                db.query(ReadValue)
+                .filter(
+                    ReadValue.acquisition_row_id == row.id,
+                    ReadValue.blocco == block_key,
+                    ReadValue.campo == field_name,
+                )
+                .one_or_none()
+            )
+            if existing_value is not None and existing_value.stato == "confermato":
+                continue
             snippet = _string_or_none(cast(dict[str, object], match).get("snippet")) or _string_or_none(cast(dict[str, object], match).get("final")) or ""
             page_id = cast(dict[str, object], match).get("page_id")
             evidence = _create_text_evidence(
@@ -26343,6 +26365,7 @@ def _apply_supplier_certificate_ai_payload(
     row: AcquisitionRow,
     payload: dict[str, object],
     actor_id: int,
+    confirmed_blocks: set[str] | None = None,
 ) -> None:
     if row.validata_finale:
         _raise_final_validation_locked()
@@ -26351,6 +26374,7 @@ def _apply_supplier_certificate_ai_payload(
         row=row,
         payload=payload,
         actor_id=actor_id,
+        confirmed_blocks=confirmed_blocks,
     )
 
 
