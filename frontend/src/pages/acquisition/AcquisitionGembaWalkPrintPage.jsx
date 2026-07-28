@@ -31,6 +31,19 @@ function composeLega(row) {
   return normalizeAlloyForDisplay(row.lega_designazione || row.lega_base || row.variante_lega || "-");
 }
 
+function displayExtrusionType(value) {
+  if (value === "diretta") {
+    return "Diretta";
+  }
+  if (value === "inversa") {
+    return "Inversa";
+  }
+  if (value === "billetta") {
+    return "Non applicabile - billetta";
+  }
+  return "";
+}
+
 export default function AcquisitionGembaWalkPrintPage() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
@@ -92,10 +105,14 @@ export default function AcquisitionGembaWalkPrintPage() {
   return (
     <section className="min-h-screen bg-white p-6 text-slate-950" id="gemba-print-root">
       <style>{`
+        @page {
+          size: A4 landscape;
+          margin: 8mm;
+        }
         @media print {
           body * { visibility: hidden; }
           #gemba-print-root, #gemba-print-root * { visibility: visible; }
-          #gemba-print-root { position: absolute; inset: 0; padding: 10mm; }
+          #gemba-print-root { position: absolute; inset: 0; padding: 0; }
           .print-actions { display: none !important; }
           table { page-break-inside: auto; }
           tr { page-break-inside: avoid; page-break-after: auto; }
@@ -134,36 +151,55 @@ export default function AcquisitionGembaWalkPrintPage() {
 
       {rows.length ? (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-[11px]">
+          <table className="w-full table-fixed border-collapse text-[9px]">
+            <colgroup>
+              <col style={{ width: "3.2%" }} />
+              <col style={{ width: "12.1%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "5%" }} />
+              <col style={{ width: "8.5%" }} />
+              <col style={{ width: "7.1%" }} />
+              <col style={{ width: "7.1%" }} />
+              <col style={{ width: "6.4%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "8.9%" }} />
+              <col style={{ width: "4.6%" }} />
+              <col style={{ width: "4.3%" }} />
+              <col style={{ width: "20.8%" }} />
+            </colgroup>
             <thead>
-              <tr className="bg-slate-100 text-left uppercase tracking-[0.12em] text-slate-700">
-                <th className="border border-slate-300 px-2 py-2">N.</th>
-                <th className="border border-slate-300 px-2 py-2">Fornitore</th>
-                <th className="border border-slate-300 px-2 py-2">Lega</th>
-                <th className="border border-slate-300 px-2 py-2">Ø</th>
-                <th className="border border-slate-300 px-2 py-2">CDQ</th>
-                <th className="border border-slate-300 px-2 py-2">Colata</th>
-                <th className="border border-slate-300 px-2 py-2">DDT</th>
-                <th className="border border-slate-300 px-2 py-2">Peso Kg</th>
-                <th className="border border-slate-300 px-2 py-2">Vs. Odv</th>
-                <th className="border border-slate-300 px-2 py-2 text-center">Spunta</th>
-                <th className="min-w-[220px] border border-slate-300 px-2 py-2">Note</th>
+              <tr className="bg-slate-100 text-left uppercase tracking-[0.08em] text-slate-700">
+                <th className="border border-slate-300 px-1.5 py-2">N.</th>
+                <th className="border border-slate-300 px-1.5 py-2">Fornitore</th>
+                <th className="border border-slate-300 px-1.5 py-2">Lega</th>
+                <th className="border border-slate-300 px-1.5 py-2">Ø</th>
+                <th className="border border-slate-300 px-1.5 py-2">Tipo estrusione</th>
+                <th className="border border-slate-300 px-1.5 py-2">CDQ</th>
+                <th className="border border-slate-300 px-1.5 py-2">Colata</th>
+                <th className="border border-slate-300 px-1.5 py-2">DDT</th>
+                <th className="border border-slate-300 px-1.5 py-2">Peso Kg</th>
+                <th className="border border-slate-300 px-1.5 py-2">Vs. Odv</th>
+                <th className="border border-slate-300 px-1.5 py-2 text-center">N. colli</th>
+                <th className="border border-slate-300 px-1.5 py-2 text-center">Spunta</th>
+                <th className="border border-slate-300 px-1.5 py-2">Note valutazione</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id}>
-                  <td className="border border-slate-300 px-2 py-2 font-semibold">{row.id}</td>
-                  <td className="border border-slate-300 px-2 py-2">{displaySupplierName(row)}</td>
-                  <td className="border border-slate-300 px-2 py-2">{composeLega(row)}</td>
-                  <td className="border border-slate-300 px-2 py-2">{formatRowFieldDisplay("diametro", row.diametro)}</td>
-                  <td className="border border-slate-300 px-2 py-2">{row.cdq || "-"}</td>
-                  <td className="border border-slate-300 px-2 py-2">{row.colata || "-"}</td>
-                  <td className="border border-slate-300 px-2 py-2">{row.ddt || "-"}</td>
-                  <td className="border border-slate-300 px-2 py-2">{formatRowFieldDisplay("peso", row.peso)}</td>
-                  <td className="border border-slate-300 px-2 py-2">{row.ordine || "-"}</td>
-                  <td className="border border-slate-300 px-2 py-2 text-center text-lg">□</td>
-                  <td className="border border-slate-300 px-2 py-2">&nbsp;</td>
+                  <td className="border border-slate-300 px-1.5 py-2 font-semibold">{row.id}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{displaySupplierName(row)}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{composeLega(row)}</td>
+                  <td className="border border-slate-300 px-1.5 py-2">{formatRowFieldDisplay("diametro", row.diametro)}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{displayExtrusionType(row.qualita_tipo_controllo)}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{row.cdq || "-"}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{row.colata || "-"}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{row.ddt || "-"}</td>
+                  <td className="border border-slate-300 px-1.5 py-2">{formatRowFieldDisplay("peso", row.peso)}</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2">{row.ordine || "-"}</td>
+                  <td className="border border-slate-300 px-1.5 py-2">&nbsp;</td>
+                  <td className="border border-slate-300 px-1.5 py-2 text-center text-lg">□</td>
+                  <td className="whitespace-pre-wrap break-words border border-slate-300 px-1.5 py-2">{row.qualita_note || ""}</td>
                 </tr>
               ))}
             </tbody>
