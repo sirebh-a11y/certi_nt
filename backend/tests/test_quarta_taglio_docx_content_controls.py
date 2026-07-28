@@ -13,6 +13,74 @@ from app.modules.standards.models import NormativeStandard  # noqa: F401 - ensur
 
 
 class QuartaTaglioDocxContentControlTests(unittest.TestCase):
+    @staticmethod
+    def _minimal_detail() -> QuartaTaglioDetailResponse:
+        return QuartaTaglioDetailResponse(
+            cod_odp="OLTEST",
+            ready=True,
+            status_color="green",
+            status_message="ok",
+            can_create_word=True,
+            header={"data_certificato": ""},
+            materials=[],
+            missing_items=[],
+            standard_candidates=[],
+            selected_standard=None,
+            selected_standard_confirmed=True,
+            chemistry=[],
+            properties=[],
+            notes=[],
+            conformity_status="conforme",
+            conformity_issues=[],
+            esolver_rows=[],
+            certifiable_units=[],
+        )
+
+    def test_footer_centers_operator_manager_and_signature_in_separate_cells(self) -> None:
+        output_path = Path(tempfile.gettempdir()) / "certi_nt_footer_alignment_test.docx"
+        user = User(name="Marco Gorza", email="marco@example.test", role="admin")
+
+        build_forgialluminio_draft_docx(
+            detail=self._minimal_detail(),
+            output_path=output_path,
+            draft_number="7000_00_00/26",
+            certified_by=user,
+            quality_manager=user,
+        )
+
+        with zipfile.ZipFile(output_path) as archive:
+            footer_xml = next(
+                archive.read(name).decode("utf-8", errors="ignore")
+                for name in archive.namelist()
+                if name.startswith("word/footer") and name.endswith(".xml")
+            )
+            document_xml = archive.read("word/document.xml").decode("utf-8", errors="ignore")
+
+        namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        footer_root = ET.fromstring(footer_xml)
+        row = footer_root.find(".//w:tr", namespace)
+        self.assertIsNotNone(row)
+        cells = row.findall("w:tc", namespace)
+        self.assertEqual(len(cells), 3)
+        grid_widths = [
+            int(column.get(f"{{{namespace['w']}}}w"))
+            for column in footer_root.findall(".//w:tblGrid/w:gridCol", namespace)
+        ]
+        self.assertEqual(grid_widths, [5112, 2808, 2304])
+        self.assertIn("Operator:", "".join(cells[0].itertext()))
+        self.assertIn("Marco Gorza", "".join(cells[0].itertext()))
+        self.assertIn("Quality Manager:", "".join(cells[1].itertext()))
+        self.assertNotIn("Quality Manager:", "".join(cells[2].itertext()))
+        self.assertNotIn("drawing", ET.tostring(cells[1], encoding="unicode"))
+        self.assertIn("drawing", ET.tostring(cells[2], encoding="unicode"))
+        self.assertEqual(
+            [cell.find("w:tcPr/w:vAlign", namespace).get(f"{{{namespace['w']}}}val") for cell in cells],
+            ["center", "center", "center"],
+        )
+        self.assertIn('w:footer="173"', document_xml)
+        self.assertIn('w:bottom="792"', document_xml)
+        self.assertIn('cx="512064"', footer_xml)
+
     def test_generated_certificate_alloy_excludes_standard_variant(self) -> None:
         standard = NormativeStandard(
             code="2024-sigma",

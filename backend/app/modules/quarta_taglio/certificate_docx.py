@@ -36,6 +36,10 @@ HEADER_LOGO_WIDTH_EMU = 1993392
 HEADER_LOGO_HEIGHT_EMU = 685800
 FOOTER_FONT_SIZE = Pt(10)
 QUALITY_MANAGER_SIGNATURE_WIDTH = Inches(0.56)
+FOOTER_OPERATOR_COLUMN_WIDTH = Inches(3.55)
+FOOTER_MANAGER_LABEL_COLUMN_WIDTH = Inches(1.95)
+FOOTER_SIGNATURE_COLUMN_WIDTH = Inches(1.60)
+FOOTER_HORIZONTAL_CELL_MARGIN = 35
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
 HEADER_FLOW_ROW_HEIGHT = Twips(355)
 HEADER_FLOW_LINE_SPACING = 205 / 240
@@ -483,29 +487,65 @@ def _fill_signature_footer(footer, *, certified_by: User, quality_manager: User 
     footer.is_linked_to_previous = False
     _clear_header_footer(footer)
 
-    table = footer.add_table(rows=1, cols=2, width=HEADER_WIDTH)
+    table = footer.add_table(rows=1, cols=3, width=HEADER_WIDTH)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _clear_table_borders(table)
-    _set_column_widths(table, [Inches(3.55), Inches(3.55)])
+    _set_column_widths(
+        table,
+        [
+            FOOTER_OPERATOR_COLUMN_WIDTH,
+            FOOTER_MANAGER_LABEL_COLUMN_WIDTH,
+            FOOTER_SIGNATURE_COLUMN_WIDTH,
+        ],
+    )
+    _set_table_grid_widths(
+        table,
+        [
+            FOOTER_OPERATOR_COLUMN_WIDTH,
+            FOOTER_MANAGER_LABEL_COLUMN_WIDTH,
+            FOOTER_SIGNATURE_COLUMN_WIDTH,
+        ],
+    )
+    _set_table_cell_margins(
+        table,
+        left=FOOTER_HORIZONTAL_CELL_MARGIN,
+        right=FOOTER_HORIZONTAL_CELL_MARGIN,
+    )
     for cell in table.rows[0].cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
     operator_paragraph = table.cell(0, 0).paragraphs[0]
     operator_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    operator_paragraph.paragraph_format.space_before = Pt(0)
     operator_paragraph.paragraph_format.space_after = Pt(0)
     if include_operator:
         _add_signature_label_value(operator_paragraph, "Operator:", certified_by.name)
 
     qm_paragraph = table.cell(0, 1).paragraphs[0]
-    qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    qm_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    qm_paragraph.paragraph_format.space_before = Pt(0)
     qm_paragraph.paragraph_format.space_after = Pt(0)
-    _add_signature_label_value(qm_paragraph, "Quality Manager:", "")
     if QUALITY_MANAGER_SIGNATURE_PATH.exists():
-        qm_paragraph.add_run().add_picture(str(QUALITY_MANAGER_SIGNATURE_PATH), width=QUALITY_MANAGER_SIGNATURE_WIDTH)
-    elif quality_manager:
-        fallback_run = qm_paragraph.add_run(quality_manager.name)
-        fallback_run.font.name = "Times New Roman"
-        fallback_run.font.size = FOOTER_FONT_SIZE
+        _add_signature_label_value(qm_paragraph, "Quality Manager:", "")
+        signature_paragraph = table.cell(0, 2).paragraphs[0]
+        signature_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        signature_paragraph.paragraph_format.space_before = Pt(0)
+        signature_paragraph.paragraph_format.space_after = Pt(0)
+        signature_paragraph.add_run().add_picture(
+            str(QUALITY_MANAGER_SIGNATURE_PATH),
+            width=QUALITY_MANAGER_SIGNATURE_WIDTH,
+        )
+    else:
+        fallback_cell = table.cell(0, 1).merge(table.cell(0, 2))
+        fallback_paragraph = fallback_cell.paragraphs[0]
+        fallback_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        fallback_paragraph.paragraph_format.space_before = Pt(0)
+        fallback_paragraph.paragraph_format.space_after = Pt(0)
+        _add_signature_label_value(
+            fallback_paragraph,
+            "Quality Manager:",
+            quality_manager.name if quality_manager else "",
+        )
 
 
 def _append_docx_body(
@@ -1237,6 +1277,11 @@ def _set_column_widths(table, widths) -> None:
     for column, width in zip(table.columns, widths):
         for cell in column.cells:
             cell.width = width
+
+
+def _set_table_grid_widths(table, widths) -> None:
+    for grid_column, width in zip(table._tbl.tblGrid.gridCol_lst, widths):
+        grid_column.set(qn("w:w"), str(int(width.twips)))
 
 
 def _set_table_width_with_first_column(table, *, total_inches: float, first_column_inches: float) -> None:
