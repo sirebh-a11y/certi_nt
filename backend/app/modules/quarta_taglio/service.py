@@ -299,6 +299,7 @@ def sync_and_list_quarta_taglio(
     sync_data: bool = True,
     only_taglio_active: bool = False,
     hide_certified: bool = False,
+    only_word_pending: bool = False,
     limit: int = 25,
     offset: int = 0,
     query_one: str | None = None,
@@ -332,6 +333,19 @@ def sync_and_list_quarta_taglio(
         operator_one=operator_one,
         operator_two=operator_two,
     )
+    if only_word_pending and filtered_groups:
+        word_pending_candidates = [
+            (summary, group_rows)
+            for summary, group_rows in filtered_groups
+            if _incoming_rows_ready_for_certification(group_rows)
+        ]
+        filtered_raw_rows = [row for _summary, group_rows in word_pending_candidates for row in group_rows]
+        cached_esolver_links.update(_refresh_esolver_links_for_rows(db, rows=filtered_raw_rows))
+        filtered_groups = _filter_word_pending_groups(
+            db,
+            groups=word_pending_candidates,
+            esolver_links=cached_esolver_links,
+        )
     progress_by_odp: dict[str, _OlCertificationProgress] = {}
     if hide_certified and filtered_groups:
         progress_by_odp = _build_certification_progress_by_odp(
@@ -383,6 +397,7 @@ def sync_and_list_quarta_taglio(
         limit=safe_limit,
         only_taglio_active=only_taglio_active,
         hide_certified=hide_certified,
+        only_word_pending=only_word_pending,
     )
 
 
@@ -4822,6 +4837,88 @@ def _certificate_cod_f3_display(certificate: QuartaTaglioFinalCertificate) -> st
     codice_f3_values = [item.get("codice_f3") for item in values if isinstance(item, dict)]
     cod_art_values = [item.get("cod_art") for item in values if isinstance(item, dict)]
     return _join_unique(codice_f3_values) or _join_unique(cod_art_values) or None
+
+
+def _filter_word_pending_groups(
+    db: Session,
+    *,
+    groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
+    esolver_links: dict[str, QuartaTaglioEsolverLink],
+) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
+    cod_odps = [summary.cod_odp for summary, _group_rows in groups]
+    certificates_by_odp = _load_final_certificates_by_odp(db, cod_odps)
+    confirmed_standard_odps = {
+        cod_odp
+        for (cod_odp,) in db.query(QuartaTaglioStandardSelection.cod_odp)
+        .filter(QuartaTaglioStandardSelection.cod_odp.in_(cod_odps))
+        .all()
+    }
+
+    result: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]] = []
+    for summary, group_rows in groups:
+        if not _group_has_ready_unit_without_word(
+            group_rows=group_rows,
+            esolver_link=esolver_links.get(summary.cod_odp),
+            certificates=certificates_by_odp.get(summary.cod_odp, []),
+        ):
+            continue
+        blockers = _word_creation_blockers(
+            db=db,
+            quarta_rows=group_rows,
+            app_rows=_load_matching_app_rows(db, group_rows),
+            selected_standard_confirmed=summary.cod_odp in confirmed_standard_odps,
+        )
+        if not blockers:
+            result.append((summary, group_rows))
+    return result
+
+
+def _group_has_ready_unit_without_word(
+    *,
+    group_rows: list[QuartaTaglioRow],
+    esolver_link: QuartaTaglioEsolverLink | None,
+    certificates: list[QuartaTaglioFinalCertificate],
+) -> bool:
+    if not group_rows or not _incoming_rows_ready_for_certification(group_rows):
+        return False
+    if esolver_link is None or esolver_link.status != "ok":
+        return False
+
+    ready_units = [
+        unit
+        for unit in _build_certifiable_units(
+            cod_odp=group_rows[0].cod_odp,
+            esolver_rows=_esolver_rows_from_link(esolver_link),
+            quarta_rows=group_rows,
+        )
+        if unit.source == "esolver" and unit.status == "ready" and _clean_text(unit.unit_key)
+    ]
+    if not ready_units:
+        return False
+
+    certificates_by_unit_key: dict[str, list[QuartaTaglioFinalCertificate]] = defaultdict(list)
+    for certificate in certificates:
+        unit_key = _clean_text(certificate.unit_key)
+        if unit_key:
+            certificates_by_unit_key[unit_key].append(certificate)
+
+    used_certificate_ids: set[int] = set()
+    for unit in ready_units:
+        exact_certificates = certificates_by_unit_key.get(unit.unit_key, [])
+        certificate = next((item for item in exact_certificates if item.storage_key_docx), None)
+        if certificate is None and exact_certificates:
+            certificate = exact_certificates[0]
+        if certificate is None:
+            certificate = _find_existing_certificate_for_unit(
+                certificates,
+                unit=unit,
+                used_certificate_ids=used_certificate_ids,
+            )
+        if certificate is not None and certificate.id is not None:
+            used_certificate_ids.add(certificate.id)
+        if certificate is None or not certificate.storage_key_docx:
+            return True
+    return False
 
 
 def _build_certification_progress_by_odp(

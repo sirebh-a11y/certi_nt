@@ -112,6 +112,7 @@ class QuartaTaglioListResponse(BaseModel):
     limit: int = 25
     only_taglio_active: bool = False
     hide_certified: bool = False
+    only_word_pending: bool = False
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):

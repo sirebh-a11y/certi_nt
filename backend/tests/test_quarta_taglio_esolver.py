@@ -10,11 +10,13 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioEsolverDdtRowResponse,
 )
 from app.modules.quarta_taglio.service import (
+    _build_certifiable_units,
     _certificate_header_flow,
     _certification_progress_for_group,
     _codice_f3_from_esolver_or_quarta,
     _detail_for_certiol_candidate,
     _esolver_status_for_rows,
+    _group_has_ready_unit_without_word,
     _serialize_ol_group,
 )
 
@@ -54,6 +56,7 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
         ddt: str | None = None,
         unit_key: str | None = None,
         status: str = "draft",
+        storage_key_docx: str | None = "cert.docx",
         storage_key_pdf: str | None = None,
     ) -> QuartaTaglioFinalCertificate:
         return QuartaTaglioFinalCertificate(
@@ -64,8 +67,16 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
             ddt=ddt,
             unit_key=unit_key,
             status=status,
-            storage_key_docx="cert.docx",
+            storage_key_docx=storage_key_docx,
             storage_key_pdf=storage_key_pdf,
+        )
+
+    def _esolver_link(self, rows: list[dict]) -> QuartaTaglioEsolverLink:
+        return QuartaTaglioEsolverLink(
+            cod_odp="OL1",
+            status="ok",
+            message="Dati eSolver/DDT collegati",
+            rows=rows,
         )
 
     def test_esolver_rows_are_valid_even_when_cod_f3_differs_from_quarta(self):
@@ -383,6 +394,127 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
 
         self.assertEqual(progress.status, "completed")
         self.assertEqual(progress.message, "Tutti i DDT certificati hanno PDF chiuso.")
+
+    def test_word_pending_filter_includes_ready_unit_without_certificate(self):
+        row = self._quarta_row()
+        link = self._esolver_link(
+            [
+                {
+                    "cod_f3": "605000730",
+                    "orp": "OL1",
+                    "ddt": "1464-28/05/2026",
+                    "id_documento": "100",
+                    "id_riga_doc": "1",
+                    "rif_lotto_alfanum": "LOT-1",
+                }
+            ]
+        )
+
+        self.assertTrue(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=link,
+                certificates=[],
+            )
+        )
+
+    def test_word_pending_filter_excludes_ready_unit_with_word(self):
+        row = self._quarta_row()
+        link = self._esolver_link(
+            [
+                {
+                    "cod_f3": "605000730",
+                    "orp": "OL1",
+                    "ddt": "1464-28/05/2026",
+                    "id_documento": "100",
+                    "id_riga_doc": "1",
+                    "rif_lotto_alfanum": "LOT-1",
+                }
+            ]
+        )
+        unit = _build_certifiable_units(
+            cod_odp="OL1",
+            esolver_rows=[QuartaTaglioEsolverDdtRowResponse(**link.rows[0])],
+            quarta_rows=[row],
+        )[0]
+
+        self.assertFalse(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=link,
+                certificates=[
+                    self._certificate(
+                        cod_f3=unit.cod_f3 or "",
+                        ddt=unit.ddt,
+                        unit_key=unit.unit_key,
+                    )
+                ],
+            )
+        )
+
+    def test_word_pending_filter_keeps_ol_when_one_of_multiple_units_has_no_word(self):
+        row = self._quarta_row()
+        link = self._esolver_link(
+            [
+                {
+                    "cod_f3": "605000730",
+                    "orp": "OL1",
+                    "ddt": "1204-29/04/2026",
+                    "id_documento": "100",
+                    "id_riga_doc": "1",
+                    "rif_lotto_alfanum": "LOT-1",
+                },
+                {
+                    "cod_f3": "605000730",
+                    "orp": "OL1",
+                    "ddt": "1464-28/05/2026",
+                    "id_documento": "101",
+                    "id_riga_doc": "1",
+                    "rif_lotto_alfanum": "LOT-2",
+                },
+            ]
+        )
+        units = _build_certifiable_units(
+            cod_odp="OL1",
+            esolver_rows=[QuartaTaglioEsolverDdtRowResponse(**item) for item in link.rows],
+            quarta_rows=[row],
+        )
+
+        self.assertTrue(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=link,
+                certificates=[
+                    self._certificate(
+                        cod_f3=units[0].cod_f3 or "",
+                        ddt=units[0].ddt,
+                        unit_key=units[0].unit_key,
+                    )
+                ],
+            )
+        )
+
+    def test_word_pending_filter_excludes_incomplete_incoming_group(self):
+        row = self._quarta_row()
+        row.status_color = "yellow"
+        row.status_message = "CDQ trovato, ma iter non completo"
+        link = self._esolver_link(
+            [
+                {
+                    "cod_f3": "605000730",
+                    "orp": "OL1",
+                    "ddt": "1464-28/05/2026",
+                }
+            ]
+        )
+
+        self.assertFalse(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=link,
+                certificates=[],
+            )
+        )
 
 
 if __name__ == "__main__":
