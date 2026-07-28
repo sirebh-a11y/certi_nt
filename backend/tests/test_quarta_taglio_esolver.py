@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 from app.core.departments.models import Department  # noqa: F401
 from app.modules.quarta_taglio.models import QuartaTaglioEsolverLink, QuartaTaglioFinalCertificate, QuartaTaglioRow
@@ -10,6 +11,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioEsolverDdtRowResponse,
 )
 from app.modules.quarta_taglio.service import (
+    _CertiOlRow,
     _build_certifiable_units,
     _certificate_header_flow,
     _certification_progress_for_group,
@@ -18,6 +20,7 @@ from app.modules.quarta_taglio.service import (
     _esolver_status_for_rows,
     _group_has_ready_unit_without_word,
     _serialize_ol_group,
+    _word_creation_blockers,
 )
 
 
@@ -514,6 +517,121 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
                 esolver_link=link,
                 certificates=[],
             )
+        )
+
+    def test_word_pending_filter_includes_certiol_candidate_before_ddt(self):
+        row = self._quarta_row()
+
+        self.assertTrue(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=None,
+                certificates=[],
+                certiol_rows=[
+                    _CertiOlRow(
+                        orp="OL1",
+                        cod_cli="CLIENTE",
+                        rag_soc="Cliente test",
+                        cod_f3_odp="605000700",
+                        cod_f3="605000700",
+                        des_f3="Descrizione Quarta",
+                    ),
+                    _CertiOlRow(
+                        orp="OL1",
+                        cod_cli="CLIENTE",
+                        rag_soc="Cliente test",
+                        cod_f3_odp="605000700",
+                        cod_f3="605000730",
+                        des_f3="Descrizione Quarta lavorata",
+                    ),
+                ],
+            )
+        )
+
+    def test_word_pending_filter_excludes_certiol_candidates_with_all_words(self):
+        row = self._quarta_row()
+        certiol_rows = [
+            _CertiOlRow(
+                orp="OL1",
+                cod_cli="CLIENTE",
+                rag_soc="Cliente test",
+                cod_f3_odp="605000700",
+                cod_f3="605000700",
+                des_f3="Descrizione Quarta",
+            ),
+            _CertiOlRow(
+                orp="OL1",
+                cod_cli="CLIENTE",
+                rag_soc="Cliente test",
+                cod_f3_odp="605000700",
+                cod_f3="605000730",
+                des_f3="Descrizione Quarta lavorata",
+            ),
+        ]
+
+        self.assertFalse(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=None,
+                certificates=[
+                    self._certificate(certificate_number="7000_00_00/26", cod_f3="605000700"),
+                    self._certificate(certificate_number="7000_00_30/26", cod_f3="605000730"),
+                ],
+                certiol_rows=certiol_rows,
+            )
+        )
+
+    def test_word_pending_filter_includes_finished_candidate_after_raw_word(self):
+        row = self._quarta_row()
+
+        self.assertTrue(
+            _group_has_ready_unit_without_word(
+                group_rows=[row],
+                esolver_link=None,
+                certificates=[
+                    self._certificate(certificate_number="7000_00_00/26", cod_f3="605000700"),
+                ],
+                certiol_rows=[
+                    _CertiOlRow(
+                        orp="OL1",
+                        cod_cli="CLIENTE",
+                        rag_soc="Cliente test",
+                        cod_f3_odp="605000700",
+                        cod_f3="605000700",
+                        des_f3="Descrizione Quarta",
+                    ),
+                    _CertiOlRow(
+                        orp="OL1",
+                        cod_cli="CLIENTE",
+                        rag_soc="Cliente test",
+                        cod_f3_odp="605000700",
+                        cod_f3="605000730",
+                        des_f3="Descrizione Quarta lavorata",
+                    ),
+                ],
+            )
+        )
+
+    def test_word_pending_filter_still_requires_confirmed_standard(self):
+        db = MagicMock()
+
+        self.assertEqual(
+            _word_creation_blockers(
+                db=db,
+                quarta_rows=[],
+                app_rows=[],
+                selected_standard_confirmed=False,
+            ),
+            ["Standard non confermato"],
+        )
+        self.assertEqual(
+            _word_creation_blockers(
+                db=db,
+                quarta_rows=[],
+                app_rows=[],
+                selected_standard_confirmed=True,
+            ),
+            [],
         )
 
 
