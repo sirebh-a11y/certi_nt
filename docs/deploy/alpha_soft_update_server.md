@@ -36,7 +36,8 @@ Informazioni confermate da IT:
 - DNS: `certi-test.forgialluminio.it` → `10.10.1.10`;
 - frontend Alpha pubblicato localmente sulla porta host `8080`;
 - backend Alpha pubblicato localmente sulla porta host `8001`;
-- PostgreSQL disponibile soltanto nella rete Docker interna, senza porta host pubblicata;
+- il 28 luglio 2026 PostgreSQL risultava disponibile soltanto nella rete Docker interna;
+- il compose Alpha ora prevede un mapping host persistente e configurabile tramite `.env`;
 - Nginx esistente instrada l'host `certi-test.forgialluminio.it` al frontend;
 - Nginx instrada `certi-test.forgialluminio.it/api` al backend;
 - pubblicazione applicativa attuale in HTTP, senza HTTPS;
@@ -53,6 +54,43 @@ proxy_read_timeout 300s;
 
 Queste impostazioni appartengono alla configurazione server gestita da IT e devono restare
 intatte durante un deploy soft.
+
+### Mapping PostgreSQL persistente
+
+Il mapping della porta PostgreSQL fa parte di `docker-compose.alpha.yml` e usa:
+
+```dotenv
+POSTGRES_BIND_HOST=127.0.0.1
+POSTGRES_HOST_PORT=5432
+```
+
+Con `127.0.0.1` PostgreSQL è raggiungibile soltanto dal server Alpha. È l'impostazione sicura
+da usare finché IT non ha verificato firewall, IP sorgente e utenti read-only.
+
+Per rendere disponibile la vista a eSolver/Nemesi, dopo la conferma di Matteo:
+
+```dotenv
+POSTGRES_BIND_HOST=10.10.1.10
+POSTGRES_HOST_PORT=5432
+```
+
+Il collegamento diventa:
+
+```text
+10.10.1.10:5432 -> container postgres:5432
+```
+
+Questi valori stanno nel `.env` del server, che il deploy soft preserva. Non aggiungere il
+mapping manualmente al compose presente soltanto sul server: il file viene sostituito dal
+pacchetto e la modifica andrebbe persa al deploy successivo.
+
+Non impostare `POSTGRES_BIND_HOST=0.0.0.0`. Prima di usare `10.10.1.10` devono essere
+confermati:
+
+- firewall TCP `5432` limitato agli IP di Nemesi/eSolver e Quarta;
+- ruoli PostgreSQL dedicati in sola lettura;
+- assenza di accesso alle tabelle applicative;
+- modalità SSL concordata con IT.
 
 SSH dal PC locale, usando PowerShell:
 
@@ -85,8 +123,9 @@ ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.for
 10. Copia archivio sul server in `/srv/certi_nt/backup`.
 11. Backup dell'app server attuale.
 12. Sostituzione soft del codice, preservando `.env`, database e storage.
-13. Avvio Docker.
-14. Verifica del contenuto e delle versioni realmente installate.
+13. Verifica dei parametri PostgreSQL preservati nel `.env`.
+14. Avvio Docker.
+15. Verifica del contenuto, delle versioni e del mapping PostgreSQL realmente installati.
 
 ## Prima di aggiornare
 
@@ -98,6 +137,7 @@ docker compose --env-file .env -f docker-compose.alpha.yml ps
 test -f .env
 test -d /srv/certi_nt/data/postgres
 test -d /srv/certi_nt/data/storage
+grep -E '^POSTGRES_(BIND_HOST|HOST_PORT)=' .env || true
 ```
 
 Non procedere se:
@@ -106,6 +146,22 @@ Non procedere se:
 - PostgreSQL non e attivo o non e healthy;
 - mancano le cartelle `data/postgres` o `data/storage`;
 - l'app e in mezzo a un caricamento importante.
+
+Se i due parametri PostgreSQL non sono ancora presenti, aggiungerli al `.env` prima di
+installare la versione del compose che contiene il mapping. Usare `127.0.0.1` finché Matteo
+non ha confermato l'apertura controllata verso Nemesi:
+
+```dotenv
+POSTGRES_BIND_HOST=127.0.0.1
+POSTGRES_HOST_PORT=5432
+```
+
+Se è già prevista la pubblicazione esterna, verificare prima che la porta host scelta non sia
+occupata:
+
+```bash
+ss -ltn | grep ':5432 ' || true
+```
 
 ### Controllare run AI attivi
 
@@ -499,9 +555,32 @@ Sul server:
 cd /srv/certi_nt/app
 docker compose --env-file .env -f docker-compose.alpha.yml ps
 docker compose --env-file .env -f docker-compose.alpha.yml logs --tail=120 backend
+docker port app-postgres-1 5432/tcp
+ss -ltn | grep ':5432 '
 curl -I http://127.0.0.1:8080/
 curl -I http://127.0.0.1:8001/docs
 ```
+
+Il controllo PostgreSQL deve corrispondere al valore conservato nel `.env`:
+
+- con `POSTGRES_BIND_HOST=127.0.0.1` deve comparire `127.0.0.1:5432`;
+- con `POSTGRES_BIND_HOST=10.10.1.10` deve comparire `10.10.1.10:5432`;
+- se `docker port` non restituisce il mapping previsto, il deploy non è concluso;
+- non correggere il compose direttamente sul server: correggere configurazione tracciata o
+  `.env`, poi ricreare il servizio.
+
+Quando la vista eSolver è attiva, controllare inoltre che il ruolo read-only esista ancora e
+che la vista sia presente:
+
+```bash
+docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
+  psql -U certi_nt -d certi_nt -P pager=off \
+  -c "select to_regclass('esolver_export.certi_certificati_pdf') as export_view;" \
+  -c "select rolname from pg_roles where rolname in ('certi_esolver_reader', 'certi_quarta_reader');"
+```
+
+La query non mostra password. I nomi effettivi dei ruoli devono essere aggiornati nel comando
+se Matteo sceglie nomi diversi.
 
 Controllare che i file installati corrispondano all'archivio. Le differenze di UID e GID sono normali nel passaggio da archivio Windows a server Linux; qualsiasi altra differenza deve bloccare la chiusura del deploy:
 
@@ -660,6 +739,9 @@ Non fare:
 - cancellare `/srv/certi_nt/data/postgres`;
 - cancellare `/srv/certi_nt/data/storage`;
 - sovrascrivere `.env`;
+- aggiungere il mapping PostgreSQL soltanto al compose presente sul server;
+- esporre PostgreSQL su `0.0.0.0`;
+- concludere il deploy senza verificare `docker port app-postgres-1 5432/tcp`;
 - usare `docker compose down -v`;
 - pulire database o documenti senza decisione esplicita;
 - aggiornare mentre un caricamento AI lungo e in corso.

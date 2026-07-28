@@ -1,9 +1,10 @@
 # Vista SQL CERTI verso ESOLVER - piano operativo
 
 Data piano: 2026-07-23
-Stato: implementazione locale completata; pubblicazione esterna in attesa dei dati IT
-Blocco attuale per il collaudo esterno: in attesa dei soli parametri di rete e accesso
-PostgreSQL predisposti da IT/Matteo
+Ultimo aggiornamento: 2026-07-28
+Stato: vista presente su Alpha; accesso PostgreSQL esterno non attivo
+Blocco attuale per il collaudo esterno: porta Docker non pubblicata e utenti read-only non
+ancora creati
 
 ## Regola operativa
 
@@ -129,9 +130,11 @@ Su `unit_key` esiste già un indice univoco per i valori non vuoti.
 
 ## Esposizione attuale
 
-Oggi non esiste alcuna vista SQL salvata.
+Su Alpha esiste la vista SQL:
 
-È disponibile soltanto l'endpoint:
+`esolver_export.certi_certificati_pdf`
+
+Resta disponibile anche l'endpoint:
 
 `/api/export/esolver/certificati-pdf`
 
@@ -154,9 +157,9 @@ Le credenziali `CERTI_EXPORT_USERNAME` e `CERTI_EXPORT_PASSWORD` proteggono l'en
 Non sono le credenziali PostgreSQL read-only della futura vista e non devono essere riutilizzate
 automaticamente per l'accesso al database.
 
-La nuova vista deve diventare la fonte dati canonica dell'export. L'endpoint HTTP deve
-continuare a funzionare, leggendo gli stessi record della vista, così da evitare due logiche
-parallele che in futuro potrebbero disallinearsi.
+La vista è la fonte dati canonica dell'export. L'endpoint HTTP continua a funzionare leggendo
+gli stessi record della vista, così da evitare due logiche parallele che in futuro potrebbero
+disallinearsi.
 
 ## Nome proposto
 
@@ -292,20 +295,21 @@ del server. Completare soltanto i valori ancora assegnati a IT/Matteo o Nemesi.
 | Motore database | `PostgreSQL 16` - verificato |
 | Host PostgreSQL interno Docker | `postgres` - verificato |
 | Porta PostgreSQL interna Docker | `5432` - verificato |
-| Pubblicazione PostgreSQL attuale | nessuna porta pubblicata dal compose - verificato |
-| Host o IP PostgreSQL da comunicare a Nemesi | candidato `10.10.1.10` / `certi-test.forgialluminio.it`, utilizzabile solo dopo pubblicazione e conferma IT |
-| Porta PostgreSQL esterna | `DA_FORNIRE_IT` |
+| Pubblicazione PostgreSQL attuale | nessuna porta host pubblicata - verificato il 2026-07-28 |
+| Host o IP PostgreSQL da comunicare a Nemesi | `10.10.1.10`, comunicato da Matteo; oggi non raggiungibile sulla porta PostgreSQL |
+| Porta PostgreSQL esterna prevista | TCP `5432`, comunicata da Matteo; mapping non presente oggi |
 | Nome database | `certi_nt` - verificato |
-| Nome schema | `esolver_export` salvo diversa indicazione |
-| Nome vista richiesto da Nemesi | `certi_certificati_pdf` salvo diversa indicazione |
+| Nome schema | `esolver_export` - presente su Alpha |
+| Nome vista richiesto da Nemesi | `certi_certificati_pdf` - presente su Alpha |
 | Username endpoint HTTP | `Certi` - verificato, non è l'utente PostgreSQL |
 | Password endpoint HTTP | configurata nel `.env` Alpha, non riportare nel repository |
-| Username PostgreSQL read-only | `DA_FORNIRE_IT` |
+| Username PostgreSQL read-only | non creato; su Alpha esiste soltanto l'utente applicativo `certi_nt` |
 | Nome secret password PostgreSQL read-only | `DA_DEFINIRE`, senza riportare la password |
-| IP sorgente Nemesi autorizzato | `DA_FORNIRE_IT` |
-| Rete/VPN autorizzata | `DA_FORNIRE_IT` |
-| SSL richiesto | `DA_FORNIRE_IT` |
-| Modalità SSL | `DA_FORNIRE_IT` |
+| IP sorgente Nemesi autorizzato | manca l'IP esatto |
+| Rete indicata da Matteo | `10.10.0.0/16`; regola presente in PostgreSQL ma non restrittiva da sola |
+| Firewall host | `DA_VERIFICARE_MATTEO`, non verificabile con l'utenza SSH applicativa |
+| SSL PostgreSQL attuale | disattivato (`ssl = off`) - verificato il 2026-07-28 |
+| Modalità SSL per Nemesi | `disable`, se Matteo conferma di mantenere l'attuale configurazione |
 | Certificato CA/client, se previsto | `DA_FORNIRE_IT` |
 | Referente tecnico | Matteo / Nemesi, dettaglio da completare |
 
@@ -313,10 +317,76 @@ La configurazione HTTP/HTTPS dell'applicazione e la configurazione SSL di Postgr
 indipendenti. Il fatto che CERTI Alpha sia pubblicato in HTTP non definisce se la connessione
 PostgreSQL di Nemesi debba usare SSL.
 
-Il DNS ora identifica con certezza il server applicativo, ma non rende PostgreSQL raggiungibile:
-nel compose Alpha il servizio `postgres` non pubblica alcuna porta sull'host. Prima di comunicare
-`10.10.1.10` a Nemesi come endpoint database, IT deve pubblicare una porta controllata, limitarla
-all'origine autorizzata e confermare il percorso di rete.
+Il DNS identifica con certezza il server applicativo, ma oggi PostgreSQL non è raggiungibile
+dalla rete: nel compose Alpha il servizio `postgres` non pubblica alcuna porta sull'host.
+Matteo aveva comunicato il 1° luglio 2026 di avere esposto `10.10.1.10:5432`, ma la verifica
+del 28 luglio mostra che quel mapping non è presente.
+
+La versione installata sul server non contiene il mapping PostgreSQL. Di conseguenza,
+un'eventuale modifica fatta soltanto sul server può essere sostituita da un deploy soft.
+
+Il 28 luglio 2026 è stata predisposta nel repository la pubblicazione persistente tramite:
+
+- `POSTGRES_BIND_HOST`, con valore sicuro predefinito `127.0.0.1`;
+- `POSTGRES_HOST_PORT`, con valore predefinito `5432`;
+- mapping definito nel `docker-compose.alpha.yml`;
+- controlli obbligatori aggiunti alla procedura di deploy soft.
+
+La configurazione diventerà effettiva su Alpha al prossimo deploy. L'impostazione
+`POSTGRES_BIND_HOST=10.10.1.10` deve essere applicata nel `.env` del server soltanto dopo la
+verifica firewall di Matteo.
+
+### Audit Alpha del 28 luglio 2026
+
+Verifiche eseguite senza leggere o mostrare password:
+
+| Controllo | Esito |
+|---|---|
+| Vista `esolver_export.certi_certificati_pdf` | presente |
+| PostgreSQL | versione `16.14`, database `certi_nt` |
+| Porta interna container | `5432/tcp` attiva |
+| Mapping porta host | assente: `PortBindings = {}` |
+| Listener host TCP `5432` | assente |
+| Ruolo `certi_esolver_reader` | assente |
+| Ruolo read-only Quarta | assente |
+| Permessi reader sulla vista | assenti perché i ruoli non esistono |
+| SSL PostgreSQL | disattivato |
+| Regola PostgreSQL `10.10.0.0/16` | presente con autenticazione `scram-sha-256` |
+| Restrizione effettiva al solo `10.10.0.0/16` | no: esiste prima una regola `host all all all scram-sha-256` |
+| Firewall host | non verificato: l'utenza SSH applicativa non ha accesso `sudo` non interattivo |
+| Configurazione pagina Database | disabilitata, host/porta/utente/rete ancora vuoti, collaudo pendente |
+
+La regola `10.10.0.0/16` conferma quanto scritto da Matteo, ma non limita da sola gli accessi:
+la regola generica precedente accetta qualsiasi origine che riesca a raggiungere PostgreSQL e
+disponga di credenziali valide. Prima di pubblicare la porta serve quindi almeno una regola
+firewall limitata agli IP corretti; è preferibile anche restringere `pg_hba.conf` ai soli ruoli
+read-only e alle sole origini autorizzate.
+
+### Cosa manca a Silvano
+
+1. Confermare l'IP esatto del server Nemesi/eSolver che aprirà la connessione. La rete
+   `10.10.0.0/16` comprende molti indirizzi ed è più ampia del necessario.
+2. Confermare se creare due utenti separati, uno per eSolver e uno per Quarta. È la scelta
+   consigliata perché permette controlli, password e revoche indipendenti.
+3. Concordare quando attivare nel `.env` il bind esterno `10.10.1.10`.
+4. Dopo la preparazione di Matteo, concordare con Walter/Nemesi il test reale di lettura.
+
+### Cosa manca a Matteo
+
+1. Comunicare o confermare gli IP sorgente esatti di Nemesi/eSolver e Quarta.
+2. Verificare sul firewall host la regola TCP `5432` e limitarla agli IP sorgente concordati.
+3. Creare uno o due ruoli PostgreSQL dedicati, senza privilegi amministrativi e con password
+   comunicate separatamente.
+4. Concedere a ciascun ruolo soltanto `CONNECT` al database, `USAGE` sullo schema
+   `esolver_export` e `SELECT` sulla vista `esolver_export.certi_certificati_pdf`.
+5. Dopo il deploy della configurazione persistente, verificare che
+   `10.10.1.10:5432 → postgres:5432` sia realmente attivo.
+6. Confermare che la connessione resti senza SSL oppure indicare la modalità SSL da usare.
+7. Provare la query dalla macchina Nemesi e confermare che lettura diretta delle tabelle e
+   operazioni di modifica vengano rifiutate.
+
+Matteo dovrà restituire: IP sorgente, username creati, conferma firewall, modalità SSL ed esito
+del test. Le password devono essere comunicate separatamente e non inserite in questo file.
 
 ### Dati ESOLVER già noti ma relativi al flusso opposto
 
@@ -710,27 +780,26 @@ Il lavoro è concluso quando:
 
 ## Stato delle informazioni mancanti
 
-L'ambiente Alpha, il server applicativo, la base URL, il motore PostgreSQL, la porta interna e
-il nome database sono già noti e verificati.
+L'ambiente Alpha, il server applicativo, la base URL, il motore PostgreSQL, la porta interna,
+il nome database, lo schema e la vista sono già noti e verificati.
 
-Per implementare e testare la vista internamente non servono altri dati IT.
+Per il collaudo esterno mancano:
 
-Per consentire a Nemesi il collaudo esterno mancano soltanto:
-
-- conferma dell'host/IP PostgreSQL raggiungibile da Nemesi;
-- porta PostgreSQL esterna;
-- username PostgreSQL read-only;
-- IP/rete autorizzati;
-- requisiti SSL/firewall;
-- nome del secret contenente la password PostgreSQL read-only.
+- IP esatto della macchina Nemesi/eSolver e, se diversa, della macchina Quarta;
+- scelta definitiva di uno o due utenti read-only;
+- creazione degli utenti e assegnazione dei permessi;
+- pubblicazione persistente della porta host TCP `5432`;
+- verifica e restrizione del firewall;
+- conferma definitiva della modalità senza SSL oppure configurazione SSL;
+- test reale dalla macchina Nemesi.
 
 Quando questi dati saranno disponibili, aggiornare la sezione
 `Parametri Alpha verificati e dati IT da completare`
 senza inserire nel repository la password in chiaro.
 
-## Stato implementazione locale
+## Stato implementazione applicativa
 
-Aggiornato il 23 luglio 2026.
+Aggiornato il 28 luglio 2026.
 
 ### Completato
 
@@ -760,13 +829,15 @@ Aggiornato il 23 luglio 2026.
 
 | Dato/attività | Stato |
 | --- | --- |
-| Host/IP PostgreSQL raggiungibile da Nemesi | candidato `10.10.1.10`, `DA_CONFERMARE_IT` dopo pubblicazione porta |
-| Porta PostgreSQL esterna | `DA_FORNIRE_IT` |
-| Username PostgreSQL read-only | `DA_FORNIRE_IT` |
+| Host/IP PostgreSQL destinato a Nemesi | `10.10.1.10`, comunicato da Matteo |
+| Porta PostgreSQL esterna prevista | TCP `5432`, ma oggi non pubblicata |
+| Persistenza mapping Docker | `IMPLEMENTATA_LOCALE`, da includere nel prossimo deploy Alpha |
+| Username PostgreSQL read-only | `DA_CREARE_MATTEO` |
 | Password PostgreSQL read-only | `DA_CONFIGURARE_SUL_SERVER` |
-| IP/CIDR sorgente Nemesi | `DA_FORNIRE_IT` |
-| Modalità SSL richiesta | `DA_FORNIRE_IT` |
-| Regole firewall/NAT | `DA_FARE_IT` |
+| IP sorgente esatto Nemesi/Quarta | `DA_CONFERMARE_MATTEO/NEMESI` |
+| CIDR presente in PostgreSQL | `10.10.0.0/16`, verificato ma non restrittivo |
+| Modalità SSL attuale | `disable`; `DA_CONFERMARE_MATTEO` |
+| Regole firewall/NAT | `DA_VERIFICARE_E_RESTRINGERE_MATTEO` |
 | Test dalla postazione Nemesi | `DA_FARE_CON_NEMESI` |
 | Conferma finale Walter | `IN_ATTESA` |
 
