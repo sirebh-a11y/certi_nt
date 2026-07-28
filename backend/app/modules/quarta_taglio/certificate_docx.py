@@ -1144,16 +1144,14 @@ def _alloy_label(detail: QuartaTaglioDetailResponse) -> str:
         material_label = getattr(detail.selected_standard, "certificate_material_label", None)
         if material_label:
             return material_label
-        if detail.selected_standard.label:
-            return _fallback_certificate_material_label(detail.selected_standard.label)
+        base_alloy = getattr(detail.selected_standard, "lega_base", None)
+        if base_alloy:
+            return _certificate_material_label_from_base(base_alloy)
     return "-"
 
 
-def _fallback_certificate_material_label(label: str) -> str:
-    parts = [part.strip() for part in label.split("·") if part.strip()]
-    if not parts:
-        return label
-    alloy = parts[0]
+def _certificate_material_label_from_base(base_alloy: str) -> str:
+    alloy = base_alloy.strip()
     alloy_label = alloy if alloy.upper().startswith("EN AW") else f"EN AW {alloy}"
     return alloy_label.strip()
 

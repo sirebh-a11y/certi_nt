@@ -4297,7 +4297,9 @@ def _standard_alloy_label(standard: NormativeStandard) -> str:
 
 
 def _standard_certificate_material_label(standard: NormativeStandard) -> str:
-    alloy = _standard_alloy_label(standard)
+    alloy = _clean_text(standard.lega_base)
+    if not alloy:
+        return "-"
     prefix = "" if alloy.upper().startswith("EN AW") else "EN AW"
     parts = [prefix, alloy]
     return " ".join(part for part in parts if part).strip()

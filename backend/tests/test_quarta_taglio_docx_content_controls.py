@@ -7,11 +7,67 @@ from pathlib import Path
 from app.core.departments.models import Department  # noqa: F401 - ensures SQLAlchemy relationship resolution
 from app.core.users.models import User
 from app.modules.quarta_taglio.certificate_docx import build_forgialluminio_draft_docx, update_docx_content_controls
-from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse
+from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse, QuartaTaglioStandardCandidateResponse
+from app.modules.quarta_taglio.service import _standard_certificate_material_label
 from app.modules.standards.models import NormativeStandard  # noqa: F401 - ensures SQLAlchemy relationship resolution
 
 
 class QuartaTaglioDocxContentControlTests(unittest.TestCase):
+    def test_generated_certificate_alloy_excludes_standard_variant(self) -> None:
+        standard = NormativeStandard(
+            code="2024-sigma",
+            lega_base="2024",
+            lega_designazione="2024 Sigma",
+            variante_lega="Sigma",
+        )
+        detail = QuartaTaglioDetailResponse(
+            cod_odp="OLTEST",
+            ready=True,
+            status_color="green",
+            status_message="ok",
+            can_create_word=True,
+            header={"data_certificato": ""},
+            materials=[],
+            missing_items=[],
+            standard_candidates=[],
+            selected_standard=QuartaTaglioStandardCandidateResponse(
+                id=1,
+                code=standard.code,
+                label="2024 Sigma · EN 755-2",
+                lega_base=standard.lega_base,
+                lega_designazione=standard.lega_designazione,
+                variante_lega=standard.variante_lega,
+                norma="EN 755-2",
+                certificate_material_label=_standard_certificate_material_label(standard),
+                confidence="confermata",
+                score=999,
+            ),
+            selected_standard_confirmed=True,
+            chemistry=[],
+            properties=[],
+            notes=[],
+            conformity_status="conforme",
+            conformity_issues=[],
+            esolver_rows=[],
+            certifiable_units=[],
+        )
+        user = User(name="System Admin", email="system@example.test", role="admin")
+        output_path = Path(tempfile.gettempdir()) / "certi_nt_standard_variant_certificate_test.docx"
+
+        build_forgialluminio_draft_docx(
+            detail=detail,
+            output_path=output_path,
+            draft_number="7000_00_00/26",
+            certified_by=user,
+            quality_manager=user,
+        )
+
+        with zipfile.ZipFile(output_path) as archive:
+            document_xml = archive.read("word/document.xml").decode("utf-8", errors="ignore")
+
+        self.assertIn("EN AW 2024", document_xml)
+        self.assertNotIn("Sigma", document_xml)
+
     def test_header_dynamic_fields_are_word_content_controls(self) -> None:
         detail = QuartaTaglioDetailResponse(
             cod_odp="OLTEST",
