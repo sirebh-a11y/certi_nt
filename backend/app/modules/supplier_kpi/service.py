@@ -363,7 +363,7 @@ def _supplier_detail_rows(
         "Peso Kg",
         "Vs. ODV",
         "Data richiesta",
-        "Tipo controllo",
+        "Tipo estrusione",
         "Valutazione",
         "Note",
         "Ritardo giorni",

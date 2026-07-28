@@ -1,6 +1,9 @@
 import unittest
 
+from app.core.departments.models import Department  # noqa: F401
+from app.core.users.models import User  # noqa: F401
 from app.modules.acquisition.models import AcquisitionRow
+from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate  # noqa: F401
 from app.modules.supplier_kpi.service import _supplier_detail_sheets
 from app.modules.suppliers.models import Supplier
 
@@ -44,7 +47,7 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
         exported_types = set()
         for _sheet_name, table in sheets:
             headers = table[4]
-            control_type_index = headers.index("Tipo controllo")
+            control_type_index = headers.index("Tipo estrusione")
             self.assertEqual(headers[control_type_index - 1], "Data richiesta")
             self.assertEqual(headers[control_type_index + 1], "Valutazione")
             exported_types.add(table[5][control_type_index])
@@ -65,7 +68,7 @@ class SupplierKpiControlTypeExportTest(unittest.TestCase):
             period_label="2026",
             supplier_label="Tutti i fornitori",
         )
-        control_type_index = table[4].index("Tipo controllo")
+        control_type_index = table[4].index("Tipo estrusione")
 
         self.assertEqual(table[5][control_type_index], "")
 

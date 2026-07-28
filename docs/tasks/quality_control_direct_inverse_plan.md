@@ -36,7 +36,7 @@ Inserire la scelta nel riquadro **Valutazione qualità** della riga Incoming, vi
 Visualizzazione proposta:
 
 ```text
-Tipo controllo
+Tipo estrusione
 [ Diretta ] [ Inversa ]
 ```
 
@@ -53,10 +53,10 @@ Si propone un unico controllo a scelta esclusiva, non due checkbox indipendenti,
 
 ### Pagina Conformità e valutazione fornitori
 
-Aggiungere una colonna **Tipo controllo** nella posizione:
+Aggiungere una colonna **Tipo estrusione** nella posizione:
 
 ```text
-Data richiesta | Tipo controllo | Valutazione | Note
+Data richiesta | Tipo estrusione | Valutazione | Note
 ```
 
 Valori visualizzati:
@@ -71,10 +71,10 @@ In questa pagina il campo è soltanto visualizzato e non è modificabile. La fon
 
 ## Proposta per l'Excel
 
-In ogni foglio di dettaglio fornitore aggiungere la colonna **Tipo controllo** dopo `Data richiesta` e prima di `Valutazione`:
+In ogni foglio di dettaglio fornitore aggiungere la colonna **Tipo estrusione** dopo `Data richiesta` e prima di `Valutazione`:
 
 ```text
-Data richiesta | Tipo controllo | Valutazione | Note
+Data richiesta | Tipo estrusione | Valutazione | Note
 ```
 
 Contenuto della cella:
@@ -163,7 +163,7 @@ Si propone un campo enumerato anziché un booleano, perché rende espliciti i va
 
 ### Excel
 
-- La colonna `Tipo controllo` è nella posizione prevista in ogni foglio di dettaglio fornitore.
+- La colonna `Tipo estrusione` è nella posizione prevista in ogni foglio di dettaglio fornitore.
 - Diretta e Inversa vengono esportate con etichetta leggibile.
 - Le righe storiche producono una cella vuota.
 - Chimica e proprietà restano allineate alle intestazioni successive.
