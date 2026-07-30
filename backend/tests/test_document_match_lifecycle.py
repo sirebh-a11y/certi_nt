@@ -1380,10 +1380,11 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             )
         ]
 
-        suggested, evidence, unidentified = _material_form_assessment(row)
+        suggested, evidence, extruded_evidence, unidentified = _material_form_assessment(row)
 
         self.assertFalse(suggested)
         self.assertIsNone(evidence)
+        self.assertIsNone(extruded_evidence)
         self.assertTrue(unidentified)
 
     def test_material_form_assessment_recognizes_bar_without_billet_warning(self):
@@ -1399,10 +1400,11 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             )
         ]
 
-        suggested, evidence, unidentified = _material_form_assessment(row)
+        suggested, evidence, extruded_evidence, unidentified = _material_form_assessment(row)
 
         self.assertFalse(suggested)
         self.assertIsNone(evidence)
+        self.assertEqual(extruded_evidence, "AL ROUND BARS FOR FORGING EN AW 6082 F")
         self.assertFalse(unidentified)
 
     def test_material_form_assessment_prefers_explicit_bar_over_process_billet_wording(self):
@@ -1418,10 +1420,11 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             )
         ]
 
-        suggested, evidence, unidentified = _material_form_assessment(row)
+        suggested, evidence, extruded_evidence, unidentified = _material_form_assessment(row)
 
         self.assertFalse(suggested)
         self.assertIsNone(evidence)
+        self.assertEqual(extruded_evidence, "EXTRUDED ROUND BAR PRODUCED FROM ALUMINIUM BILLET")
         self.assertFalse(unidentified)
 
     def test_quality_note_autosave_only_changes_the_note(self):

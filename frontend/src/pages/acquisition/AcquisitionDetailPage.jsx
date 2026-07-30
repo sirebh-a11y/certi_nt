@@ -1354,11 +1354,21 @@ export default function AcquisitionDetailPage() {
                           Verifica il documento e, se confermato, scegli Non applicabile - billetta.
                         </div>
                       </div>
+                    ) : row.materiale_estruso_evidenza ? (
+                      <div className="mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">
+                        <div className="text-xs font-semibold">Barra/estruso rilevato dall&apos;AI</div>
+                        <div className="mt-1 text-xs leading-5">
+                          Descrizione prodotto: “{row.materiale_estruso_evidenza}”
+                        </div>
+                        <div className="mt-1 text-xs text-emerald-700">
+                          Seleziona Diretta o Inversa in base al processo utilizzato.
+                        </div>
+                      </div>
                     ) : row.materiale_forma_non_identificata ? (
-                      <div className="mb-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
-                        <div className="text-xs font-medium">Tipo di materiale non identificato nel certificato.</div>
-                        <div className="mt-1 text-xs leading-5 text-slate-500">
-                          Verifica se si tratta di billetta oppure di materiale estruso.
+                      <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                        <div className="text-xs font-semibold">Tipo di materiale non identificato dall&apos;AI</div>
+                        <div className="mt-1 text-xs leading-5 text-amber-700">
+                          Verifica nei documenti se si tratta di billetta oppure di materiale estruso.
                         </div>
                       </div>
                     ) : null}

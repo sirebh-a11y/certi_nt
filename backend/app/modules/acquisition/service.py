@@ -476,6 +476,7 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
     (
         materiale_billetta_suggerito,
         materiale_billetta_evidenza,
+        materiale_estruso_evidenza,
         materiale_forma_non_identificata,
     ) = _material_form_assessment(row)
     return AcquisitionRowDetailResponse(
@@ -484,6 +485,7 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         certificate_document=serialize_document_summary(row.certificate_document) if row.certificate_document else None,
         materiale_billetta_suggerito=materiale_billetta_suggerito,
         materiale_billetta_evidenza=materiale_billetta_evidenza,
+        materiale_estruso_evidenza=materiale_estruso_evidenza,
         materiale_forma_non_identificata=materiale_forma_non_identificata,
         evidences=[serialize_evidence(evidence) for evidence in row.evidences],
         values=[serialize_read_value(value) for value in row.values],
@@ -595,7 +597,7 @@ def _billet_material_description_candidates(row: AcquisitionRow) -> list[str]:
     return candidates
 
 
-def _material_form_assessment(row: AcquisitionRow) -> tuple[bool, str | None, bool]:
+def _material_form_assessment(row: AcquisitionRow) -> tuple[bool, str | None, str | None, bool]:
     candidates = _billet_material_description_candidates(row)
     billet_evidence = next((value for value in candidates if _BILLET_PRODUCT_PATTERN.search(value)), None)
     non_billet_evidence = next(
@@ -603,14 +605,14 @@ def _material_form_assessment(row: AcquisitionRow) -> tuple[bool, str | None, bo
         None,
     )
     if billet_evidence is not None and non_billet_evidence is None:
-        return True, billet_evidence[:500], False
+        return True, billet_evidence[:500], None, False
     if non_billet_evidence is not None:
-        return False, None, False
-    return False, None, True
+        return False, None, non_billet_evidence[:500], False
+    return False, None, None, True
 
 
 def _billet_material_suggestion(row: AcquisitionRow) -> tuple[bool, str | None]:
-    suggested, evidence, _ = _material_form_assessment(row)
+    suggested, evidence, _, _ = _material_form_assessment(row)
     return suggested, evidence
 
 

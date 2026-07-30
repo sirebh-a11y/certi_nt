@@ -740,6 +740,7 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
     certificate_document: DocumentSummaryResponse | None
     materiale_billetta_suggerito: bool = False
     materiale_billetta_evidenza: str | None = None
+    materiale_estruso_evidenza: str | None = None
     materiale_forma_non_identificata: bool = False
     evidences: list[DocumentEvidenceResponse]
     values: list[ReadValueResponse]
