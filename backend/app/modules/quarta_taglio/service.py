@@ -24,6 +24,7 @@ from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
 from app.core.security.crypto import decrypt_secret
 from app.core.users.models import User
 from app.modules.acquisition.models import AcquisitionHistoryEvent, AcquisitionRow, AcquisitionValueHistory, ReadValue
+from app.modules.acquisition.material_form import assess_material_form
 from app.modules.acquisition.service import _compute_block_states_from_db, _sync_row_statuses
 from app.modules.quarta_taglio.certificate_docx import (
     LEGACY_PDF_ATTACHMENT_PREFIX,
@@ -61,6 +62,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioIncomingRowOverrideRequest,
     QuartaTaglioListResponse,
     QuartaTaglioMaterialResponse,
+    QuartaTaglioMaterialFormResponse,
     QuartaTaglioMissingItemResponse,
     QuartaTaglioNoteResponse,
     QuartaTaglioPdfAttachmentResponse,
@@ -74,6 +76,7 @@ from app.modules.quarta_taglio.schemas import (
 
 
 from app.modules.standards.models import NormativeStandard
+from app.modules.standards.matching import rank_standard_candidates
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.supplier_codes.models import SupplierInstallationCode
 from app.modules.suppliers.models import Supplier
@@ -574,6 +577,18 @@ def get_quarta_taglio_detail(
     esolver_link = esolver_links.get(cod_odp)
     group = _serialize_ol_group(rows, esolver_link=esolver_link)
     app_rows = _load_matching_app_rows(db, rows)
+    material_forms = [
+        QuartaTaglioMaterialFormResponse(
+            acquisition_row_id=row.id,
+            cdq=row.cdq,
+            colata=row.colata,
+            form=assessment.code,
+            label=assessment.label,
+            evidence=list(assessment.evidence),
+        )
+        for row in app_rows
+        for assessment in [assess_material_form(row)]
+    ]
     materials = [
         QuartaTaglioMaterialResponse(
             cdq=row.cdq,
@@ -806,6 +821,7 @@ def get_quarta_taglio_detail(
             else None,
         },
         materials=materials,
+        material_forms=material_forms,
         missing_items=missing_items,
         standard_candidates=standard_candidates,
         selected_standard=selected_standard,
@@ -3589,6 +3605,8 @@ def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> 
         variante_lega=standard.variante_lega,
         norma=standard.norma,
         trattamento_termico=standard.trattamento_termico,
+        tipo_prodotto=standard.tipo_prodotto,
+        misura_tipo=standard.misura_tipo,
         certificate_material_label=_standard_certificate_material_label(standard),
         confidence="confermata",
         score=999,
@@ -4123,74 +4141,16 @@ def _suggest_standard_candidates(
 ) -> list[QuartaTaglioStandardCandidateResponse]:
     if not app_rows:
         return []
-
-    alloys = sorted(
-        set(
-            filter(
-                None,
-                (
-                    _normalize_alloy_for_standard(row.lega_base or row.lega_designazione or row.variante_lega)
-                    for row in app_rows
-                ),
-            )
-        )
-    )
-    measure_type = "diametro" if _first_numeric(row.diametro for row in app_rows) is not None else None
-    product_type = _infer_product_type(app_rows=app_rows, materials=materials)
     standards = (
         db.query(NormativeStandard)
         .options(selectinload(NormativeStandard.chemistry_limits), selectinload(NormativeStandard.property_limits))
         .filter(NormativeStandard.stato_validazione == "attivo")
         .all()
     )
-
-    candidates: list[tuple[int, NormativeStandard, list[str], list[str]]] = []
-    for standard in standards:
-        reasons: list[str] = []
-        warnings: list[str] = []
-        score = 0
-        standard_alloy = _normalize_alloy_for_standard(standard.lega_base)
-        if alloys and standard_alloy not in alloys:
-            continue
-        if standard_alloy in alloys:
-            score += 50
-            reasons.append(f"lega {_standard_alloy_label(standard)}")
-
-        if measure_type and standard.misura_tipo:
-            if _norm(standard.misura_tipo) != _norm(measure_type):
-                continue
-            score += 20
-            reasons.append(f"misura {standard.misura_tipo}")
-
-        if product_type and standard.tipo_prodotto:
-            if _norm(standard.tipo_prodotto) == _norm(product_type):
-                score += 25
-                reasons.append(f"prodotto {standard.tipo_prodotto}")
-            else:
-                continue
-
-        treatment = _clean_text(standard.trattamento_termico)
-        if treatment:
-            score += 5
-            reasons.append(treatment)
-
-        if not standard.property_limits:
-            warnings.append("proprietà standard non presenti")
-        if not standard.chemistry_limits:
-            warnings.append("chimica standard non presente")
-        candidates.append((score, standard, reasons, warnings))
-
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    top_score = candidates[0][0] if candidates else 0
+    candidates = rank_standard_candidates(standards, rows=app_rows)
     result: list[QuartaTaglioStandardCandidateResponse] = []
-    for score, standard, reasons, warnings in candidates[:3]:
-        close_competitor = score < top_score or any(candidate_score >= score - 15 for candidate_score, other, _, _ in candidates if other.id != standard.id)
-        if score >= 95 and not close_competitor:
-            confidence = "alta"
-        elif score >= 70:
-            confidence = "media"
-        else:
-            confidence = "bassa"
+    for candidate in candidates[:3]:
+        standard = candidate.standard
         result.append(
             QuartaTaglioStandardCandidateResponse(
                 id=standard.id,
@@ -4201,11 +4161,15 @@ def _suggest_standard_candidates(
                 variante_lega=standard.variante_lega,
                 norma=standard.norma,
                 trattamento_termico=standard.trattamento_termico,
+                tipo_prodotto=standard.tipo_prodotto,
+                misura_tipo=standard.misura_tipo,
                 certificate_material_label=_standard_certificate_material_label(standard),
-                confidence=confidence,
-                score=score,
-                reasons=reasons,
-                warnings=warnings,
+                confidence=candidate.confidence,
+                score=candidate.score,
+                reasons=list(candidate.reasons),
+                warnings=list(candidate.warnings),
+                compatible_material_rows=candidate.compatible_material_rows,
+                total_material_rows=candidate.total_material_rows,
             )
         )
     return result
@@ -4227,67 +4191,6 @@ def _clean_note_value(value: Any) -> str | None:
     if _norm(cleaned) in {"false", "no", "0"}:
         return None
     return cleaned
-
-
-def _normalize_alloy_for_standard(value: Any) -> str | None:
-    cleaned = _clean_text(value)
-    if not cleaned:
-        return None
-    normalized = re.sub(r"\bEN\s*[- ]?\s*AW\b", " ", cleaned.upper())
-    normalized = re.sub(r"\bAW\b", " ", normalized)
-    tokens = re.findall(r"[0-9A-Z]+", normalized)
-    match = None
-    suffix_from_same_token = False
-    for index, token in enumerate(tokens):
-        token_match = re.match(r"^([0-9]{4})([A-Z0-9]*)$", token)
-        if not token_match:
-            continue
-        number, suffix = token_match.groups()
-        suffix_from_same_token = bool(suffix)
-        if not suffix and index + 1 < len(tokens):
-            next_token = tokens[index + 1]
-            if next_token in {"H", "L"} and len(tokens) <= 2:
-                suffix = next_token
-                suffix_from_same_token = True
-            elif next_token in {"F", "T4", "T42", "T6", "T62", "T64", "T651", "T76", "HF", "LF"}:
-                suffix = next_token
-        match = (number, suffix)
-        break
-    if not match:
-        return re.sub(r"[^0-9A-Za-z]", "", cleaned).upper()
-    number, suffix = match
-    if number == "6082" and suffix.startswith("HF"):
-        return "6082H"
-    if number == "6082" and suffix.startswith("LF"):
-        return "6082L"
-    if suffix in {"F", "T6", "T76", ""}:
-        return number
-    if number == "6082" and suffix_from_same_token and suffix[:1] in {"H", "L"}:
-        return f"{number}{suffix[:1]}"
-    return number
-
-
-def _infer_product_type(
-    *,
-    app_rows: list[AcquisitionRow],
-    materials: list[QuartaTaglioMaterialResponse],
-) -> str | None:
-    haystack = " ".join(
-        filter(
-            None,
-            [
-                *(row.note_documento for row in app_rows),
-                *(row.lega_designazione for row in app_rows),
-                *(_read_value(row, "ddt", field) for row in app_rows for field in ("descrizione", "descrizione_articolo", "materiale")),
-                *(material.cod_art for material in materials),
-            ],
-        )
-    ).upper()
-    if any(token in haystack for token in ("BARRA", "BARRE", "ROUND BAR", "BAR ")):
-        return "BARRE"
-    if any(token in haystack for token in ("PROFILO", "PROFILI", "PROFILE")):
-        return "PROFILI"
-    return None
 
 
 def _standard_label(standard: NormativeStandard) -> str:

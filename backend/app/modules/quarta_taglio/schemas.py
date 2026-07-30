@@ -171,6 +171,15 @@ class QuartaTaglioMaterialResponse(BaseModel):
     matching_row_ids: list[int] = Field(default_factory=list)
 
 
+class QuartaTaglioMaterialFormResponse(BaseModel):
+    acquisition_row_id: int
+    cdq: str | None = None
+    colata: str | None = None
+    form: str
+    label: str
+    evidence: list[str] = Field(default_factory=list)
+
+
 class QuartaTaglioStandardCandidateResponse(BaseModel):
     id: int
     code: str
@@ -180,11 +189,15 @@ class QuartaTaglioStandardCandidateResponse(BaseModel):
     variante_lega: str | None = None
     norma: str | None = None
     trattamento_termico: str | None = None
+    tipo_prodotto: str | None = None
+    misura_tipo: str | None = None
     certificate_material_label: str | None = None
     confidence: str
     score: int
     reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    compatible_material_rows: int = 0
+    total_material_rows: int = 0
 
 
 class QuartaTaglioAggregateValueResponse(BaseModel):
@@ -294,6 +307,7 @@ class QuartaTaglioDetailResponse(BaseModel):
     word_creation_blockers: list[str] = Field(default_factory=list)
     header: dict[str, str | None]
     materials: list[QuartaTaglioMaterialResponse]
+    material_forms: list[QuartaTaglioMaterialFormResponse] = Field(default_factory=list)
     missing_items: list[QuartaTaglioMissingItemResponse]
     standard_candidates: list[QuartaTaglioStandardCandidateResponse]
     selected_standard: QuartaTaglioStandardCandidateResponse | None = None

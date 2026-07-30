@@ -181,12 +181,24 @@ function StandardPreviewSummary({ preview }) {
   const blockingIssues = issues.filter((issue) => issue.severity === "block");
   const warningIssues = issues.filter((issue) => issue.severity !== "block" && issue.severity !== "info");
   const infoIssues = issues.filter((issue) => issue.severity === "info");
+  const selectionContext = preview.material_form_label || preview.standard_reasons?.length || preview.standard_warnings?.length ? (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-white/70 px-3 py-2 text-xs text-slate-700">
+      {preview.material_form_label ? <p>Forma materiale: <span className="font-semibold">{preview.material_form_label}</span></p> : null}
+      {preview.standard_reasons?.length ? <p className="mt-1">Motivi: {preview.standard_reasons.join(" · ")}</p> : null}
+      {preview.standard_warnings?.length ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-amber-700">
+          {preview.standard_warnings.map((warning) => <li key={warning}>{warning}</li>)}
+        </ul>
+      ) : null}
+    </div>
+  ) : null;
 
   if (preview.status === "valori_non_validi") {
     return (
       <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
         <p className="font-semibold">Errore nei valori: conferma non possibile</p>
         <p className="mt-1">Correggi prima i campi non numerici. La pagina non viene confermata con valori non leggibili.</p>
+        {selectionContext}
         {issues.length ? (
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {issues.map((issue, index) => (
@@ -203,6 +215,7 @@ function StandardPreviewSummary({ preview }) {
       <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
         <p className="font-semibold">Controllo standard OK</p>
         <p className="mt-1">Ho applicato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+        {selectionContext}
         <p className="mt-1 text-xs">La scelta ufficiale dello standard resta nella pagina Certificazione.</p>
       </div>
     );
@@ -217,6 +230,7 @@ function StandardPreviewSummary({ preview }) {
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
             <p className="font-semibold">Controllo standard: verifica richiesta</p>
             <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+            {selectionContext}
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {hardIssues.map((issue, index) => (
                 <li key={`${issue.field}-hard-${index}`}>{issue.message || `${issue.field}: valore da verificare`}</li>
@@ -233,6 +247,7 @@ function StandardPreviewSummary({ preview }) {
                 ? `Ho usato solo come controllo visivo lo standard più coerente con il materiale: ${standardLabel}.`
                 : "Questi campi sono previsti dallo standard, ma non sono stati letti nel certificato."}
             </p>
+            {onlyInformative ? selectionContext : null}
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {infoIssues.map((issue, index) => (
                 <li key={`${issue.field}-info-${index}`}>{issue.message || `${issue.field}: valore mancante`}</li>
@@ -249,6 +264,7 @@ function StandardPreviewSummary({ preview }) {
     <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
       <p className="font-semibold">Standard non individuato</p>
       <p className="mt-1">{preview.message || "Non ho trovato uno standard coerente per controllare la chimica."}</p>
+      {selectionContext}
       <p className="mt-1 text-xs">Puoi confermare comunque: la scelta ufficiale resta nella pagina Certificazione.</p>
     </div>
   );

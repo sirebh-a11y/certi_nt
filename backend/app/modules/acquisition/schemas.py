@@ -515,6 +515,12 @@ class AcquisitionStandardPreviewResponse(BaseModel):
     block: StandardPreviewBlock
     standard_id: int | None = None
     standard_label: str | None = None
+    material_form: str | None = None
+    material_form_label: str | None = None
+    material_evidence: list[str] = Field(default_factory=list)
+    standard_confidence: Literal["alta", "media", "bassa"] | None = None
+    standard_reasons: list[str] = Field(default_factory=list)
+    standard_warnings: list[str] = Field(default_factory=list)
     issues: list[AcquisitionStandardPreviewIssue] = Field(default_factory=list)
     message: str | None = None
 
@@ -742,6 +748,9 @@ class AcquisitionRowDetailResponse(AcquisitionRowListItemResponse):
     materiale_billetta_evidenza: str | None = None
     materiale_estruso_evidenza: str | None = None
     materiale_forma_non_identificata: bool = False
+    materiale_forma: str = "DA_VERIFICARE"
+    materiale_forma_etichetta: str = "Materiale da verificare"
+    materiale_forma_evidenze: list[str] = Field(default_factory=list)
     evidences: list[DocumentEvidenceResponse]
     values: list[ReadValueResponse]
     custom_note_templates: list[NoteTemplateResponse]

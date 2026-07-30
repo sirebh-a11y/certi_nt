@@ -1124,6 +1124,25 @@ export default function QuartaTaglioDetailPage() {
               </span>
             ))}
           </div>
+          {data.material_forms?.length ? (
+            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Forma materiale rilevata
+              </div>
+              <div className="mt-2 space-y-1 text-xs text-slate-700">
+                {data.material_forms.map((item) => (
+                  <div className="flex flex-wrap gap-x-2" key={item.acquisition_row_id}>
+                    <span className="font-semibold">CDQ {item.cdq || `riga #${item.acquisition_row_id}`}:</span>
+                    <span>{item.label}</span>
+                    {item.evidence?.[0] ? <span className="text-slate-500">“{item.evidence[0]}”</span> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
+                È un suggerimento: la scelta e la conferma dello standard restano sempre dell&apos;utente.
+              </div>
+            </div>
+          ) : null}
           {data.selected_standard ? (
             <div
               className={`rounded-lg border px-3 py-2 text-sm ${
@@ -1161,6 +1180,13 @@ export default function QuartaTaglioDetailPage() {
                   <span className="text-xs font-semibold uppercase text-slate-500">{candidate.confidence}</span>
                 </div>
                 <div className="mt-1 text-xs text-slate-500">{candidate.reasons.join(" · ") || candidate.code}</div>
+                {candidate.warnings?.length ? (
+                  <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                    {candidate.warnings.map((warning) => (
+                      <li key={warning}>• {warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 <button
                   className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={

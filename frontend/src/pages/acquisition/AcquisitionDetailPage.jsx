@@ -1342,33 +1342,42 @@ export default function AcquisitionDetailPage() {
                     <legend className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       Tipo estrusione
                     </legend>
-                    {row.materiale_billetta_suggerito ? (
+                    {row.materiale_forma === "BILLETTE" ? (
                       <div className="mb-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sky-900">
-                        <div className="text-xs font-semibold">Possibile billetta rilevata dall&apos;AI</div>
-                        {row.materiale_billetta_evidenza ? (
+                        <div className="text-xs font-semibold">Billetta rilevata dall&apos;AI</div>
+                        {row.materiale_forma_evidenze?.[0] ? (
                           <div className="mt-1 text-xs leading-5">
-                            Descrizione prodotto: “{row.materiale_billetta_evidenza}”
+                            Descrizione prodotto: “{row.materiale_forma_evidenze[0]}”
                           </div>
                         ) : null}
                         <div className="mt-1 text-xs text-sky-700">
                           Verifica il documento e, se confermato, scegli Non applicabile - billetta.
                         </div>
                       </div>
-                    ) : row.materiale_estruso_evidenza ? (
+                    ) : ["BARRE", "PROFILI"].includes(row.materiale_forma) ? (
                       <div className="mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">
-                        <div className="text-xs font-semibold">Barra/estruso rilevato dall&apos;AI</div>
+                        <div className="text-xs font-semibold">{row.materiale_forma_etichetta} rilevata dall&apos;AI</div>
                         <div className="mt-1 text-xs leading-5">
-                          Descrizione prodotto: “{row.materiale_estruso_evidenza}”
+                          Descrizione prodotto: “{row.materiale_forma_evidenze?.[0] || "-" }”
                         </div>
                         <div className="mt-1 text-xs text-emerald-700">
                           Seleziona Diretta o Inversa in base al processo utilizzato.
                         </div>
                       </div>
-                    ) : row.materiale_forma_non_identificata ? (
+                    ) : row.materiale_forma === "DATI_DISCORDANTI" ? (
+                      <div className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">
+                        <div className="text-xs font-semibold">Descrizioni del materiale discordanti</div>
+                        <div className="mt-1 text-xs leading-5 text-rose-700">
+                          I documenti indicano forme diverse. Verifica il certificato e scegli tu il tipo estrusione corretto.
+                        </div>
+                      </div>
+                    ) : ["ESTRUSO_GENERICO", "DA_VERIFICARE"].includes(row.materiale_forma) ? (
                       <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
-                        <div className="text-xs font-semibold">Tipo di materiale non identificato dall&apos;AI</div>
+                        <div className="text-xs font-semibold">{row.materiale_forma_etichetta || "Tipo di materiale non identificato dall'AI"}</div>
                         <div className="mt-1 text-xs leading-5 text-amber-700">
-                          Verifica nei documenti se si tratta di billetta oppure di materiale estruso.
+                          {row.materiale_forma === "ESTRUSO_GENERICO"
+                            ? "È stato rilevato materiale estruso, ma non è chiaro se barra o profilo. Verifica il documento."
+                            : "Verifica nei documenti se si tratta di billetta, barra o profilo."}
                         </div>
                       </div>
                     ) : null}

@@ -46,6 +46,11 @@ from app.modules.acquisition.models import (
     ManualMatchBlock,
     ReadValue,
 )
+from app.modules.acquisition.material_form import (
+    assess_material_form,
+    legacy_material_form_assessment,
+    material_description_candidates,
+)
 from app.modules.acquisition.schemas import (
     AcquisitionFinalValidationRequest,
     AcquisitionQualityControlTypeUpdateRequest,
@@ -123,6 +128,7 @@ from app.modules.acquisition.rematch_bridge import (
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
 from app.modules.standards.models import NormativeStandard
+from app.modules.standards.matching import RankedStandard, rank_standard_candidates
 from app.modules.document_reader.registry import resolve_supplier_template, resolve_supplier_template_by_key
 from app.modules.document_reader.matching import (
     aww_weights_are_compatible as reader_aww_weights_are_compatible,
@@ -473,6 +479,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
 
 def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetailResponse:
     base = serialize_acquisition_row_list_item(row)
+    material_form = assess_material_form(row)
     (
         materiale_billetta_suggerito,
         materiale_billetta_evidenza,
@@ -487,6 +494,9 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
         materiale_billetta_evidenza=materiale_billetta_evidenza,
         materiale_estruso_evidenza=materiale_estruso_evidenza,
         materiale_forma_non_identificata=materiale_forma_non_identificata,
+        materiale_forma=material_form.code,
+        materiale_forma_etichetta=material_form.label,
+        materiale_forma_evidenze=list(material_form.evidence),
         evidences=[serialize_evidence(evidence) for evidence in row.evidences],
         values=[serialize_read_value(value) for value in row.values],
         custom_note_templates=[
@@ -506,109 +516,12 @@ def serialize_acquisition_row_detail(row: AcquisitionRow) -> AcquisitionRowDetai
     )
 
 
-_MATERIAL_DESCRIPTION_KEYS = {
-    "articledescriptionraw",
-    "customeritemdescriptionraw",
-    "descrizionemateriale",
-    "descrizioneprodotto",
-    "materialdescriptionraw",
-    "materialraw",
-    "productdescription",
-    "productdescriptionraw",
-    "productraw",
-}
-_BILLET_PRODUCT_PATTERN = re.compile(
-    r"\b(?:billets?|billett(?:a|e|es)|(?:strangpress|press)bolzen)\b",
-    re.IGNORECASE,
-)
-_NON_BILLET_PRODUCT_FORM_PATTERN = re.compile(
-    r"\b(?:"
-    r"estrus(?:o|a|i|e)|extrud(?:ed|ate|ates|ation|ations|iert|é|ée|és|ées)|"
-    r"extrus(?:ion|ions)|extrusi(?:on|ón|ones)|strangpress\w*|"
-    r"bars?|barra|barre|rods?|"
-    r"profiles?|profili|profilo|profilati|profilés?|"
-    r"sections?|sezioni|stange|stangen"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _material_description_key(value: object) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
-
-
-def _iter_ai_material_descriptions(payload: object) -> Iterable[str]:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if _material_description_key(key) in _MATERIAL_DESCRIPTION_KEYS and isinstance(value, str):
-                cleaned = value.strip()
-                if cleaned:
-                    yield cleaned
-                continue
-            if isinstance(value, (dict, list)):
-                yield from _iter_ai_material_descriptions(value)
-    elif isinstance(payload, list):
-        for value in payload:
-            yield from _iter_ai_material_descriptions(value)
-
-
 def _billet_material_description_candidates(row: AcquisitionRow) -> list[str]:
-    candidates: list[str] = []
-    seen: set[str] = set()
-
-    def _append(value: object) -> None:
-        cleaned = str(value or "").strip()
-        key = cleaned.casefold()
-        if not cleaned or key in seen:
-            return
-        seen.add(key)
-        candidates.append(cleaned)
-
-    for value in getattr(row, "values", None) or []:
-        if _material_description_key(value.campo) not in _MATERIAL_DESCRIPTION_KEYS:
-            continue
-        if value.metodo_lettura != "chatgpt":
-            continue
-        _append(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
-
-    evidences: list[DocumentEvidence] = list(getattr(row, "evidences", None) or [])
-    for document in (getattr(row, "ddt_document", None), getattr(row, "certificate_document", None)):
-        if document is not None:
-            evidences.extend(getattr(document, "evidences", None) or [])
-
-    processed_evidence_ids: set[int] = set()
-    for evidence in evidences:
-        if evidence.id is not None and evidence.id in processed_evidence_ids:
-            continue
-        if evidence.id is not None:
-            processed_evidence_ids.add(evidence.id)
-        if evidence.tipo_evidenza != "ai_payload" or evidence.metodo_estrazione != "chatgpt":
-            continue
-        raw_payload = (evidence.testo_grezzo or "").strip()
-        if not raw_payload.startswith(("{", "[")):
-            continue
-        try:
-            payload = json.loads(raw_payload)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        for description in _iter_ai_material_descriptions(payload):
-            _append(description)
-
-    return candidates
+    return material_description_candidates(row)
 
 
 def _material_form_assessment(row: AcquisitionRow) -> tuple[bool, str | None, str | None, bool]:
-    candidates = _billet_material_description_candidates(row)
-    billet_evidence = next((value for value in candidates if _BILLET_PRODUCT_PATTERN.search(value)), None)
-    non_billet_evidence = next(
-        (value for value in candidates if _NON_BILLET_PRODUCT_FORM_PATTERN.search(value)),
-        None,
-    )
-    if billet_evidence is not None and non_billet_evidence is None:
-        return True, billet_evidence[:500], None, False
-    if non_billet_evidence is not None:
-        return False, None, non_billet_evidence[:500], False
-    return False, None, None, True
+    return legacy_material_form_assessment(row)
 
 
 def _billet_material_suggestion(row: AcquisitionRow) -> tuple[bool, str | None]:
@@ -1066,40 +979,6 @@ def _standard_preview_select_property_limit(limits: list, diameter: float | None
     return no_range[0] if no_range else limits[0]
 
 
-def _standard_preview_row_value(row: AcquisitionRow, block: str, field: str) -> str | None:
-    target_block = _standard_preview_key(block)
-    target_field = _standard_preview_key(field)
-    for value in row.values or []:
-        if _standard_preview_key(value.blocco) != target_block:
-            continue
-        if _standard_preview_key(value.campo) != target_field:
-            continue
-        return value.valore_finale or value.valore_standardizzato or value.valore_grezzo
-    return None
-
-
-def _standard_preview_infer_product_type(row: AcquisitionRow) -> str | None:
-    haystack = " ".join(
-        filter(
-            None,
-            [
-                row.note_documento,
-                row.lega_designazione,
-                row.lega_base,
-                row.variante_lega,
-                _standard_preview_row_value(row, "ddt", "descrizione"),
-                _standard_preview_row_value(row, "ddt", "descrizione_articolo"),
-                _standard_preview_row_value(row, "ddt", "materiale"),
-            ],
-        )
-    ).upper()
-    if any(token in haystack for token in ("BARRA", "BARRE", "ROUND BAR", "BAR ")):
-        return "BARRE"
-    if any(token in haystack for token in ("PROFILO", "PROFILI", "PROFILE")):
-        return "PROFILI"
-    return None
-
-
 def _standard_preview_confirmed_standard(db: Session, *, row: AcquisitionRow) -> NormativeStandard | None:
     row_cdq = _standard_preview_text(row.cdq)
     if row_cdq is None:
@@ -1140,58 +1019,42 @@ def _standard_preview_find_candidate(
     *,
     row: AcquisitionRow,
 ) -> NormativeStandard | None:
+    match = _standard_preview_find_match(db, row=row)
+    return match.standard if match is not None else None
+
+
+def _standard_preview_find_match(
+    db: Session,
+    *,
+    row: AcquisitionRow,
+) -> RankedStandard | None:
     confirmed_standard = _standard_preview_confirmed_standard(db, row=row)
     if confirmed_standard is not None:
-        return confirmed_standard
+        material_form = assess_material_form(row)
+        return RankedStandard(
+            standard=confirmed_standard,
+            score=100,
+            confidence="alta",
+            reasons=("standard già confermato in Certificazione",),
+            warnings=(),
+            compatible_material_rows=1 if material_form.code in {"BILLETTE", "BARRE", "PROFILI"} else 0,
+            total_material_rows=1 if material_form.code in {"BILLETTE", "BARRE", "PROFILI"} else 0,
+        )
 
-    row_alloy = (
+    if (
         _standard_preview_normalize_alloy(row.lega_base)
         or _standard_preview_normalize_alloy(row.lega_designazione)
         or _standard_preview_normalize_alloy(row.variante_lega)
-    )
-    if row_alloy is None:
+    ) is None:
         return None
-    row_temper = _standard_preview_extract_temper(row.lega_designazione, row.lega_base, row.variante_lega)
-    measure_type = "diametro" if parse_property_number(row.diametro) is not None else None
-    product_type = _standard_preview_infer_product_type(row)
     standards = (
         db.query(NormativeStandard)
         .options(selectinload(NormativeStandard.chemistry_limits), selectinload(NormativeStandard.property_limits))
         .filter(NormativeStandard.stato_validazione == "attivo")
         .all()
     )
-
-    candidates: list[tuple[int, int, NormativeStandard]] = []
-    for standard in standards:
-        standard_alloy = (
-            _standard_preview_normalize_alloy(standard.lega_base)
-            or _standard_preview_normalize_alloy(standard.lega_designazione)
-        )
-        if row_alloy and standard_alloy and row_alloy != standard_alloy:
-            continue
-
-        score = 0
-        if row_alloy and standard_alloy == row_alloy:
-            score += 50
-        if measure_type and standard.misura_tipo:
-            if _standard_preview_key(standard.misura_tipo) != _standard_preview_key(measure_type):
-                continue
-            score += 20
-        if product_type and standard.tipo_prodotto:
-            if _standard_preview_key(standard.tipo_prodotto) != _standard_preview_key(product_type):
-                continue
-            score += 25
-        if standard.trattamento_termico:
-            score += 5
-        if row_temper and _standard_preview_key(standard.trattamento_termico) == _standard_preview_key(row_temper):
-            score += 5
-        limits_count = len(standard.chemistry_limits) + len(standard.property_limits)
-        candidates.append((score, limits_count, standard))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return candidates[0][2]
+    candidates = rank_standard_candidates(standards, rows=[row])
+    return candidates[0] if candidates else None
 
 
 def preview_acquisition_row_standard_conformity(
@@ -1203,7 +1066,17 @@ def preview_acquisition_row_standard_conformity(
     block = payload.block
     raw_fields = _standard_preview_raw_field_map(row, block, payload.fields)
     fields = _standard_preview_field_map(row, block, payload.fields)
-    standard = _standard_preview_find_candidate(db, row=row)
+    standard_match = _standard_preview_find_match(db, row=row)
+    standard = standard_match.standard if standard_match is not None else None
+    material_form = assess_material_form(row)
+    preview_context = {
+        "material_form": material_form.code,
+        "material_form_label": material_form.label,
+        "material_evidence": list(material_form.evidence),
+        "standard_confidence": standard_match.confidence if standard_match is not None else None,
+        "standard_reasons": list(standard_match.reasons) if standard_match is not None else [],
+        "standard_warnings": list(standard_match.warnings) if standard_match is not None else [],
+    }
 
     blocking_issues: list[AcquisitionStandardPreviewIssue] = []
     warning_issues: list[AcquisitionStandardPreviewIssue] = []
@@ -1248,6 +1121,7 @@ def preview_acquisition_row_standard_conformity(
     if standard is None:
         if blocking_issues:
             return AcquisitionStandardPreviewResponse(
+                **preview_context,
                 status="valori_non_validi",
                 block=block,
                 issues=blocking_issues + warning_issues,
@@ -1255,12 +1129,14 @@ def preview_acquisition_row_standard_conformity(
             )
         if warning_issues:
             return AcquisitionStandardPreviewResponse(
+                **preview_context,
                 status="non_conforme",
                 block=block,
                 issues=warning_issues,
                 message="Valori da verificare manualmente prima della conferma.",
             )
         return AcquisitionStandardPreviewResponse(
+            **preview_context,
             status="standard_mancante",
             block=block,
             message="Standard non individuato automaticamente per questa riga.",
@@ -1303,6 +1179,7 @@ def preview_acquisition_row_standard_conformity(
 
     if blocking_issues:
         return AcquisitionStandardPreviewResponse(
+            **preview_context,
             status="valori_non_validi",
             block=block,
             standard_id=standard.id,
@@ -1381,6 +1258,7 @@ def preview_acquisition_row_standard_conformity(
 
     if any(issue.severity == "block" for issue in issues):
         return AcquisitionStandardPreviewResponse(
+            **preview_context,
             status="valori_non_validi",
             block=block,
             standard_id=standard.id,
@@ -1392,6 +1270,7 @@ def preview_acquisition_row_standard_conformity(
     if compared <= 0:
         if issues:
             return AcquisitionStandardPreviewResponse(
+                **preview_context,
                 status="non_conforme",
                 block=block,
                 standard_id=standard.id,
@@ -1400,6 +1279,7 @@ def preview_acquisition_row_standard_conformity(
                 message="Valori da verificare manualmente prima della conferma.",
             )
         return AcquisitionStandardPreviewResponse(
+            **preview_context,
             status="standard_mancante",
             block=block,
             standard_id=standard.id,
@@ -1408,6 +1288,7 @@ def preview_acquisition_row_standard_conformity(
         )
 
     return AcquisitionStandardPreviewResponse(
+        **preview_context,
         status="non_conforme" if issues else "conforme",
         block=block,
         standard_id=standard.id,
@@ -14875,6 +14756,8 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
                 "Se certificate_number_raw sembra tronco ma lot_batch_raw contiene un root piu lungo, conserva lot_batch_raw completo; non accorciare il root lotto. "
                 "La Colata e' Batch/Melt o Heat della stessa riga, es. 25E-7870 o H6245. "
                 "Diametro e lega/stato vengono dalla descrizione materiale: Extruded Round Bar 44.00, Alloy 7150, Temper F. "
+                "product_description_raw deve contenere la descrizione completa e letterale del prodotto/materiale della stessa riga, "
+                "per esempio Extruded bar. Non ricavarla da note, norme, controlli ultrasuoni o requisiti tecnici. "
                 "diameter_raw deve essere solo una dimensione fisica in mm/diameter/round bar; non usare mai norme come EN 573, PN-EN 573-3, EN 755 o EN 10204 come diametro. "
                 "customer_part_raw deve essere solo un codice articolo/part number visibile; non usare descrizioni generiche, norme EN/PN-EN, lega, temper o diametro come codice articolo. "
                 "Non usare dati autista, timbri o firme. Non usare nome file. Non fare match con certificati. "
@@ -14882,7 +14765,7 @@ def _extract_grupa_kety_ddt_row_groups_from_openai(
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"certificate_number_raw\":\"string|null\",\"lot_batch_raw\":\"string|null\",\"heat_raw\":\"string|null\","
-                "\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"diameter_raw\":\"string|null\","
+                "\"product_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"diameter_raw\":\"string|null\","
                 "\"customer_part_raw\":\"string|null\",\"customer_order_raw\":\"string|null\","
                 "\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
             ),
@@ -14951,6 +14834,7 @@ def _parse_openai_json_payload_for_grupa_kety_row_groups(payload: str) -> tuple[
                 "certificate_number_raw": _string_or_none(raw_row.get("certificate_number_raw")),
                 "lot_batch_raw": _string_or_none(raw_row.get("lot_batch_raw")),
                 "heat_raw": _string_or_none(raw_row.get("heat_raw")),
+                "product_description_raw": _string_or_none(raw_row.get("product_description_raw")),
                 "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
                 "temper_raw": _string_or_none(raw_row.get("temper_raw")),
                 "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
@@ -15178,6 +15062,8 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 "order_no_raw e' Order date / Nr kontraktu klienta se presente, es. 154. "
                 "customer_part_raw e' solo un codice articolo/part number cliente visibile, es. PPO 44MM 7150/F L:5000. "
                 "Se vedi solo una descrizione tipo Extruded bar o una norma tipo PN-EN 573-3 / EN 573 / EN 755, customer_part_raw deve essere null. "
+                "product_description_raw deve contenere la descrizione completa e letterale del prodotto/materiale. "
+                "Non usare note, norme, controlli ultrasuoni o requisiti tecnici come descrizione prodotto. "
                 "alloy_raw viene da Alloy grade, es. EN AW-7150; temper_raw da Temper; heat_raw da Heat; kg_raw da kg; pieces_raw da Pieces. "
                 "diameter_raw viene solo da Dimensions/drawing o da un testo articolo che contiene una misura fisica esplicita in mm/diameter/round bar, es. 44.00 mm. "
                 "Non usare mai EN 573, PN-EN 573-3, EN 755, EN 10204 o altri numeri di norma come diameter_raw. Se il diametro non e chiaramente fisico, metti null. "
@@ -15193,7 +15079,7 @@ def _extract_grupa_kety_certificate_payload_from_openai(
                 )
                 + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"certificate_number\":\"string|null\",\"packing_slip_raw\":\"string|null\",\"order_no_raw\":\"string|null\","
-                "\"customer_part_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"heat_raw\":\"string|null\","
+                "\"customer_part_raw\":\"string|null\",\"product_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"temper_raw\":\"string|null\",\"heat_raw\":\"string|null\","
                 "\"kg_raw\":\"string|null\",\"pieces_raw\":\"string|null\",\"diameter_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
                 "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
@@ -23910,6 +23796,9 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
                 "purchase_number_raw deve essere il valore raw del campo Purchase Number. "
                 "order_confirmation_raw deve essere il valore raw del campo Order Confirmation. "
                 "alloy_raw deve essere la lega materiale del documento o della stessa riga batch, quando visibile. "
+                "product_description_raw deve contenere solo il testo completo e letterale della voce prodotto realmente selezionata/contrassegnata, "
+                "per esempio Billets casted, homogenized and turned. Se il modulo mostra piu opzioni, non restituirle tutte: usa solo quella con il segno di selezione; "
+                "se non e possibile capire quale sia selezionata, restituisci null. Non usare note, norme o controlli come descrizione prodotto. "
                 "diameter_raw deve essere il diametro del materiale, quando visibile. "
                 "batch_raw deve essere il batch della stessa riga logica, letto dal gruppo batch o dalla sezione di continuazione in cui compare. "
                 "net_weight_raw deve essere il peso netto del gruppo batch della stessa riga logica, letto dalla packing list o dalla riga/tabella dove quel batch compare. "
@@ -23920,7 +23809,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"purchase_number_raw\":\"string|null\",\"order_confirmation_raw\":\"string|null\","
-                "\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"batch_raw\":\"string|null\","
+                "\"product_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"batch_raw\":\"string|null\","
                 "\"net_weight_raw\":\"string|null\",\"source_crops\":[\"label\"]}]}"
             ),
         }
@@ -24005,6 +23894,7 @@ def _parse_openai_json_payload_for_leichtmetall_row_groups(
                 "row_index": normalized_row_index,
                 "purchase_number_raw": _string_or_none(raw_row.get("purchase_number_raw")),
                 "order_confirmation_raw": _string_or_none(raw_row.get("order_confirmation_raw")),
+                "product_description_raw": _string_or_none(raw_row.get("product_description_raw")),
                 "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
                 "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
                 "batch_raw": _string_or_none(raw_row.get("batch_raw")),
@@ -24324,6 +24214,8 @@ def _extract_aww_ddt_row_groups_from_openai(
                 "Se trovi solo T1/T6 senza una lega tipo 6082, 6082A, EN AW o AlSi, restituisci null. "
                 "Se il documento mostra EN AW-6082A/535/T1, restituisci proprio quel raw completo. "
                 "diameter_raw deve essere il diametro preso dal simbolo Ø o da outer Ø della stessa posizione, senza dipendere dalla parola barra. "
+                "product_raw deve contenere la descrizione materiale completa e letterale della posizione, per esempio Rundstange 35,00. "
+                "Non usare note, norme o controlli come descrizione prodotto. "
                 "length_raw deve essere la lunghezza raw della stessa posizione, quando visibile. "
                 "Non fare il match con alcun certificato e non normalizzare i valori. "
                 "Usa solo testo realmente visibile. Non inventare, non inferire e non usare nome file o conoscenza esterna. "
@@ -24332,7 +24224,7 @@ def _extract_aww_ddt_row_groups_from_openai(
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
                 "\"customer_order_raw\":\"string|null\",\"part_number_raw\":\"string|null\","
                 "\"your_part_number_raw\":\"string|null\",\"order_confirmation_raw\":\"string|null\","
-                "\"batch_number_oc_raw\":\"string|null\",\"alloy_temper_raw\":\"string|null\","
+                "\"batch_number_oc_raw\":\"string|null\",\"alloy_temper_raw\":\"string|null\",\"product_raw\":\"string|null\","
                 "\"diameter_raw\":\"string|null\",\"length_raw\":\"string|null\",\"net_weight_raw\":\"string|null\","
                 "\"source_crops\":[\"label\"]}]}"
             ),
@@ -24422,6 +24314,7 @@ def _parse_openai_json_payload_for_aww_row_groups(
                 "order_confirmation_raw": _string_or_none(raw_row.get("order_confirmation_raw")),
                 "batch_number_oc_raw": _string_or_none(raw_row.get("batch_number_oc_raw")),
                 "alloy_temper_raw": _string_or_none(raw_row.get("alloy_temper_raw")),
+                "product_raw": _string_or_none(raw_row.get("product_raw")),
                 "diameter_raw": _string_or_none(raw_row.get("diameter_raw")),
                 "length_raw": _string_or_none(raw_row.get("length_raw")),
                 "net_weight_raw": _string_or_none(raw_row.get("net_weight_raw")),
@@ -25182,6 +25075,9 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 "po_no: estrai il valore raw del campo PO-No. "
                 "charge_cast_no: estrai il valore raw del campo Charge / Cast No. "
                 "alloy_raw: estrai il valore raw della lega. "
+                "product_description_raw: estrai solo la voce prodotto effettivamente selezionata/contrassegnata o la descrizione materiale completa. "
+                "Se sono visibili piu opzioni, non unirle: restituisci solo quella selezionata; se il segno non e chiaro, restituisci null. "
+                "Esempio valido: Billets casted, homogenized and turned. Non usare note, norme o controlli come descrizione prodotto. "
                 "diameter_raw: estrai il diametro raw del materiale. "
                 "weight_raw: estrai il peso raw del materiale. "
                 "Chimica: usa solo Si, Fe, Cu, Mn, Mg, Cr, Ni, Zn, Ti, Cd, Hg, Pb, V, Bi, Sn, Zr, Be, Zr+Ti, Mn+Cr, Bi+Pb; restituisci solo i valori misurati veri e ignora Min e Max. "
@@ -25194,7 +25090,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
                 + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
                 "\"lega\":\"string|null\",\"descrizione_profilo_cliente\":\"string|null\",\"colata\":\"string|null\",\"peso_netto\":\"string|null\","
-                "\"po_no\":\"string|null\",\"charge_cast_no\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\"},"
+                "\"po_no\":\"string|null\",\"charge_cast_no\":\"string|null\",\"product_description_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\",\"Mg\":\"string|null\","
                 "\"Cr\":\"string|null\",\"Ni\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\",\"Cd\":\"string|null\",\"Hg\":\"string|null\","
                 "\"Pb\":\"string|null\",\"V\":\"string|null\",\"Bi\":\"string|null\",\"Sn\":\"string|null\",\"Zr\":\"string|null\",\"Be\":\"string|null\",\"Zr+Ti\":\"string|null\",\"Mn+Cr\":\"string|null\","
@@ -26460,11 +26356,13 @@ def _extract_zalco_ddt_row_groups_from_openai(
                 "code_art_raw e' CODE ART/CODE tipo 0381Z; diameter_raw e' FORMAT o DIAMETER OR SIZES; "
                 "weight_raw e' POIDS NET/NET; cast_raw e' No. COULEE/CAST Nr. completo, ad esempio 2023 42669; "
                 "alloy_raw e' la lega/stato stampata, ad esempio 6082 HO; chemistry_raw contiene solo valori misurati, non limiti. "
+                "product_description_raw e' la descrizione completa e letterale del materiale, per esempio billets. "
+                "Non usare note, norme, controlli o testo legale come descrizione prodotto. "
                 "Restituisci solo JSON con questa struttura: "
                 "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,\"tally_sheet_raw\":\"string|null\","
                 "\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\",\"code_art_raw\":\"string|null\","
                 "\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\",\"cast_raw\":\"string|null\","
-                "\"alloy_raw\":\"string|null\",\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\","
+                "\"alloy_raw\":\"string|null\",\"product_description_raw\":\"string|null\",\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\","
                 "\"Mn\":\"string|null\",\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
                 "\"source_crops\":[\"label\"]}]}"
             ),
@@ -26537,6 +26435,7 @@ def _parse_openai_json_payload_for_zalco_row_groups(payload: str) -> tuple[str |
                 "weight_raw": _string_or_none(raw_row.get("weight_raw")),
                 "cast_raw": _string_or_none(raw_row.get("cast_raw")),
                 "alloy_raw": _string_or_none(raw_row.get("alloy_raw")),
+                "product_description_raw": _string_or_none(raw_row.get("product_description_raw")),
                 "chemistry_raw": chemistry_raw if isinstance(chemistry_raw, dict) else {},
                 "source_crops": normalized_sources,
             }
@@ -26768,6 +26667,8 @@ def _extract_zalco_certificate_payload_from_openai(
                 "symbol_raw e' SYMBOLE/CUSTOMER ALLOY CODE; code_art_raw e' CODE/CODE ART; "
                 "diameter_raw e' DIAMETER OR SIZES/FORMAT; weight_raw e' NET; cast_raw e' No. COULEE/CAST Nr. completo; "
                 "alloy_raw e' lega/stato visibile come 6082 HO. "
+                "product_description_raw e' la descrizione completa e letterale del materiale, per esempio billets. "
+                "Non usare note, norme, controlli o testo legale come descrizione prodotto. "
                 "Chimica: leggi solo riga valori misurati, non limiti e non testo legale. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
                 + _us_control_scope_prompt()
@@ -26777,7 +26678,7 @@ def _extract_zalco_certificate_payload_from_openai(
                 + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"tally_sheet_raw\":\"string|null\",\"order_raw\":\"string|null\",\"symbol_raw\":\"string|null\","
                 "\"code_art_raw\":\"string|null\",\"diameter_raw\":\"string|null\",\"weight_raw\":\"string|null\","
-                "\"cast_raw\":\"string|null\",\"alloy_raw\":\"string|null\"},"
+                "\"cast_raw\":\"string|null\",\"alloy_raw\":\"string|null\",\"product_description_raw\":\"string|null\"},"
                 "\"chemistry_raw\":{\"Si\":\"string|null\",\"Fe\":\"string|null\",\"Cu\":\"string|null\",\"Mn\":\"string|null\","
                 "\"Mg\":\"string|null\",\"Cr\":\"string|null\",\"Zn\":\"string|null\",\"Ti\":\"string|null\"},"
                 "\"notes_raw\":{\"nota_us_control_class_a_raw\":\"string|null\",\"nota_us_control_class_a_type1_bsh_raw\":\"string|null\",\"nota_us_control_class_b_raw\":\"string|null\","
