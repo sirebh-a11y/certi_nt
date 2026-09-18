@@ -3,6 +3,7 @@ import { useBeforeUnload, useNavigate } from "react-router-dom";
 
 import { apiRequest, fetchApiBlob } from "../../app/api";
 import { documentTone } from "./documentTone";
+import { hasUnverifiedSourcePage } from "./evidenceProvenance";
 import { focusFirstOverlayItemInViewport } from "./overlayScroll";
 
 const SYSTEM_NOTE_ORDER = [
@@ -658,6 +659,11 @@ export default function AcquisitionNotesSectionPage({ certificateDocument, row, 
 
   return (
     <div className="space-y-4">
+      {hasUnverifiedSourcePage(row, "note") ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
+          Pagina di origine di alcune note da verificare: il testo è stato letto, ma non è stato possibile individuare una pagina univoca. Controlla il certificato prima di confermare.
+        </p>
+      ) : null}
       <NotePdfPanel
         certificateDocument={certificateDocument}
         footerContent={

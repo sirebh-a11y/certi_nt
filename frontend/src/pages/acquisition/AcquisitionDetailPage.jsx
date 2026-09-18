@@ -6,6 +6,7 @@ import { useAuth } from "../../app/auth";
 import { canReopenQualityFlow } from "../../app/access";
 import AcquisitionRowSummaryCard from "./AcquisitionRowSummaryCard";
 import { documentTone } from "./documentTone";
+import { hasUnverifiedSourcePage } from "./evidenceProvenance";
 import { formatFieldDisplay, formatRowFieldDisplay } from "./fieldFormatting";
 
 const BLOCK_LABELS = {
@@ -1307,6 +1308,11 @@ export default function AcquisitionDetailPage() {
                           Frase rilevata dal certificato:
                         </div>
                         <div className="mt-1 text-sm leading-5 text-slate-900">{mechanicalRequirementText}</div>
+                        {hasUnverifiedSourcePage(row, "requisiti") ? (
+                          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="status">
+                            Pagina di origine da verificare sul certificato: il riferimento non è univoco.
+                          </p>
+                        ) : null}
                       </>
                     ) : (
                       <div className="mt-1 text-sm text-slate-500">

@@ -1,6 +1,6 @@
 # Impol — piano correzioni mascheramento e pagina delle note
 
-Data: 18 settembre 2026. **Solo audit e proposta: implementazione da autorizzare.**
+Data: 18 settembre 2026. **Implementazione locale autorizzata e completata; deploy Alpha non richiesto.** Il piano iniziale resta sotto come traccia, seguito dall'esito dei lavori.
 
 ## Cosa è emerso
 
@@ -44,9 +44,45 @@ Usare prima test locali senza chiamate AI; eventuali nuove prove a pagamento ris
 
 - [x] Audit del campione e dei punti del codice.
 - [x] Piano scritto.
-- [ ] OK di Silvano per implementare Impol.
-- [ ] Correzioni locali e campioni aggiuntivi.
-- [ ] Test di estrazione, evidenze e regressioni del percorso applicativo.
-- [ ] Approvazione, commit/push e deploy separatamente richiesti.
+- [x] OK di Silvano per implementare Impol: «commitpush e poi procedi con impol».
+- [x] Correzioni locali e campioni aggiuntivi.
+- [x] Test automatici di normalizzazione, evidenze e regressioni; controlli visivi dei campioni.
+- [x] Commit/push richiesto anche per Impol durante la lavorazione.
+- [ ] Prova AI reale con le nuove immagini e caricamento completo su dati di test.
+- [ ] Deploy Alpha, solo dopo richiesta separata e secondo MD.
 
 Il controllo AI DDT/certificato rimane per ora limitato a Leichtmetall. Nessuna estensione automatica a Impol o agli altri fornitori. Nessuna modifica Alpha, agli originali, allo storico, ai match confermati, a KPI o Registro.
+
+## Esito implementazione locale
+
+### Maschere certificati
+
+`impol_masking.py` sostituisce il rettangolo fisso del percorso certificato. Riconosce intestazione e confine dei campi ordine via OCR; dentro le aree del layout conosciuto usa i confini effettivi dell'inchiostro, con margine limitato. Copre indirizzo cliente, logo/recapiti fornitore, nomi dei timbri, pannelli firme e dati societari a piè pagina. Conserva titolo, numero certificato, campi ordine, dati tecnici e dichiarazioni ISO/conformità all'ordine.
+
+Nel layout 17126/a il controllo visivo ha rilevato intestazione spostata e firme vicine alla dichiarazione: corretti i limiti superiore/inferiore e aggiunto un test di regressione. Si tratta di un profilo Impol ancorato, non di un riconoscitore universale per qualsiasi impaginazione. Se mancano gli ancoraggi o un'area da oscurare si sovrappone a un campo tecnico riconosciuto, errore esplicito prima della chiamata AI. Nessun retry automatico per questo errore. Nessuna nuova finestra di approvazione maschere introdotta.
+
+DDT Impol e maschere degli altri fornitori non modificati. Nessuna bonifica automatica delle vecchie immagini derivate; i nuovi ritagli vengono rigenerati nel percorso di lettura certificato.
+
+### Provenienza note e richiamo requisiti
+
+`impol_evidence.py` confronta le citazioni già estratte dall'AI con testo PDF/OCR delle pagine. Nessuna modifica al prompt, al modello o alle regole di estrazione. L'OCR serve soltanto per localizzare la frase, non per sostituire il valore letto dall'AI.
+
+- Associazione solo se la citazione è individuata su un'unica pagina; citazioni unite da `|` devono risultare tutte sulla stessa pagina.
+- Tolleranza di una sola sostituzione OCR in frasi lunghe almeno 40 caratteri; numeri e classe A/B devono coincidere. Esempio reale: `STD` letto dall'OCR come `STO`.
+- Se assente, ripetuta, troppo breve o non verificabile: pagina nulla, testo ed esito tecnico invariati. Non si assegna più l'ultima pagina per ipotesi.
+- Implicazione LST00 → classe B invariata, ma localizzata prima che un consumatore possa riattribuirla per fallback alla prima pagina.
+- Persistenza nello schema esistente: `document_page_id = NULL`, tipo evidenza `testo_pagina_da_verificare`. Nessuna migrazione DB.
+- Avviso giallo tenue in Note e sul richiamo requisiti quando il valore corrente non confermato ha provenienza incerta. Evidenze vecchie non più referenziate non mantengono avvisi; le evidenze senza pagina non generano sovrapposizioni grafiche su una pagina inventata.
+
+### Verifiche
+
+- Quattro PDF locali: 1505/a (2 pagine), 10341 (2), 1505/c (2), 17126/a (1). Rendering e verifica visiva di tutte le sette pagine; ordine fornitore e contenuto tecnico leggibili nelle copie mascherate.
+- Test maschere su scale differenti, traslazione, ancoraggi mancanti, layout alto e firme basse; originali non modificati.
+- Test note su pagina 1/2, citazioni ripetute, mancanti, aggregate, OCR incompleto, classe/numero diverso, implicazione LST00 e salvataggio con pagina nulla; note confermate protette.
+- Rielaborate localmente le quattro risposte AI Impol già salvate nella valutazione precedente: mantenuti CDQ `1505/a`, undici valori chimici, tre righe meccaniche, classe B presente e A sulle estremità esclusa, RoHS presente. Classe B e richiamo LST00 localizzati alla pagina 1 in tutte. RoHS localizzato alla pagina 1 in due risposte; nelle altre due citazione/OCR non concordano abbastanza e viene correttamente richiesto il controllo della pagina, senza cambiare l'esito RoHS.
+- Test frontend della visibilità dell'avviso e build Vite. Avvisi non bloccanti: database Browserslist datato e dimensione bundle; nessun aggiornamento dipendenze fuori ambito.
+- Suite backend completa: **296 test superati**, 7 avvisi di deprecazione; 2 test frontend superati; build Vite completata. `git diff --check` senza errori di whitespace.
+
+### Limiti prima del rilascio
+
+Nessuna nuova chiamata AI a pagamento: budget invariato. La leggibilità visiva dell'ordine ora scoperto non equivale a una nuova prova di estrazione AI di quel valore. Non eseguito ciclo completo upload → conferme → Word/PDF su database aziendale né collaudo UI interattivo. Layout ruotati/degradati o diversi dai campioni richiedono ulteriori prove; gli errori espliciti vanno gestiti mediante verifica del documento, senza allargare automaticamente le maschere. Nessun deploy Alpha eseguito.

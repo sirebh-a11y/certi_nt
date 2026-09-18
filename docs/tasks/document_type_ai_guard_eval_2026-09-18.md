@@ -145,4 +145,4 @@ File: `document_type_guard.py`, `leichtmetall_type_workflow.py`, integrazioni mi
 - Non eseguiti upload reali con scritture nel DB aziendale, prova concorrente di produzione o ciclo completo Word/PDF. La suite superata non sostituisce questi controlli prima di un rilascio Alpha.
 - Nessun commit, push, deploy Alpha o modifica delle impostazioni AI effettuati.
 
-Piano Impol separato: [audit e piano](impol_masking_note_page_audit_plan.md), da approvare prima del codice. L'eventuale bonifica di documenti già caricati richiede una decisione separata, non avviene automaticamente.
+Piano Impol separato: [audit, piano ed esito successivo](impol_masking_note_page_audit_plan.md). Dopo questo rapporto Silvano ha autorizzato l'implementazione locale, documentata nel file collegato. L'eventuale bonifica di documenti già caricati richiede una decisione separata, non avviene automaticamente.

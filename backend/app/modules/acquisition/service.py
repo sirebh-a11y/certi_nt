@@ -32,6 +32,8 @@ from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
 from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
+from app.modules.acquisition.impol_evidence import assign_note_pages, evidence_type as _note_evidence_type
+from app.modules.acquisition.impol_masking import ImpolMaskReviewRequired, mask_certificate as _mask_impol_certificate
 from app.modules.acquisition.document_type_guard import (
     DocumentTypeReviewRequired,
     document_type_prompt,
@@ -8567,7 +8569,7 @@ def _error_detail_text(exc: Exception) -> str:
 
 
 def _is_retryable_processing_error(exc: Exception) -> bool:
-    if isinstance(exc, DocumentTypeReviewRequired):
+    if isinstance(exc, (DocumentTypeReviewRequired, ImpolMaskReviewRequired)):
         return False
     text_value = _error_detail_text(exc).lower()
     retryable_tokens = (
@@ -12220,7 +12222,7 @@ def detect_standard_notes(
             document_page_id=match["page_id"],
             acquisition_row_id=row.id,
             blocco="note",
-            tipo_evidenza="testo",
+            tipo_evidenza=_note_evidence_type(match),
             bbox=None,
             testo_grezzo=match["snippet"],
             storage_key_derivato=None,
@@ -21104,6 +21106,7 @@ def _build_impol_certificate_safe_crops(
         with Image.open(image_path) as image:
             masked_page = _build_impol_certificate_masked_page(image)
             storage_key = _save_certificate_crop(page, masked_page, f"impol_masked_page_{page.numero_pagina}")
+            source_text = "\n".join(filter(None, [page.testo_estratto, page.ocr_text, masked_page.info.get("impol_source_text")]))
             width, height = masked_page.size
             if index == 0:
                 role_specs = [
@@ -21126,17 +21129,13 @@ def _build_impol_certificate_safe_crops(
                     "page_number": page.numero_pagina,
                     "storage_key": storage_key,
                     "bbox": f"0,0,{width},{height}",
+                    "source_text": source_text,
                 }
     return crops
 
 
 def _build_impol_certificate_masked_page(image: Image.Image) -> Image.Image:
-    masked = image.convert("RGB")
-    lines = _extract_ocr_line_blocks(masked)
-    _mask_impol_visual_logo_regions(masked, is_certificate_page=True)
-    _mask_impol_customer_occurrence_blocks(masked, lines)
-    _mask_impol_supplier_occurrence_blocks(masked, lines)
-    return masked
+    return _mask_impol_certificate(image, _extract_ocr_word_blocks(image))
 
 
 def _build_metalba_certificate_safe_crops(
@@ -23411,7 +23410,7 @@ def _normalize_impol_certificate_ai_payload(
     cast_raw = _string_or_none(core_payload.get("colata"))
     weight_raw = _string_or_none(core_payload.get("peso_netto"))
 
-    return {
+    payload = {
         "match_values": {
             field_name: _string_or_none(field_payload.get("value"))
             for field_name, field_payload in core_fields.items()
@@ -23433,6 +23432,10 @@ def _normalize_impol_certificate_ai_payload(
         "mechanical_requirement": mechanical_requirement_match,
         "debug_raw_output": json.dumps(raw_payload, ensure_ascii=False),
     }
+    # Resolve after the existing LST00 implication to avoid a guessed page in
+    # later consumers. Technical values and original quotations are unchanged.
+    _enrich_notes_with_lst_00_class_b(payload, fallback_page_id=first_page_id or None)
+    return assign_note_pages(payload, page_images)
 
 
 def _sanitize_impol_vision_certificate_fields(
@@ -26014,6 +26017,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
                 snippet=snippet,
                 actor_id=actor_id,
                 confidence=confidence,
+                tipo_evidenza=_note_evidence_type(match),
             )
             _upsert_read_value_model(
                 db=db,
@@ -26044,6 +26048,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
             snippet=snippet,
             actor_id=actor_id,
             confidence=0.74,
+            tipo_evidenza=_note_evidence_type(match),
         )
         _upsert_read_value_model(
             db=db,
@@ -27881,18 +27886,19 @@ def _create_text_evidence(
     *,
     row_id: int,
     document_id: int,
-    document_page_id: int,
+    document_page_id: int | None,
     blocco: str,
     snippet: str,
     actor_id: int,
     confidence: float,
+    tipo_evidenza: str = "testo",
 ) -> DocumentEvidence:
     evidence = DocumentEvidence(
         document_id=document_id,
         document_page_id=document_page_id,
         acquisition_row_id=row_id,
         blocco=blocco,
-        tipo_evidenza="testo",
+        tipo_evidenza=tipo_evidenza,
         bbox=None,
         testo_grezzo=snippet,
         storage_key_derivato=None,
