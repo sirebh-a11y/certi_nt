@@ -112,8 +112,10 @@ export default function AcquisitionGembaWalkPrintPage() {
         @media print {
           body * { visibility: hidden; }
           #gemba-print-root, #gemba-print-root * { visibility: visible; }
-          #gemba-print-root { position: absolute; inset: 0; padding: 0; }
+          #gemba-print-root { position: absolute; top: 0; left: 0; right: 0; height: auto; min-height: 0; padding: 0; }
           .print-actions { display: none !important; }
+          #gemba-print-root .gemba-table-viewport { overflow: visible; }
+          #gemba-print-root thead { display: table-header-group; }
           table { page-break-inside: auto; }
           tr { page-break-inside: avoid; page-break-after: auto; }
         }
@@ -150,8 +152,8 @@ export default function AcquisitionGembaWalkPrintPage() {
       ) : null}
 
       {rows.length ? (
-        <div className="overflow-x-auto">
-          <table className="w-full table-fixed border-collapse text-[9px]">
+        <div className="gemba-table-viewport overflow-x-auto">
+          <table className="w-full table-fixed border-collapse text-[11px]">
             <colgroup>
               <col style={{ width: "3.2%" }} />
               <col style={{ width: "12.1%" }} />
@@ -164,8 +166,8 @@ export default function AcquisitionGembaWalkPrintPage() {
               <col style={{ width: "6%" }} />
               <col style={{ width: "8.9%" }} />
               <col style={{ width: "4.6%" }} />
-              <col style={{ width: "4.3%" }} />
-              <col style={{ width: "20.8%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "19.1%" }} />
             </colgroup>
             <thead>
               <tr className="bg-slate-100 text-left uppercase tracking-[0.08em] text-slate-700">
@@ -197,7 +199,7 @@ export default function AcquisitionGembaWalkPrintPage() {
                   <td className="break-words border border-slate-300 px-1.5 py-2">{row.ddt || "-"}</td>
                   <td className="border border-slate-300 px-1.5 py-2">{formatRowFieldDisplay("peso", row.peso)}</td>
                   <td className="break-words border border-slate-300 px-1.5 py-2">{row.ordine || "-"}</td>
-                  <td className="border border-slate-300 px-1.5 py-2">&nbsp;</td>
+                  <td className="break-words border border-slate-300 px-1.5 py-2 text-center">{row.qualita_numero_colli ?? "\u00a0"}</td>
                   <td className="border border-slate-300 px-1.5 py-2 text-center text-lg">□</td>
                   <td className="whitespace-pre-wrap break-words border border-slate-300 px-1.5 py-2">{row.qualita_note || ""}</td>
                 </tr>

@@ -206,8 +206,10 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
         for tag in expected_tags:
             self.assertIn(f'w:val="{tag}"', header_xml)
         self.assertEqual(header_xml.count("<w:sdt>"), len(expected_tags))
-        self.assertIn("T.D.:", header_xml)
-        self.assertIn("(D.d.T.):", header_xml)
+        self.assertEqual(header_xml.count("Delivery Note:"), 2)
+        self.assertEqual(header_xml.count("(D.d.T.)"), 2)
+        self.assertNotIn("T.D.:", header_xml)
+        self.assertNotIn("(D.d.T.):", header_xml)
         self.assertIn("Quantity:", header_xml)
         self.assertIn("Quantit", header_xml)
 
@@ -262,12 +264,14 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
             {
                 "CERT_DATE": "19/05/2026",
                 "DDT_RAW": "1133-19/05/2026",
+                "DDT_FINISHED": "2026/DDT-000123456789-19/05/2026",
                 "COD_F3_FINISHED": "605001860",
             },
         )
 
         self.assertIn("CERT_DATE", updated)
         self.assertIn("DDT_RAW", updated)
+        self.assertIn("DDT_FINISHED", updated)
         self.assertIn("COD_F3_FINISHED", updated)
         self.assertEqual(missing, [])
         with zipfile.ZipFile(output_path) as archive:
@@ -281,6 +285,9 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
                     ET.fromstring(archive.read(name))
         self.assertIn("19/05/2026", header_xml)
         self.assertIn("1133-19/05/2026", header_xml)
+        self.assertIn("2026/DDT-000123456789-19/05/2026", header_xml)
+        self.assertEqual(header_xml.count("Delivery Note:"), 2)
+        self.assertNotIn("T.D.:", header_xml)
         self.assertIn("605001860", header_xml)
         self.assertIn("<w:text/>", header_xml)
         self.assertIn("<w:sdtContent>", header_xml)

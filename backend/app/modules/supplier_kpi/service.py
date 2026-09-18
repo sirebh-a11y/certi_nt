@@ -365,6 +365,7 @@ def _supplier_detail_rows(
         "Data richiesta",
         "Tipo estrusione",
         "Valutazione",
+        "N° colli",
         "Note",
         "Ritardo giorni",
         "Tempo controllo giorni",
@@ -387,6 +388,7 @@ def _supplier_detail_rows(
             _format_date(row.qualita_data_richiesta),
             _quality_control_type_label(row.qualita_tipo_controllo),
             _quality_label(row.qualita_valutazione),
+            row.qualita_numero_colli if row.qualita_numero_colli is not None else "",
             _clean_cell(row.qualita_note),
             _delay_days(row),
             _control_time_days(row, non_working_dates),
@@ -602,6 +604,8 @@ def _write_xlsx(sheets: list[tuple[str, list[list[object]]]]) -> bytes:
 
 def _sheet_xml(rows: list[list[object]]) -> str:
     column_widths = _column_widths(rows)
+    # Only the new package-count column changes type; preserve legacy exports.
+    package_column = rows[4].index("N° colli") + 1 if len(rows) > 4 and "N° colli" in rows[4] else None
     xml_columns = "".join(
         f'<col min="{column_index}" max="{column_index}" width="{width:.2f}" customWidth="1"/>'
         for column_index, width in enumerate(column_widths, start=1)
@@ -616,7 +620,10 @@ def _sheet_xml(rows: list[list[object]]) -> str:
             line_count = _wrapped_line_count(text_value, column_widths[column_index - 1])
             row_line_count = max(row_line_count, line_count)
             style_attribute = ' s="1"' if line_count > 1 else ""
-            cells.append(f'<c r="{cell_ref}"{style_attribute} t="inlineStr"><is><t>{escape(text_value)}</t></is></c>')
+            if row_index > 5 and column_index == package_column and type(value) is int:
+                cells.append(f'<c r="{cell_ref}"{style_attribute} t="n"><v>{value}</v></c>')
+            else:
+                cells.append(f'<c r="{cell_ref}"{style_attribute} t="inlineStr"><is><t>{escape(text_value)}</t></is></c>')
         row_attributes = f' r="{row_index}"'
         if row_line_count > 1:
             row_height = min(MAX_EXCEL_ROW_HEIGHT, DEFAULT_EXCEL_ROW_HEIGHT * row_line_count)

@@ -336,6 +336,8 @@ def ensure_acquisition_quality_columns() -> None:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_valutazione VARCHAR(32)")
     if "qualita_note" not in columns:
         statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_note TEXT")
+    if "qualita_numero_colli" not in columns:
+        statements.append("ALTER TABLE datimaterialeincoming ADD COLUMN qualita_numero_colli INTEGER")
     if "qualita_numero_analisi_da_ricontrollare" not in columns:
         statements.append(
             "ALTER TABLE datimaterialeincoming ADD COLUMN qualita_numero_analisi_da_ricontrollare BOOLEAN NOT NULL DEFAULT FALSE"

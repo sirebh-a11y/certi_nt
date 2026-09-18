@@ -1040,8 +1040,8 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
         ),
         (
             ("Confirm of order:", "C.d.O.:", certificate_header.get("conferma_ordine"), "CONFIRM_ORDER", True),
-            ("T.D.:", "(D.d.T.):", certificate_header.get("ddt_raw"), "DDT_RAW", True),
-            ("T.D.:", "(D.d.T.):", certificate_header.get("ddt_finished"), "DDT_FINISHED", True),
+            ("Delivery Note:", "(D.d.T.)", certificate_header.get("ddt_raw"), "DDT_RAW", True),
+            ("Delivery Note:", "(D.d.T.)", certificate_header.get("ddt_finished"), "DDT_FINISHED", True),
         ),
         (
             ("", "", "", None, False),

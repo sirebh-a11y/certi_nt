@@ -458,6 +458,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         qualita_tipo_controllo=row.qualita_tipo_controllo,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
+        qualita_numero_colli=row.qualita_numero_colli,
         pending_closure_reason=_quality_pending_closure_reason(
             qualita_valutazione=row.qualita_valutazione,
             document_ddt_id=row.document_ddt_id,
@@ -562,6 +563,7 @@ def serialize_quality_row(row: AcquisitionRow) -> AcquisitionQualityRowResponse:
         qualita_tipo_controllo=row.qualita_tipo_controllo,
         qualita_valutazione=row.qualita_valutazione,
         qualita_note=row.qualita_note,
+        qualita_numero_colli=row.qualita_numero_colli,
         qualita_numero_analisi_da_ricontrollare=row.qualita_numero_analisi_da_ricontrollare,
         qualita_note_da_ricontrollare=row.qualita_note_da_ricontrollare,
         updated_at=row.updated_at,
@@ -9646,6 +9648,7 @@ def update_quality_row(
         "qualita_numero_analisi",
         "qualita_tipo_controllo",
         "qualita_note",
+        "qualita_numero_colli",
     )
     changed_fields: list[str] = []
     for field_name in field_names:
@@ -12427,6 +12430,13 @@ def validate_final_row(
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
     ensure_acquisition_row_ai_editable(db, row)
+    # Serialize confirmation with a concurrent date autosave and read the latest
+    # stored date/evaluation instead of overwriting values loaded earlier.
+    db.refresh(
+        row,
+        attribute_names=["qualita_data_accettazione", "qualita_valutazione"],
+        with_for_update=True,
+    )
     if row.qualita_valutazione:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -12453,7 +12463,8 @@ def validate_final_row(
         value=payload.qualita_tipo_controllo,
         actor_id=actor_id,
     )
-    row.qualita_data_accettazione = _current_quality_acceptance_date()
+    if row.qualita_data_accettazione is None:
+        row.qualita_data_accettazione = _current_quality_acceptance_date()
     row.qualita_valutazione = payload.qualita_valutazione
     row.qualita_note = payload.qualita_note
     row.qualita_numero_analisi_da_ricontrollare = False
@@ -18835,6 +18846,10 @@ def _merge_certificate_only_row_into_ddt_row(
         target_row.note_documento = source_row.note_documento
     if source_row.qualita_tipo_controllo and not target_row.qualita_tipo_controllo:
         target_row.qualita_tipo_controllo = source_row.qualita_tipo_controllo
+    # A manual row count must survive the merge, never be summed or copied
+    # to sibling rows. Keep a value already entered on the destination.
+    if target_row.qualita_numero_colli is None:
+        target_row.qualita_numero_colli = source_row.qualita_numero_colli
     if source_row.qualita_valutazione and not target_row.qualita_valutazione:
         target_row.qualita_tipo_controllo = source_row.qualita_tipo_controllo or target_row.qualita_tipo_controllo
         target_row.qualita_valutazione = source_row.qualita_valutazione
@@ -18877,7 +18892,14 @@ def _merge_certificate_only_row_into_ddt_row(
         blocco="match",
         azione="certificate_first_unito_a_ddt",
         user_id=actor_id,
-        nota_breve=f"riga origine #{source_row.id}, valori copiati {copied_fields}",
+        nota_breve=(
+            f"riga origine #{source_row.id}, valori copiati {copied_fields}"
+            + (
+                f", N° colli origine {source_row.qualita_numero_colli}, mantenuti {target_row.qualita_numero_colli}"
+                if source_row.qualita_numero_colli is not None
+                else ""
+            )
+        ),
     )
 
     db.query(AutonomousProcessingRun).filter(AutonomousProcessingRun.current_row_id == source_row.id).update(

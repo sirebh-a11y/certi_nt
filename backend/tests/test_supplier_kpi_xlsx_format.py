@@ -26,6 +26,7 @@ class SupplierKpiXlsxFormatTest(unittest.TestCase):
             qualita_tipo_controllo=None,
             qualita_valutazione=None,
             qualita_note=None,
+            qualita_numero_colli=None,
             lega_base=None,
             lega_designazione=None,
             diametro=None,

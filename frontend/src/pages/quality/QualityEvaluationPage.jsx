@@ -4,6 +4,7 @@ import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { alloySearchText, normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "../acquisition/fieldFormatting";
+import { qualityFieldError, qualityFieldPayloadValue } from "./qualityFieldPayload";
 
 const EVALUATION_OPTIONS = [
   { value: "", label: "Da valutare" },
@@ -34,6 +35,7 @@ const EDITABLE_FIELDS = [
   "qualita_data_accettazione",
   "qualita_data_richiesta",
   "qualita_tipo_controllo",
+  "qualita_numero_colli",
   "qualita_note",
 ];
 
@@ -154,10 +156,6 @@ function buildDraft(row) {
   return Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, row[field] ?? ""]));
 }
 
-function payloadValue(value) {
-  return value === "" ? null : value;
-}
-
 function autosaveTitle(cellState) {
   if (!cellState) {
     return undefined;
@@ -234,6 +232,7 @@ function searchableFieldValues(row, draft) {
     row.qualita_tipo_controllo,
     qualityControlTypeLabel(row.qualita_tipo_controllo),
     row.qualita_valutazione,
+    draft.qualita_numero_colli,
     row.qualita_note,
   ]
     .filter((value) => value !== null && value !== undefined && value !== "")
@@ -298,6 +297,8 @@ function qualitySortValue(row, draft, field) {
       return qualityControlTypeLabel(row.qualita_tipo_controllo);
     case "valutazione":
       return EVALUATION_SORT_RANK[row.qualita_valutazione || ""] ?? 99;
+    case "numero_colli":
+      return parseSortableNumber(draft.qualita_numero_colli);
     case "note":
       return row.qualita_note || "";
     default:
@@ -486,7 +487,8 @@ export default function QualityEvaluationPage() {
         const payload = Object.fromEntries(
           EDITABLE_FIELDS
             .filter((field) => textValue(row[field]) !== textValue(draft[field]))
-            .map((field) => [field, payloadValue(draft[field])]),
+            .filter((field) => !qualityFieldError(field, draft[field]))
+            .map((field) => [field, qualityFieldPayloadValue(field, draft[field])]),
         );
         if (!Object.keys(payload).length) {
           return;
@@ -657,6 +659,12 @@ export default function QualityEvaluationPage() {
     const version = (saveVersionsRef.current[key] || 0) + 1;
     saveVersionsRef.current[key] = version;
 
+    const validationError = qualityFieldError(field, value);
+    if (validationError) {
+      setCellState(key, { status: "error", message: validationError });
+      return;
+    }
+
     const currentRow = rowsRef.current.find((item) => item.id === rowId);
     const matchesSavedValue = currentRow && textValue(currentRow[field]) === textValue(value);
     if (matchesSavedValue && !inFlightCellsRef.current[key]) {
@@ -701,7 +709,7 @@ export default function QualityEvaluationPage() {
         `/acquisition/quality-rows/${rowId}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ [field]: payloadValue(value) }),
+          body: JSON.stringify({ [field]: qualityFieldPayloadValue(field, value) }),
           keepalive: true,
         },
         token,
@@ -794,7 +802,7 @@ export default function QualityEvaluationPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione</p>
           <h2 className="mt-2 text-2xl font-semibold">Conformità e valutazione fornitori</h2>
           <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Registro delle righe con match confermato dall'utente. Tipo estrusione e nota valutazione possono essere corretti qui anche dopo la chiusura, senza riaprire la riga.
+            Registro delle righe con match confermato dall'utente. Tipo estrusione, N° colli e nota valutazione possono essere corretti qui anche dopo la chiusura, senza riaprire la riga.
           </p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -912,7 +920,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1740px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1840px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -928,8 +936,9 @@ export default function QualityEvaluationPage() {
               <SortableHeader field="ordine" label="Vs. Odv" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="data_richiesta" label="Data richiesta" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="tipo_controllo" label="Tipo estrusione" onSort={toggleSort} sortConfig={sortConfig} />
-              <SortableHeader field="valutazione" label="Valutazione" onSort={toggleSort} sortConfig={sortConfig} />
+              <SortableHeader field="numero_colli" label="N° colli" onSort={toggleSort} sortConfig={sortConfig} />
               <SortableHeader field="note" label="Note" onSort={toggleSort} sortConfig={sortConfig} />
+              <SortableHeader field="valutazione" label="Valutazione" onSort={toggleSort} sortConfig={sortConfig} />
             </tr>
           </thead>
           <tbody>
@@ -1032,7 +1041,20 @@ export default function QualityEvaluationPage() {
                     </select>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>
+                    <input
+                      aria-label={`N° colli riga ${row.id}`}
+                      aria-invalid={cellStates[cellKey(row.id, "qualita_numero_colli")]?.status === "error"}
+                      className={`w-[90px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
+                        changed: textValue(row.qualita_numero_colli) !== textValue(draft.qualita_numero_colli),
+                        status: cellStates[cellKey(row.id, "qualita_numero_colli")]?.status,
+                      })}`}
+                      inputMode="numeric"
+                      onBlur={() => flushQualityCell(row.id, "qualita_numero_colli")}
+                      onChange={(event) => updateDraftAndAutosave(row.id, "qualita_numero_colli", event.target.value)}
+                      title={autosaveTitle(cellStates[cellKey(row.id, "qualita_numero_colli")]) || "Numero colli facoltativo, inserito manualmente"}
+                      type="text"
+                      value={draft.qualita_numero_colli ?? ""}
+                    />
                   </td>
                   <td className="px-2 py-2">
                     <input
@@ -1054,6 +1076,9 @@ export default function QualityEvaluationPage() {
                       type="text"
                       value={draft.qualita_note || ""}
                     />
+                  </td>
+                  <td className="px-2 py-2">
+                    <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>
                   </td>
                 </tr>
               );

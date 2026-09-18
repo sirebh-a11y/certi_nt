@@ -141,6 +141,7 @@ class AcquisitionRow(Base):
     qualita_tipo_controllo: Mapped[str | None] = mapped_column(String(16), nullable=True)
     qualita_valutazione: Mapped[str | None] = mapped_column(String(32), nullable=True)
     qualita_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qualita_numero_colli: Mapped[int | None] = mapped_column(Integer, nullable=True)
     qualita_numero_analisi_da_ricontrollare: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     qualita_note_da_ricontrollare: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     stato_tecnico: Mapped[str] = mapped_column(String(32), default="rosso", nullable=False)

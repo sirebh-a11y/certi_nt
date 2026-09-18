@@ -782,7 +782,7 @@ export default function QuartaTaglioPage() {
                 <SortableHeader field="colata" label="Colata" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="cod_mp" label="Cod. Art." onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cod_f3" label="Cod. F3" onSort={toggleSort} sortConfig={sortConfig} />
-                <SortableHeader field="qta_totale" label="Qta" onSort={toggleSort} sortConfig={sortConfig} />
+                <SortableHeader field="qta_totale" label="Qta(Kg)" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_cliente" label="Cliente" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_ddt" label="DDT" onSort={toggleSort} sortConfig={sortConfig} />
                 <SortableHeader field="esolver_qta_totale" label="Qta DDT" onSort={toggleSort} sortConfig={sortConfig} />

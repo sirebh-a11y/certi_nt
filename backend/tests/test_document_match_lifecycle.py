@@ -1197,7 +1197,7 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             with self.subTest(evaluation=evaluation):
                 row = AcquisitionRow(
                     cdq=f"ACCEPTANCE-DATE-{evaluation}",
-                    qualita_data_accettazione=date(2026, 7, 1),
+                    qualita_data_accettazione=None,
                 )
                 self.db.add(row)
                 self.db.flush()
@@ -1240,6 +1240,118 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
                     get_acquisition_row(self.db, row.id).qualita_data_accettazione,
                     expected_date,
                 )
+
+    def _make_date_test_row(self, acceptance_date=None):
+        row = AcquisitionRow(
+            cdq="PRESERVED-ACCEPTANCE-DATE",
+            qualita_data_ricezione=date(2026, 7, 1),
+            qualita_data_accettazione=acceptance_date,
+        )
+        self.db.add(row)
+        self.db.flush()
+        for block, field, value in [
+            ("chimica", "Si", "0,9"),
+            ("proprieta", "Rm", "350"),
+            ("note", "nota_radioactive_free", "true"),
+        ]:
+            self.db.add(ReadValue(
+                acquisition_row_id=row.id,
+                blocco=block,
+                campo=field,
+                valore_grezzo=value,
+                valore_standardizzato=value,
+                valore_finale=value,
+                stato="confermato",
+                metodo_lettura="sistema",
+                fonte_documentale="sistema",
+            ))
+        self.db.commit()
+        return get_acquisition_row(self.db, row.id)
+
+    def _confirm_date_test_row(self, row, evaluation="accettato"):
+        return validate_final_row(
+            self.db,
+            row=row,
+            payload=AcquisitionFinalValidationRequest(
+                qualita_tipo_controllo="diretta",
+                qualita_valutazione=evaluation,
+                qualita_note="Motivazione" if evaluation != "accettato" else None,
+            ),
+            actor_id=1,
+        )
+
+    def test_quality_evaluation_preserves_date_for_every_outcome_and_kpi(self):
+        from app.modules.supplier_kpi.service import _control_time_days, _supplier_detail_rows
+
+        saved_date = date(2026, 7, 3)
+        for evaluation in ("accettato", "accettato_con_riserva", "respinto"):
+            with self.subTest(evaluation=evaluation):
+                row = self._make_date_test_row(saved_date)
+                with patch("app.modules.acquisition.service._current_quality_acceptance_date") as today:
+                    self._confirm_date_test_row(row, evaluation)
+                today.assert_not_called()
+                persisted = get_acquisition_row(self.db, row.id)
+                self.assertEqual(persisted.qualita_data_accettazione, saved_date)
+                self.assertEqual(persisted.qualita_valutazione, evaluation)
+                self.assertEqual(_control_time_days(persisted), "2")
+                table = _supplier_detail_rows([persisted], period_label="2026", supplier_label="Test")
+                self.assertEqual(table[5][table[4].index("Data accettazione")], "03/07/2026")
+
+    def test_confirmation_reads_date_saved_after_request_loaded_row(self):
+        saved_date = date(2026, 7, 3)
+        for initial_date in (None, date(2026, 7, 2)):
+            with self.subTest(initial_date=initial_date):
+                row = self._make_date_test_row(initial_date)
+                with self.Session() as autosave_db:
+                    autosave_row = autosave_db.get(AcquisitionRow, row.id)
+                    autosave_row.qualita_data_accettazione = saved_date
+                    autosave_db.commit()
+                self.assertEqual(row.qualita_data_accettazione, initial_date)
+                with patch("app.modules.acquisition.service._current_quality_acceptance_date") as today:
+                    self._confirm_date_test_row(row)
+                today.assert_not_called()
+                self.assertEqual(get_acquisition_row(self.db, row.id).qualita_data_accettazione, saved_date)
+
+    def test_date_autosave_after_confirmation_keeps_manual_value(self):
+        row = self._make_date_test_row()
+        with self.Session() as autosave_db:
+            autosave_row = autosave_db.get(AcquisitionRow, row.id)
+            self.assertIsNone(autosave_row.qualita_data_accettazione)
+            with patch("app.modules.acquisition.service._current_quality_acceptance_date", return_value=date(2026, 7, 20)):
+                self._confirm_date_test_row(row)
+            with patch("app.modules.acquisition.service._is_row_available_in_quality_register", return_value=True):
+                update_quality_row(
+                    autosave_db,
+                    row=autosave_row,
+                    payload=AcquisitionQualityUpdateRequest(qualita_data_accettazione=date(2026, 7, 3)),
+                    actor_id=1,
+                )
+        self.db.expire_all()
+        persisted = get_acquisition_row(self.db, row.id)
+        self.assertEqual(persisted.qualita_data_accettazione, date(2026, 7, 3))
+        self.assertEqual(persisted.qualita_valutazione, "accettato")
+
+    def test_stale_second_confirmation_is_rejected_without_changing_date(self):
+        row = self._make_date_test_row(date(2026, 7, 3))
+        with self.Session() as first_db:
+            first_row = first_db.get(AcquisitionRow, row.id)
+            first_row.qualita_valutazione = "accettato"
+            first_db.commit()
+        self.assertIsNone(row.qualita_valutazione)
+        with self.assertRaises(HTTPException) as error:
+            self._confirm_date_test_row(row, "respinto")
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(row.qualita_data_accettazione, date(2026, 7, 3))
+        self.assertEqual(row.qualita_valutazione, "accettato")
+
+    def test_reconfirm_after_reopening_keeps_existing_date(self):
+        row = self._make_date_test_row(date(2026, 7, 3))
+        self._confirm_date_test_row(row)
+        reopen_final_validation(self.db, row=get_acquisition_row(self.db, row.id), actor_id=1)
+        with patch("app.modules.acquisition.service._current_quality_acceptance_date") as today:
+            self._confirm_date_test_row(get_acquisition_row(self.db, row.id), "accettato_con_riserva")
+        today.assert_not_called()
+        self.assertEqual(get_acquisition_row(self.db, row.id).qualita_data_accettazione, date(2026, 7, 3))
 
     def test_billet_can_be_confirmed_without_direct_or_inverse_extrusion(self):
         row = AcquisitionRow(cdq="BILLET-QUALITY")

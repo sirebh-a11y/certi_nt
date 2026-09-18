@@ -721,6 +721,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     qualita_tipo_controllo: QualityControlType | None
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
+    qualita_numero_colli: int | None = None
     pending_closure_reason: str | None = None
     block_states: dict[str, str]
     quick_confirmed_blocks: dict[str, bool] = Field(default_factory=dict)
@@ -815,6 +816,7 @@ class AcquisitionQualityRowResponse(BaseModel):
     qualita_tipo_controllo: QualityControlType | None
     qualita_valutazione: QualityEvaluationState | None
     qualita_note: str | None
+    qualita_numero_colli: int | None = None
     qualita_numero_analisi_da_ricontrollare: bool
     qualita_note_da_ricontrollare: bool
     updated_at: datetime
@@ -831,6 +833,7 @@ class AcquisitionQualityUpdateRequest(BaseModel):
     qualita_numero_analisi: str | None = Field(default=None, max_length=128)
     qualita_tipo_controllo: QualityControlType | None = None
     qualita_note: str | None = None
+    qualita_numero_colli: int | None = Field(default=None, strict=True, ge=1, le=2147483647)
 
     @field_validator("qualita_numero_analisi", "qualita_note")
     @classmethod
