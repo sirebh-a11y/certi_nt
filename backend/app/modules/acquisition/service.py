@@ -33,6 +33,11 @@ from app.core.email.service import email_service
 from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
 from app.modules.acquisition.impol_evidence import assign_note_pages, evidence_type as _note_evidence_type
+from app.modules.acquisition.quality_merge import (
+    MANUAL_FIELDS as MERGE_MANUAL_QUALITY_FIELDS,
+    acceptance_date_needs_choice,
+    merge_manual_quality_values,
+)
 from app.modules.acquisition.impol_masking import ImpolMaskReviewRequired, mask_certificate as _mask_impol_certificate
 from app.modules.acquisition.document_type_guard import (
     DocumentTypeReviewRequired,
@@ -10813,6 +10818,10 @@ def _link_certificate_candidate_to_ddt_row(
 ) -> DocumentLinkCandidateResponse:
     if candidate_row.document_certificato_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row has no certificate document")
+    merging = _certificate_only_row_can_merge(candidate_row)
+    if merging:
+        _lock_merge_quality_rows(db, candidate_row, current_row)
+        merge_manual_quality_values(candidate_row, current_row, acceptance_date_choice=payload.merge_acceptance_date)
     score = score_bridge_match(_build_row_ddt_bridge(current_row), _build_row_certificate_bridge(candidate_row))
     _ensure_user_candidate_can_link(
         db=db,
@@ -10845,6 +10854,7 @@ def _link_certificate_candidate_to_ddt_row(
             candidates=[],
         ),
         actor_id=actor_id,
+        commit=not merging,
     )
     target_row = get_acquisition_row(db, current_row.id)
     source_row_deleted = False
@@ -10854,6 +10864,7 @@ def _link_certificate_candidate_to_ddt_row(
             target_row=target_row,
             source_row_id=candidate_row.id,
             actor_id=actor_id,
+            acceptance_date_choice=payload.merge_acceptance_date,
         )
     else:
         _copy_certificate_side_blocks_between_rows(
@@ -10882,6 +10893,10 @@ def _link_ddt_candidate_to_certificate_row(
 ) -> DocumentLinkCandidateResponse:
     if candidate_row.document_ddt_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate row has no DDT document")
+    merging = _certificate_only_row_can_merge(current_row)
+    if merging and candidate_row.document_certificato_id is None:
+        _lock_merge_quality_rows(db, current_row, candidate_row)
+        merge_manual_quality_values(current_row, candidate_row, acceptance_date_choice=payload.merge_acceptance_date)
     score = score_bridge_match(_build_row_ddt_bridge(candidate_row), _build_row_certificate_bridge(current_row))
     _ensure_user_candidate_can_link(
         db=db,
@@ -10924,12 +10939,14 @@ def _link_ddt_candidate_to_certificate_row(
             candidates=[],
         ),
         actor_id=actor_id,
+        commit=not merging,
     )
     merged = _merge_certificate_only_row_into_ddt_row(
         db=db,
         target_row=get_acquisition_row(db, target_row.id),
         source_row_id=current_row.id,
         actor_id=actor_id,
+        acceptance_date_choice=payload.merge_acceptance_date,
     )
     refreshed = get_acquisition_row(db, target_row.id)
     return DocumentLinkCandidateResponse(
@@ -12053,6 +12070,7 @@ def upsert_match(
     row: AcquisitionRow,
     payload: MatchUpsertRequest,
     actor_id: int,
+    commit: bool = True,
 ) -> MatchResponse:
     ensure_acquisition_row_ai_editable(db, row)
     if row.validata_finale:
@@ -12103,7 +12121,7 @@ def upsert_match(
         row.fornitore_id = certificate_document.fornitore_id
     if not row.fornitore_raw and certificate_document.supplier is not None:
         row.fornitore_raw = certificate_document.supplier.ragione_sociale
-    _sync_row_cdq_from_certificate_document(db, row, certificate_document)
+    _sync_row_cdq_from_certificate_document(db, row, certificate_document, commit=commit)
 
     if previous_document_id != certificate_document.id:
         action = "match_cambiato" if previous_document_id is not None else action
@@ -12150,7 +12168,12 @@ def upsert_match(
     )
     _sync_row_from_match_values(db, row)
     _sync_row_statuses(db, row)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+        db.expire(row, ["certificate_match"])
+        db.expire(match, ["candidates"])
     updated_row = get_acquisition_row(db, row.id)
     if updated_row.certificate_match is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Match not available after update")
@@ -18643,11 +18666,24 @@ def _run_cross_run_auto_rematch(
         row = get_acquisition_row(db, plan.row_id)
         if _row_is_locked_for_auto_rematch(row):
             continue
+        best_candidate = eligible_candidates[0]
+        merging = not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id
+        if merging:
+            source = get_acquisition_row(db, best_candidate.source_row_id)
+            _lock_merge_quality_rows(db, source, row)
+            if acceptance_date_needs_choice(source, row):
+                _record_history_event(
+                    db, row.id, "match", "unione_richiede_data_accettazione", actor_id,
+                    f"Riga certificato #{source.id}: date accettazione diverse. Collegare manualmente per scegliere la data.",
+                )
+                db.commit()
+                continue
         row = _set_row_ai_processing_state(
             db,
             row,
             processing_status="in_lavorazione",
             run_id=run_id,
+            commit=not merging,
         )
         if _row_is_locked_for_auto_rematch(row):
             _set_row_ai_processing_state(
@@ -18667,6 +18703,7 @@ def _run_cross_run_auto_rematch(
                     source_row,
                     processing_status="in_lavorazione",
                     run_id=run_id,
+                    commit=not merging,
                 )
                 source_row_claimed = True
         candidates = [
@@ -18690,6 +18727,7 @@ def _run_cross_run_auto_rematch(
                 candidates=candidates,
             ),
             actor_id=actor_id,
+            commit=not merging,
         )
         if best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
             _copy_certificate_side_blocks_between_rows(
@@ -18844,12 +18882,18 @@ def _certificate_only_row_can_merge(row: AcquisitionRow) -> bool:
     return match.fonte_proposta in {"sistema", "chatgpt"}
 
 
+def _lock_merge_quality_rows(db: Session, source_row: AcquisitionRow, target_row: AcquisitionRow) -> None:
+    for row in sorted((source_row, target_row), key=lambda item: item.id):
+        db.refresh(row, attribute_names=[*MERGE_MANUAL_QUALITY_FIELDS, "qualita_valutazione"], with_for_update=True)
+
+
 def _merge_certificate_only_row_into_ddt_row(
     *,
     db: Session,
     target_row: AcquisitionRow,
     source_row_id: int,
     actor_id: int,
+    acceptance_date_choice: date | None = None,
 ) -> bool:
     source_row = get_acquisition_row(db, source_row_id)
     if not _certificate_only_row_can_merge(source_row):
@@ -18860,6 +18904,11 @@ def _merge_certificate_only_row_into_ddt_row(
         return False
     if target_row.document_certificato_id != source_row.document_certificato_id:
         return False
+
+    _lock_merge_quality_rows(db, source_row, target_row)
+    manual_quality_values = merge_manual_quality_values(
+        source_row, target_row, acceptance_date_choice=acceptance_date_choice,
+    )
 
     source_values = [
         value
@@ -18918,13 +18967,24 @@ def _merge_certificate_only_row_into_ddt_row(
     if source_row.qualita_valutazione and not target_row.qualita_valutazione:
         target_row.qualita_tipo_controllo = source_row.qualita_tipo_controllo or target_row.qualita_tipo_controllo
         target_row.qualita_valutazione = source_row.qualita_valutazione
-        target_row.qualita_note = source_row.qualita_note
         target_row.qualita_numero_analisi = source_row.qualita_numero_analisi
-        target_row.qualita_data_ricezione = source_row.qualita_data_ricezione
-        target_row.qualita_data_accettazione = source_row.qualita_data_accettazione
-        target_row.qualita_data_richiesta = source_row.qualita_data_richiesta
         target_row.qualita_numero_analisi_da_ricontrollare = source_row.qualita_numero_analisi_da_ricontrollare
         target_row.qualita_note_da_ricontrollare = source_row.qualita_note_da_ricontrollare
+
+    for field_name, value in manual_quality_values.items():
+        source_value = getattr(source_row, field_name)
+        target_value = getattr(target_row, field_name)
+        # Full values belong in Text history columns, never the short event summary.
+        if source_value is not None or target_value is not None:
+            for origin, origin_value in (("certificato", source_value), ("ddt", target_value)):
+                db.add(AcquisitionValueHistory(
+                    acquisition_row_id=target_row.id, blocco="quality", campo=field_name,
+                    valore_prima=json.dumps({"origine": origin,
+                        "riga_id": source_row.id if origin == "certificato" else target_row.id,
+                        "valore": str(origin_value) if origin_value is not None else None}, ensure_ascii=False),
+                    valore_dopo=str(value) if value is not None else None, utente_id=actor_id,
+                ))
+        setattr(target_row, field_name, value)
 
     # Quality confirmations and custom notes belong to the certificate side.
     # Reassign the ORM relationships before deleting the certificate-only row,
@@ -20435,7 +20495,7 @@ def _resolve_storage_path(storage_key: str) -> Path:
     return resolved
 
 
-def _index_document_from_path(db: Session, document: Document) -> Document:
+def _index_document_from_path(db: Session, document: Document, *, commit: bool = True) -> Document:
     storage_path = _document_storage_root() / Path(document.storage_key)
     if not storage_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored document file not found")
@@ -20467,7 +20527,11 @@ def _index_document_from_path(db: Session, document: Document) -> Document:
         document.numero_pagine = None
         document.stato_elaborazione = "errore"
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+        db.expire(document, ["pages"])
     return get_document(db, document.id)
 
 
@@ -20591,7 +20655,7 @@ def _render_page_image(storage_key: str, page: fitz.Page, page_number: int) -> s
     return image_relative_path.as_posix()
 
 
-def _ensure_document_page_ocr(db: Session, document: Document) -> Document:
+def _ensure_document_page_ocr(db: Session, document: Document, *, commit: bool = True) -> Document:
     changed = False
     for page in document.pages:
         if page.ocr_text:
@@ -20612,7 +20676,10 @@ def _ensure_document_page_ocr(db: Session, document: Document) -> Document:
         db.add(page)
         changed = True
     if changed:
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return get_document(db, document.id)
     return document
 
@@ -27646,6 +27713,8 @@ def _sync_row_cdq_from_certificate_document(
     db: Session,
     row: AcquisitionRow,
     certificate_document: Document,
+    *,
+    commit: bool = True,
 ) -> None:
     match_certificate_number = _string_or_none(
         _final_value_for_row(
@@ -27666,8 +27735,8 @@ def _sync_row_cdq_from_certificate_document(
         return
 
     if not certificate_document.pages:
-        certificate_document = _index_document_from_path(db, certificate_document)
-    certificate_document = _ensure_document_page_ocr(db, certificate_document)
+        certificate_document = _index_document_from_path(db, certificate_document, commit=commit)
+    certificate_document = _ensure_document_page_ocr(db, certificate_document, commit=commit)
     certificate_template = resolve_supplier_template(
         row.supplier.ragione_sociale if row.supplier is not None else None,
         row.fornitore_raw,

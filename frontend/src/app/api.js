@@ -68,6 +68,7 @@ function createApiError(status, detail, fallback = "Request failed") {
   const error = new Error(message);
   error.status = status;
   error.detail = message;
+  error.payload = detail;
   return error;
 }
 

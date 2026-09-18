@@ -995,7 +995,13 @@ export default function AcquisitionDocumentMatchingSectionPage({
   const [detachingMatch, setDetachingMatch] = useState(false);
   const [linkingCandidateKey, setLinkingCandidateKey] = useState("");
   const [pendingLinkCandidate, setPendingLinkCandidate] = useState(null);
+  const [mergeDateConflict, setMergeDateConflict] = useState(null);
   const [confirmGuidanceDialog, setConfirmGuidanceDialog] = useState(null);
+
+  useEffect(() => {
+    setMergeDateConflict(null);
+    setPendingLinkCandidate(null);
+  }, [rowId]);
 
   useEffect(() => {
     const nextDraft = buildDdtDraft(row);
@@ -1356,7 +1362,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
     await executeLinkCandidate(type, item);
   }
 
-  async function executeLinkCandidate(type, item) {
+  async function executeLinkCandidate(type, item, acceptanceDate = null) {
     const key = `${type}-${safeText(item.row_id)}`;
     setLinkingCandidateKey(key);
     setError("");
@@ -1370,6 +1376,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
             allow_already_linked: Boolean(item.already_linked),
             allow_manual_blocked: Boolean(item.manual_blocked),
             motivo_breve: null,
+            merge_acceptance_date: acceptanceDate,
           }),
         },
         token,
@@ -1381,6 +1388,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
       setDdtLinkPreview(null);
       setCertificateLinkPreview(null);
       setPendingLinkCandidate(null);
+      setMergeDateConflict(null);
       const targetRowId = response?.target_row_id;
       if (targetRowId && String(targetRowId) !== String(rowId)) {
         onRowRelocated?.(targetRowId);
@@ -1388,7 +1396,13 @@ export default function AcquisitionDocumentMatchingSectionPage({
       }
       await onRefreshRow?.();
     } catch (requestError) {
-      setError(requestError.message);
+      if (requestError.payload?.code === "merge_acceptance_date_choice") {
+        setPendingLinkCandidate(null);
+        setMergeDateConflict({ type, item, ...requestError.payload });
+      } else {
+        setMergeDateConflict(null);
+        setError(requestError.message);
+      }
     } finally {
       setLinkingCandidateKey("");
     }
@@ -1621,6 +1635,28 @@ export default function AcquisitionDocumentMatchingSectionPage({
           onCancel={() => setDetachDialogOpen(false)}
           onConfirm={() => void handleDetachMatch()}
         />
+      ) : null}
+      {mergeDateConflict ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+          <div role="dialog" aria-modal="true" aria-labelledby="merge-date-title" className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <h3 id="merge-date-title" className="text-lg font-semibold">Quale data accettazione manteniamo?</h3>
+            <p className="mt-2 text-sm text-slate-600">Le due righe hanno date diverse e nessuna valutazione confermata. Nessuna unione è stata eseguita. Entrambe le date resteranno nello storico.</p>
+            <div className="mt-4 flex flex-col gap-2">
+              {[
+                ["Da certificato", mergeDateConflict.certificate_date],
+                ["Da riga DDT", mergeDateConflict.ddt_date],
+              ].map(([label, value]) => (
+                <button key={label} type="button" disabled={Boolean(linkingCandidateKey)}
+                  className="rounded-xl border border-slate-300 px-4 py-3 text-left hover:bg-slate-50 disabled:opacity-50"
+                  onClick={() => void executeLinkCandidate(mergeDateConflict.type, mergeDateConflict.item, value)}>
+                  {label}: {value.split("-").reverse().join("/")}
+                </button>
+              ))}
+              <button type="button" disabled={Boolean(linkingCandidateKey)} className="mt-2 rounded-xl border px-4 py-2"
+                onClick={() => setMergeDateConflict(null)}>Annulla: lascia le righe separate</button>
+            </div>
+          </div>
+        </div>
       ) : null}
       {pendingLinkCandidate ? (
         <LinkCandidateConfirmDialog

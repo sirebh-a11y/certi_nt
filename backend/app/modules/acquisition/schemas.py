@@ -585,6 +585,7 @@ class DocumentLinkCandidateRequest(BaseModel):
     allow_already_linked: bool = False
     allow_manual_blocked: bool = False
     motivo_breve: str | None = Field(default=None, max_length=255)
+    merge_acceptance_date: date | None = None
 
     @field_validator("motivo_breve")
     @classmethod
