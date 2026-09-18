@@ -3,10 +3,12 @@
 ## Stato del documento
 
 - Audit applicativo completato in locale il 30/07/2026.
+- Audit tecnico dell'innesto isolato completato in locale il 10/08/2026.
 - Documento di analisi e piano: nessuna parte descritta qui è stata implementata.
 - Nessuna modifica al codice applicativo, al database o al server Alpha è autorizzata da questo documento.
 - Prima di iniziare il codice serve un nuovo `ok` o `procedi` esplicito dell'utente.
 - Le soglie numeriche di match riportate sono una proposta iniziale da approvare.
+- Il futuro laboratorio non deve essere incluso nei deploy Alpha durante lo sviluppo locale.
 
 ## Obiettivo
 
@@ -46,6 +48,11 @@ Il risultato operativo deve essere simile a quello dei fornitori preferenziali e
 9. Un certificato deve poter coprire più righe, quando la regola reale del fornitore lo permette.
 10. Non esiste un numero fisso obbligatorio di tre DDT o tre certificati.
 11. I nove fornitori dedicati esistenti non devono cambiare comportamento nella prima fase.
+12. La mascheratura finale deve usare i margini reali iniziale e finale di ogni nome, scritta, icona o logo, coprendo tutto l'oggetto ma non i campi tecnici vicini.
+13. Lo sviluppo della linea generale deve rimanere su un branch dedicato e separato da `main` finché non è completo e approvato.
+14. Durante lo sviluppo il laboratorio deve funzionare solamente in locale ed essere accessibile esclusivamente a un utente con ruolo `admin` e reparto `IT`.
+15. Il laboratorio potrà essere installato su Alpha solamente dopo test locali, audit conclusivo e un nuovo `procedi` esplicito dell'utente.
+16. La prima installazione futura su Alpha resterà comunque separata dal flusso operativo: nessuna scrittura in Incoming e nessuna attivazione produttiva.
 
 ## Significato di “insegnare all'app”
 
@@ -179,6 +186,25 @@ Il fallback generale usa aree centrali del documento, per esempio corpo alto, me
 - footer;
 
 siano sempre coperti.
+
+L'audit del codice mostra inoltre due strategie differenti:
+
+- per le scritte sono già disponibili bounding box OCR di parola o gruppo di parole;
+- per alcuni elementi grafici sono disponibili componenti connesse dentro una zona di ricerca;
+- diversi loghi sono però ancora coperti con rettangoli percentuali fissi;
+- alcuni rettangoli vengono allargati con margini generici e possono coprire più del necessario.
+
+Per la linea generale il rettangolo fisso non deve essere la maschera finale. Può essere usato solamente come area nella quale cercare l'oggetto.
+
+La maschera finale deve essere calcolata sul contenuto realmente trovato:
+
+- `x_min`: inizio reale più a sinistra;
+- `y_min`: inizio reale più in alto;
+- `x_max`: fine reale più a destra;
+- `y_max`: fine reale più in basso;
+- piccolo margine di sicurezza controllato per bordi, antialiasing e imprecisioni di lettura.
+
+Per un nome composto il bounding box deve comprendere tutte e sole le parole appartenenti al nome. Per un logo composto deve comprendere simbolo, icona ed eventuale scritta collegata.
 
 Quindi per un nuovo fornitore la dicitura “dati sensibili mascherati” non può basarsi solamente sui crop generici.
 
@@ -409,6 +435,28 @@ Mancano test per:
 - cambio layout;
 - promozione da generico a preferenziale.
 
+### 16. Audit tecnico dell'innesto isolato
+
+L'innesto è fattibile, ma non deve essere sviluppato direttamente dentro il servizio operativo di Acquisition.
+
+L'audit del codice ha rilevato:
+
+- il controllo frontend `isItAdmin` è già disponibile;
+- il controllo backend `require_it_admin` è già disponibile e deve proteggere ogni API, file e anteprima del laboratorio;
+- la pagina Fornitori normale è accessibile anche al reparto Qualità e quindi non è una posizione sufficientemente isolata;
+- il servizio operativo Acquisition supera 32.000 righe e contiene numerosi rami specifici per fornitore;
+- caricamento, indicizzazione, OCR, creazione righe, evidenze e match eseguono oggi scritture e `commit` sulle entità operative;
+- il controllo dei run attivi è principalmente legato all'utente che li ha avviati e non protegge da ogni possibile sovrapposizione tra un test Lab e un run operativo;
+- il progetto usa `Base.metadata.create_all` e procedure additive, senza una gestione completa delle migrazioni tipo Alembic.
+
+Conseguenza:
+
+- durante lo sviluppo il laboratorio deve essere un modulo autonomo;
+- non deve importare o chiamare i servizi che creano righe Incoming;
+- può riutilizzare algoritmi tecnici solo dopo averli separati dalle scritture operative;
+- le prime modifiche dati devono aggiungere esclusivamente nuove tabelle Lab, senza alterare le tabelle esistenti;
+- il futuro collegamento produttivo deve passare da una decisione centralizzata sul percorso del fornitore, mantenendo invariati i nove rami dedicati.
+
 ---
 
 ## Architettura proposta
@@ -471,7 +519,7 @@ Layout troppo specifico: necessario parser dedicato.
 Ogni modifica produce una nuova versione:
 
 ```text
-Bozza → Test → Pilota → Attiva → Archiviata
+Bozza → Test → Approvata in laboratorio → Pilota operativo → Attiva in produzione → Archiviata
 ```
 
 Una versione attiva non viene modificata direttamente.
@@ -546,6 +594,90 @@ Da valutare in progettazione tecnica:
 
 Non è necessario duplicare chimica, proprietà, note o campi Incoming: devono continuare a usare le entità esistenti.
 
+### 5. Laboratorio isolato durante lo sviluppo
+
+Il laboratorio deve affiancare l'applicazione senza entrare nel flusso operativo:
+
+```text
+Applicazione CERTI_nt
+├── Flusso operativo attuale
+│   └── nove fornitori dedicati invariati
+│
+└── Laboratorio nuovi fornitori
+    ├── accesso esclusivo Admin IT
+    ├── profili e versioni in prova
+    ├── campioni e risultati separati
+    ├── OCR, mascheratura, AI e simulazione match
+    └── nessuna scrittura in Incoming
+```
+
+Struttura tecnica futura proposta:
+
+```text
+backend/app/modules/supplier_lab/
+frontend/src/pages/supplierLab/
+storage/supplier_lab/
+```
+
+Le entità profilo e versione possono avere fin dall'inizio la struttura definitiva. Campioni, esecuzioni e file di prova devono invece rimanere separati dai documenti operativi.
+
+Il laboratorio non deve usare direttamente:
+
+- `documenti_fornitore` per i campioni;
+- `datimaterialeincoming` per simulare le righe;
+- i run autonomi di Acquisition;
+- le notifiche email operative;
+- le funzioni che applicano direttamente risultati AI, match o valori alle righe reali.
+
+Durante lo sviluppo non devono ancora esistere nel branch `main`:
+
+- route frontend del laboratorio;
+- API `/api/supplier-lab`;
+- tabelle e storage Lab;
+- flag di abilitazione Lab;
+- collegamenti dal motore operativo.
+
+Questi elementi devono vivere nel branch locale dedicato proposto:
+
+```text
+feature/supplier-lab
+```
+
+Il nome identifica il ramo futuro: il branch non esiste ancora e verrà creato solamente quando inizierà lo sviluppo autorizzato.
+
+### 6. Separazione tra approvazione Lab e produzione
+
+Gli stati devono distinguere chiaramente configurazione e utilizzo operativo:
+
+```text
+Bozza
+  ↓
+Test
+  ↓
+Approvata in laboratorio
+  ↓  solo dopo nuova autorizzazione e installazione controllata
+Pilota operativo
+  ↓
+Attiva in produzione
+```
+
+Durante lo sviluppo locale si può arrivare solamente a `Approvata in laboratorio`.
+
+Quando in futuro il laboratorio verrà installato su Alpha, dovranno esistere due blocchi indipendenti:
+
+```dotenv
+SUPPLIER_LAB_ENABLED=true
+GENERAL_SUPPLIER_RUNTIME_ENABLED=false
+```
+
+Il primo rende disponibile il laboratorio solamente ad Admin IT. Il secondo mantiene disabilitato qualsiasi uso del profilo nel caricamento reale.
+
+Per attivare in futuro un fornitore serviranno contemporaneamente:
+
+1. abilitazione generale del motore sul server;
+2. abilitazione operativa del singolo profilo fornitore;
+3. un nuovo `procedi` esplicito dell'utente.
+
 ---
 
 ## Nuova pagina “Configurazione lettura fornitore”
@@ -553,9 +685,26 @@ Non è necessario duplicare chimica, proprietà, note o campi Incoming: devono c
 ### Posizione proposta
 
 ```text
-Anagrafica fornitori
-└── Dettaglio fornitore
-    └── Configurazione lettura
+Amministrazione
+└── Laboratorio nuovi fornitori
+    └── Configurazione fornitore
+```
+
+Percorso frontend futuro proposto:
+
+```text
+/admin/supplier-lab
+```
+
+La pagina deve essere distinta dal normale dettaglio Fornitore. Nel dettaglio fornitore potrà comparire un collegamento solamente per Admin IT, ma non deve essere il controllo di sicurezza principale.
+
+Ogni route frontend deve usare una regola `itAdminOnly`. Ogni API, anteprima, PDF campione e file derivato deve usare il controllo backend `require_it_admin` e restituire `403` agli altri utenti.
+
+La pagina deve mostrare sempre il banner:
+
+```text
+LABORATORIO IT
+I risultati non entrano nel flusso operativo.
 ```
 
 La pagina deve mostrare sempre:
@@ -648,13 +797,57 @@ Per ogni layout:
 - footer;
 - aree tecniche che devono restare visibili.
 
+Per ogni elemento da coprire la configurazione deve conservare:
+
+- tipo: nome, scritta, icona, simbolo, logo o blocco misto;
+- area di ricerca approssimativa;
+- metodo di individuazione;
+- margine iniziale e finale rilevato;
+- bounding box finale;
+- margine di sicurezza applicato;
+- confidenza;
+- campi tecnici protetti nelle vicinanze.
+
+Metodi previsti:
+
+- OCR e unione delle bounding box per nomi e scritte;
+- componenti grafiche e analisi del contrasto per icone e simboli;
+- template/layout matching per loghi stabili;
+- rilevazione dell'intero oggetto per loghi composti da simbolo e testo.
+
+Regola:
+
+```text
+Area configurata = zona nella quale cercare.
+Bounding box rilevato = zona precisa da coprire.
+```
+
+Non si deve coprire automaticamente tutta l'area di ricerca.
+
+Per un nome su più parole:
+
+- individuare la prima parola;
+- seguire solamente le parole contigue appartenenti allo stesso nome;
+- fermarsi prima dell'etichetta o del campo tecnico successivo;
+- unire i margini della prima e dell'ultima parola.
+
+Per un'icona o un logo:
+
+- individuare tutti i componenti grafici appartenenti allo stesso oggetto;
+- includere eventuale scritta integrata nel marchio;
+- calcolare il rettangolo esterno dell'intero gruppo;
+- non includere linee, tabelle o testi tecnici vicini.
+
 Flusso obbligatorio:
 
 1. rilevazione locale;
-2. generazione anteprima;
-3. controllo visivo;
-4. approvazione dell'utente;
-5. solo dopo invio all'AI.
+2. calcolo dei margini reali;
+3. controllo che il bounding box non intersechi campi tecnici protetti;
+4. generazione anteprima con bordo visibile prima dell'applicazione;
+5. generazione anteprima mascherata;
+6. controllo visivo;
+7. approvazione dell'utente;
+8. solo dopo invio all'AI.
 
 Se la mascheratura è incerta:
 
@@ -801,12 +994,14 @@ Bozza
   ↓
 Test
   ↓
-Pilota
+Approvata in laboratorio
   ↓
-Attiva
+Pilota operativo
+  ↓
+Attiva in produzione
 ```
 
-Il pulsante `Attiva` deve essere disponibile solo se:
+Il pulsante `Approva in laboratorio` deve essere disponibile solo se:
 
 - mascheratura approvata;
 - layout coperti;
@@ -815,6 +1010,30 @@ Il pulsante `Attiva` deve essere disponibile solo se:
 - test negativi o ambigui non confermati erroneamente;
 - codice Ref. presente quando necessario;
 - nessun errore bloccante.
+
+Il laboratorio locale non deve mostrare un pulsante utilizzabile per `Pilota operativo` o `Attiva in produzione`.
+
+### Percorso pratico Admin IT
+
+```text
+Seleziona fornitore
+        ↓
+Carica DDT e certificati campione
+        ↓
+Indica documenti collegati e risultati attesi
+        ↓
+Controlla e approva la mascheratura
+        ↓
+Valuta le proposte AI per campi e regole
+        ↓
+Configura pesi e vincoli del match
+        ↓
+Esegue test positivi, negativi e ambigui
+        ↓
+Approva il profilo in laboratorio
+```
+
+L'Admin IT configura e verifica il comportamento; non scrive codice. Il codice resta responsabilità dello sviluppo e le decisioni dell'Admin vengono salvate come configurazione versionata e leggibile.
 
 ---
 
@@ -831,6 +1050,9 @@ Prima dell'AI:
 - riconoscimento pagine;
 - rilevazione delle ancore;
 - identificazione locale delle aree sensibili;
+- rilevazione precisa dei margini di nomi, scritte, icone e loghi;
+- raggruppamento dei componenti appartenenti allo stesso oggetto;
+- controllo delle intersezioni con campi tecnici protetti;
 - generazione mascheratura.
 
 #### Fase B - Approvazione mascheratura
@@ -1218,6 +1440,12 @@ Protezione:
 
 Protezione:
 
+- area fissa usata solamente per la ricerca;
+- bounding box finale ricavato dai margini reali dell'oggetto;
+- unione controllata delle parole di un nome;
+- raggruppamento di simbolo, icona e testo dello stesso logo;
+- piccolo padding controllato, non rettangoli ampi arbitrari;
+- controllo che la maschera non intersechi campi tecnici protetti;
 - anteprima obbligatoria;
 - nessuna chiamata AI se non approvata;
 - profilo non attivabile.
@@ -1284,31 +1512,49 @@ Protezione:
 
 ## Piano di implementazione futuro
 
-### Fase 0 - Chiusura decisioni
+### Fase 0 - Documentazione e separazione branch
+
+- aggiornare questo piano e la procedura di deploy Alpha;
+- mantenere `main` come unica fonte dei deploy Alpha correnti;
+- creare `feature/supplier-lab` solamente quando parte lo sviluppo autorizzato;
+- non unire il branch Lab in `main` durante lo sviluppo locale;
+- non creare ancora route, API, tabelle, flag o storage Lab su Alpha.
+
+### Fase 1 - Chiusura decisioni
 
 Prima del codice confermare:
 
 - soglie del match;
 - copertura minima;
 - margine tra candidati;
-- ruoli che possono creare, testare e attivare;
 - primo fornitore pilota;
 - politica di conservazione dei campioni;
 - modello e budget AI;
 - trattamento delle righe aperte dopo una nuova versione.
 
-### Fase 1 - Modello profilo e versioni
+### Fase 2 - Guscio isolato e sicurezza locale
+
+- creare il modulo Lab separato;
+- aggiungere route frontend `itAdminOnly`;
+- proteggere tutte le API e i file con `require_it_admin`;
+- aggiungere il flag Lab solamente all'ambiente locale del branch dedicato;
+- verificare `403` per ogni ruolo non autorizzato;
+- verificare che il flusso operativo non importi il modulo Lab.
+
+### Fase 3 - Modello profilo e versioni
 
 - creare entità profilo;
 - validare schema configurazione;
 - gestire stati;
-- legare documenti e tentativi alla versione;
-- impedire modifiche dirette a una versione attiva;
+- legare campioni e tentativi alla versione;
+- impedire modifiche dirette a una versione approvata;
 - aggiungere audit.
 
-### Fase 2 - Pagina di configurazione
+Le nuove tabelle devono essere additive. Non aggiungere colonne alle tabelle operative durante questa fase.
 
-- sezione nel dettaglio fornitore;
+### Fase 4 - Pagina di configurazione
+
+- pagina autonoma Admin IT;
 - wizard;
 - domande;
 - campioni;
@@ -1317,9 +1563,9 @@ Prima del codice confermare:
 - regole riga;
 - match;
 - test;
-- attivazione.
+- approvazione in laboratorio.
 
-### Fase 3 - Laboratorio documentale e AI
+### Fase 5 - Laboratorio documentale e AI
 
 - ambiente di prova separato da Incoming;
 - OCR e classificazione;
@@ -1329,11 +1575,13 @@ Prima del codice confermare:
 - proposta profilo;
 - tracciamento costi.
 
-### Fase 4 - Motore generale di lettura
+Durante questa fase campioni e risultati restano nello storage e nelle tabelle Lab. Nessuna email operativa deve essere inviata.
+
+### Fase 6 - Motore generale di lettura in simulazione
 
 - riconoscimento layout;
 - estrazione DDT;
-- creazione righe;
+- simulazione delle righe senza creare Incoming;
 - estrazione certificato;
 - chimica;
 - proprietà;
@@ -1341,7 +1589,7 @@ Prima del codice confermare:
 - descrizione prodotto e forma materiale;
 - evidenze.
 
-### Fase 5 - Match configurabile
+### Fase 7 - Match configurabile in simulazione
 
 - pesi 1-10;
 - campi obbligatori;
@@ -1349,13 +1597,35 @@ Prima del codice confermare:
 - tolleranze;
 - cardinalità;
 - ranking;
-- conferma automatica;
-- proposta manuale;
-- cross-run;
+- conferma automatica simulata;
+- proposta manuale simulata;
+- cross-run simulato sui campioni;
 - certificate-first;
 - scollegamento e blocco.
 
-### Fase 6 - Integrazione completa
+### Fase 8 - Collaudo locale e approvazione Lab
+
+- un solo test Lab alla volta;
+- nessun test mentre è in corso un run operativo locale;
+- test positivi, negativi, ambigui, DDT-first e certificate-first;
+- controllo che le tabelle operative non cambino;
+- regressione completa sui nove fornitori;
+- audit conclusivo prima di qualsiasi merge.
+
+### Fase 9 - Prima installazione futura su Alpha
+
+Questa fase richiede un nuovo `procedi` esplicito.
+
+- unire il branch Lab in `main` solamente dopo approvazione;
+- aggiornare intenzionalmente la procedura deploy che oggi blocca il modulo Lab;
+- installare il laboratorio con accesso esclusivo Admin IT;
+- mantenere `GENERAL_SUPPLIER_RUNTIME_ENABLED=false`;
+- ripetere su Alpha i test di sicurezza e isolamento;
+- non creare righe operative.
+
+### Fase 10 - Integrazione completa futura
+
+Questa fase richiede un'ulteriore autorizzazione separata.
 
 - Incoming;
 - Valutazione;
@@ -1370,7 +1640,17 @@ Prima del codice confermare:
 
 Non devono essere create logiche qualità parallele.
 
-### Fase 7 - Pilota
+Il collegamento deve usare una decisione centralizzata:
+
+```text
+fornitore dedicato         → percorso attuale invariato
+profilo generale abilitato → motore generale
+altro fornitore            → comportamento attuale
+```
+
+Il codice attuale contiene molti smistamenti specifici. Non deve essere rifattorizzato integralmente insieme al primo Lab: si aggiunge inizialmente solamente il percorso generale nei punti di ingresso controllati.
+
+### Fase 11 - Pilota operativo
 
 - un solo nuovo fornitore;
 - modalità Pilota;
@@ -1378,7 +1658,7 @@ Non devono essere create logiche qualità parallele.
 - confronto dati estratti con i PDF;
 - nessuna estensione ad altri fornitori finché il pilota non è stabile.
 
-### Fase 8 - Estensione e regressione
+### Fase 12 - Estensione e regressione
 
 - regressione sui nove fornitori;
 - attivazione di un secondo nuovo fornitore con layout diverso;
@@ -1388,6 +1668,21 @@ Non devono essere create logiche qualità parallele.
 ---
 
 ## Test obbligatori
+
+### Isolamento preliminare
+
+Prima dei test funzionali devono essere superati questi controlli:
+
+- il branch Lab non viene usato per creare un pacchetto Alpha durante lo sviluppo;
+- il modulo Lab non è presente sul server Alpha prima dell'autorizzazione;
+- solamente Admin IT vede il collegamento e la pagina locale;
+- utenti Qualità, manager, utenti normali e Admin non-IT ricevono `403` dalle API Lab;
+- file e anteprime Lab non sono scaricabili tramite URL diretto da utenti non autorizzati;
+- caricamento, elaborazione e cancellazione di un campione non modificano documenti operativi;
+- nessuna riga Incoming, match, valutazione, KPI, Quarta, Word, PDF o Registro viene creata o modificata;
+- nessuna email operativa viene inviata;
+- disabilitando il flag Lab, pagina e API non sono disponibili;
+- un riavvio locale conserva profili e campioni Lab senza toccare i dati operativi.
 
 ### Configurazione
 
@@ -1412,93 +1707,99 @@ Non devono essere create logiche qualità parallele.
 
 ### Mascheratura
 
-16. Logo coperto.
-17. Cliente coperto.
-18. Indirizzo e contatti coperti.
-19. Campi tecnici visibili.
-20. Layout sconosciuto bloccato.
-21. Nessuna chiamata AI senza approvazione.
+16. Nome singolo coperto dal primo all'ultimo margine reale.
+17. Nome composto coperto dalla prima all'ultima parola corretta, senza inglobare il campo successivo.
+18. Icona coperta sul proprio bounding box completo.
+19. Logo composto coperto includendo simbolo e scritta collegata.
+20. Cliente, indirizzo e contatti coperti completamente.
+21. Area di ricerca più grande del logo: viene coperto solamente il logo rilevato.
+22. Margine di sicurezza sufficiente a coprire bordi e antialiasing.
+23. Campi tecnici vicini completamente visibili.
+24. Linee e celle della tabella non scambiate per parti del logo.
+25. Oggetto grafico non riconosciuto con sufficiente confidenza: documento bloccato.
+26. Layout sconosciuto bloccato.
+27. Nessuna chiamata AI senza approvazione.
 
 ### Lettura DDT
 
-22. DDT monoriga.
-23. DDT pluririga.
-24. Raggruppamento per colata/lotto.
-25. Peso diretto.
-26. Peso somma colli.
-27. Totale non trasformato in riga.
-28. Dettaglio in seconda pagina.
-29. Raw preservato.
-30. Maiuscole/minuscole preservate.
+28. DDT monoriga.
+29. DDT pluririga.
+30. Raggruppamento per colata/lotto.
+31. Peso diretto.
+32. Peso somma colli.
+33. Totale non trasformato in riga.
+34. Dettaglio in seconda pagina.
+35. Raw preservato.
+36. Maiuscole/minuscole preservate.
 
 ### Lettura certificato
 
-31. CDQ corretto.
-32. Colata corretta.
-33. Riga chimica misurata.
-34. Min/max esclusi.
-35. Proprietà misurate.
-36. Unità normalizzate.
-37. Note standard.
-38. Class A/B con controllo generale.
-39. Class A/B limitata alle estremità esclusa.
-40. Descrizione prodotto e forma materiale.
+37. CDQ corretto.
+38. Colata corretta.
+39. Riga chimica misurata.
+40. Min/max esclusi.
+41. Proprietà misurate.
+42. Unità normalizzate.
+43. Note standard.
+44. Class A/B con controllo generale.
+45. Class A/B limitata alle estremità esclusa.
+46. Descrizione prodotto e forma materiale.
 
 ### AI
 
-41. Estrazione indipendente.
-42. Evidenza e pagina presenti.
-43. Campo incerto restituito vuoto.
-44. Payload raw conservato.
-45. Modello, prompt, costo e versione tracciati.
-46. Timeout/retry senza duplicare righe.
-47. Proposta AI non attivata automaticamente.
+47. Estrazione indipendente.
+48. Evidenza e pagina presenti.
+49. Campo incerto restituito vuoto.
+50. Payload raw conservato.
+51. Modello, prompt, costo e versione tracciati.
+52. Timeout/retry senza duplicare righe.
+53. Proposta AI non attivata automaticamente.
 
 ### Match
 
-48. Match forte e unico confermato automaticamente.
-49. Fonte sistema e nessun utente conferma.
-50. Match medio solamente proposto.
-51. Match basso non creato.
-52. Mismatch bloccante escluso.
-53. Secondo candidato vicino impedisce la conferma automatica.
-54. Campo mancante riduce la copertura.
-55. Identificativo unico sufficiente solamente se configurato.
-56. Stesso certificato su più righe quando consentito.
-57. Stesso certificato bloccato su più righe quando non consentito.
-58. Un DDT con più certificati.
-59. Scollegamento manuale e blocco riaggancio.
-60. Match di un altro fornitore sempre escluso.
+54. Match forte e unico confermato automaticamente.
+55. Fonte sistema e nessun utente conferma.
+56. Match medio solamente proposto.
+57. Match basso non creato.
+58. Mismatch bloccante escluso.
+59. Secondo candidato vicino impedisce la conferma automatica.
+60. Campo mancante riduce la copertura.
+61. Identificativo unico sufficiente solamente se configurato.
+62. Stesso certificato su più righe quando consentito.
+63. Stesso certificato bloccato su più righe quando non consentito.
+64. Un DDT con più certificati.
+65. Scollegamento manuale e blocco riaggancio.
+66. Match di un altro fornitore sempre escluso.
 
 ### Ordine di arrivo
 
-61. DDT prima, certificato dopo.
-62. Certificato prima, DDT dopo.
-63. Certificate-first mantiene chimica, proprietà e note confermate.
-64. Cross-run trova documenti già presenti.
-65. Riga chiusa non modificata dal rematch.
+67. DDT prima, certificato dopo.
+68. Certificato prima, DDT dopo.
+69. Certificate-first mantiene chimica, proprietà e note confermate.
+70. Cross-run trova documenti già presenti.
+71. Riga chiusa non modificata dal rematch.
 
 ### Flusso finale
 
-66. Riga visibile in Incoming con fornitore corretto.
-67. Chimica, proprietà e note confermabili.
-68. Valutazione invariata.
-69. KPI invariati.
-70. Forma materiale coerente.
-71. Standard proposto nello stesso modo in Incoming e Certificazione.
-72. CDQ/colata trovati da Quarta.
-73. Codice Ref. presente.
-74. Word generato.
-75. PDF chiuso.
-76. Registro aggiornato.
+72. Riga visibile in Incoming con fornitore corretto.
+73. Chimica, proprietà e note confermabili.
+74. Valutazione invariata.
+75. KPI invariati.
+76. Forma materiale coerente.
+77. Standard proposto nello stesso modo in Incoming e Certificazione.
+78. CDQ/colata trovati da Quarta.
+79. Codice Ref. presente.
+80. Word generato.
+81. PDF chiuso.
+82. Registro aggiornato.
 
 ### Regressione
 
-77. Test completi sui nove fornitori dedicati.
-78. Nessun cambio delle loro mascherature.
-79. Nessun cambio dei loro prompt.
-80. Nessun cambio dei loro match.
-81. Nessun ricalcolo dello storico.
+83. Test completi sui nove fornitori dedicati.
+84. Nessun cambio delle loro mascherature.
+85. Nessun cambio dei loro prompt.
+86. Nessun cambio dei loro match.
+87. Nessun ricalcolo dello storico.
 
 ---
 
@@ -1508,6 +1809,8 @@ Il primo fornitore può uscire dalla modalità Pilota quando:
 
 - tutti i layout noti sono coperti;
 - nessun dato sensibile è visibile nelle preview approvate;
+- ogni nome, scritta, icona e logo è coperto fino ai propri margini reali;
+- nessun campo tecnico vicino viene coperto dalla maschera;
 - i campi critici hanno evidenza;
 - i test positivi vengono confermati correttamente;
 - i casi negativi e ambigui non vengono confermati automaticamente;
@@ -1528,8 +1831,11 @@ Il primo fornitore può uscire dalla modalità Pilota quando:
 | Copertura minima | 80% | Da confermare |
 | Margine sul secondo candidato | 15 punti | Da confermare |
 | Minimo prove forti | 2, salvo ID unico | Da confermare |
-| Ruoli modifica profilo | Admin/IT | Da confermare |
-| Ruoli approvazione | Qualità o Admin | Da confermare |
+| Ruoli modifica profilo durante sviluppo | Solo Admin IT | Confermato |
+| Ruoli approvazione in laboratorio | Solo Admin IT | Confermato |
+| Presenza su Alpha durante sviluppo | Esclusa | Confermato |
+| Branch di sviluppo | `feature/supplier-lab`, da creare all'avvio | Confermato |
+| Attivazione produttiva | Separata e soggetta a nuovo `procedi` | Confermato |
 | Primo fornitore pilota | Non scelto | Mancante |
 | Modello AI onboarding | Da scegliere prima dei test | Mancante |
 | Budget AI onboarding | Da stabilire per fornitore | Mancante |

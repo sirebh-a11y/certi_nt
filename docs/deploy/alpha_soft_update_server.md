@@ -13,6 +13,39 @@ Devono restare intatti:
 - file `.env` del server;
 - configurazioni Nginx/server fatte da IT.
 
+### Separazione obbligatoria della futura linea nuovi fornitori
+
+Il futuro laboratorio per configurare nuovi fornitori non esiste ancora e non deve essere presente su Alpha durante il suo sviluppo.
+
+Regola corrente:
+
+```text
+main                         → unica fonte autorizzata per i deploy Alpha
+feature/supplier-lab         → futuro branch di sviluppo esclusivamente locale
+```
+
+Il nome `feature/supplier-lab` è riservato al futuro ramo: il branch non è ancora stato creato.
+
+Durante lo sviluppo della linea generale:
+
+- il codice Lab resta nel branch dedicato;
+- il branch Lab non viene unito in `main`;
+- il pacchetto `alpha-produzione` continua a essere generato esclusivamente da `origin/main`;
+- route, API, tabelle, flag e storage Lab non devono essere installati su Alpha;
+- i Markdown di analisi possono essere presenti in `main`: documentano il lavoro futuro ma non abilitano alcuna funzione;
+- nessun controllo deve essere rimosso con la motivazione che la pagina sarebbe comunque nascosta agli utenti.
+
+Quando il laboratorio sarà completo in locale serviranno, nell'ordine:
+
+1. audit conclusivo e test di isolamento;
+2. nuovo `procedi` esplicito dell'utente;
+3. merge intenzionale del branch in `main`;
+4. modifica intenzionale dei controlli di esclusione riportati in questo documento;
+5. nuovo pacchetto e deploy Alpha;
+6. laboratorio visibile solamente ad Admin IT e motore produttivo ancora disabilitato.
+
+L'installazione futura del Lab su Alpha non autorizzerà automaticamente il suo utilizzo in Incoming. L'attivazione produttiva richiederà un'altra decisione separata.
+
 ## Percorsi
 
 Sviluppo locale:
@@ -111,21 +144,23 @@ ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.for
 
 ## Flusso corretto
 
-1. Sviluppo e test in locale.
-2. Commit e push del repo app.
-3. Registrazione del commit app esatto in `alpha-produzione/SOURCE_COMMIT`.
-4. Rigenerazione completa di `alpha-produzione` dal commit app, senza copie parziali e senza file non tracciati.
-5. Confronto integrale tra commit app e pacchetto deploy.
-6. Verifica che backend, footer e bundle frontend riportino la stessa versione.
-7. Test del contenuto del pacchetto deploy.
-8. Commit, push e tag del repo deploy.
-9. Creazione archivio `.tar` pulito dalla cartella `alpha-produzione`.
-10. Copia archivio sul server in `/srv/certi_nt/backup`.
-11. Backup dell'app server attuale.
-12. Sostituzione soft del codice, preservando `.env`, database e storage.
-13. Verifica dei parametri PostgreSQL preservati nel `.env`.
-14. Avvio Docker.
-15. Verifica del contenuto, delle versioni e del mapping PostgreSQL realmente installati.
+1. Sviluppo e test in locale sul ramo corretto.
+2. Verifica che il deploy corrente provenga da `main` e non dal futuro branch Lab.
+3. Verifica che il commit `main` non contenga il modulo Lab non ancora autorizzato.
+4. Commit e push del repo app.
+5. Registrazione del commit app esatto in `alpha-produzione/SOURCE_COMMIT`.
+6. Rigenerazione completa di `alpha-produzione` dal commit app, senza copie parziali e senza file non tracciati.
+7. Confronto integrale tra commit app e pacchetto deploy.
+8. Verifica che backend, footer e bundle frontend riportino la stessa versione.
+9. Test del contenuto del pacchetto deploy.
+10. Commit, push e tag del repo deploy.
+11. Creazione archivio `.tar` pulito dalla cartella `alpha-produzione`.
+12. Copia archivio sul server in `/srv/certi_nt/backup`.
+13. Backup dell'app server attuale.
+14. Sostituzione soft del codice, preservando `.env`, database e storage.
+15. Verifica dei parametri PostgreSQL preservati nel `.env`.
+16. Avvio Docker.
+17. Verifica del contenuto, delle versioni, dell'assenza del Lab non autorizzato e del mapping PostgreSQL realmente installati.
 
 ## Prima di aggiornare
 
@@ -237,6 +272,10 @@ $expectedAlphaDir = 'C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt
 
 $sourceCommit = (git -C $appRepo rev-parse HEAD).Trim()
 $remoteCommit = (git -C $appRepo rev-parse origin/main).Trim()
+$currentBranch = (git -C $appRepo branch --show-current).Trim()
+if ($currentBranch -ne 'main') {
+    throw "Deploy Alpha vietato dal branch '$currentBranch': usare esclusivamente main."
+}
 if ($sourceCommit -ne $remoteCommit) {
     throw 'Il commit app locale non coincide con origin/main: fare push prima del deploy.'
 }
@@ -247,6 +286,31 @@ if ($LASTEXITCODE -ne 0) {
 git -C $appRepo diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     throw 'Il repo app contiene modifiche in staging non committate.'
+}
+
+# Protezione temporanea: resta obbligatoria finche il laboratorio nuovi fornitori
+# non e completo, approvato e autorizzato per la prima installazione Alpha.
+$forbiddenLabPaths = @(
+    'backend/app/modules/supplier_lab',
+    'frontend/src/pages/supplierLab'
+)
+foreach ($relativePath in $forbiddenLabPaths) {
+    if (Test-Path -LiteralPath (Join-Path $appRepo $relativePath)) {
+        throw "Modulo Lab non ancora autorizzato presente in main: $relativePath"
+    }
+}
+
+$labMarkers = @(
+    git -C $appRepo grep -n -E `
+      'app/modules/supplier_lab|app\.modules\.supplier_lab|/supplier-lab|SUPPLIER_LAB_ENABLED|GENERAL_SUPPLIER_RUNTIME_ENABLED' `
+      $sourceCommit -- backend/app frontend/src docker-compose.alpha.yml 2>$null
+)
+if ($LASTEXITCODE -eq 0 -and $labMarkers.Count) {
+    $labMarkers | ForEach-Object { Write-Host "Riferimento Lab non autorizzato: $_" }
+    throw 'Il commit main contiene codice o configurazione Lab non ancora autorizzati per Alpha.'
+}
+if ($LASTEXITCODE -notin @(0, 1)) {
+    throw 'Controllo riferimenti Lab fallito.'
 }
 
 $shortCommit = $sourceCommit.Substring(0, 12)
@@ -594,6 +658,10 @@ cd /srv/certi_nt/app
 test "$(cat SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 test ! -e backend/tmp
 test ! -e backend/tmp_eval
+test ! -e backend/app/modules/supplier_lab
+test ! -e frontend/src/pages/supplierLab
+! grep -R -E 'SUPPLIER_LAB_ENABLED|GENERAL_SUPPLIER_RUNTIME_ENABLED' \
+  backend/app frontend/src docker-compose.alpha.yml
 
 content_differences=$(
   tar --compare \
@@ -733,6 +801,9 @@ Non fare:
 - copiare nel deploy la working tree locale invece del contenuto di un commit Git;
 - creare o pubblicare il tag prima del confronto integrale tra app e deploy;
 - accettare file deploy aggiuntivi diversi da `README_ALPHA.md` e `SOURCE_COMMIT`;
+- creare un pacchetto Alpha dal futuro branch `feature/supplier-lab` o da qualsiasi branch diverso da `main`;
+- unire o installare il modulo Lab prima dell'audit conclusivo e del nuovo `procedi` esplicito;
+- rimuovere i controlli temporanei di esclusione Lab senza autorizzazione;
 - includere `backend/tmp`, `backend/tmp_eval`, `.env`, storage, cache, `node_modules` o `dist` nell'archivio;
 - verificare soltanto `app.version` senza controllare anche il bundle frontend servito;
 - cancellare `/srv/certi_nt/data`;
