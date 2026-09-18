@@ -62,6 +62,11 @@ class QuartaTaglioCodF3CandidateSummaryResponse(BaseModel):
     message: str | None = None
 
 
+class QuartaTaglioWordPendingReason(BaseModel):
+    kind: str
+    message: str
+
+
 class QuartaTaglioRowResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -98,6 +103,7 @@ class QuartaTaglioRowResponse(BaseModel):
     certification_progress_label: str = "Da fare"
     certification_progress_color: str = "not_checked"
     certification_progress_message: str | None = None
+    word_pending_reasons: list[QuartaTaglioWordPendingReason] = Field(default_factory=list)
     certificates: list[QuartaTaglioCertificateResponse] = Field(default_factory=list)
     seen_in_last_sync: bool
     first_seen_at: datetime
@@ -113,6 +119,7 @@ class QuartaTaglioListResponse(BaseModel):
     only_taglio_active: bool = False
     hide_certified: bool = False
     only_word_pending: bool = False
+    only_additional_words: bool = False
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):

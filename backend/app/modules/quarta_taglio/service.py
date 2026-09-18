@@ -73,6 +73,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioSyncRunResponse,
     QuartaTaglioWordDraftResponse,
     QuartaTaglioWordInfoResponse,
+    QuartaTaglioWordPendingReason,
 )
 
 
@@ -304,6 +305,7 @@ def sync_and_list_quarta_taglio(
     only_taglio_active: bool = False,
     hide_certified: bool = False,
     only_word_pending: bool = False,
+    only_additional_words: bool = False,
     limit: int = 25,
     offset: int = 0,
     query_one: str | None = None,
@@ -314,6 +316,8 @@ def sync_and_list_quarta_taglio(
     sort_field: str | None = None,
     sort_direction: str = "asc",
 ) -> QuartaTaglioListResponse:
+    if only_word_pending and only_additional_words:
+        raise HTTPException(status_code=422, detail="Selezionare un solo filtro Word alla volta")
     run = _sync_quarta_rows(db, actor_id=actor_id) if sync_data else _latest_quarta_sync_run(db)
     if run is None:
         run = _sync_quarta_rows(db, actor_id=actor_id)
@@ -337,7 +341,7 @@ def sync_and_list_quarta_taglio(
         operator_one=operator_one,
         operator_two=operator_two,
     )
-    if only_word_pending and filtered_groups:
+    if (only_word_pending or only_additional_words) and filtered_groups:
         word_pending_candidates = [
             (summary, group_rows)
             for summary, group_rows in filtered_groups
@@ -349,6 +353,7 @@ def sync_and_list_quarta_taglio(
             db,
             groups=word_pending_candidates,
             esolver_links=cached_esolver_links,
+            additional_words=only_additional_words,
         )
     progress_by_odp: dict[str, _OlCertificationProgress] = {}
     if hide_certified and filtered_groups:
@@ -371,7 +376,12 @@ def sync_and_list_quarta_taglio(
     safe_limit = min(max(limit, 1), 1000)
     page_groups = filtered_groups[safe_offset : safe_offset + safe_limit]
     page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
-    esolver_links = _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
+    # The Word filter already refreshed these links: keep its snapshot for the page.
+    esolver_links = (
+        cached_esolver_links
+        if only_word_pending or only_additional_words
+        else _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
+    )
     certiol_rows_by_odp = _fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _group_rows in page_groups])
     page_progress_by_odp = _build_certification_progress_by_odp(
         db,
@@ -385,6 +395,7 @@ def sync_and_list_quarta_taglio(
             group_rows,
             esolver_link=esolver_links.get(summary.cod_odp),
             certification_progress=page_progress_by_odp.get(summary.cod_odp),
+            word_pending_reasons=summary.word_pending_reasons,
             cod_f3_candidates=_build_certiol_candidates(
                 certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
                 quarta_rows=group_rows,
@@ -402,6 +413,7 @@ def sync_and_list_quarta_taglio(
         only_taglio_active=only_taglio_active,
         hide_certified=hide_certified,
         only_word_pending=only_word_pending,
+        only_additional_words=only_additional_words,
     )
 
 
@@ -4805,6 +4817,7 @@ def _filter_word_pending_groups(
     *,
     groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
     esolver_links: dict[str, QuartaTaglioEsolverLink],
+    additional_words: bool = False,
 ) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
     cod_odps = [summary.cod_odp for summary, _group_rows in groups]
     certificates_by_odp = _load_final_certificates_by_odp(db, cod_odps)
@@ -4817,6 +4830,8 @@ def _filter_word_pending_groups(
 
     creatable_groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]] = []
     for summary, group_rows in groups:
+        if _has_prepared_word(certificates_by_odp.get(summary.cod_odp, [])) != additional_words:
+            continue
         blockers = _word_creation_blockers(
             db=db,
             quarta_rows=group_rows,
@@ -4830,16 +4845,22 @@ def _filter_word_pending_groups(
         db,
         [summary.cod_odp for summary, _group_rows in creatable_groups],
     )
-    return [
-        (summary, group_rows)
-        for summary, group_rows in creatable_groups
-        if _group_has_ready_unit_without_word(
+    result = []
+    for summary, group_rows in creatable_groups:
+        reasons = _word_pending_reasons(
             group_rows=group_rows,
             esolver_link=esolver_links.get(summary.cod_odp),
             certificates=certificates_by_odp.get(summary.cod_odp, []),
             certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
         )
-    ]
+        if reasons:
+            result.append((summary.model_copy(update={"word_pending_reasons": reasons}), group_rows))
+    return result
+
+
+def _has_prepared_word(certificates: list[QuartaTaglioFinalCertificate]) -> bool:
+    # A closed PDF is also evidence of work already started, including legacy records.
+    return any(c.storage_key_docx or _certificate_is_pdf_final(c) for c in certificates)
 
 
 def _group_has_ready_unit_without_word(
@@ -4849,8 +4870,21 @@ def _group_has_ready_unit_without_word(
     certificates: list[QuartaTaglioFinalCertificate],
     certiol_rows: list[_CertiOlRow] | None = None,
 ) -> bool:
+    return bool(_word_pending_reasons(
+        group_rows=group_rows, esolver_link=esolver_link,
+        certificates=certificates, certiol_rows=certiol_rows,
+    ))
+
+
+def _word_pending_reasons(
+    *,
+    group_rows: list[QuartaTaglioRow],
+    esolver_link: QuartaTaglioEsolverLink | None,
+    certificates: list[QuartaTaglioFinalCertificate],
+    certiol_rows: list[_CertiOlRow] | None = None,
+) -> list[QuartaTaglioWordPendingReason]:
     if not group_rows or not _incoming_rows_ready_for_certification(group_rows):
-        return False
+        return []
 
     esolver_rows = _esolver_rows_from_link(esolver_link)
     ready_units: list[QuartaTaglioCertifiableUnitResponse] = []
@@ -4864,8 +4898,15 @@ def _group_has_ready_unit_without_word(
             )
             if unit.source == "esolver" and unit.status == "ready" and _clean_text(unit.unit_key)
         ]
-    if _units_have_missing_word(ready_units, certificates=certificates):
-        return True
+    missing_units = _units_without_word(ready_units, certificates=certificates)
+    reasons = [
+        QuartaTaglioWordPendingReason(
+            kind="ddt",
+            message=f"Word mancante per DDT {unit.ddt}, articolo {unit.cod_f3}",
+        )
+        for unit in missing_units
+    ]
+    missing_unit_codes = {_norm(unit.cod_f3) for unit in missing_units}
 
     candidates = _build_certiol_candidates(
         certiol_rows=certiol_rows or [],
@@ -4876,13 +4917,23 @@ def _group_has_ready_unit_without_word(
         candidates=candidates,
         certificates=certificates,
     )
-    return any(
-        candidate.confidence != "review"
-        and not candidate.blocked_reason
-        and not candidate.has_word
-        and bool(_clean_text(candidate.cod_f3))
-        for candidate in candidates
-    )
+    for candidate in candidates:
+        if (
+            candidate.confidence == "review" or candidate.blocked_reason or candidate.has_word
+            or not _clean_text(candidate.cod_f3) or _norm(candidate.cod_f3) in missing_unit_codes
+        ):
+            continue
+        if candidate.confidence == "ddt":
+            kind = "ddt"
+            message = f"Word mancante per articolo {candidate.cod_f3} (DDT disponibile)"
+        elif candidate.relation == "raw":
+            kind = "raw"
+            message = f"Word da preparare per articolo base {candidate.cod_f3}"
+        else:
+            kind = "proposed"
+            message = f"Articolo proposto {candidate.cod_f3}: verificare se serve il certificato"
+        reasons.append(QuartaTaglioWordPendingReason(kind=kind, message=message))
+    return reasons
 
 
 def _units_have_missing_word(
@@ -4890,8 +4941,15 @@ def _units_have_missing_word(
     *,
     certificates: list[QuartaTaglioFinalCertificate],
 ) -> bool:
-    if not units:
-        return False
+    return bool(_units_without_word(units, certificates=certificates))
+
+
+def _units_without_word(
+    units: list[QuartaTaglioCertifiableUnitResponse],
+    *,
+    certificates: list[QuartaTaglioFinalCertificate],
+) -> list[QuartaTaglioCertifiableUnitResponse]:
+    missing = []
 
     certificates_by_unit_key: dict[str, list[QuartaTaglioFinalCertificate]] = defaultdict(list)
     for certificate in certificates:
@@ -4914,8 +4972,8 @@ def _units_have_missing_word(
         if certificate is not None and certificate.id is not None:
             used_certificate_ids.add(certificate.id)
         if certificate is None or not certificate.storage_key_docx:
-            return True
-    return False
+            missing.append(unit)
+    return missing
 
 
 def _build_certification_progress_by_odp(
@@ -5292,6 +5350,7 @@ def _serialize_ol_group(
     esolver_link: QuartaTaglioEsolverLink | None = None,
     cod_f3_candidates: list[QuartaTaglioCodF3CandidateResponse] | None = None,
     certification_progress: _OlCertificationProgress | None = None,
+    word_pending_reasons: list[QuartaTaglioWordPendingReason] | None = None,
 ) -> QuartaTaglioRowResponse:
     primary = rows[0]
     worst_color = max((row.status_color for row in rows), key=lambda color: STATUS_SEVERITY.get(color, 0))
@@ -5331,6 +5390,7 @@ def _serialize_ol_group(
         certification_progress_label=progress.label,
         certification_progress_color=progress.color,
         certification_progress_message=progress.message,
+        word_pending_reasons=word_pending_reasons or [],
         certificates=[_serialize_certificate(row) for row in rows],
         seen_in_last_sync=all(row.seen_in_last_sync for row in rows),
         first_seen_at=min(row.first_seen_at for row in rows),

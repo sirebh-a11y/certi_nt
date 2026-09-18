@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { normalizeWordFilters, toggleWordFilter } from "./wordFilters";
 import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
@@ -48,6 +49,7 @@ const DEFAULT_LIST_STATE = {
   rowLimit: "25",
   hideCertified: false,
   onlyWordPending: false,
+  onlyAdditionalWords: false,
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
   scrollTop: 0,
@@ -92,8 +94,7 @@ function loadPersistedListState() {
       operatorOne: parsed?.operatorOne === "or" ? "or" : DEFAULT_LIST_STATE.operatorOne,
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
       rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
-      hideCertified: parsed?.hideCertified === true,
-      onlyWordPending: parsed?.onlyWordPending === true,
+      ...normalizeWordFilters(parsed || {}),
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
       scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
@@ -352,6 +353,7 @@ export default function QuartaTaglioPage() {
   const [rowLimit, setRowLimit] = useState(initialListStateRef.current.rowLimit);
   const [hideCertified, setHideCertified] = useState(initialListStateRef.current.hideCertified);
   const [onlyWordPending, setOnlyWordPending] = useState(initialListStateRef.current.onlyWordPending);
+  const [onlyAdditionalWords, setOnlyAdditionalWords] = useState(initialListStateRef.current.onlyAdditionalWords);
   const [quickIncomingConfirm, setQuickIncomingConfirm] = useState(loadQuickIncomingConfirmSetting);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [totalItems, setTotalItems] = useState(0);
@@ -378,12 +380,14 @@ export default function QuartaTaglioPage() {
       setLoadingMore(true);
     } else {
       setLoading(true);
+      setLoadingMore(false);
     }
     setError("");
     const params = new URLSearchParams({
       sync: sync ? "true" : "false",
       hide_certified: hideCertified ? "true" : "false",
       only_word_pending: onlyWordPending ? "true" : "false",
+      only_additional_words: onlyAdditionalWords ? "true" : "false",
       limit: rowLimit === "all" ? "1000" : rowLimit,
       offset: String(offset),
       query_one: queryOne,
@@ -435,7 +439,7 @@ export default function QuartaTaglioPage() {
     return () => {
       ignore = true;
     };
-  }, [hideCertified, onlyWordPending, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
+  }, [hideCertified, onlyWordPending, onlyAdditionalWords, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
 
   useEffect(() => {
     const viewport = tableViewportRef.current;
@@ -449,12 +453,13 @@ export default function QuartaTaglioPage() {
       rowLimit,
       hideCertified,
       onlyWordPending,
+      onlyAdditionalWords,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [hideCertified, onlyWordPending, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [hideCertified, onlyWordPending, onlyAdditionalWords, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -568,6 +573,7 @@ export default function QuartaTaglioPage() {
       rowLimit,
       hideCertified,
       onlyWordPending,
+      onlyAdditionalWords,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
       scrollTop: viewport?.scrollTop || 0,
@@ -583,19 +589,18 @@ export default function QuartaTaglioPage() {
   }
 
   function toggleHideCertified() {
-    const nextValue = !hideCertified;
-    setHideCertified(nextValue);
-    if (nextValue) {
-      setOnlyWordPending(false);
-    }
+    selectListFilter("hideCertified");
   }
 
   function toggleOnlyWordPending() {
-    const nextValue = !onlyWordPending;
-    setOnlyWordPending(nextValue);
-    if (nextValue) {
-      setHideCertified(false);
-    }
+    selectListFilter("onlyWordPending");
+  }
+
+  function selectListFilter(key) {
+    const next = toggleWordFilter({ hideCertified, onlyWordPending, onlyAdditionalWords }, key);
+    setHideCertified(next.hideCertified);
+    setOnlyWordPending(next.onlyWordPending);
+    setOnlyAdditionalWords(next.onlyAdditionalWords);
   }
 
   return (
@@ -642,8 +647,9 @@ export default function QuartaTaglioPage() {
         </div>
       </div>
 
-      <div className="flex items-end gap-2 overflow-x-auto pb-1">
+      <div className="flex flex-wrap items-end gap-2 pb-1">
         <button
+          aria-pressed={hideCertified}
           className={`min-w-[190px] rounded-xl border px-3 py-2 text-sm font-semibold ${
             hideCertified
               ? "border-emerald-300 bg-emerald-50 text-emerald-800"
@@ -655,6 +661,7 @@ export default function QuartaTaglioPage() {
           {hideCertified ? "Completati nascosti" : "Nascondi completati"}
         </button>
         <button
+          aria-pressed={onlyWordPending}
           className={`min-w-[210px] rounded-xl border px-3 py-2 text-sm font-semibold ${
             onlyWordPending
               ? "border-emerald-300 bg-emerald-50 text-emerald-800"
@@ -664,6 +671,18 @@ export default function QuartaTaglioPage() {
           type="button"
         >
           {onlyWordPending ? "Certificati da fare attivo" : "Solo certificati da fare"}
+        </button>
+        <button
+          aria-pressed={onlyAdditionalWords}
+          className={`min-w-[210px] rounded-xl border px-3 py-2 text-sm font-semibold ${
+            onlyAdditionalWords
+              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+              : "border-border bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+          onClick={() => selectListFilter("onlyAdditionalWords")}
+          type="button"
+        >
+          Altri Word da preparare
         </button>
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-taglio-search-1">
@@ -879,6 +898,9 @@ export default function QuartaTaglioPage() {
                         ))}
                       </div>
                     ) : null}
+                    {(onlyWordPending || onlyAdditionalWords) && item.word_pending_reasons?.length ? (
+                      <WordPendingReasons reasons={item.word_pending_reasons} />
+                    ) : null}
                   </td>
                 </tr>
               ))}
@@ -900,6 +922,32 @@ export default function QuartaTaglioPage() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function WordPendingReasons({ reasons }) {
+  const renderReason = (reason, index) => (
+    <div
+      key={`${reason.kind}-${index}`}
+      className={`rounded-lg border px-2 py-1 whitespace-normal ${
+        reason.kind === "proposed"
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-slate-200 bg-slate-50 text-slate-700"
+      }`}
+    >
+      {reason.message}
+    </div>
+  );
+  return (
+    <div className="mt-2 space-y-1 text-xs">
+      {renderReason(reasons[0], 0)}
+      {reasons.length > 1 ? (
+        <details onClick={(event) => event.stopPropagation()}>
+          <summary className="cursor-pointer text-slate-600">Altre indicazioni ({reasons.length - 1})</summary>
+          <div className="mt-1 space-y-1">{reasons.slice(1).map(renderReason)}</div>
+        </details>
+      ) : null}
+    </div>
   );
 }
 
