@@ -222,7 +222,7 @@ function certificateSortValue(item, field) {
     case "cdo_lega":
       return item.cdo_lega || "";
     case "quantita":
-      return item.quantita || "";
+      return item.quantita ?? "";
     case "fornitore_cliente":
       return item.fornitore_cliente || "";
     case "status":
@@ -843,7 +843,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                   <td className="px-4 py-3 font-medium text-slate-800">{item.ddt || "-"}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.ordine_cliente || "-"}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.cdo_lega || "-"}</td>
-                  <td className="px-4 py-3 font-medium text-slate-800">{item.quantita ? Number(item.quantita).toLocaleString("it-IT") : "-"}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800" title={item.quantita == null ? "Quantità della spedizione non disponibile o non collegata in modo univoco al certificato" : "Quantità della riga DDT eSolver collegata al certificato"}>{item.quantita != null ? Number(item.quantita).toLocaleString("it-IT") : "—"}</td>
                   <td className="px-4 py-3 text-slate-700">{item.fornitore_cliente || "-"}</td>
                   <td className="px-4 py-3">
                     <span

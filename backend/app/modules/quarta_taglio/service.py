@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import secrets
 import zipfile
@@ -474,7 +475,7 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         if _clean_text(certificate.unit_key) or certificate.cod_odp not in ol_with_unit_specific_certificates
     ]
     return QuartaTaglioFinalCertificateRegisterResponse(
-        items=[_serialize_final_certificate_register_item(certificate) for certificate in visible_certificates],
+        items=_serialize_final_certificate_register_items(db, visible_certificates),
         total_items=len(visible_certificates),
     )
 
@@ -511,7 +512,7 @@ def refresh_quarta_taglio_visible_final_certificates(db: Session, *, certificate
     items_by_id = {item.id: item for item in refreshed_certificates}
     ordered_items = [items_by_id[certificate_id] for certificate_id in safe_ids if certificate_id in items_by_id]
     return QuartaTaglioFinalCertificateRegisterResponse(
-        items=[_serialize_final_certificate_register_item(certificate) for certificate in ordered_items],
+        items=_serialize_final_certificate_register_items(db, ordered_items),
         total_items=len(ordered_items),
     )
 
@@ -2383,7 +2384,7 @@ def generate_quarta_taglio_certificate_pdf(
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
     if certificate.status == "pdf_final" and certificate.storage_key_pdf:
-        return _serialize_final_certificate_register_item(certificate)
+        return _serialize_final_certificate_register_items(db, [certificate])[0]
     if not certificate.storage_key_docx:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word non presente")
     if not _clean_text(certificate.ddt):
@@ -2430,7 +2431,7 @@ def generate_quarta_taglio_certificate_pdf(
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
-    return _serialize_final_certificate_register_item(certificate)
+    return _serialize_final_certificate_register_items(db, [certificate])[0]
 
 
 def reopen_quarta_taglio_certificate_pdf(
@@ -2474,7 +2475,7 @@ def reopen_quarta_taglio_certificate_pdf(
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
-    return _serialize_final_certificate_register_item(certificate)
+    return _serialize_final_certificate_register_items(db, [certificate])[0]
 
 
 def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, download_token: str | None) -> tuple[Path, str]:
@@ -4633,10 +4634,31 @@ def _serialize_run(run: QuartaTaglioSyncRun) -> QuartaTaglioSyncRunResponse:
     return QuartaTaglioSyncRunResponse.model_validate(run)
 
 
+def _serialize_final_certificate_register_items(
+    db: Session,
+    certificates: list[QuartaTaglioFinalCertificate],
+) -> list[QuartaTaglioFinalCertificateRegisterItem]:
+    # Read the existing eSolver cache once. No external sync, document generation
+    # or writes are needed to choose the quantity displayed in the register.
+    cod_odps = {certificate.cod_odp for certificate in certificates}
+    links = {
+        link.cod_odp: link
+        for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps)).all()
+    } if cod_odps else {}
+    return [
+        _serialize_final_certificate_register_item(
+            certificate,
+            esolver_rows=_esolver_rows_from_link(links.get(certificate.cod_odp)),
+        )
+        for certificate in certificates
+    ]
+
+
 def _serialize_final_certificate_register_item(
     certificate: QuartaTaglioFinalCertificate,
     *,
     db: Session | None = None,
+    esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] | None = None,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
     conformity_status = _certificate_conformity_status(certificate)
     conformity_issues = certificate.conformity_issues or []
@@ -4661,7 +4683,7 @@ def _serialize_final_certificate_register_item(
         esolver_id_riga_doc=certificate.esolver_id_riga_doc,
         esolver_rif_lotto_alfanum=certificate.esolver_rif_lotto_alfanum,
         ordine_cliente=certificate.ordine_cliente,
-        quantita=_certificate_quantity_display(certificate),
+        quantita=_certificate_quantity_display(certificate, esolver_rows=esolver_rows or []),
         cdq=_certificate_cdq_display(certificate),
         cert_date=certificate.cert_date,
         lega_cod_f3=_certificate_cod_f3_display(certificate),
@@ -4687,21 +4709,57 @@ def _certificate_cdq_display(certificate: QuartaTaglioFinalCertificate) -> str |
     return _join_unique(cdq_values) or _clean_text(certificate.cdq_key)
 
 
-def _certificate_quantity_display(certificate: QuartaTaglioFinalCertificate) -> float | None:
-    if certificate.quantita is not None:
-        return certificate.quantita
-    values = certificate.cdq_values or []
-    quantities = [
-        _as_float(item.get("qta_totale"))
-        for item in values
-        if isinstance(item, dict) and _as_float(item.get("qta_totale")) is not None
-    ]
-    if not quantities:
+def _certificate_quantity_display(
+    certificate: QuartaTaglioFinalCertificate,
+    *,
+    esolver_rows: list[QuartaTaglioEsolverDdtRowResponse],
+) -> float | None:
+    """Display only an unambiguous shipment quantity, never a Quarta material total.
+
+    The persisted certificate quantity can come from either source, so its mere
+    presence (including on a closed PDF) is not proof of a shipped quantity.
+    Legacy certificates without eSolver IDs may match one unique DDT line; they
+    must not absorb quantities from sibling lines, lots or partial deliveries.
+    """
+    if not _clean_text(certificate.ddt) or not _clean_text(certificate.cod_f3):
         return None
-    unique_quantities = {quantity for quantity in quantities}
-    if len(unique_quantities) == 1:
-        return quantities[0]
-    return _sum_optional(quantities)
+    reference_fields = (
+        ("esolver_id_documento", "id_documento"),
+        ("esolver_id_riga_doc", "id_riga_doc"),
+        ("esolver_rif_lotto_alfanum", "rif_lotto_alfanum"),
+        ("ordine_cliente", "odv_cli"),
+        ("cdo_lega", "odv_f3"),
+    )
+    matches: list[QuartaTaglioEsolverDdtRowResponse] = []
+    for row in esolver_rows:
+        if (
+            _norm(row.orp) != _norm(certificate.cod_odp)
+            or _norm(row.cod_f3) != _norm(certificate.cod_f3)
+            or _norm(row.ddt) != _norm(certificate.ddt)
+            or not _clean_text(row.id_documento)
+            or not _clean_text(row.id_riga_doc)
+        ):
+            continue
+        if any(
+            _clean_text(getattr(certificate, certificate_field))
+            and _norm(getattr(certificate, certificate_field)) != _norm(getattr(row, row_field))
+            for certificate_field, row_field in reference_fields
+        ):
+            continue
+        matches.append(row)
+    if not matches:
+        return None
+    identities = {
+        tuple(_norm(getattr(row, field)) for field in ("id_documento", "id_riga_doc", "rif_lotto_alfanum", "odv_cli", "odv_f3"))
+        for row in matches
+    }
+    quantities = {row.qta_um_mag for row in matches}
+    # Identical duplicate source rows count once; conflicting duplicates remain
+    # unknown. Never sum a whole OL or silently accept a partial quantity.
+    if len(identities) != 1 or len(quantities) != 1:
+        return None
+    quantity = next(iter(quantities))
+    return quantity if quantity is not None and math.isfinite(quantity) and quantity >= 0 else None
 
 
 def _live_certificate_conformity_for_register(
