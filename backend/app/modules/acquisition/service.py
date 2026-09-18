@@ -32,6 +32,19 @@ from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
 from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
+from app.modules.acquisition.document_type_guard import (
+    DocumentTypeReviewRequired,
+    document_type_prompt,
+    require_complete_pages,
+    validate_document_type_response,
+)
+from app.modules.acquisition.leichtmetall_type_workflow import (
+    BLOCKED_KEY as TYPE_GUARD_BLOCKED_KEY,
+    blocked_row_ids as _type_guard_blocked_row_ids,
+    can_retype as _can_retype_leichtmetall_document,
+    EVIDENCE_TYPE as LEICHTMETALL_TYPE_EVIDENCE,
+    preflight_documents as _preflight_leichtmetall_documents,
+)
 from app.modules.acquisition.models import (
     AcquisitionHistoryEvent,
     AcquisitionRow,
@@ -7094,6 +7107,16 @@ def _apply_document_identity_detection(db: Session, document: Document) -> Docum
     probable_type = _detect_document_type(document)
     probable_supplier_id = _detect_document_supplier_id(db, document)
 
+    if probable_type != document.tipo_documento and _looks_like_leichtmetall_identity_text(
+        _normalize_identity_text(_document_identity_text(document))
+    ):
+        checked = db.query(DocumentEvidence.id).filter(
+            DocumentEvidence.document_id == document.id,
+            DocumentEvidence.tipo_evidenza == LEICHTMETALL_TYPE_EVIDENCE,
+        ).first()
+        if checked is not None or not _can_retype_leichtmetall_document(db, document):
+            probable_type = None
+
     changed = False
     if probable_type and probable_type != document.tipo_documento:
         document.tipo_documento = probable_type
@@ -7315,10 +7338,7 @@ def _detect_leichtmetall_document_type(search_text: str, file_name: str) -> str 
     if not _looks_like_leichtmetall_identity_text(search_text):
         return None
 
-    if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
-        return "certificato"
-
-    has_delivery_note = " delivery note " in search_text
+    has_delivery_note = re.search(r"\bdel[i1l]very\s+n[o0]t[e3]\b", search_text) is not None
     has_packing_list = any(
         marker in search_text
         for marker in (
@@ -7326,7 +7346,7 @@ def _detect_leichtmetall_document_type(search_text: str, file_name: str) -> str 
             " packi n g list ",
         )
     )
-    has_logistic_signals = any(
+    logistic_signal_count = sum(
         marker in search_text
         for marker in (
             " transportnummer ",
@@ -7339,9 +7359,6 @@ def _detect_leichtmetall_document_type(search_text: str, file_name: str) -> str 
         )
     )
     has_numeric_ddt_file_name = re.fullmatch(r"\d[\d_-]{1,}\.pdf", file_name) is not None
-
-    if has_delivery_note and (has_packing_list or has_logistic_signals or has_numeric_ddt_file_name):
-        return "ddt"
 
     has_chemical_table = any(
         marker in search_text
@@ -7371,6 +7388,13 @@ def _detect_leichtmetall_document_type(search_text: str, file_name: str) -> str 
     )
 
     if has_chemical_table and (has_certificate_header or has_cast_identity):
+        return "certificato"
+
+    if has_delivery_note and (has_packing_list or logistic_signal_count or has_numeric_ddt_file_name):
+        return "ddt"
+    if has_packing_list and logistic_signal_count >= 3 and " batch " in search_text and " net kg " in search_text:
+        return "ddt"
+    if file_name.startswith("cqf_") or file_name.startswith("cdq_"):
         return "certificato"
 
     return None
@@ -7595,6 +7619,7 @@ def create_rows_from_document_split_plan(
         certificate_first_candidates = _candidate_rows_for_incoming_ddt_link(
             rows=existing_rows,
             supplier_id=document.fornitore_id,
+            blocked_document_ids=db.info.get(TYPE_GUARD_BLOCKED_KEY, set()),
         )
         certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
             db=db,
@@ -8185,6 +8210,7 @@ def _candidate_rows_for_incoming_ddt_link(
     *,
     rows: list[AcquisitionRow],
     supplier_id: int | None,
+    blocked_document_ids: set[int] | None = None,
 ) -> list[AcquisitionRow]:
     if supplier_id is None:
         return []
@@ -8194,6 +8220,7 @@ def _candidate_rows_for_incoming_ddt_link(
         if row.fornitore_id == supplier_id
         and row.document_ddt_id is None
         and row.document_certificato_id is not None
+        and row.document_certificato_id not in (blocked_document_ids or set())
     ]
 
 
@@ -8204,7 +8231,7 @@ def _candidate_rows_for_incoming_certificate_link(
 ) -> list[AcquisitionRow]:
     if supplier_id is None:
         return []
-    return (
+    rows = (
         db.query(AcquisitionRow)
         .filter(
             AcquisitionRow.fornitore_id == supplier_id,
@@ -8214,6 +8241,8 @@ def _candidate_rows_for_incoming_certificate_link(
         .order_by(AcquisitionRow.id.asc())
         .all()
     )
+    blocked_ids = db.info.get(TYPE_GUARD_BLOCKED_KEY, set())
+    return [row for row in rows if row.document_ddt_id not in blocked_ids and row.document_certificato_id not in blocked_ids]
 
 
 def create_document_page(db: Session, document: Document, payload: DocumentPageCreateRequest) -> DocumentPageResponse:
@@ -8538,6 +8567,8 @@ def _error_detail_text(exc: Exception) -> str:
 
 
 def _is_retryable_processing_error(exc: Exception) -> bool:
+    if isinstance(exc, DocumentTypeReviewRequired):
+        return False
     text_value = _error_detail_text(exc).lower()
     retryable_tokens = (
         "timeout",
@@ -8746,18 +8777,43 @@ def run_autonomous_processing(
             ultimo_errore=None,
         )
 
-        ddt_documents = [_get_document_of_type(db, document_id, "ddt") for document_id in ddt_document_ids]
+        certificate_ai_cache: dict[int, dict[str, object]] = {}
+        explicit_ids = {*ddt_document_ids, *certificate_document_ids}
+        if use_ai_intervention and openai_api_key:
+            explicit_documents = [get_document(db, document_id) for document_id in sorted(explicit_ids)]
+            _save_run(db, run, fase_corrente="verifica_tipo_documenti", messaggio_corrente="Verifico tipo e dati dei documenti Leichtmetall prima di creare le righe")
+            _, type_failures = _preflight_leichtmetall_documents(
+                db, explicit_documents, explicit_ids=explicit_ids, certificate_ai_cache=certificate_ai_cache,
+                api_key=openai_api_key, actor_id=actor_id, actor_email=actor_email,
+            )
+            for item in type_failures:
+                _add_failed_notification_item(failed_notification_items, **item)
+            # Keep ALL submitted IDs in the run (including errors), but route successful
+            # documents by the final type. No row has been created at this point.
+            ddt_document_ids = [d.id for d in explicit_documents if d.tipo_documento == "ddt"]
+            certificate_document_ids = [d.id for d in explicit_documents if d.tipo_documento == "certificato"]
+            _save_run(db, run, ddt_document_ids=json.dumps(ddt_document_ids), certificate_document_ids=json.dumps(certificate_document_ids),
+                      totale_documenti_ddt=len(ddt_document_ids), totale_documenti_certificato=len(certificate_document_ids))
+        blocked_ids = db.info.get(TYPE_GUARD_BLOCKED_KEY, set())
+        ddt_documents = [_get_document_of_type(db, document_id, "ddt") for document_id in ddt_document_ids if document_id not in blocked_ids]
+        usable_certificate_ids = [document_id for document_id in certificate_document_ids if document_id not in blocked_ids]
         certificate_documents = _resolve_certificate_documents_for_automation(
-            db,
-            ddt_documents=ddt_documents,
-            explicit_certificate_document_ids=certificate_document_ids,
-        )
+            db, ddt_documents=ddt_documents, explicit_certificate_document_ids=usable_certificate_ids,
+        ) if ddt_documents or usable_certificate_ids else []
+        if use_ai_intervention and openai_api_key:
+            certificate_documents, type_failures = _preflight_leichtmetall_documents(
+                db, certificate_documents, explicit_ids=explicit_ids, certificate_ai_cache=certificate_ai_cache,
+                api_key=openai_api_key, actor_id=actor_id, actor_email=actor_email,
+            )
+            for item in type_failures:
+                _add_failed_notification_item(failed_notification_items, **item)
         explicit_certificate_documents = [
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
-        certificate_ai_cache: dict[int, dict[str, object]] = {}
         if use_ai_intervention and openai_api_key:
             for certificate_index, certificate_document in enumerate(certificate_documents, start=1):
+                if certificate_document.id in certificate_ai_cache:
+                    continue
                 template = resolve_supplier_template(
                     certificate_document.supplier.ragione_sociale if certificate_document.supplier is not None else None,
                     certificate_document.nome_file_originale,
@@ -9091,7 +9147,7 @@ def run_autonomous_processing(
                 supplier_ids=rematch_supplier_ids,
                 actor_id=actor_id,
                 run_id=run.id,
-                protected_row_ids={
+                protected_row_ids=_type_guard_blocked_row_ids(db) | {
                     row_id
                     for (row_id,) in (
                         db.query(AcquisitionRow.id)
@@ -9128,7 +9184,10 @@ def run_autonomous_processing(
             run,
             stato="completato",
             fase_corrente="completato",
-            messaggio_corrente="Compilazione automatica completata. Ora puo intervenire quality.",
+            messaggio_corrente=("Compilazione completata con documenti Leichtmetall da verificare. Consultare il riepilogo errori."
+                               if db.info.get(TYPE_GUARD_BLOCKED_KEY) else "Compilazione automatica completata. Ora puo intervenire quality."),
+            ultimo_errore=(" | ".join(item["reason"] for item in failed_notification_items)
+                           if db.info.get(TYPE_GUARD_BLOCKED_KEY) else run.ultimo_errore),
             righe_create=final_row_count,
             righe_processate=final_row_count,
             totale_righe_target=final_row_count,
@@ -9140,7 +9199,8 @@ def run_autonomous_processing(
         )
         _set_documents_processing_state(
             db,
-            [*ddt_document_ids, *certificate_document_ids],
+            [document_id for document_id in [*ddt_document_ids, *certificate_document_ids]
+             if document_id not in db.info.get(TYPE_GUARD_BLOCKED_KEY, set())],
             stato_elaborazione="indicizzato",
         )
         _promote_documents_to_persistent(db, [*ddt_document_ids, *certificate_document_ids])
@@ -17014,6 +17074,8 @@ def _ensure_autonomous_rows_with_ai(
         .all()
     )
     if existing_rows:
+        protected_ids = _type_guard_blocked_row_ids(db)
+        existing_rows = [row for row in existing_rows if row.id not in protected_ids]
         claimed_rows = [
             _set_row_ai_processing_state(
                 db,
@@ -17076,6 +17138,7 @@ def _ensure_autonomous_rows_with_ai(
         certificate_first_candidates = _candidate_rows_for_incoming_ddt_link(
             rows=existing_rows_all,
             supplier_id=ddt_document.fornitore_id,
+            blocked_document_ids=db.info.get(TYPE_GUARD_BLOCKED_KEY, set()),
         )
         certificate_first_row = _find_existing_certificate_first_row_for_split_candidate(
             db=db,
@@ -21164,9 +21227,20 @@ def _build_leichtmetall_certificate_safe_crops(
 
 
 def _build_leichtmetall_certificate_masked_page(image: Image.Image) -> Image.Image:
+    return _build_leichtmetall_type_safe_masked_page(image)
+
+
+def _build_leichtmetall_type_safe_masked_page(image: Image.Image) -> Image.Image:
+    """Same mask whichever type OCR assigned; do not cover the document title."""
     masked = image.convert("RGB")
     lines = _extract_ocr_line_blocks(masked)
-    _mask_leichtmetall_visual_logo_regions(masked)
+    title_tops = [int(line["top"]) for line in lines
+                  if int(line["top"]) < masked.height * .30
+                  and any(marker in re.sub(r"[^A-Z0-9]", "", str(line["text"]).upper())
+                          for marker in ("PACKINGLIST", "DELIVERYNOTE", "DELIVERYN0TE", "INSPECTIONCERTIFICATE", "ABNAHMEPR"))]
+    logo_bottom = min(.14, min(title_tops) / masked.height - .004) if title_tops else .14
+    if logo_bottom > .04:
+        _mask_relative_rectangle(masked, (.60, .04, .98, logo_bottom))
     _mask_leichtmetall_customer_occurrence_blocks(masked, lines)
     _mask_leichtmetall_supplier_occurrence_blocks(masked, lines)
     return masked
@@ -23717,6 +23791,11 @@ def _extract_leichtmetall_ddt_row_groups_with_vision(
     ddt_document: Document,
     openai_api_key: str,
 ) -> list[ReaderRowSplitCandidateResponse]:
+    if ddt_document.id in db.info.get(TYPE_GUARD_BLOCKED_KEY, set()):
+        raise DocumentTypeReviewRequired("documento gia fermato in questo run; verificare il tipo.")
+    cached = db.info.get("leichtmetall_ddt_checked", {}).get(ddt_document.id)
+    if cached is not None:
+        return cached
     if not ddt_document.pages:
         ddt_document = _index_document_from_path(db, ddt_document)
     ddt_document = _ensure_document_page_images(db, ddt_document)
@@ -23725,6 +23804,7 @@ def _extract_leichtmetall_ddt_row_groups_with_vision(
     if not image_pages:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT has no image pages available for AI")
 
+    require_complete_pages(ddt_document)
     crop_definitions = _build_leichtmetall_ddt_group_crops(image_pages)
     if not crop_definitions:
         raise HTTPException(
@@ -23789,13 +23869,7 @@ def _build_leichtmetall_ddt_group_crops(
 
 
 def _build_leichtmetall_ddt_masked_page(image: Image.Image) -> Image.Image:
-    masked = image.convert("RGB")
-    lines = _extract_ocr_line_blocks(masked)
-    has_packing_list = any("PACKING LIST" in str(line["text"]).upper() for line in lines)
-    _mask_leichtmetall_visual_logo_regions(masked, is_ddt=True, has_packing_list=has_packing_list)
-    _mask_leichtmetall_customer_occurrence_blocks(masked, lines)
-    _mask_leichtmetall_supplier_occurrence_blocks(masked, lines)
-    return masked
+    return _build_leichtmetall_type_safe_masked_page(image)
 
 
 def _extract_leichtmetall_ddt_row_groups_from_openai(
@@ -23808,7 +23882,8 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
         {
             "type": "input_text",
             "text": (
-                "Leggi queste immagini di un documento tecnico di trasporto Leichtmetall e ricostruisci tutte le righe logiche materiale presenti. "
+                document_type_prompt("ddt")
+                + "Leggi queste immagini di un documento tecnico di trasporto Leichtmetall e ricostruisci tutte le righe logiche materiale presenti. "
                 "Questo DDT puo richiedere piu certificati: se nel documento esistono piu batch o gruppi con peso netto diverso, restituisci una riga logica separata per ogni gruppo batch. "
                 "Non unire batch diversi nella stessa riga. Non fare il match con nessun certificato e non normalizzare i valori. "
                 "Per l'ordine utile al match usa il valore del campo Purchase Number. "
@@ -23866,6 +23941,7 @@ def _extract_leichtmetall_ddt_row_groups_from_openai(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Leichtmetall DDT row-group AI request failed") from exc
 
+    validate_document_type_response(response, assigned="ddt", page_numbers={int(crop["page_number"]) for crop in crops.values()})
     return (*_parse_openai_json_payload_for_leichtmetall_row_groups(response.output_text), response.output_text)
 
 
@@ -25032,6 +25108,8 @@ def _get_leichtmetall_certificate_ai_payload(
     openai_api_key: str,
     certificate_ai_cache: dict[int, dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    if certificate_document.id in db.info.get(TYPE_GUARD_BLOCKED_KEY, set()):
+        raise DocumentTypeReviewRequired("documento gia fermato in questo run; verificare il tipo.")
     cached = certificate_ai_cache.get(certificate_document.id) if certificate_ai_cache is not None else None
     if cached is not None:
         return cached
@@ -25039,19 +25117,11 @@ def _get_leichtmetall_certificate_ai_payload(
     if not certificate_document.pages:
         certificate_document = _index_document_from_path(db, certificate_document)
     certificate_document = _ensure_document_page_images(db, certificate_document)
-    if not _document_has_image_pages(certificate_document):
-        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
-        if certificate_ai_cache is not None:
-            certificate_ai_cache[certificate_document.id] = empty_payload
-        return empty_payload
-
+    require_complete_pages(certificate_document)
     crops = _build_certificate_safe_crops(certificate_document.pages, supplier_key="leichtmetall")
     page_images = _select_leichtmetall_certificate_document_images(crops)
     if not page_images:
-        empty_payload = {"match_values": {}, "supplier_fields": {}, "chemistry": {}, "properties": {}, "notes": {}}
-        if certificate_ai_cache is not None:
-            certificate_ai_cache[certificate_document.id] = empty_payload
-        return empty_payload
+        raise DocumentTypeReviewRequired("immagini del certificato non disponibili; nessuna estrazione applicata.")
 
     raw_payload = _extract_leichtmetall_certificate_payload_from_openai(
         page_images,
@@ -25079,7 +25149,8 @@ def _extract_leichtmetall_certificate_payload_from_openai(
         {
             "type": "input_text",
             "text": (
-                "Leggi questo certificato materiale Leichtmetall. "
+                document_type_prompt("certificato")
+                + "Leggi questo certificato materiale Leichtmetall. "
                 "Scopo: estrarre i dati identificativi e tecnici del certificato, leggere composizione chimica, proprieta meccaniche e note tecniche rilevanti. "
                 "Presta particolare attenzione a PO-No., Charge / Cast No, alloy, diameter e weight. "
                 "Per questo fornitore la Charge / Cast No del certificato puo essere trattata anche come cdq. "
@@ -25148,6 +25219,7 @@ def _extract_leichtmetall_certificate_payload_from_openai(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Leichtmetall certificate AI extraction request failed") from exc
 
+    validate_document_type_response(response, assigned="certificato", page_numbers={int(crop["page_number"]) for crop in page_images.values()})
     return _parse_openai_json_payload_for_certificate_bundle(response.output_text)
 
 
