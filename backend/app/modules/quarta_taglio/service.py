@@ -86,6 +86,7 @@ from app.modules.suppliers.models import Supplier
 
 FINAL_CERTIFICATE_REGISTER_REFRESH_FRESHNESS_MINUTES = 15
 QUALITY_RESERVATION_STATUS_MESSAGE = "CDQ accettato con riserva"
+QUALITY_REJECTED_STATUS_MESSAGE = "Respinto da qualità"
 
 
 @dataclass(frozen=True)
@@ -345,7 +346,7 @@ def sync_and_list_quarta_taglio(
         word_pending_candidates = [
             (summary, group_rows)
             for summary, group_rows in filtered_groups
-            if _incoming_rows_ready_for_certification(group_rows)
+            if _incoming_rows_complete_for_word_queue(group_rows)
         ]
         filtered_raw_rows = [row for _summary, group_rows in word_pending_candidates for row in group_rows]
         cached_esolver_links.update(_refresh_esolver_links_for_rows(db, rows=filtered_raw_rows))
@@ -3467,6 +3468,68 @@ def _read_value_has_payload_for_quick_confirm(value: ReadValue) -> bool:
     return bool(_clean_text(value.valore_finale) or _clean_text(value.valore_standardizzato) or _clean_text(value.valore_grezzo))
 
 
+def _word_queue_visibility_blockers(
+    *,
+    db: Session,
+    quarta_rows: list[QuartaTaglioRow],
+    app_rows: list[AcquisitionRow],
+) -> list[str]:
+    """Checks only whether an OL belongs in a Word work queue.
+
+    Standard, supplier reference and the final quality outcome are creation
+    concerns: they must remain visible in the queue and can block the action in
+    the detail page.  The queue itself requires a supplier certificate and all
+    Incoming checks to have been completed.
+    """
+    blockers: list[str] = []
+    app_rows_by_key: dict[tuple[str, str], list[AcquisitionRow]] = defaultdict(list)
+    for row in app_rows:
+        if row.document_certificato_id is not None:
+            app_rows_by_key[(_norm(row.cdq), _norm(row.colata))].append(row)
+
+    seen_material_keys: set[tuple[str, str]] = set()
+    for quarta_row in quarta_rows:
+        key = (_norm(quarta_row.cdq), _norm(quarta_row.colata))
+        if key in seen_material_keys:
+            continue
+        seen_material_keys.add(key)
+
+        label = _certificate_material_label(quarta_row)
+        if not key[0]:
+            blockers.append(f"{label}: CDQ mancante da Quarta")
+            continue
+        if not key[1]:
+            blockers.append(f"{label}: colata mancante da Quarta")
+            continue
+
+        exact_rows = app_rows_by_key.get(key, [])
+        if not exact_rows:
+            blockers.append(f"{label}: certificato non presente in Incoming")
+            continue
+        exact_rows, ambiguity_message = _effective_incoming_rows_for_quarta_material(
+            db,
+            cod_odp=quarta_row.cod_odp,
+            cdq=quarta_row.cdq,
+            colata=quarta_row.colata,
+            qta_totale=quarta_row.qta_totale,
+            exact_rows=exact_rows,
+        )
+        if ambiguity_message:
+            ids = ", ".join(f"#{row.id}" for row in exact_rows)
+            blockers.append(f"{label}: certificato presente su più righe Incoming ({ids}), serve verifica manuale")
+            continue
+
+        row = exact_rows[0]
+        block_states = _compute_block_states_from_db(db, row)
+        for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
+            if block_states.get(block) != "verde":
+                blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
+        if row.qualita_valutazione not in {"accettato", "accettato_con_riserva", "respinto"}:
+            blockers.append(f"{label}: riga Incoming #{row.id} qualità non valutata")
+
+    return sorted(set(blockers))
+
+
 def _word_creation_blockers(
     *,
     db: Session,
@@ -4618,7 +4681,7 @@ def _evaluate_cdq(
 
     for row in exact_rows:
         if row.qualita_valutazione == "respinto":
-            return "red", "Respinto da qualità", [f"Riga app #{row.id}: valutazione qualità respinta"], matching_ids
+            return "red", QUALITY_REJECTED_STATUS_MESSAGE, [f"Riga app #{row.id}: valutazione qualità respinta"], matching_ids
 
     for row in exact_rows:
         block_states = _compute_block_states_from_db(db, row)
@@ -4821,22 +4884,17 @@ def _filter_word_pending_groups(
 ) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
     cod_odps = [summary.cod_odp for summary, _group_rows in groups]
     certificates_by_odp = _load_final_certificates_by_odp(db, cod_odps)
-    confirmed_standard_odps = {
-        cod_odp
-        for (cod_odp,) in db.query(QuartaTaglioStandardSelection.cod_odp)
-        .filter(QuartaTaglioStandardSelection.cod_odp.in_(cod_odps))
-        .all()
-    }
 
     creatable_groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]] = []
     for summary, group_rows in groups:
+        if not _incoming_rows_complete_for_word_queue(group_rows):
+            continue
         if _has_prepared_word(certificates_by_odp.get(summary.cod_odp, [])) != additional_words:
             continue
-        blockers = _word_creation_blockers(
+        blockers = _word_queue_visibility_blockers(
             db=db,
             quarta_rows=group_rows,
             app_rows=_load_matching_app_rows(db, group_rows),
-            selected_standard_confirmed=summary.cod_odp in confirmed_standard_odps,
         )
         if not blockers:
             creatable_groups.append((summary, group_rows))
@@ -4853,6 +4911,13 @@ def _filter_word_pending_groups(
             certificates=certificates_by_odp.get(summary.cod_odp, []),
             certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
         )
+        if not reasons and not additional_words:
+            reasons = [
+                QuartaTaglioWordPendingReason(
+                    kind="incoming",
+                    message="Certificato Incoming validato: Word da preparare",
+                )
+            ]
         if reasons:
             result.append((summary.model_copy(update={"word_pending_reasons": reasons}), group_rows))
     return result
@@ -4883,7 +4948,7 @@ def _word_pending_reasons(
     certificates: list[QuartaTaglioFinalCertificate],
     certiol_rows: list[_CertiOlRow] | None = None,
 ) -> list[QuartaTaglioWordPendingReason]:
-    if not group_rows or not _incoming_rows_ready_for_certification(group_rows):
+    if not group_rows or not _incoming_rows_complete_for_word_queue(group_rows):
         return []
 
     esolver_rows = _esolver_rows_from_link(esolver_link)
@@ -5932,6 +5997,15 @@ def _group_status_message(color: str, rows: list[QuartaTaglioRow]) -> str:
 
 def _incoming_rows_ready_for_certification(rows: list[QuartaTaglioRow]) -> bool:
     return all(row.status_color == "green" or _is_quality_reservation_only(row) for row in rows)
+
+
+def _incoming_rows_complete_for_word_queue(rows: list[QuartaTaglioRow]) -> bool:
+    return bool(rows) and all(
+        row.status_color == "green"
+        or _is_quality_reservation_only(row)
+        or (row.status_color == "red" and row.status_message == QUALITY_REJECTED_STATUS_MESSAGE)
+        for row in rows
+    )
 
 
 def _is_quality_reservation_only(row: QuartaTaglioRow) -> bool:

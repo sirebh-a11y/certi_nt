@@ -30,7 +30,7 @@ class WordFiltersTest(unittest.TestCase):
             for name, value in {
                 '_load_final_certificates_by_odp': {'OL1': certificates},
                 '_load_matching_app_rows': [],
-                '_word_creation_blockers': ['Blocked'] if blocked else [],
+                '_word_queue_visibility_blockers': ['Blocked'] if blocked else [],
                 '_fetch_certiol_rows_batch': {'OL1': candidates},
             }.items():
                 stack.enter_context(patch.object(s, name, return_value=value))
@@ -53,10 +53,20 @@ class WordFiltersTest(unittest.TestCase):
         for additional in (False, True):
             self.assertFalse(self.filter_groups(certificates, [self.raw, self.child], additional=additional))
 
-    def test_standard_or_other_blockers_still_exclude_both(self):
+    def test_incoming_validation_blockers_still_exclude_both(self):
         for additional in (False, True):
             self.assertFalse(self.filter_groups([self.raw_word] if additional else [],
                                                [self.raw, self.child], additional=additional, blocked=True))
+
+    def test_first_filter_keeps_validated_incoming_even_without_esolver_candidate(self):
+        result = self.filter_groups([], [])
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][0].word_pending_reasons[0].kind, 'incoming')
+        self.assertIn('Word da preparare', result[0][0].word_pending_reasons[0].message)
+
+    def test_additional_filter_still_requires_an_uncovered_word(self):
+        self.assertFalse(self.filter_groups([self.raw_word], [], additional=True))
 
     def test_probable_and_preparable_candidates_are_both_explicitly_proposals(self):
         for child in [self.child, self.candidate('605000760', 'Xyz')]:
@@ -117,7 +127,7 @@ class WordFiltersTest(unittest.TestCase):
                 '_refresh_esolver_links_for_rows': {},
                 '_load_final_certificates_by_odp': {'OL4': [self.raw_word]},
                 '_load_matching_app_rows': [],
-                '_word_creation_blockers': [],
+                '_word_queue_visibility_blockers': [],
                 '_fetch_certiol_rows_batch': ci,
                 '_build_certification_progress_by_odp': {},
                 '_serialize_run': dict(id=1, status='ok', message=None, total_ol=4,
@@ -152,6 +162,35 @@ class WordFiltersTest(unittest.TestCase):
         self.assertFalse(self.filter_groups([], [self.raw]))
         self.row.status_message = s.QUALITY_RESERVATION_STATUS_MESSAGE
         self.assertTrue(self.filter_groups([], [self.raw]))
+
+    def test_rejected_quality_is_visible_in_first_and_additional_queues(self):
+        self.row.status_color = 'red'
+        self.row.status_message = s.QUALITY_REJECTED_STATUS_MESSAGE
+
+        self.assertTrue(self.filter_groups([], [self.raw]))
+        self.assertTrue(self.filter_groups([self.raw_word], [self.raw, self.child], additional=True))
+
+    def test_queue_validation_accepts_rejected_but_requires_completed_blocks_and_certificate(self):
+        app_row = MagicMock(
+            id=7,
+            cdq='CDQ1',
+            colata='COL1',
+            document_certificato_id=10,
+            qualita_valutazione='respinto',
+        )
+        with patch.object(s, '_effective_incoming_rows_for_quarta_material', return_value=([app_row], None)), \
+             patch.object(s, '_compute_block_states_from_db', return_value={
+                 'chimica': 'verde', 'proprieta': 'verde', 'note': 'verde',
+             }):
+            self.assertEqual(
+                s._word_queue_visibility_blockers(db=MagicMock(), quarta_rows=[self.row], app_rows=[app_row]),
+                [],
+            )
+
+        app_row.document_certificato_id = None
+        self.assertTrue(
+            s._word_queue_visibility_blockers(db=MagicMock(), quarta_rows=[self.row], app_rows=[app_row])
+        )
 
 
 if __name__ == '__main__':

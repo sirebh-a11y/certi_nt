@@ -5,10 +5,15 @@
 Implementazione locale autorizzata il 18 settembre 2026, dopo audit e simulazione
 in sola lettura su Alpha. Commit, push e deploy richiedono richieste separate.
 
-- **Solo certificati da fare**: OL idonei senza Word gia preparati, con almeno un
-  Word preparabile secondo le regole esistenti.
-- **Altri Word da preparare**: OL idonei con un Word gia presente e almeno un
-  ulteriore Word mancante o candidato preparabile.
+- **Solo certificati da fare**: OL senza Word gia preparati, con certificato
+  presente in Incoming e controlli Incoming completati.
+- **Altri Word da preparare**: OL con un Word gia presente e almeno un ulteriore
+  Word mancante collegato a certificati con controlli Incoming completati.
+- Accettato, accettato con riserva e respinto entrano nelle code. Un respinto
+  resta bloccato quando si tenta di creare il Word, ma non viene nascosto.
+- Standard non confermato, riferimento fornitore o altri blocchi di creazione
+  non nascondono l'OL: restano visibili nel dettaglio e continuano a impedire
+  la generazione finche non vengono risolti.
 - I due filtri sono alternativi, anche rispetto a **Nascondi completati**, come
   gia accadeva per il filtro precedente. Disattivandoli si torna alla vista generale.
 - Gli OL con tutti i Word presenti e in attesa soltanto di DDT/PDF non sono
@@ -44,8 +49,12 @@ con ricerca e ordinamento, anche prima di entrare nel dettaglio.
   rifiutata prima di sincronizzare o accedere al database.
 - Separazione basata sui Word presenti (o su un PDF finale legacy), non sulla
   sola etichetta Da fare/Parziale/Completato.
-- Riutilizzati controlli di idoneita e abbinamento ai singoli DDT: lo stesso
-  articolo puo avere piu spedizioni e un Word puo coprire soltanto una di esse.
+- La visibilita richiede certificato fornitore, corrispondenza CDQ/colata,
+  chimica/proprieta/note confermate e valutazione qualita conclusa. Lo standard
+  e gli altri requisiti tecnici vengono controllati soltanto nell'azione di
+  creazione Word.
+- Riutilizzati gli abbinamenti ai singoli DDT: lo stesso articolo puo avere piu
+  spedizioni e un Word puo coprire soltanto una di esse.
 - Motivi e appartenenza al filtro derivano dalla stessa funzione. Conteggio e
   filtro vengono calcolati prima della paginazione.
 - Nei filtri Word viene riutilizzata la lettura DDT gia aggiornata per la selezione,
@@ -55,11 +64,14 @@ con ricerca e ordinamento, anche prima di entrare nel dettaglio.
 
 ## Verifiche locali
 
+- Aggiornamento del 21 settembre 2026: aggiunti test per OL senza standard,
+  respinto, certificato Incoming mancante, controlli incompleti e separazione
+  fra primo e secondo filtro. Suite backend completa: 321 test superati.
 - 10 nuovi test backend: separazione, tutti i Word presenti, blocchi, riserva,
   candidati probabili, due DDT dello stesso articolo, conteggi, ricerca,
   paginazione, messaggi e rifiuto di filtri incompatibili.
 - Suite Certificazione: 79 test superati (inclusi i 10 nuovi).
-- Suite backend completa: 294 test superati.
+- Verifica precedente alla modifica del 21 settembre: 294 test backend superati.
 - 3 nuovi test frontend: esclusivita, ripristino sessione e dati salvati incoerenti.
 - Suite frontend disponibile: 8 test superati.
 - Build frontend riuscita; avvisi non bloccanti sulla dimensione bundle e sui
