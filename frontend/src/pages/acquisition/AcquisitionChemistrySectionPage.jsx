@@ -213,10 +213,10 @@ function StandardPreviewSummary({ preview }) {
   if (preview.status === "conforme") {
     return (
       <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-        <p className="font-semibold">Controllo standard OK</p>
-        <p className="mt-1">Ho applicato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+        <p className="font-semibold">Controllo chimico Incoming OK</p>
+        <p className="mt-1">Ho confrontato i valori presenti con il profilo chimico: {standardLabel}.</p>
         {selectionContext}
-        <p className="mt-1 text-xs">La scelta ufficiale dello standard resta nella pagina Certificazione.</p>
+        <p className="mt-1 text-xs">Questo controllo non modifica lo standard scelto nella pagina Certificazione.</p>
       </div>
     );
   }
@@ -228,8 +228,8 @@ function StandardPreviewSummary({ preview }) {
       <div className="mt-4 space-y-2">
         {hardIssues.length ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-            <p className="font-semibold">Controllo standard: verifica richiesta</p>
-            <p className="mt-1">Ho usato solo come controllo visivo lo standard più coerente con il materiale: {standardLabel}.</p>
+            <p className="font-semibold">Controllo chimico Incoming: verifica richiesta</p>
+            <p className="mt-1">Ho confrontato i valori presenti con il profilo chimico: {standardLabel}.</p>
             {selectionContext}
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {hardIssues.map((issue, index) => (
@@ -262,10 +262,10 @@ function StandardPreviewSummary({ preview }) {
 
   return (
     <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-      <p className="font-semibold">Standard non individuato</p>
-      <p className="mt-1">{preview.message || "Non ho trovato uno standard coerente per controllare la chimica."}</p>
+      <p className="font-semibold">Profilo chimico Incoming non individuato</p>
+      <p className="mt-1">{preview.message || "Non ho trovato un profilo chimico per la lega della riga."}</p>
       {selectionContext}
-      <p className="mt-1 text-xs">Puoi confermare comunque: la scelta ufficiale resta nella pagina Certificazione.</p>
+      <p className="mt-1 text-xs">Puoi confermare comunque: questo controllo non modifica la pagina Certificazione.</p>
     </div>
   );
 }

@@ -33,6 +33,11 @@ from app.core.email.service import email_service
 from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
 from app.modules.acquisition.impol_evidence import assign_note_pages, evidence_type as _note_evidence_type
+from app.modules.acquisition.incoming_chemistry import (
+    IncomingChemistryLimit,
+    find_incoming_chemistry_profile,
+    incoming_chemistry_value_is_inside,
+)
 from app.modules.acquisition.quality_merge import (
     MANUAL_FIELDS as MERGE_MANUAL_QUALITY_FIELDS,
     acceptance_date_needs_choice,
@@ -1079,6 +1084,164 @@ def _standard_preview_find_match(
     return candidates[0] if candidates else None
 
 
+def _incoming_chemistry_limit_label(limit: IncomingChemistryLimit) -> str:
+    if limit.min_value is not None and limit.max_value is not None:
+        return f"{limit.min_value:g} - {limit.max_value:g}"
+    if limit.min_value is not None:
+        return f">= {limit.min_value:g}"
+    if limit.max_value is not None:
+        operator = "<=" if limit.max_inclusive else "<"
+        return f"{operator} {limit.max_value:g}"
+    return "-"
+
+
+def _preview_incoming_chemistry_conformity(
+    *,
+    row: AcquisitionRow,
+    payload: AcquisitionStandardPreviewRequest,
+) -> AcquisitionStandardPreviewResponse:
+    raw_fields = _standard_preview_raw_field_map(row, "chimica", payload.fields)
+    fields = _standard_preview_field_map(row, "chimica", payload.fields)
+    material_form = assess_material_form(row)
+    profile = find_incoming_chemistry_profile(
+        lega_base=row.lega_base,
+        lega_designazione=row.lega_designazione,
+        variante_lega=row.variante_lega,
+    )
+    preview_context = {
+        "material_form": material_form.code,
+        "material_form_label": material_form.label,
+        "material_evidence": list(material_form.evidence),
+        "standard_confidence": "alta" if profile is not None else None,
+        "standard_reasons": (
+            [f"lega {profile.base_alloy}", "tabella chimica dedicata a Incoming"]
+            if profile is not None
+            else []
+        ),
+        "standard_warnings": [],
+    }
+
+    blocking_issues: list[AcquisitionStandardPreviewIssue] = []
+    warning_issues: list[AcquisitionStandardPreviewIssue] = []
+    for field, raw_value in raw_fields.items():
+        if _is_missing_numeric_placeholder(raw_value):
+            continue
+        normalized_value = _normalize_chemistry_capture_value(raw_value)
+        if normalized_value is None:
+            blocking_issues.append(
+                AcquisitionStandardPreviewIssue(
+                    block="chimica",
+                    field=field,
+                    value=raw_value,
+                    message=f'{field}: "{raw_value}" non e un valore chimico valido. Inserire solo un numero.',
+                    severity="block",
+                )
+            )
+        elif _chemistry_value_has_limit_prefix(raw_value):
+            warning_issues.append(
+                AcquisitionStandardPreviewIssue(
+                    block="chimica",
+                    field=field,
+                    value=normalized_value,
+                    message=(
+                        f"{field}: valore {normalized_value} da verificare manualmente. "
+                        "Controlla che la lettura sia corretta prima di confermare."
+                    ),
+                    severity="warning",
+                )
+            )
+
+    if blocking_issues:
+        return AcquisitionStandardPreviewResponse(
+            **preview_context,
+            status="valori_non_validi",
+            block="chimica",
+            standard_label=profile.label if profile is not None else None,
+            issues=blocking_issues + warning_issues,
+            message="Correggere i valori non numerici prima di confermare.",
+        )
+
+    if profile is None:
+        if warning_issues:
+            return AcquisitionStandardPreviewResponse(
+                **preview_context,
+                status="non_conforme",
+                block="chimica",
+                issues=warning_issues,
+                message="Valori da verificare manualmente prima della conferma.",
+            )
+        return AcquisitionStandardPreviewResponse(
+            **preview_context,
+            status="standard_mancante",
+            block="chimica",
+            message="Profilo chimico Incoming non individuato per la lega della riga.",
+        )
+
+    issues: list[AcquisitionStandardPreviewIssue] = list(warning_issues)
+    field_by_key = {_standard_preview_key(field): (field, value) for field, value in fields.items()}
+    compared = 0
+    for limit in profile.limits:
+        item = field_by_key.get(_standard_preview_key(limit.element))
+        if item is None:
+            continue
+        field, raw_value = item
+        numeric_value = _safe_chemistry_float(raw_value)
+        if numeric_value is None:
+            issues.append(
+                AcquisitionStandardPreviewIssue(
+                    block="chimica",
+                    field=field,
+                    value=raw_value,
+                    limit=_incoming_chemistry_limit_label(limit),
+                    message="Valore non numerico.",
+                    severity="block",
+                )
+            )
+            continue
+        compared += 1
+        if not incoming_chemistry_value_is_inside(numeric_value, limit):
+            issues.append(
+                AcquisitionStandardPreviewIssue(
+                    block="chimica",
+                    field=field,
+                    value=raw_value,
+                    limit=_incoming_chemistry_limit_label(limit),
+                    message=f"{field}: {raw_value} fuori limite {_incoming_chemistry_limit_label(limit)}",
+                )
+            )
+
+    if any(issue.severity == "block" for issue in issues):
+        return AcquisitionStandardPreviewResponse(
+            **preview_context,
+            status="valori_non_validi",
+            block="chimica",
+            standard_label=profile.label,
+            issues=issues,
+            message="Correggere i valori non numerici prima di confermare.",
+        )
+    if compared <= 0:
+        return AcquisitionStandardPreviewResponse(
+            **preview_context,
+            status="non_conforme" if issues else "standard_mancante",
+            block="chimica",
+            standard_label=profile.label,
+            issues=issues,
+            message=(
+                "Valori da verificare manualmente prima della conferma."
+                if issues
+                else "Profilo chimico Incoming individuato, ma nessun valore presente e confrontabile."
+            ),
+        )
+    return AcquisitionStandardPreviewResponse(
+        **preview_context,
+        status="non_conforme" if issues else "conforme",
+        block="chimica",
+        standard_label=profile.label,
+        issues=issues,
+        message="Controllo chimico Incoming eseguito sulla tabella approvata.",
+    )
+
+
 def preview_acquisition_row_standard_conformity(
     db: Session,
     *,
@@ -1086,6 +1249,8 @@ def preview_acquisition_row_standard_conformity(
     payload: AcquisitionStandardPreviewRequest,
 ) -> AcquisitionStandardPreviewResponse:
     block = payload.block
+    if block == "chimica":
+        return _preview_incoming_chemistry_conformity(row=row, payload=payload)
     raw_fields = _standard_preview_raw_field_map(row, block, payload.fields)
     fields = _standard_preview_field_map(row, block, payload.fields)
     standard_match = _standard_preview_find_match(db, row=row)
