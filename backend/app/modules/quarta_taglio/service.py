@@ -3160,6 +3160,7 @@ def _effective_incoming_rows_for_quarta_material(
     colata: str | None,
     qta_totale: float | None,
     exact_rows: list[AcquisitionRow],
+    article_code: str | None = None,
 ) -> tuple[list[AcquisitionRow], str | None]:
     if len(exact_rows) <= 1:
         return exact_rows, None
@@ -3171,11 +3172,47 @@ def _effective_incoming_rows_for_quarta_material(
             return selected, None
         return exact_rows, "Scelta manuale non più valida: riga Incoming non coerente con CDQ/colata"
 
+    article_matches = _incoming_rows_matching_quarta_article(article_code=article_code, rows=exact_rows)
+    if len(article_matches) == 1:
+        return article_matches, None
+
     weight_matches = [row for row in exact_rows if _incoming_row_weight_matches_quarta(row, qta_totale)]
     if len(weight_matches) == 1:
         return weight_matches, None
 
     return exact_rows, "CDQ presente su più righe app: verifica manuale"
+
+
+def _incoming_rows_matching_quarta_article(
+    *,
+    article_code: str | None,
+    rows: list[AcquisitionRow],
+) -> list[AcquisitionRow]:
+    """Interpret the article using only diameters from the candidate rows."""
+    article_key = re.sub(r"[^0-9a-z]", "", _norm(article_code))
+    if not article_key:
+        return []
+
+    matches: list[AcquisitionRow] = []
+    for row in rows:
+        tokens = _diameter_tokens_for_article(row.diametro)
+        if tokens and any(token in article_key for token in tokens):
+            matches.append(row)
+    return matches
+
+
+def _diameter_tokens_for_article(value: Any) -> set[str]:
+    raw = _clean_text(value)
+    numeric = _as_float(value)
+    if not raw or numeric is None or numeric <= 0:
+        return set()
+
+    if numeric.is_integer():
+        normalized = str(int(numeric))
+    else:
+        normalized = f"{numeric:.6f}".rstrip("0").rstrip(".").replace(".", "")
+    normalized = normalized.lstrip("0") or "0"
+    return {normalized} if len(normalized) >= 2 else set()
 
 
 def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> None:
@@ -3220,6 +3257,7 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
             colata=row.colata,
             qta_totale=row.qta_totale,
             rows_by_cdq=rows_by_cdq,
+            article_code=row.cod_mp,
         )
         if (
             row.status_color != status_color
@@ -3431,6 +3469,7 @@ def _standard_confirmation_blockers(
             colata=quarta_row.colata,
             qta_totale=quarta_row.qta_totale,
             exact_rows=exact_rows,
+            article_code=quarta_row.cod_mp,
         )
         if ambiguity_message:
             ids = ", ".join(f"#{row.id}" for row in effective_rows)
@@ -3523,6 +3562,7 @@ def _word_queue_visibility_blockers(
             colata=quarta_row.colata,
             qta_totale=quarta_row.qta_totale,
             exact_rows=exact_rows,
+            article_code=quarta_row.cod_mp,
         )
         if ambiguity_message:
             ids = ", ".join(f"#{row.id}" for row in exact_rows)
@@ -3587,6 +3627,7 @@ def _word_creation_blockers(
             colata=quarta_row.colata,
             qta_totale=quarta_row.qta_totale,
             exact_rows=exact_rows,
+            article_code=quarta_row.cod_mp,
         )
         if ambiguity_message:
             ids = ", ".join(f"#{row.id}" for row in exact_rows)
@@ -4617,6 +4658,7 @@ def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows
             colata=colata,
             qta_totale=_as_float(external_row.get("QTA_TOTALE")),
             rows_by_cdq=rows_by_cdq,
+            article_code=cod_mp,
         )
 
         item = (
@@ -4660,6 +4702,7 @@ def _evaluate_cdq(
     colata: str | None,
     qta_totale: float | None,
     rows_by_cdq: dict[str, list[AcquisitionRow]],
+    article_code: str | None = None,
 ) -> tuple[str, str, list[str], list[int]]:
     candidates = rows_by_cdq.get(_norm(cdq), [])
     if not candidates:
@@ -4684,6 +4727,7 @@ def _evaluate_cdq(
         colata=colata,
         qta_totale=qta_totale,
         exact_rows=certificate_rows,
+        article_code=article_code,
     )
     matching_ids = [row.id for row in exact_rows]
     if ambiguity_message:
