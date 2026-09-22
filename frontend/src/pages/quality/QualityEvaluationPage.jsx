@@ -920,7 +920,7 @@ export default function QualityEvaluationPage() {
           onScroll={(event) => syncScroll(topScrollRef.current, event.currentTarget)}
           ref={tableViewportRef}
         >
-        <table className="min-w-[1840px] w-full border-collapse text-sm" ref={tableRef}>
+        <table className="min-w-[1780px] w-full border-collapse text-sm" ref={tableRef}>
           <thead className="sticky-list-head">
             <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-[0.16em] text-slate-500">
               <SortableHeader field="id" label="N°" onSort={toggleSort} sortConfig={sortConfig} />
@@ -1000,10 +1000,10 @@ export default function QualityEvaluationPage() {
                     <LockedCell truncate={false} widthClass="w-28">{formatRowFieldDisplay("ddt", row.ddt)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell truncate={false} widthClass="w-24">{formatRowFieldDisplay("peso", row.peso)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-20">{formatRowFieldDisplay("peso", row.peso)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
-                    <LockedCell truncate={false} widthClass="w-36">{formatRowFieldDisplay("ordine", row.ordine)}</LockedCell>
+                    <LockedCell truncate={false} widthClass="w-[120px]">{formatRowFieldDisplay("ordine", row.ordine)}</LockedCell>
                   </td>
                   <td className="px-2 py-2">
                     <input
@@ -1044,7 +1044,7 @@ export default function QualityEvaluationPage() {
                     <input
                       aria-label={`N° colli riga ${row.id}`}
                       aria-invalid={cellStates[cellKey(row.id, "qualita_numero_colli")]?.status === "error"}
-                      className={`w-[90px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
+                      className={`w-[72px] rounded-lg border px-2 py-1.5 text-[13px] tabular-nums ${fieldClass({
                         changed: textValue(row.qualita_numero_colli) !== textValue(draft.qualita_numero_colli),
                         status: cellStates[cellKey(row.id, "qualita_numero_colli")]?.status,
                       })}`}
