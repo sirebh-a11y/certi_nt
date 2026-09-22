@@ -65,6 +65,27 @@ class WordFiltersTest(unittest.TestCase):
         self.assertEqual(result[0][0].word_pending_reasons[0].kind, 'incoming')
         self.assertIn('Word da preparare', result[0][0].word_pending_reasons[0].message)
 
+    def test_todo_filter_includes_blocked_rows_but_excludes_started_certifications(self):
+        green = self.f._quarta_row(cod_odp='OL-GREEN')
+        ambiguous = self.f._quarta_row(cod_odp='OL-AMBIGUOUS')
+        ambiguous.status_color = 'yellow'
+        ambiguous.status_message = 'CDQ trovato, ma iter non completo'
+        missing = self.f._quarta_row(cod_odp='OL-MISSING')
+        missing.status_color = 'red'
+        missing.status_message = 'CDQ non presente in Incoming Quality'
+        started = self.f._quarta_row(cod_odp='OL-STARTED')
+        groups = [
+            (s._serialize_ol_group([row]), [row])
+            for row in (green, ambiguous, missing, started)
+        ]
+        with patch.object(s, '_load_final_certificates_by_odp', return_value={'OL-STARTED': [self.raw_word]}):
+            result = s._filter_certification_todo_groups(MagicMock(), groups=groups)
+
+        self.assertEqual(
+            [summary.cod_odp for summary, _rows in result],
+            ['OL-GREEN', 'OL-AMBIGUOUS', 'OL-MISSING'],
+        )
+
     def test_additional_filter_still_requires_an_uncovered_word(self):
         self.assertFalse(self.filter_groups([self.raw_word], [], additional=True))
 

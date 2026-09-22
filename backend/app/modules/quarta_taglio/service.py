@@ -342,7 +342,9 @@ def sync_and_list_quarta_taglio(
         operator_one=operator_one,
         operator_two=operator_two,
     )
-    if (only_word_pending or only_additional_words) and filtered_groups:
+    if only_word_pending and filtered_groups:
+        filtered_groups = _filter_certification_todo_groups(db, groups=filtered_groups)
+    elif only_additional_words and filtered_groups:
         word_pending_candidates = [
             (summary, group_rows)
             for summary, group_rows in filtered_groups
@@ -377,13 +379,21 @@ def sync_and_list_quarta_taglio(
     safe_limit = min(max(limit, 1), 1000)
     page_groups = filtered_groups[safe_offset : safe_offset + safe_limit]
     page_raw_rows = [row for _summary, group_rows in page_groups for row in group_rows]
-    # The Word filter already refreshed these links: keep its snapshot for the page.
+    # The additional-Word filter already refreshed these links for its candidates.
+    # The first-Word filter can contain a large backlog, so refresh only the page.
     esolver_links = (
         cached_esolver_links
-        if only_word_pending or only_additional_words
+        if only_additional_words
         else _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
     )
     certiol_rows_by_odp = _fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _group_rows in page_groups])
+    if only_word_pending:
+        page_groups = _enrich_todo_groups_with_word_reasons(
+            db,
+            groups=page_groups,
+            esolver_links=esolver_links,
+            certiol_rows_by_odp=certiol_rows_by_odp,
+        )
     page_progress_by_odp = _build_certification_progress_by_odp(
         db,
         groups=[group_rows for _summary, group_rows in page_groups],
@@ -4920,6 +4930,61 @@ def _filter_word_pending_groups(
             ]
         if reasons:
             result.append((summary.model_copy(update={"word_pending_reasons": reasons}), group_rows))
+    return result
+
+
+def _filter_certification_todo_groups(
+    db: Session,
+    *,
+    groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
+) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
+    """Keep exactly the OL whose displayed certification progress is ``Da fare``.
+
+    The progress label is ``Da fare`` until a final-certificate record exists.
+    Incoming readiness is intentionally not checked here: an OL can belong to
+    the work backlog while its row still explains what must be completed first.
+    """
+    certificates_by_odp = _load_final_certificates_by_odp(
+        db,
+        [summary.cod_odp for summary, _group_rows in groups],
+    )
+    return [
+        (summary, group_rows)
+        for summary, group_rows in groups
+        if not certificates_by_odp.get(summary.cod_odp)
+    ]
+
+
+def _enrich_todo_groups_with_word_reasons(
+    db: Session,
+    *,
+    groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
+    esolver_links: dict[str, QuartaTaglioEsolverLink],
+    certiol_rows_by_odp: dict[str, list[_CertiOlRow]],
+) -> list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]]:
+    """Add useful Word hints to the current page without hiding blocked OL."""
+    result: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]] = []
+    for summary, group_rows in groups:
+        reasons = _word_pending_reasons(
+            group_rows=group_rows,
+            esolver_link=esolver_links.get(summary.cod_odp),
+            certificates=[],
+            certiol_rows=certiol_rows_by_odp.get(summary.cod_odp, []),
+        )
+        if not reasons and _incoming_rows_complete_for_word_queue(group_rows):
+            blockers = _word_queue_visibility_blockers(
+                db=db,
+                quarta_rows=group_rows,
+                app_rows=_load_matching_app_rows(db, group_rows),
+            )
+            if not blockers:
+                reasons = [
+                    QuartaTaglioWordPendingReason(
+                        kind="incoming",
+                        message="Certificato Incoming validato: Word da preparare",
+                    )
+                ]
+        result.append((summary.model_copy(update={"word_pending_reasons": reasons}), group_rows))
     return result
 
 
