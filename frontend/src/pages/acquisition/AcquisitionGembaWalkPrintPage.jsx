@@ -109,6 +109,15 @@ export default function AcquisitionGembaWalkPrintPage() {
           size: A4 landscape;
           margin: 8mm;
         }
+        #gemba-print-root .gemba-table th,
+        #gemba-print-root .gemba-table td {
+          padding: 6px 4px;
+          line-height: 1.2;
+          overflow-wrap: anywhere;
+        }
+        #gemba-print-root .gemba-table thead tr {
+          letter-spacing: 0.03em;
+        }
         @media print {
           body * { visibility: hidden; }
           #gemba-print-root, #gemba-print-root * { visibility: visible; }
@@ -153,7 +162,7 @@ export default function AcquisitionGembaWalkPrintPage() {
 
       {rows.length ? (
         <div className="gemba-table-viewport overflow-x-auto">
-          <table className="w-full table-fixed border-collapse text-[11px]">
+          <table className="gemba-table w-full table-fixed border-collapse text-[14px]">
             <colgroup>
               <col style={{ width: "3.2%" }} />
               <col style={{ width: "12.1%" }} />
@@ -170,7 +179,7 @@ export default function AcquisitionGembaWalkPrintPage() {
               <col style={{ width: "19.1%" }} />
             </colgroup>
             <thead>
-              <tr className="bg-slate-100 text-left uppercase tracking-[0.08em] text-slate-700">
+              <tr className="bg-slate-100 text-left uppercase text-slate-700">
                 <th className="border border-slate-300 px-1.5 py-2">N.</th>
                 <th className="border border-slate-300 px-1.5 py-2">Fornitore</th>
                 <th className="border border-slate-300 px-1.5 py-2">Lega</th>
