@@ -68,6 +68,17 @@ class DdtSnapshotTest(unittest.TestCase):
         self.assertNotEqual(item.certification_unit_key, first.certification_unit_key)
         self.assertEqual(item.certification_unit_key, "OL1|001240|78-02/01/2026|100|1|lot-a|PO2|ORD")
 
+    def test_corrected_date_clears_only_date_warning_not_identity_conflict(self):
+        self.sync([row(DDT="date unreadable")])
+        self.assertEqual(self.items()[0].source_review_reason, "ddt_date_unrecognized")
+        self.sync([row()])
+        self.assertIsNone(self.items()[0].source_review_reason)
+        with self.factory() as db:
+            db.scalar(select(QuartaTaglioDdtWorkItem)).source_review_reason = "source_identity_changed"
+            db.commit()
+        self.sync([row()])
+        self.assertEqual(self.items()[0].source_review_reason, "source_identity_changed")
+
     def test_every_share_and_missing_ol_is_retained(self):
         rows = [row(), row(ORP="OL2"), row(IdDocumento=101), row(IdRigaDoc=2),
                 row(RifLottoAlfanum="lot-b"), row(ORP=None), row(ORP=None, RifLottoAlfanum="lot-c")]

@@ -207,6 +207,9 @@ def _apply_snapshot(db, raw_rows, *, now):
         item.source_disappeared_at = None
         if review_reason:
             item.source_review_reason = review_reason
+        elif item.source_review_reason == "ddt_date_unrecognized" and item.ddt_date is not None:
+            # A corrected source date resolves this warning, not identity conflicts.
+            item.source_review_reason = None
         if item.ddt_raw and item.ddt_date is None:
             item.source_review_reason = item.source_review_reason or "ddt_date_unrecognized"
 

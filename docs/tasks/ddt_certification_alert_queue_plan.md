@@ -1,6 +1,6 @@
 # DDT da certificare - audit Alpha e piano di implementazione
 
-**Stato:** fase 1 backend realizzata in locale; attivazione, API/UI e recupero storico ancora da completare
+**Stato:** fasi 1, 2A (stati/API) e 2B (raccordo backend storico) realizzate in locale; UI, importazione storica e attivazione ancora da completare
 
 **Data audit:** 29/09/2026
 
@@ -26,7 +26,98 @@ La nuova sincronizzazione **non è stata attivata** sul database applicativo. I 
 
 Le aggiunte qui descritte sono autorizzate dal procedi per la fase 1. Il vecchio documento `docs/development_rules.md` contiene vincoli del progetto inizialmente limitato al core: l'eccezione riguarda soltanto questa funzionalità approvata, non modifiche generali all'architettura.
 
-Mancano ancora: API, pagina, badge, stati derivati da Incoming/PDF, esclusione manuale, importazione storica, scelta delle soglie e avviso visivo. Non considerare la coda operativa finché queste fasi non sono complete e verificate. Nessun commit, push o deploy eseguito.
+La fase 1 è stata committata e pubblicata su `main` con `c16cb7d4`. I successivi `procedi` autorizzano le fasi 2A/2B locali descritte sotto, non il deploy. Mancano ancora pagina, badge, esclusione manuale, importazione storica, scelta delle soglie e avviso visivo. Non considerare la coda operativa finché queste fasi non sono complete e verificate.
+
+### Fase 2A - stati e API locali in sola lettura (29/09/2026)
+
+Implementati:
+
+- `ddt_queue.py`: proiezione degli stati correnti, senza persistire lo stato calcolato;
+- `ddt_schemas.py` e `ddt_router.py`: contratto ed endpoint di lettura;
+- `GET /api/quarta-taglio/ddt-work-items` e `/counters`, prima delle rotte dinamiche OL;
+- accesso autenticato per IT, Qualità e Laboratorio, coerente con i reparti autorizzati alla pagina Certificazione;
+- filtri testuali, date DDT, presenza nella sorgente, stato, storico completati; paginazione e ordinamento stabile per data DDT/id, date mancanti in fondo;
+- contatori sulla popolazione filtrata per dati sorgente, indipendenti da stato/vista e paginazione; `total_items` conta invece il risultato effettivo della vista/stato selezionati;
+- ultimo tentativo e ultimo successo separati, più flag di sincronizzazione attiva, senza inventare soglie giallo/rosso;
+- rivalutazione Incoming con la stessa funzione già usata da Certificazione, estratta in un helper di sola lettura. La funzione preesistente di aggiornamento Quarta mantiene il comportamento di prima;
+- nessuna chiamata a `get_quarta_taglio_detail`, conferma rapida, servizi remoti, refresh cache, generazione Word/PDF o scrittura durante i GET.
+
+Stati restituiti: `completed`, `to_link`, `quality_rejected`, `waiting_incoming`, `word_ready`, `ready`, `review`.
+
+`Pronto lato Incoming` significa che chimica/proprietà/note/qualità soddisfano le regole già esistenti. **Non significa che standard, conformità o PDF siano automaticamente autorizzati**: quei controlli restano nel flusso Certificazione.
+
+La chiusura è prudente: richiede unit key esatta, identità strutturata coerente (OL, CodF3, DDT, documento, riga, lotto e ordine), quantità compatibile con il Float del certificato, stato `pdf_final`, versione attiva non annullata relativa allo stesso file e file presente/non vuoto nel percorso storage ammesso. Non viene analizzato il contenuto binario del PDF. Una chiave legacy, un PDF di altra quota o un file mancante non chiudono la segnalazione. Due certificati esatti generano verifica richiesta. Una quantità modificata dopo il PDF viene segnalata, senza modificare il PDF.
+
+La verifica separata dei campi evita anche che una collisione del separatore `|` nella chiave storica CERTI chiuda la quota sbagliata; la chiave sorgente SHA-256 della fase 1 non cambia.
+
+Un Word anticipato viene segnalato come candidato soltanto per lo stesso OL/CodF3, senza DDT né identità eSolver, e quando l'associazione è unica. Non viene assegnato o copiato dal GET. Più Word candidati o più quote possibili richiedono verifica; il risultato non cambia restringendo il filtro della pagina. Le regole di ereditarietà Word delle altre lavorazioni restano invariate.
+
+Le anomalie hanno priorità sullo stato pronto: una riga con collegamento ambiguo non deve sembrare liberamente lavorabile. Il PDF esatto valido ha priorità su Incoming eventualmente modificato dopo la chiusura; la coda non invalida PDF già chiusi.
+
+Correzione circoscritta alla fase 1: se eSolver corregge una data DDT prima illeggibile, viene rimosso il solo avviso `ddt_date_unrecognized`. Un conflitto `source_identity_changed` non viene cancellato automaticamente.
+
+### Limiti espliciti annotati alla fine della fase 2A
+
+- Il GET non modifica cache o certificati: uno snapshot vecchio non diventa automaticamente un'unità selezionabile nel dettaglio OL esistente.
+- Raccordo successivamente realizzato nella fase 2B sotto descritta: selezione della quota storica nel dettaglio/creazione Word/chiusura PDF, senza dipendenza dalla finestra DDT eSolver e senza sostituire la cache corrente o PDF già chiusi.
+- Nessun endpoint `sync` o `disposition` aggiunto in questa fase. Esclusione manuale, autorizzazioni relative e soglie temporali restano decisioni da confermare. Nessuna etichetta `Nuovo/non letto` con durata arbitraria.
+- Nessuna importazione storica, nessuna attivazione di `DDT_SNAPSHOT_ENABLED`, nessuna modifica alle configurazioni Alpha.
+- I GET valutano lato server la popolazione candidata prima della paginazione; al client arriva soltanto la pagina oppure i contatori. Le query di contesto sono suddivise in blocchi e Incoming viene valutato una volta per OL, non per ogni DDT. Prima di importazioni storiche estese misurare i tempi con il volume reale: il conteggio degli stati richiede ancora la lettura delle righe candidate, non è un conteggio SQL materializzato.
+- Per questa prossima parte restare su Astra; valutare Sol per la successiva interfaccia quando il raccordo storico sarà collaudato.
+
+### Test fase 2A
+
+36 test dedicati alla coda: stati Incoming reali con dati sintetici, accettato/riserva/respinto, conferme mancanti, più materiali, AI in corso, solo DDT, scelta manuale, diametri 285/85 ambigui, cache Quarta obsoleta, storico, Word anticipato/ambiguo, più DDT/OL/righe/lotti, riapertura, versioni annullate, file mancanti e percorsi non ammessi, PDF legacy, duplicati, collisione di chiave, variazione quantità, filtro/paginazione su 510 elementi, autenticazione e autorizzazioni.
+
+Il test di non interferenza controlla che durante la lettura vengano eseguiti solo `SELECT`, senza oggetti ORM modificati, commit, chiamate esterne o modifica della cache. Il test del refresh preesistente verifica che continui invece ad aggiornare normalmente lo stato Quarta.
+
+Comando di regressione dalla radice:
+
+```powershell
+$env:PYTHONPATH = 'backend'
+$ddtRegressionFiles = (rg --files backend/tests | Where-Object { $_ -match 'test_quarta_taglio_.*\.py$|test_esolver_export\.py$' })
+python -m pytest $ddtRegressionFiles -q
+```
+
+Esito finale: **157 test superati, 2 saltati** (test PostgreSQL opzionali della fase 1, già collaudati separatamente nella fase precedente e non rieseguiti qui). Rimangono soltanto avvisi di deprecazione SWIG/AnyIO. `git diff --check` superato. UI non ancora realizzata, quindi nessuna verifica visiva o build frontend in questa fase. Nessun commit/push o deploy della fase 2A effettuato.
+
+### Fase 2B - raccordo backend della quota storica
+
+Implementata in locale dopo il successivo `procedi`:
+
+1. `GET /api/quarta-taglio/{OL}?ddt_work_item_id={id}` apre precisamente la quota conservata. L'ID deve appartenere all'OL richiesto. Nessun collegamento inventato se manca OL/Quarta.
+2. `POST /api/quarta-taglio/{OL}/word-draft` accetta `ddt_work_item_id` nel corpo JSON. Non combinarlo con `candidate_cod_f3`.
+3. Dopo la creazione, gli ID eSolver e la chiave già salvati sul certificato permettono a download Word, rigenerazione e PDF di ritrovare la quota senza un nuovo campo DB. Se non esiste alcuno snapshot corrispondente, resta il percorso precedente.
+4. Apertura della quota: valutazione locale di Incoming su oggetti temporanei, nessuna scrittura di cache/registro, nessuna assegnazione automatica del Word anticipato. La vecchia vista `CertiRigheDDT` non viene riletta. **Rimane la lettura di `CertiOL`**, come nel flusso precedente, per descrizioni e relazione raw/finished; non è la vista soggetta alla finestra DDT. Lo storico DDT non è quindi una copia offline di tutti i dati eSolver/Quarta.
+5. Creazione: lock della quota e lock registro OL, conservazione della precisa identità, riuso del certificato esatto oppure del solo Word anticipato univoco. Le verifiche standard, conformità, conferma di non conformità e protezione del Word manuale restano attive. Nessuna creazione di record per le altre quote dalla sola selezione storica.
+6. Legacy senza identità, doppia associazione, correzione eSolver ambigua o quantità cambiata rispetto a un certificato esistente producono `409` con richiesta di verifica. Non vengono scelti automaticamente altri DDT o altri Word. Il flusso di risoluzione manuale di questi conflitti non è stato aggiunto.
+7. Download Word: controlla l'identità anche per file manuali senza content control; quando aggiorna i campi di un Word della quota storica, usa un nuovo file per non riscrivere un percorso condiviso. Rigenerazioni/upload/allegati del nuovo contesto non propagano il file ad altri record con lo stesso numero.
+8. Chiusura PDF: controlla nuovamente la quota dopo la conversione e prima di salvare la chiusura. Una modifica intervenuta nel frattempo non può chiudere un PDF su dati superati. Il file prodotto da una conversione poi rifiutata può restare non referenziato nello storage; non diventa PDF valido né viene esportato. Nessuna cancellazione automatica di file introdotta.
+9. Registro: se la cache corrente non contiene più quella quota, può usare la quantità dello snapshot con identità esatta; se la quota è ancora nella cache, mantiene quel dato. Non usa il peso Quarta come quantità spedita. Il fallback già usato nel certificato (`cdo_lega = ordine_cliente` quando ODVF3 manca) viene riconosciuto nel confronto quantità.
+
+La risposta dettaglio aggiunge `ddt_work_item_id`, `ddt_source_present`, `ddt_last_seen_at`, `ddt_early_word_id`. La futura UI deve conservare l'ID della quota nella navigazione e nel comando Word. Dopo azioni OL-wide (standard, conferme Incoming, dati articolo) deve ricaricare il dettaglio con lo stesso ID, non sostituirlo con il dettaglio generico restituito dall'azione. La navigazione UI non è ancora stata modificata o collaudata.
+
+Non tutte le eccezioni del mondo reale sono risolte: la riga resta visibile nella coda anche quando la quota non può essere aperta per identità incoerente, assenza Quarta o dati da verificare. Non introdurre un pulsante `Nascondi` per aggirare questi casi.
+
+### Correzioni circoscritte emerse dai test 2B
+
+- Il lettore data preesistente riconosceva erroneamente `77-01/09` dentro `77-01/09/2026` (data vuota) e poteva ottenere il 2009 con numeri DDT brevi. Ora cerca date con separatore coerente, preferendo l'anno a quattro cifre; restano supportate date slash/trattino e anno a due cifre. La correzione vale anche per il flusso precedente, perché l'helper è condiviso, senza modificare date già salvate.
+- Un CDQ Quarta vuoto resta una riga bloccata invece di lasciare una lista materiale vuota e provocare errore nel dettaglio storico.
+- Nel nuovo percorso, una quantità spedita assente resta assente: niente ripiego sul peso materiale Quarta.
+
+### Collaudo e limiti fase 2B
+
+26 nuovi test backend su database SQLite isolato e file temporanei, più 2 test concorrenti su PostgreSQL isolato, oltre alle regressioni Quarta/export. Testano selezione esatta, quota vecchia, working copy del Word, creazione ripetuta senza duplicati, Word anticipato univoco/ambiguo, manuale protetto, PDF già chiuso, riapertura, cambi sorgente prima/durante conversione, descrizione finished, date, quantità e accessi.
+
+La costruzione del layout Word e il convertitore PDF sono sostituiti nei test del ciclo completo: il collaudo verifica collegamenti, stati e invarianti, **non la resa visiva dei documenti**. Il layout/generatore documenti non è stato cambiato. Nessuna chiamata reale eSolver/Alpha effettuata, nessun file o database applicativo modificato dai test.
+
+Esito finale: **187 test superati, nessuno saltato**; inclusi i 2 test PostgreSQL della fase 1, rieseguiti, e i 2 nuovi test concorrenti. Rimangono soltanto avvisi di deprecazione SWIG/AnyIO. `git diff --check` superato.
+
+Il collaudo PostgreSQL usa connessioni/transazioni distinte concorrenti, con gli stessi lock usati dal codice: due creatori della stessa quota producono un solo record; l'aggiornamento sorgente attende il lock e la modifica successiva della quantità viene rilevata. I test si abilitano con `DDT_TEST_POSTGRES_URL` e rifiutano host non locali o nomi database diversi da `certi_ddt_test*`. Creano e rimuovono un proprio schema temporaneo. Il contenitore PostgreSQL 16 dedicato è stato arrestato e rimosso; nessun volume dell'app è stato usato.
+
+Nessun commit/push delle fasi 2A/2B e nessun deploy effettuato. Sincronizzazione ancora disattivata.
+
+Prossimo passo: UI della coda e collegamento alla quota esatta; successivamente collaudo locale integrato, dry-run/import storico autorizzato e scelta soglie/esclusioni. Nessuna attivazione o deploy implicito.
 
 ### Precisazione emersa nell'implementazione
 

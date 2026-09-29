@@ -42,12 +42,16 @@ from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificateExtraPages,
     QuartaTaglioCertificatePdfAttachment,
     QuartaTaglioCertificatePdfVersion,
+    QuartaTaglioDdtWorkItem,
     QuartaTaglioEsolverLink,
     QuartaTaglioFinalCertificate,
     QuartaTaglioIncomingRowOverride,
     QuartaTaglioRow,
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
+)
+from app.modules.quarta_taglio.ddt_context import (
+    certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioAdditionalPagesResponse,
@@ -591,14 +595,44 @@ def get_quarta_taglio_detail(
     cod_odp: str,
     certificate_id: int | None = None,
     candidate_cod_f3: str | None = None,
+    ddt_work_item_id: int | None = None,
 ) -> QuartaTaglioDetailResponse:
+    if ddt_work_item_id is not None and candidate_cod_f3:
+        raise HTTPException(status_code=422, detail="Scegliere una quota DDT oppure un candidato CodF3, non entrambi")
+    selected_certificate = _get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    saved_ddt = resolve_saved_ddt(db, cod_odp=cod_odp, work_item_id=ddt_work_item_id, certificate=selected_certificate)
+    early_word = None
+    if saved_ddt is not None:
+        candidate_certificate = certificate_for_saved_ddt(db, saved_ddt)
+        if candidate_certificate is not None and exact_certificate(saved_ddt, candidate_certificate):
+            selected_certificate = candidate_certificate
+        else:
+            early_word = candidate_certificate
     rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
 
-    _refresh_quarta_rows_from_incoming(db, rows=rows)
-    esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
-    esolver_link = esolver_links.get(cod_odp)
+    if saved_ddt is None:
+        _refresh_quarta_rows_from_incoming(db, rows=rows)
+        esolver_links = _refresh_esolver_links_for_rows(db, rows=rows)
+        esolver_link = esolver_links.get(cod_odp)
+    else:
+        # Transient projections: opening a saved share must not flush Incoming,
+        # Quarta cache or register records, nor replace the live eSolver cache.
+        projected = []
+        evaluations = {row.id: evaluation for row, evaluation in _evaluate_quarta_rows_from_incoming(db, rows=rows)}
+        for row in rows:
+            clone = QuartaTaglioRow(**{column.key: getattr(row, column.key) for column in QuartaTaglioRow.__table__.columns})
+            evaluation = evaluations.get(row.id, ("red", "CDQ mancante da Quarta", [], []))
+            clone.status_color, clone.status_message, clone.status_details, clone.matching_row_ids = evaluation
+            projected.append(clone)
+        rows = projected
+        esolver_link = QuartaTaglioEsolverLink(cod_odp=cod_odp)
+        _apply_esolver_link_values(
+            esolver_link, esolver_rows=[saved_ddt_row(saved_ddt)], status_value="ok",
+            message="Quota DDT conservata in CERTI; dati riferiti all'ultima lettura eSolver",
+            checked_at=saved_ddt.last_seen_at,
+        )
     group = _serialize_ol_group(rows, esolver_link=esolver_link)
     app_rows = _load_matching_app_rows(db, rows)
     material_forms = [
@@ -683,6 +717,8 @@ def get_quarta_taglio_detail(
     esolver_rows = _esolver_rows_from_link(esolver_link)
     esolver_status = esolver_link.status if esolver_link else "not_checked"
     esolver_message = esolver_link.message if esolver_link else "Dati eSolver non ancora controllati"
+    # CertiOL supplies raw/finished descriptions, not the rolling DDT window.
+    # Keep this existing enrichment even when the selected DDT is historical.
     certiol_rows = _fetch_certiol_rows_batch(db, [group.cod_odp]).get(group.cod_odp, [])
     cod_f3_candidates = _build_certiol_candidates(
         certiol_rows=certiol_rows,
@@ -736,16 +772,15 @@ def get_quarta_taglio_detail(
     disegno = disegno_override or disegno_proposta
     esolver_header_rows = esolver_rows
     certifiable_units = _build_certifiable_units(cod_odp=group.cod_odp, esolver_rows=esolver_rows, quarta_rows=rows)
-    selected_certificate = _get_certificate_context(db, cod_odp=group.cod_odp, certificate_id=certificate_id)
     primary_unit = _select_unit_for_certificate(certifiable_units, selected_certificate) or _primary_certifiable_unit(certifiable_units)
     raw_candidate = next((candidate for candidate in cod_f3_candidates if candidate.relation == "raw"), None)
     selected_candidate = _candidate_by_cod_f3(
         cod_f3_candidates,
-        selected_certificate.cod_f3 if selected_certificate else candidate_cod_f3,
+        selected_certificate.cod_f3 if selected_certificate else saved_ddt.cod_f3 if saved_ddt is not None else candidate_cod_f3,
     )
-    if selected_certificate is None and not candidate_cod_f3 and raw_candidate is not None:
+    if saved_ddt is None and selected_certificate is None and not candidate_cod_f3 and raw_candidate is not None:
         selected_candidate = raw_candidate
-    if selected_candidate is not None and (
+    if saved_ddt is None and selected_candidate is not None and (
         primary_unit is None or _norm(primary_unit.cod_f3) != _norm(selected_candidate.cod_f3)
     ):
         candidate_unit = _unit_from_certiol_candidate(cod_odp=group.cod_odp, candidate=selected_candidate)
@@ -761,7 +796,9 @@ def get_quarta_taglio_detail(
         else _sum_optional(row.qta_um_mag for row in esolver_header_rows)
     )
     codice_f3 = _codice_f3_from_unit_or_quarta(unit=primary_unit, quarta_rows=rows)
-    open_certificate = selected_certificate or _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
+    open_certificate = selected_certificate
+    if open_certificate is None and saved_ddt is None:
+        open_certificate = _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
     header_flow = _certificate_header_flow(
         current_unit=primary_unit,
         certifiable_units=certifiable_units,
@@ -790,6 +827,10 @@ def get_quarta_taglio_detail(
 
     detail = QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
+        ddt_work_item_id=saved_ddt.id if saved_ddt is not None else None,
+        ddt_source_present=saved_ddt.source_present if saved_ddt is not None else None,
+        ddt_last_seen_at=saved_ddt.last_seen_at if saved_ddt is not None else None,
+        ddt_early_word_id=early_word.id if early_word is not None else None,
         ready=ready,
         status_color=detail_status_color,
         status_message=(
@@ -840,7 +881,8 @@ def get_quarta_taglio_detail(
             "materiale_fornito": _join_unique(_materiale_fornito_from_app_row(row) for row in app_rows) or None,
             "diametro": _join_unique(row.diametro for row in app_rows) or None,
             "materiale_raw": _join_unique((_materiale_raw_from_app_row(row) for row in app_rows), separator=" | ") or None,
-            "quantita": _format_quantity(esolver_qta if esolver_qta is not None else group.qta_totale)
+            "quantita": _format_quantity(esolver_qta) if saved_ddt is not None else
+            _format_quantity(esolver_qta if esolver_qta is not None else group.qta_totale)
             if (esolver_qta is not None or group.qta_totale is not None)
             else None,
         },
@@ -877,7 +919,7 @@ def get_quarta_taglio_detail(
         pdf_attachments=_serialize_pdf_attachments(db, open_certificate),
         word_info=_serialize_word_info(open_certificate),
     )
-    if _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
+    if saved_ddt is None and _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
         _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
         db.commit()
     return detail
@@ -1072,8 +1114,22 @@ def create_quarta_taglio_word_draft(
     force_regenerate: bool = False,
     certificate_id: int | None = None,
     candidate_cod_f3: str | None = None,
+    ddt_work_item_id: int | None = None,
 ) -> QuartaTaglioWordDraftResponse:
-    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    if ddt_work_item_id is not None and candidate_cod_f3:
+        raise HTTPException(status_code=422, detail="Scegliere una quota DDT oppure un candidato CodF3, non entrambi")
+    context_certificate = _get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id)
+    if context_certificate is not None:
+        _ensure_certificate_word_is_editable(context_certificate)
+    saved_ddt = resolve_saved_ddt(db, cod_odp=cod_odp, work_item_id=ddt_work_item_id,
+                                  certificate=context_certificate, lock=True)
+    if saved_ddt is not None:
+        # Same lock as the existing register; serialize all creators for this OL.
+        _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
+        if candidate_cod_f3:
+            raise HTTPException(status_code=422, detail="Il certificato è già collegato a una quota DDT precisa")
+    detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id,
+                                    ddt_work_item_id=saved_ddt.id if saved_ddt is not None else None)
     if certificate_id is not None:
         _ensure_certificate_word_is_editable(_get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
     candidate = _candidate_by_cod_f3(detail.cod_f3_candidates, candidate_cod_f3)
@@ -1098,9 +1154,12 @@ def create_quarta_taglio_word_draft(
             },
         )
 
-    _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=False)
+    if saved_ddt is None:
+        _sync_certifiable_unit_register(db, detail=detail, actor=actor, create_missing=False)
+    else:
+        candidate_unit = _primary_certifiable_unit(detail.certifiable_units)
     certificate = (
-        _get_or_create_open_certificate_for_unit(db, detail=detail, unit=candidate_unit, actor=actor)
+        _get_or_create_open_certificate_for_unit(db, detail=detail, unit=candidate_unit, actor=actor, saved_ddt=saved_ddt)
         if candidate_unit is not None
         else _get_or_create_open_certificate(db, detail=detail, actor=actor)
     )
@@ -1155,7 +1214,8 @@ def create_quarta_taglio_word_draft(
     certificate.certified_by_user_id = actor.id
     certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
     _apply_word_file_state(certificate, output_path, source="generated")
-    _propagate_shared_certificate_word(db, source_certificate=certificate)
+    if saved_ddt is None:
+        _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1240,7 +1300,8 @@ def upload_quarta_taglio_additional_pages(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source="generated")
-    _propagate_shared_certificate_word(db, source_certificate=certificate)
+    if detail.ddt_work_item_id is None:
+        _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1429,7 +1490,8 @@ def _rebuild_manual_certificate_word_with_pdf_attachments(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source=source, original_filename=original_filename)
-    _propagate_shared_certificate_word(db, source_certificate=certificate)
+    if detail.ddt_work_item_id is None:
+        _propagate_shared_certificate_word(db, source_certificate=certificate)
 
 
 def _rebuild_generated_certificate_word(
@@ -1474,7 +1536,8 @@ def _rebuild_generated_certificate_word(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source="generated")
-    _propagate_shared_certificate_word(db, source_certificate=certificate)
+    if detail.ddt_work_item_id is None:
+        _propagate_shared_certificate_word(db, source_certificate=certificate)
 
 
 def _pdf_attachments_for_certificate(
@@ -1609,7 +1672,8 @@ def upload_quarta_taglio_word_file(
     _apply_word_file_state(certificate, output_path, source="user_uploaded", original_filename=original_name)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
-    _propagate_shared_certificate_word(db, source_certificate=certificate)
+    if detail.ddt_work_item_id is None:
+        _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
@@ -1854,11 +1918,15 @@ def _get_or_create_open_certificate_for_unit(
     detail: QuartaTaglioDetailResponse,
     unit: QuartaTaglioCertifiableUnitResponse | None,
     actor: User,
+    saved_ddt=None,
 ) -> QuartaTaglioFinalCertificate:
     if unit is None:
         return _get_or_create_open_certificate(db, detail=detail, actor=actor)
-    certificate = _find_open_certificate_for_detail(db, cod_odp=detail.cod_odp, unit_key=unit.unit_key)
-    if certificate is None:
+    certificate = (certificate_for_saved_ddt(db, saved_ddt) if saved_ddt is not None
+                   else _find_open_certificate_for_detail(db, cod_odp=detail.cod_odp, unit_key=unit.unit_key))
+    if saved_ddt is not None:
+        _ensure_certificate_word_is_editable(certificate)
+    if certificate is None and saved_ddt is None:
         existing_certificates = (
             db.query(QuartaTaglioFinalCertificate)
             .filter(
@@ -2408,6 +2476,7 @@ def generate_quarta_taglio_certificate_pdf(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
     if certificate.status == "pdf_final" and certificate.storage_key_pdf:
         return _serialize_final_certificate_register_items(db, [certificate])[0]
+    resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     if not certificate.storage_key_docx:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word non presente")
     if not _clean_text(certificate.ddt):
@@ -2436,6 +2505,8 @@ def generate_quarta_taglio_certificate_pdf(
     except PDFConversionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Generazione PDF fallita: {exc}") from exc
 
+    # Word refresh may commit. Recheck the share after conversion before closure.
+    resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     now = datetime.now(timezone.utc)
     version = _next_pdf_version(db, certificate_id=certificate.id)
     db.add(
@@ -2516,6 +2587,8 @@ def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, 
 def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> Path:
     if certificate.status == "pdf_final":
         return path
+    # Validate even manual files without content controls before download/PDF.
+    saved_ddt = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     try:
         present, missing = inspect_docx_content_controls(path)
     except (OSError, zipfile.BadZipFile):
@@ -2548,13 +2621,20 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         return path
 
     detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
-    update_docx_content_controls(path, path, _word_content_control_values(detail, certificate))
-    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(path)
+    output_path = path
+    if saved_ddt is not None:
+        # Old registry entries may share a Word path. Never edit another quota's file.
+        storage_key = _certificate_docx_storage_key(certificate.cod_odp)
+        output_path = _certificate_storage_path(storage_key)
+    update_docx_content_controls(path, output_path, _word_content_control_values(detail, certificate))
+    if saved_ddt is not None:
+        certificate.storage_key_docx = storage_key
+    certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     db.add(certificate)
     db.commit()
-    return path
+    return output_path
 
 
 def _certificate_word_actor(db: Session, certificate: QuartaTaglioFinalCertificate) -> User:
@@ -3215,7 +3295,8 @@ def _diameter_tokens_for_article(value: Any) -> set[str]:
     return {normalized} if len(normalized) >= 2 else set()
 
 
-def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> None:
+def _evaluate_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> list[tuple]:
+    """Read current Incoming state without changing the stored Quarta projection."""
     cdq_values = {
         candidate
         for row in rows
@@ -3228,7 +3309,7 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
         if candidate
     }
     if not cdq_values:
-        return
+        return []
 
     app_rows = (
         db.query(AcquisitionRow)
@@ -3248,9 +3329,9 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
         if key:
             rows_by_cdq[key].append(app_row)
 
-    changed = False
+    evaluations = []
     for row in rows:
-        status_color, status_message, status_details, matching_row_ids = _evaluate_cdq(
+        evaluation = _evaluate_cdq(
             db=db,
             cod_odp=row.cod_odp,
             cdq=row.cdq,
@@ -3259,6 +3340,14 @@ def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRo
             rows_by_cdq=rows_by_cdq,
             article_code=row.cod_mp,
         )
+        evaluations.append((row, evaluation))
+    return evaluations
+
+
+def _refresh_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioRow]) -> None:
+    changed = False
+    for row, evaluation in _evaluate_quarta_rows_from_incoming(db, rows=rows):
+        status_color, status_message, status_details, matching_row_ids = evaluation
         if (
             row.status_color != status_color
             or row.status_message != status_message
@@ -4774,13 +4863,31 @@ def _serialize_final_certificate_register_items(
         link.cod_odp: link
         for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps)).all()
     } if cod_odps else {}
+    unit_keys = {certificate.unit_key for certificate in certificates if certificate.unit_key}
+    saved_by_key = defaultdict(list)
+    if unit_keys:
+        for item in db.query(QuartaTaglioDdtWorkItem).filter(QuartaTaglioDdtWorkItem.certification_unit_key.in_(unit_keys)).all():
+            saved_by_key[item.certification_unit_key].append(item)
     return [
         _serialize_final_certificate_register_item(
             certificate,
-            esolver_rows=_esolver_rows_from_link(links.get(certificate.cod_odp)),
+            esolver_rows=_register_ddt_rows(certificate, _esolver_rows_from_link(links.get(certificate.cod_odp)),
+                                            saved_by_key.get(certificate.unit_key, [])),
         )
         for certificate in certificates
     ]
+
+
+def _register_ddt_rows(certificate, cached_rows, saved_items):
+    """Keep shipment quantities visible after their DDT ages out of the cache."""
+    if len(saved_items) != 1 or not exact_certificate(saved_items[0], certificate):
+        return cached_rows
+    saved = saved_ddt_row(saved_items[0])
+    identity = (saved.id_documento, saved.id_riga_doc, saved.rif_lotto_alfanum, saved.orp, saved.cod_f3, saved.ddt)
+    if any((row.id_documento, row.id_riga_doc, row.rif_lotto_alfanum, row.orp, row.cod_f3, row.ddt) == identity
+           for row in cached_rows):
+        return cached_rows
+    return [*cached_rows, saved]
 
 
 def _serialize_final_certificate_register_item(
@@ -4872,6 +4979,9 @@ def _certificate_quantity_display(
         if any(
             _clean_text(getattr(certificate, certificate_field))
             and _norm(getattr(certificate, certificate_field)) != _norm(getattr(row, row_field))
+            and not (certificate_field == "cdo_lega" and not _clean_text(row.odv_f3)
+                     and _norm(certificate.cdo_lega) == _norm(certificate.ordine_cliente)
+                     and _norm(certificate.ordine_cliente) == _norm(row.odv_cli))
             for certificate_field, row_field in reference_fields
         ):
             continue
@@ -6207,18 +6317,19 @@ def _certificate_datetime_from_ddt(ddt: Any) -> datetime | None:
     text = _clean_text(ddt)
     if not text:
         return None
-    match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", text)
-    if not match:
-        return None
-    day = int(match.group(1))
-    month = int(match.group(2))
-    year = int(match.group(3))
-    if year < 100:
-        year += 2000
-    try:
-        return datetime(year, month, day, tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    # Prefer the complete date. In "77-01/09/2026", "77-01/09"
+    # is not a date; with DDT 12 the old mixed-separator match even yielded 2009.
+    for year_pattern in (r"\d{4}", r"\d{2}"):
+        pattern = rf"\b(\d{{1,2}})([/-])(\d{{1,2}})\2({year_pattern})\b(?![/-]\d)"
+        for match in re.finditer(pattern, text):
+            day, month, year = int(match.group(1)), int(match.group(3)), int(match.group(4))
+            if year < 100:
+                year += 2000
+            try:
+                return datetime(year, month, day, tzinfo=timezone.utc)
+            except ValueError:
+                continue
+    return None
 
 
 def _format_certificate_date(value: datetime | None) -> str | None:

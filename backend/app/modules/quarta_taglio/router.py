@@ -2,6 +2,7 @@ from fastapi import APIRouter, Body, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
+from app.modules.quarta_taglio.ddt_router import router as ddt_queue_router, require_certification_reader
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioArticleDataRequest,
     QuartaTaglioDetailResponse,
@@ -36,6 +37,7 @@ from app.modules.quarta_taglio.service import (
 )
 
 router = APIRouter()
+router.include_router(ddt_queue_router)
 
 
 @router.get("", response_model=QuartaTaglioListResponse)
@@ -146,8 +148,12 @@ def get_quarta_taglio_detail_route(
     db: DbSession,
     certificate_id: int | None = Query(default=None),
     candidate_cod_f3: str | None = Query(default=None),
+    ddt_work_item_id: int | None = Query(default=None, ge=1),
 ) -> QuartaTaglioDetailResponse:
-    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id, candidate_cod_f3=candidate_cod_f3)
+    if ddt_work_item_id is not None:
+        require_certification_reader(current_user)
+    return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id,
+                                   candidate_cod_f3=candidate_cod_f3, ddt_work_item_id=ddt_work_item_id)
 
 
 @router.post("/{cod_odp}/standard", response_model=QuartaTaglioDetailResponse)
@@ -204,6 +210,8 @@ def create_quarta_taglio_word_draft_route(
     db: DbSession,
     payload: QuartaTaglioWordDraftRequest = Body(default_factory=QuartaTaglioWordDraftRequest),
 ) -> QuartaTaglioWordDraftResponse:
+    if payload.ddt_work_item_id is not None:
+        require_certification_reader(current_user)
     return create_quarta_taglio_word_draft(
         db,
         cod_odp=cod_odp,
@@ -212,6 +220,7 @@ def create_quarta_taglio_word_draft_route(
         force_regenerate=payload.force_regenerate,
         certificate_id=payload.certificate_id,
         candidate_cod_f3=payload.candidate_cod_f3,
+        ddt_work_item_id=payload.ddt_work_item_id,
     )
 
 

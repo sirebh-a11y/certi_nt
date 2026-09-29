@@ -307,6 +307,10 @@ class QuartaTaglioWordInfoResponse(BaseModel):
 
 class QuartaTaglioDetailResponse(BaseModel):
     cod_odp: str
+    ddt_work_item_id: int | None = None
+    ddt_source_present: bool | None = None
+    ddt_last_seen_at: datetime | None = None
+    ddt_early_word_id: int | None = None
     ready: bool
     status_color: str
     status_message: str
@@ -371,6 +375,7 @@ class QuartaTaglioWordDraftRequest(BaseModel):
     force_regenerate: bool = False
     certificate_id: int | None = None
     candidate_cod_f3: str | None = None
+    ddt_work_item_id: int | None = Field(default=None, ge=1)
 
 
 class QuartaTaglioPdfReopenRequest(BaseModel):
