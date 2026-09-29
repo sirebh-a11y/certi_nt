@@ -5,8 +5,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import CurrentUser, DbSession, user_is_in_department
-from app.modules.quarta_taglio.ddt_queue import read_ddt_queue
-from app.modules.quarta_taglio.ddt_schemas import DdtQueueCountersResponse, DdtQueueResponse, DdtScope, DdtState
+from app.modules.quarta_taglio.ddt_queue import read_ddt_queue, read_ddt_sync
+from app.modules.quarta_taglio.ddt_schemas import DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse, DdtScope, DdtState
 
 
 def require_certification_reader(current_user: CurrentUser):
@@ -40,10 +40,18 @@ def list_ddt_work_items(
     state: DdtState | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    sort_field: Literal["ddt_date", "ddt_raw", "cod_odp", "cod_f3", "cliente", "quantita",
+                        "ordine_cliente", "conferma_ordine", "incoming", "certificazione",
+                        "state", "last_seen_at"] = "ddt_date",
     sort_direction: Literal["asc", "desc"] = "desc",
 ):
     return read_ddt_queue(db, **filters, scope=scope, state=state, limit=limit,
-                          offset=offset, sort_direction=sort_direction)
+                          offset=offset, sort_field=sort_field, sort_direction=sort_direction)
+
+
+@router.get("/sync", response_model=DdtQueueSyncResponse)
+def ddt_sync_status(db: DbSession):
+    return read_ddt_sync(db)
 
 
 @router.get("/counters", response_model=DdtQueueCountersResponse)

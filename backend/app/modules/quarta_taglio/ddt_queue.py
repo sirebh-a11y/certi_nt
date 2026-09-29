@@ -31,6 +31,12 @@ LABELS = {
     "review": "Verifica richiesta",
 }
 
+SORT_FIELDS = {
+    "ddt_date", "ddt_raw", "cod_odp", "cod_f3", "cliente", "quantita",
+    "ordine_cliente", "conferma_ordine", "incoming", "certificazione",
+    "state", "last_seen_at",
+}
+
 
 def _clean(value):
     return str(value).strip() if value is not None else ""
@@ -189,14 +195,38 @@ def _project(db, items):
     return result
 
 
+def read_ddt_sync(db):
+    """Lightweight status for the page's four-hour connection warning."""
+    latest, success = last_snapshot_runs(db)
+    return DdtQueueSyncResponse(
+        enabled=settings.ddt_snapshot_enabled,
+        last_attempt=DdtSyncAttemptResponse.model_validate(latest) if latest else None,
+        last_success=DdtSyncAttemptResponse.model_validate(success) if success else None,
+    )
+
+
+def _sort_value(item, field):
+    if field == "incoming":
+        value = "Qualità respinta" if item.state == "quality_rejected" else "Pronto" if item.incoming_ready else "Da verificare"
+    elif field == "certificazione":
+        value = "PDF finale" if item.state == "completed" else "Word presente" if item.word_candidate_id else "Scheda presente" if item.certificate_id else "Da fare"
+    elif field == "state":
+        value = item.label
+    else:
+        value = getattr(item, field)
+    if isinstance(value, str):
+        return value.strip().casefold() or None
+    return value
+
+
 def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_odp=None,
                    cod_f3=None, cliente=None, date_from: date | None = None,
                    date_to: date | None = None, source_present=None,
-                   limit=50, offset=0, sort_direction="desc", counters_only=False):
+                   limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
     if scope not in {"active", "completed", "all"} or (state is not None and state not in LABELS):
         raise HTTPException(status_code=422, detail="Filtro stato non valido")
-    if limit < 1 or limit > 200 or offset < 0 or sort_direction not in {"asc", "desc"}:
+    if limit < 1 or limit > 200 or offset < 0 or sort_field not in SORT_FIELDS or sort_direction not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="Intervallo date non valido")
@@ -221,20 +251,18 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         projected = _project(db, items)
         counts = {key: 0 for key in LABELS}
         counts.update(Counter(item.state for item in projected))
-        latest, success = last_snapshot_runs(db)
-        sync = DdtQueueSyncResponse(enabled=settings.ddt_snapshot_enabled,
-               last_attempt=DdtSyncAttemptResponse.model_validate(latest) if latest else None,
-               last_success=DdtSyncAttemptResponse.model_validate(success) if success else None)
+        sync = read_ddt_sync(db)
         counters = dict(total=len(projected), active=len(projected) - counts["completed"], by_state=counts, sync=sync)
         if counters_only:
             return DdtQueueCountersResponse(**counters)
         selected = [item for item in projected if (scope == "all" or (item.state == "completed") == (scope == "completed"))
                     and (state is None or item.state == state)]
-        # Stable ordering; undated rows last in both directions.
-        dated = sorted((item for item in selected if item.ddt_date), key=lambda item: (item.ddt_date, item.id),
-                       reverse=sort_direction == "desc")
-        undated = sorted((item for item in selected if not item.ddt_date), key=lambda item: item.id,
+        # Sort the whole filtered population before pagination; missing values stay last.
+        present = sorted((item for item in selected if _sort_value(item, sort_field) is not None),
+                         key=lambda item: (_sort_value(item, sort_field), item.id),
                          reverse=sort_direction == "desc")
-        selected = dated + undated
+        missing = sorted((item for item in selected if _sort_value(item, sort_field) is None),
+                         key=lambda item: item.id, reverse=sort_direction == "desc")
+        selected = present + missing
         return DdtQueueResponse(**counters, total_items=len(selected), limit=limit, offset=offset,
                                 items=selected[offset:offset + limit])

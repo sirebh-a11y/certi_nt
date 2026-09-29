@@ -8,6 +8,32 @@
 
 **Scopo del documento:** consegna operativa per proseguire il lavoro con Codex in VS Code.
 
+## Seguito UI e passaggio beta (29/09/2026)
+
+La verifica funzionale locale aveva lasciato aperte le frecce di ordinamento.
+L'utente ha autorizzato **solo** queste per la pagina DDT: sono state aggiunte
+in locale alle intestazioni, con ordinamento dell'intera lista filtrata prima
+della paginazione. Il selettore Righe esistente (25/50/100/200) e le colonne
+fisse restano come concordato.
+
+Autorizzato anche l'avviso dopo quattro ore senza lettura eSolver riuscita:
+stesso riquadro già presente, giallo tenue; eventuale errore resta rosso.
+Il testo indica di contattare il referente interno IT. La pagina controlla
+periodicamente lo stato senza rileggere l'intera coda a ogni minuto.
+Al primo successo dopo un avviso, la pagina ricarica la tabella e mostra
+«Collegamento eSolver ripristinato» con data e ora; dichiara l'elenco aggiornato
+solo dopo che la nuova lettura della coda è riuscita.
+
+Il numero elevato di quote storiche nella pagina e nel badge è accettato per
+ora. Riduzione dei campi e data iniziale operativa beta vanno concordate con
+il cliente, senza cancellare automaticamente lo storico. Nessuna modifica
+applicativa o attivazione Alpha è autorizzata da questa nota.
+
+Decisioni, stato UI, spiegazione dei passaggi mancanti e punti per la futura
+email sono mantenuti in [Passaggio alla beta](beta_transition_plan.md).
+Le sezioni successive conservano la cronologia delle singole fasi: le note
+di lavoro ancora da fare nelle fasi iniziali vanno lette con gli esiti successivi.
+
 ## Avanzamento locale dopo il procedi
 
 L'utente ha autorizzato lo sviluppo locale. È stata realizzata la fase 1:
@@ -727,12 +753,16 @@ Se la lettura fallisce:
 
 L'app deve controllare quando è terminata con successo l'ultima lettura completa di `CertiRigheDDT`.
 
-Comportamento proposto:
+Comportamento concordato e implementato in locale:
 
-- sincronizzazione recente e riuscita: nessun avviso, mostrare soltanto `Ultimo aggiornamento: data e ora`;
-- uno o più tentativi falliti per alcune ore: avviso giallo `Aggiornamento DDT eSolver non riuscito dalle HH:MM`;
-- collegamento fermo da più giorni: avviso rosso, ben visibile agli amministratori, con data e ora dell'ultimo aggiornamento riuscito;
-- al ripristino del collegamento: recuperare automaticamente tutte le righe ancora presenti nella finestra eSolver e rimuovere l'avviso dopo una lettura completa riuscita.
+- ultima lettura riuscita meno di quattro ore fa: mostrare data e ora senza avviso;
+- almeno quattro ore dall'ultima lettura riuscita: avviso giallo tenue nel riquadro
+  esistente, con istruzione di contattare il referente interno IT;
+- ultimo tentativo fallito: mantenere il rosso già presente nello stesso riquadro;
+- nessuna lettura riuscita da quando la sincronizzazione è attiva: messaggio esplicito;
+- sincronizzazione disattivata: messaggio specifico, senza falso avviso di ritardo;
+- dopo una nuova lettura riuscita: l'avviso scompare al successivo controllo
+  periodico della pagina, senza modificare i dati già conservati.
 
 L'avviso non deve:
 
@@ -741,7 +771,10 @@ L'avviso non deve:
 - mostrare password, stringhe di connessione o dettagli tecnici sensibili;
 - dichiarare che i dati sono aggiornati quando l'ultima lettura completa è fallita.
 
-Scopo dell'avviso: rendere evidente un'interruzione prima che duri abbastanza da creare una possibile lacuna rispetto alla finestra temporale eSolver. Le soglie precise per giallo e rosso devono essere confermate prima dell'implementazione; non devono essere valori nascosti o duplicati nel frontend.
+Scopo dell'avviso: rendere evidente un'interruzione prima che duri abbastanza da
+creare una possibile lacuna rispetto alla finestra temporale eSolver. La sola
+soglia temporale concordata è quattro ore. Eventuali ulteriori livelli di
+gravità richiedono una decisione successiva.
 
 ## Regole di comparsa e scomparsa
 
@@ -1148,7 +1181,9 @@ Prima dell'implementazione finale chiedere conferma solamente sui punti che inci
 3. mostrare nel badge tutte le righe attive oppure solamente quelle pronte;
 4. periodo visivo dell'etichetta `Nuovo`;
 5. conferma da Matteo/eSolver del limite SQL esatto della vista, informazione utile ma non bloccante.
-6. soglie temporali dell'avviso: dopo quante ore mostrare il giallo e dopo quanti giorni mostrare il rosso.
+
+La soglia dell'avviso è stata decisa successivamente: giallo tenue dopo quattro
+ore senza lettura riuscita; l'errore effettivo conserva il rosso già esistente.
 
 ## Nota finale
 

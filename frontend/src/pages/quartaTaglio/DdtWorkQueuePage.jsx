@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
+import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
 
 const STATE_OPTIONS = [
   ["", "Tutti gli stati"],
@@ -29,8 +30,16 @@ const STATE_CLASSES = {
 const INITIAL_FILTERS = {
   query: "", ddt: "", cod_odp: "", cod_f3: "", cliente: "",
   date_from: "", date_to: "", source_present: "", scope: "active", state: "",
-  sort_direction: "desc", limit: "50",
+  sort_field: "ddt_date", sort_direction: "desc", limit: "50",
 };
+
+const SORTABLE_COLUMNS = [
+  ["ddt_date", "Data DDT"], ["ddt_raw", "DDT"], ["cod_odp", "OL"],
+  ["cod_f3", "Cod. F3"], ["cliente", "Cliente"], ["quantita", "Qta"],
+  ["ordine_cliente", "Ordine cliente"], ["conferma_ordine", "Conferma F3"],
+  ["incoming", "Incoming"], ["certificazione", "Certificazione"],
+  ["state", "Stato"], ["last_seen_at", "Ultima lettura"],
+];
 
 function formatDate(value) {
   if (!value) return "-";
@@ -96,6 +105,10 @@ export default function DdtWorkQueuePage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [clock, setClock] = useState(() => Date.now());
+  const syncStatusRef = useRef(null);
+  const [recovery, setRecovery] = useState(null);
 
   const updateDraft = useCallback((field, value) => {
     setDraftFilters((current) => {
@@ -118,6 +131,13 @@ export default function DdtWorkQueuePage() {
     setFilters({ ...draftFilters });
   }
 
+  function toggleSort(field) {
+    const direction = filters.sort_field === field && filters.sort_direction === "asc" ? "desc" : "asc";
+    setOffset(0);
+    setFilters((current) => ({ ...current, sort_field: field, sort_direction: direction }));
+    setDraftFilters((current) => ({ ...current, sort_field: field, sort_direction: direction }));
+  }
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -125,11 +145,24 @@ export default function DdtWorkQueuePage() {
     apiRequest(`/quarta-taglio/ddt-work-items?${filterParams(filters, offset)}`, {}, token)
       .then((result) => {
         if (cancelled) return;
+        const now = Date.now();
+        const recovered = ddtSyncRecovered(syncStatusRef.current, result.sync, now);
+        const warning = ddtSyncWarning(result.sync, now);
+        syncStatusRef.current = result.sync;
         setData(result);
+        setSyncStatus(result.sync);
+        setRecovery((current) => {
+          if (warning.syncFailed || warning.neverSucceeded || warning.stale) return null;
+          if (recovered) return { time: result.sync.last_success.finished_at, phase: "updated" };
+          return current?.phase === "refreshing" ? { ...current, phase: "updated" } : current;
+        });
         window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
       })
       .catch((requestError) => {
-        if (!cancelled) setError(requestError.message || "Impossibile caricare i DDT.");
+        if (!cancelled) {
+          setError(requestError.message || "Impossibile caricare i DDT.");
+          setRecovery((current) => current?.phase === "refreshing" ? { ...current, phase: "error" } : current);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -137,13 +170,47 @@ export default function DdtWorkQueuePage() {
     return () => { cancelled = true; };
   }, [filters, offset, refresh, token]);
 
+  useEffect(() => {
+    if (!token) return undefined;
+    let cancelled = false;
+    async function updateSyncStatus() {
+      const now = Date.now();
+      setClock(now);
+      if (document.visibilityState === "hidden") return;
+      try {
+        const result = await apiRequest("/quarta-taglio/ddt-work-items/sync", {}, token);
+        if (cancelled) return;
+        const recovered = ddtSyncRecovered(syncStatusRef.current, result, now);
+        const warning = ddtSyncWarning(result, now);
+        syncStatusRef.current = result;
+        setSyncStatus(result);
+        if (warning.syncFailed || warning.neverSucceeded || warning.stale) setRecovery(null);
+        if (recovered) {
+          setRecovery({ time: result.last_success.finished_at, phase: "refreshing" });
+          setRefresh((current) => current + 1);
+        }
+      } catch {
+        // Keep the last known success time; the four-hour warning still applies.
+      }
+    }
+    const interval = window.setInterval(updateSyncStatus, 60000);
+    document.addEventListener("visibilitychange", updateSyncStatus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", updateSyncStatus);
+    };
+  }, [token]);
+
   const returnTo = "/quarta-taglio/ddt-da-certificare";
   const pageSize = Number(filters.limit);
   const totalPages = data ? Math.max(1, Math.ceil(data.total_items / pageSize)) : 1;
   const pageNumber = Math.floor(offset / pageSize) + 1;
-  const lastAttempt = data?.sync?.last_attempt;
-  const lastSuccess = data?.sync?.last_success;
-  const syncFailed = lastAttempt?.status === "error";
+  const currentSync = syncStatus || data?.sync;
+  const lastAttempt = currentSync?.last_attempt;
+  const lastSuccess = currentSync?.last_success;
+  const { syncFailed, neverSucceeded, stale: syncStale } = ddtSyncWarning(currentSync, clock);
+  const syncAlert = neverSucceeded || syncStale || syncFailed;
 
   return (
     <section className="space-y-5">
@@ -169,11 +236,14 @@ export default function DdtWorkQueuePage() {
       </div>
       <p className="text-xs text-slate-500">I contatori seguono la ricerca e la presenza eSolver; vista, stato e pagina non li restringono.</p>
 
-      <div className={`rounded-xl border px-4 py-3 text-sm ${syncFailed ? "border-rose-200 bg-rose-50 text-rose-800" : "border-slate-200 bg-white text-slate-700"}`}>
+      <div role={syncAlert ? "alert" : recovery ? "status" : undefined} className={`rounded-xl border px-4 py-3 text-sm ${syncFailed ? "border-rose-200 bg-rose-50 text-rose-800" : syncStale || neverSucceeded ? "border-amber-200 bg-amber-50 text-amber-800" : recovery ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700"}`}>
         <span>Ultima lettura eSolver riuscita: <strong>{formatTimestamp(lastSuccess?.finished_at)}</strong>.</span>
-        {!data?.sync?.enabled ? <span className="ml-2">Sincronizzazione automatica non attiva in questo ambiente.</span> : null}
+        {currentSync && !currentSync.enabled ? <span className="ml-2">Sincronizzazione automatica non attiva in questo ambiente.</span> : null}
+        {syncStale ? <span className="ml-2"><strong>DDT eSolver non aggiornati da almeno 4 ore.</strong> Potrebbero mancare nuovi DDT o modifiche recenti. I dati già acquisiti restano disponibili. Contattare il referente interno IT.</span> : null}
+        {neverSucceeded ? <span className="ml-2"><strong>Nessuna lettura eSolver riuscita.</strong> Potrebbero mancare DDT. Contattare il referente interno IT.</span> : null}
         {syncFailed ? <span className="ml-2">Ultimo tentativo non riuscito ({formatTimestamp(lastAttempt.finished_at || lastAttempt.started_at)}); i DDT già conservati restano visibili.</span> : null}
         {syncFailed && lastAttempt.error_code === "empty_source_requires_review" ? <span className="ml-2">eSolver ha restituito zero righe: verificare la sorgente. Sono mantenuti i dati dell’ultima lettura valida.</span> : null}
+        {recovery && !syncAlert ? <span className="ml-2 font-medium text-emerald-800">Collegamento eSolver ripristinato alle {formatTimestamp(recovery.time)}. {recovery.phase === "updated" ? "Elenco DDT aggiornato." : recovery.phase === "error" ? "Aggiornamento dell’elenco non riuscito: riprovare." : "Aggiornamento elenco DDT in corso..."}</span> : null}
       </div>
 
       <form className="rounded-xl border border-slate-200 bg-white p-4" onSubmit={applyFilters}>
@@ -211,7 +281,7 @@ export default function DdtWorkQueuePage() {
           </label>
           <label className="block text-xs font-semibold text-slate-600">Ordine
             <select value={draftFilters.sort_direction} onChange={(event) => updateDraft("sort_direction", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
-              <option value="desc">Più recenti</option><option value="asc">Più vecchi</option>
+              {draftFilters.sort_field === "ddt_date" ? <><option value="desc">Più recenti</option><option value="asc">Più vecchi</option></> : <><option value="asc">Crescente</option><option value="desc">Decrescente</option></>}
             </select>
           </label>
           <label className="block text-xs font-semibold text-slate-600">Righe
@@ -230,7 +300,18 @@ export default function DdtWorkQueuePage() {
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-[1600px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
-            <tr>{["Data DDT", "DDT", "OL", "Cod. F3", "Cliente", "Qta", "Ordine cliente", "Conferma F3", "Incoming", "Certificazione", "Stato", "Ultima lettura", "Azioni"].map((label) => <th key={label} scope="col" className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{label}</th>)}</tr>
+            <tr>
+              {SORTABLE_COLUMNS.map(([field, label]) => {
+                const active = filters.sort_field === field;
+                const indicator = active ? filters.sort_direction === "asc" ? "↑" : "↓" : "↕";
+                return <th key={field} scope="col" aria-sort={active ? filters.sort_direction === "asc" ? "ascending" : "descending" : "none"} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">
+                  <button type="button" onClick={() => toggleSort(field)} className="inline-flex items-center gap-1 text-left hover:text-slate-900">
+                    <span>{label}</span><span aria-hidden="true" className={`min-w-[10px] text-[10px] ${active ? "text-slate-700" : "text-slate-400"}`}>{indicator}</span>
+                  </button>
+                </th>;
+              })}
+              <th scope="col" className="whitespace-nowrap border-b border-slate-200 px-3 py-3">Azioni</th>
+            </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {(data?.items || []).map((item) => {

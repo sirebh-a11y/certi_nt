@@ -413,6 +413,33 @@ class DdtQueueTest(DdtQueueFixture):
         self.assertEqual(self.read(state="completed", scope="all").total_items, 1)
         self.assertEqual(self.read(offset=100).total_items, 3)
 
+    def test_header_sort_uses_all_filtered_rows_before_pagination(self):
+        self.item(IdDocumento="1", ORP=None, QtaUmMag=Decimal("10"), RagSoc="zeta")
+        self.item(IdDocumento="2", ORP=None, QtaUmMag=Decimal("2"), RagSoc="Alfa")
+        self.item(IdDocumento="3", ORP=None, QtaUmMag=None, RagSoc="Beta")
+        self.assertEqual([row.id_documento for row in self.read(sort_field="quantita", sort_direction="asc").items],
+                         ["2", "1", "3"])
+        self.assertEqual([row.id_documento for row in self.read(sort_field="quantita", sort_direction="desc",
+                                                                 limit=1, offset=1).items], ["2"])
+        self.assertEqual([row.id_documento for row in self.read(sort_field="cliente", sort_direction="asc").items],
+                         ["2", "3", "1"])
+        self.assertEqual(self.read(sort_field="quantita", limit=1).total_items, 3)
+
+    def test_sync_status_endpoint_is_lightweight_and_preserves_last_success(self):
+        self.db.add(QuartaTaglioDdtSyncRun(status="success", started_at=NOW - timedelta(hours=5), finished_at=NOW - timedelta(hours=5)))
+        self.db.add(QuartaTaglioDdtSyncRun(status="error", started_at=NOW, finished_at=NOW, error_code="source_read_failed"))
+        self.db.commit()
+        app = FastAPI()
+        app.include_router(router, prefix="/api/quarta-taglio")
+        app.dependency_overrides[get_db] = lambda: self.db
+        user = SimpleNamespace(role="operator", department=SimpleNamespace(name="Qualità"))
+        app.dependency_overrides[get_current_user] = lambda: user
+        with patch.object(queue, "_project", side_effect=AssertionError("queue projection not needed")):
+            response = TestClient(app).get("/api/quarta-taglio/ddt-work-items/sync")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["last_attempt"]["status"], "error")
+        self.assertEqual(response.json()["last_success"]["status"], "success")
+
     def test_more_than_500_rows_paginate_after_derivation_not_before(self):
         for index in range(510):
             self.item(IdDocumento=str(index), ORP=None)
@@ -446,7 +473,8 @@ class DdtQueueTest(DdtQueueFixture):
         for department in ("IT", "Laboratorio"):
             user.department.name = department
             self.assertEqual(client.get(path).status_code, 200)
-        for params in ({"state": "wrong"}, {"scope": "wrong"}, {"limit": 201}, {"offset": -1},
+        for params in ({"state": "wrong"}, {"scope": "wrong"}, {"sort_field": "id_documento"},
+                       {"limit": 201}, {"offset": -1},
                        {"date_from": "2026-09-03", "date_to": "2026-09-01"}):
             self.assertEqual(client.get(path, params=params).status_code, 422)
         payload = client.get(path).text
