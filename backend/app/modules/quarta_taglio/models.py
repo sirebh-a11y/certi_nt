@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -83,6 +84,50 @@ class QuartaTaglioEsolverLink(Base):
     rows: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class QuartaTaglioDdtWorkItem(Base):
+    """Persistent source facts; operational/PDF state is derived separately."""
+
+    __tablename__ = "quarta_taglio_ddt_work_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    id_documento: Mapped[str] = mapped_column(Text, nullable=False)
+    id_riga_doc: Mapped[str] = mapped_column(Text, nullable=False)
+    rif_lotto_alfanum: Mapped[str | None] = mapped_column(Text)
+    cod_odp: Mapped[str | None] = mapped_column(Text, index=True)
+    cod_f3: Mapped[str | None] = mapped_column(Text)
+    ddt_raw: Mapped[str | None] = mapped_column(Text)
+    ddt_date: Mapped[date | None] = mapped_column(Date, index=True)
+    cliente: Mapped[str | None] = mapped_column(Text)
+    ordine_cliente: Mapped[str | None] = mapped_column(Text)
+    conferma_ordine: Mapped[str | None] = mapped_column(Text)
+    quantita: Mapped[Decimal | None] = mapped_column(Numeric)
+    certificato_presente_esolver: Mapped[bool | None] = mapped_column(Boolean)
+    certification_unit_key: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_present: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    source_disappeared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_review_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class QuartaTaglioDdtSyncRun(Base):
+    __tablename__ = "quarta_taglio_ddt_sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    inserted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reconciled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    disappeared: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class QuartaTaglioArticleOverride(Base):

@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     acquisition_notification_admin_email: str | None = Field(default=None, alias="ACQUISITION_NOTIFICATION_ADMIN_EMAIL")
     document_storage_root: str = Field(default="storage/documents", alias="DOCUMENT_STORAGE_ROOT")
     certi_public_base_url: str = Field(default="", alias="CERTI_PUBLIC_BASE_URL")
+    # Explicit opt-in while the DDT queue is developed/tested locally.
+    ddt_snapshot_enabled: bool = Field(default=False, alias="DDT_SNAPSHOT_ENABLED")
     certi_export_username: str = Field(default="Certi", alias="CERTI_EXPORT_USERNAME")
     certi_export_password: str = Field(default="Certi", alias="CERTI_EXPORT_PASSWORD")
     pdf_conversion_enabled: bool = Field(default=True, alias="PDF_CONVERSION_ENABLED")
