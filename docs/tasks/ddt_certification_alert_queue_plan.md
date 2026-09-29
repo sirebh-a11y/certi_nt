@@ -1,6 +1,6 @@
 # DDT da certificare - audit Alpha e piano di implementazione
 
-**Stato:** fasi 1, 2A (stati/API) e 2B (raccordo backend storico) realizzate in locale; UI, importazione storica e attivazione ancora da completare
+**Stato:** fasi 1, 2A, 2B pubblicate; fase 3 (pagina UI) realizzata in locale; importazione storica e attivazione ancora da completare
 
 **Data audit:** 29/09/2026
 
@@ -26,7 +26,7 @@ La nuova sincronizzazione **non è stata attivata** sul database applicativo. I 
 
 Le aggiunte qui descritte sono autorizzate dal procedi per la fase 1. Il vecchio documento `docs/development_rules.md` contiene vincoli del progetto inizialmente limitato al core: l'eccezione riguarda soltanto questa funzionalità approvata, non modifiche generali all'architettura.
 
-La fase 1 è stata committata e pubblicata su `main` con `c16cb7d4`. I successivi `procedi` autorizzano le fasi 2A/2B locali descritte sotto, non il deploy. Mancano ancora pagina, badge, esclusione manuale, importazione storica, scelta delle soglie e avviso visivo. Non considerare la coda operativa finché queste fasi non sono complete e verificate.
+La fase 1 è stata pubblicata su `main` con `c16cb7d4`; le fasi 2A/2B con `abcb0ee2`. Il successivo `procedi` ha autorizzato la fase 3 locale, non il deploy. Restano da decidere esclusione manuale, storico iniziale e soglie degli avvisi. La sincronizzazione è ancora disattivata: non considerare la coda operativa finché non saranno completati il collaudo integrato e l'attivazione concordata.
 
 ### Fase 2A - stati e API locali in sola lettura (29/09/2026)
 
@@ -115,9 +115,21 @@ Esito finale: **187 test superati, nessuno saltato**; inclusi i 2 test PostgreSQ
 
 Il collaudo PostgreSQL usa connessioni/transazioni distinte concorrenti, con gli stessi lock usati dal codice: due creatori della stessa quota producono un solo record; l'aggiornamento sorgente attende il lock e la modifica successiva della quantità viene rilevata. I test si abilitano con `DDT_TEST_POSTGRES_URL` e rifiutano host non locali o nomi database diversi da `certi_ddt_test*`. Creano e rimuovono un proprio schema temporaneo. Il contenitore PostgreSQL 16 dedicato è stato arrestato e rimosso; nessun volume dell'app è stato usato.
 
-Nessun commit/push delle fasi 2A/2B e nessun deploy effettuato. Sincronizzazione ancora disattivata.
+Le fasi 2A/2B sono state poi committate e pubblicate con `abcb0ee2`; nessun deploy effettuato. Sincronizzazione ancora disattivata.
 
-Prossimo passo: UI della coda e collegamento alla quota esatta; successivamente collaudo locale integrato, dry-run/import storico autorizzato e scelta soglie/esclusioni. Nessuna attivazione o deploy implicito.
+La UI della coda e il collegamento alla quota esatta sono stati aggiunti nella fase 3 seguente. Restano collaudo integrato, dry-run/import storico autorizzato e scelta soglie/esclusioni. Nessuna attivazione o deploy implicito.
+
+### Fase 3 - pagina DDT da certificare (29/09/2026)
+
+- Nuova pagina `/quarta-taglio/ddt-da-certificare`, prima voce del flusso Certificazione, con accesso per gli stessi reparti della pagina Certificazione.
+- Badge sidebar delle **righe attive globali** dall'endpoint `/counters`: si aggiorna all'ingresso e ogni due minuti con app visibile. Il conteggio della pagina usa invece i filtri sorgente applicati, come previsto dall'API; il badge non viene sostituito dal conteggio filtrato.
+- Tabella paginata con DDT, OL, CodF3, cliente, quantità, ordini, stato Incoming, stato certificazione, motivi, ultima lettura e azioni. Filtri per ricerca generale, DDT, OL, CodF3, cliente, date, presenza nella vista eSolver, stato e vista attivi/completati.
+- La riga apre `/quarta-taglio/{OL}?ddtWorkItemId={id}`. Il dettaglio invia `ddt_work_item_id` all'API, lo conserva dopo il Word e ricarica la medesima quota dopo le azioni OL-wide o sugli allegati. Il selettore CodF3 generico è nascosto nel contesto della quota storica per evitare un passaggio silenzioso a un'altra lavorazione.
+- Righe senza OL o con identità sorgente incompleta restano visibili con motivo esplicito; il collegamento a Certificazione è disponibile solo quando i campi minimi della quota sono validi. Il link Incoming appare quando ci sono righe collegate.
+- Stato sincronizzazione fattuale: ultimo successo e ultimo errore, senza soglie giallo/rosso arbitrarie. `Aggiorna vista` rilegge la coda locale; non forza la sincronizzazione eSolver. L'etichetta `Nuovo` e l'esclusione manuale restano da definire.
+- Nessuna variabile di attivazione, migrazione dati, import storico o deploy in questa fase.
+
+Verifica locale: build frontend riuscita. La verifica visiva con dati reali e il collaudo integrato end-to-end restano nella fase 5.
 
 ### Precisazione emersa nell'implementazione
 

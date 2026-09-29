@@ -1,11 +1,15 @@
+import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
+import { apiRequest } from "../../app/api";
 import { canAccessPage } from "../../app/access";
 import { useAuth } from "../../app/auth";
+import { DDT_QUEUE_REFRESH_EVENT } from "../../app/ddtQueue";
 
 const navItems = [
   { label: "Dashboard", to: "/dashboard", page: "dashboard", icon: "dashboard" },
   { type: "section", label: "Flusso certificazione", key: "certification-flow" },
+  { label: "DDT da certificare", to: "/quarta-taglio/ddt-da-certificare", page: "certification", icon: "inbox", badge: "ddt" },
   { label: "Carica Documenti", to: "/acquisition/upload", page: "acquisitionUpload", icon: "upload" },
   { label: "Incoming materiale", to: "/acquisition", page: "acquisition", icon: "inbox" },
   { label: "Certificazione", to: "/quarta-taglio", page: "certification", icon: "certificate" },
@@ -205,9 +209,37 @@ function SidebarIcon({ name }) {
 }
 
 export default function Sidebar() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const location = useLocation();
+  const [ddtActiveCount, setDdtActiveCount] = useState(null);
   const visibleNavItems = [];
+
+  useEffect(() => {
+    if (!token || !canAccessPage(user, "certification")) return undefined;
+    let cancelled = false;
+    async function updateCount() {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const counters = await apiRequest("/quarta-taglio/ddt-work-items/counters", {}, token);
+        if (!cancelled) setDdtActiveCount(counters.active);
+      } catch {
+        if (!cancelled) setDdtActiveCount(null);
+      }
+    }
+    function onQueueRefresh() {
+      void updateCount();
+    }
+    void updateCount();
+    const interval = window.setInterval(updateCount, 120000);
+    document.addEventListener("visibilitychange", updateCount);
+    window.addEventListener(DDT_QUEUE_REFRESH_EVENT, onQueueRefresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", updateCount);
+      window.removeEventListener(DDT_QUEUE_REFRESH_EVENT, onQueueRefresh);
+    };
+  }, [token, user]);
 
   navItems.forEach((item, index) => {
     if (item.type !== "section") {
@@ -231,7 +263,7 @@ export default function Sidebar() {
       return location.pathname === "/acquisition" || /^\/acquisition\/\d+/.test(location.pathname);
     }
     if (item.to === "/quarta-taglio") {
-      return location.pathname === "/quarta-taglio" || /^\/quarta-taglio\/(?!certificati(?:\/|$))/.test(location.pathname);
+      return location.pathname === "/quarta-taglio" || /^\/quarta-taglio\/(?!certificati(?:\/|$)|ddt-da-certificare(?:\/|$))/.test(location.pathname);
     }
     return isActive;
   }
@@ -274,6 +306,11 @@ export default function Sidebar() {
                       <SidebarIcon name={item.icon} />
                     </span>
                     <span className="truncate">{item.label}</span>
+                    {item.badge === "ddt" && ddtActiveCount !== null ? (
+                      <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900" aria-label={`${ddtActiveCount} DDT attivi`}>
+                        {ddtActiveCount}
+                      </span>
+                    ) : null}
                   </>
                 );
               }}

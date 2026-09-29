@@ -179,9 +179,12 @@ function standardLabel(standard) {
 function quartaDetailApiPath(codOdp, params = {}) {
   const basePath = `/quarta-taglio/${encodeURIComponent(codOdp)}`;
   const query = new URLSearchParams();
+  if (params.ddtWorkItemId) {
+    query.set("ddt_work_item_id", params.ddtWorkItemId);
+  }
   if (params.certificateId) {
     query.set("certificate_id", params.certificateId);
-  } else if (params.candidateCodF3) {
+  } else if (!params.ddtWorkItemId && params.candidateCodF3) {
     query.set("candidate_cod_f3", params.candidateCodF3);
   }
   const queryString = query.toString();
@@ -191,9 +194,12 @@ function quartaDetailApiPath(codOdp, params = {}) {
 function quartaDetailUiPath(codOdp, params = {}) {
   const basePath = `/quarta-taglio/${encodeURIComponent(codOdp)}`;
   const query = new URLSearchParams();
+  if (params.ddtWorkItemId) {
+    query.set("ddtWorkItemId", params.ddtWorkItemId);
+  }
   if (params.certificateId) {
     query.set("certificateId", params.certificateId);
-  } else if (params.candidateCodF3) {
+  } else if (!params.ddtWorkItemId && params.candidateCodF3) {
     query.set("candidateCodF3", params.candidateCodF3);
   }
   const queryString = query.toString();
@@ -307,6 +313,7 @@ export default function QuartaTaglioDetailPage() {
   const [searchParams] = useSearchParams();
   const certificateId = searchParams.get("certificateId");
   const selectedCandidateCodF3 = searchParams.get("candidateCodF3");
+  const ddtWorkItemId = searchParams.get("ddtWorkItemId");
   const navigate = useNavigate();
   const location = useLocation();
   const { clearAuth, token } = useAuth();
@@ -348,11 +355,20 @@ export default function QuartaTaglioDetailPage() {
     return message;
   }
 
+  function detailPath(overrides = {}) {
+    return quartaDetailApiPath(codOdp, {
+      certificateId,
+      candidateCodF3: selectedCandidateCodF3,
+      ddtWorkItemId,
+      ...overrides,
+    });
+  }
+
   useEffect(() => {
     let ignore = false;
     setLoading(true);
     setError("");
-    apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
+    apiRequest(detailPath(), {}, token)
       .then((response) => {
         if (!ignore) {
           setData(response);
@@ -372,7 +388,7 @@ export default function QuartaTaglioDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [codOdp, certificateId, selectedCandidateCodF3, token]);
+  }, [codOdp, certificateId, selectedCandidateCodF3, ddtWorkItemId, token]);
 
   useEffect(() => {
     let ignore = false;
@@ -434,7 +450,7 @@ export default function QuartaTaglioDetailPage() {
   );
 
   useEffect(() => {
-    if (!data?.cod_odp || !quickIncomingConfirmEnabled()) {
+    if (!data?.cod_odp || ddtWorkItemId || !quickIncomingConfirmEnabled()) {
       return;
     }
     if (!data.quick_incoming_confirm_available || data.quick_incoming_confirm_applied) {
@@ -458,6 +474,7 @@ export default function QuartaTaglioDetailPage() {
     data?.conformity_status,
     data?.quick_incoming_confirm_available,
     data?.quick_incoming_confirm_applied,
+    ddtWorkItemId,
   ]);
 
   function confirmStandard(standardId) {
@@ -473,8 +490,8 @@ export default function QuartaTaglioDetailPage() {
     )
       .then(async (response) => {
         let nextResponse =
-          certificateId || selectedCandidateCodF3
-            ? await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
+          certificateId || selectedCandidateCodF3 || ddtWorkItemId
+            ? await apiRequest(detailPath(), {}, token)
             : response;
         if (
           quickIncomingConfirmEnabled() &&
@@ -488,7 +505,7 @@ export default function QuartaTaglioDetailPage() {
             message: "Incoming aggiornato: chimica, proprietà e note confermate.",
           });
         }
-        setData(nextResponse);
+        setData(ddtWorkItemId ? await apiRequest(detailPath(), {}, token) : nextResponse);
         if ((response.conformity_issues || []).length > 0) {
           setStandardConformityDialogOpen(true);
         }
@@ -557,8 +574,8 @@ export default function QuartaTaglioDetailPage() {
         return;
       }
       const nextResponse =
-        certificateId || selectedCandidateCodF3
-          ? await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token)
+        certificateId || selectedCandidateCodF3 || ddtWorkItemId
+          ? await apiRequest(detailPath(), {}, token)
           : response;
       setData(nextResponse);
       const nextDraft = {
@@ -617,7 +634,8 @@ export default function QuartaTaglioDetailPage() {
             force_non_conforming: forceNonConforming,
             force_regenerate: forceRegenerate,
             certificate_id: certificateId ? Number(certificateId) : null,
-            candidate_cod_f3: candidateCodF3 || null,
+            candidate_cod_f3: ddtWorkItemId ? null : candidateCodF3 || null,
+            ddt_work_item_id: ddtWorkItemId ? Number(ddtWorkItemId) : null,
           }),
         },
         token,
@@ -628,9 +646,9 @@ export default function QuartaTaglioDetailPage() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId: response.id }), {}, token);
+      const refreshed = await apiRequest(detailPath({ certificateId: response.id }), {}, token);
       setData(refreshed);
-      navigate(quartaDetailUiPath(codOdp, { certificateId: response.id }), { replace: true });
+      navigate(quartaDetailUiPath(codOdp, { certificateId: response.id, ddtWorkItemId }), { replace: true });
       setPendingWordCandidateCodF3(null);
       setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
@@ -658,7 +676,7 @@ export default function QuartaTaglioDetailPage() {
     setError("");
     try {
       const response = await applyQuickIncomingConfirmationRequest();
-      setData(response);
+      setData(ddtWorkItemId ? await apiRequest(detailPath(), {}, token) : response);
       setQuickConfirmState({
         status: "saved",
         message: "Incoming aggiornato: chimica, proprietà e note confermate.",
@@ -741,7 +759,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
+      const refreshed = await apiRequest(detailPath(), {}, token);
       setData(refreshed);
       setWordUploadState({ status: "saved", message: `Word ricaricato sul certificato ${response.draft_number}` });
     } catch (requestError) {
@@ -777,7 +795,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      const refreshed = await apiRequest(quartaDetailApiPath(codOdp, { certificateId, candidateCodF3: selectedCandidateCodF3 }), {}, token);
+      const refreshed = await apiRequest(detailPath(), {}, token);
       setData(refreshed);
       setAdditionalPagesState({
         status: "saved",
@@ -817,7 +835,7 @@ export default function QuartaTaglioDetailPage() {
       if (fileInput) {
         fileInput.value = "";
       }
-      setData(response);
+      setData(ddtWorkItemId ? await apiRequest(detailPath(), {}, token) : response);
       setPdfAttachmentState({ status: "saved", message: "PDF allegato e Word aggiornato." });
     } catch (requestError) {
       setPdfAttachmentState({
@@ -838,7 +856,7 @@ export default function QuartaTaglioDetailPage() {
         { method: "DELETE" },
         token,
       );
-      setData(response);
+      setData(ddtWorkItemId ? await apiRequest(detailPath(), {}, token) : response);
       setPdfAttachmentState({ status: "saved", message: "Allegato PDF rimosso e Word aggiornato." });
     } catch (requestError) {
       setPdfAttachmentState({
@@ -925,8 +943,8 @@ export default function QuartaTaglioDetailPage() {
     selectedCandidateCodF3
       ? codF3Candidates.find((candidate) => codF3ExactKey(candidate.cod_f3) === codF3ExactKey(selectedCandidateCodF3)) || null
       : null;
-  const activeCodF3Candidate = certificateId ? null : selectedCodF3Candidate || rawCodF3Candidate;
-  const activeCandidateCodF3 = activeCodF3Candidate?.cod_f3 || null;
+  const activeCodF3Candidate = certificateId || ddtWorkItemId ? null : selectedCodF3Candidate || rawCodF3Candidate;
+  const activeCandidateCodF3 = ddtWorkItemId ? null : activeCodF3Candidate?.cod_f3 || null;
   const codF3CandidateSummary = data?.cod_f3_candidate_summary || {};
   const visibleCodF3Candidates = codF3Candidates.filter((candidate) => candidate.confidence !== "review").slice(0, 25);
   const hiddenCodF3CandidateCount = Math.max((codF3CandidateSummary.count || 0) - visibleCodF3Candidates.length, 0);
@@ -997,8 +1015,8 @@ export default function QuartaTaglioDetailPage() {
   if (error) {
     return (
       <section className="space-y-3">
-        <Link className="text-sm font-semibold text-accent hover:underline" to="/quarta-taglio">
-          Torna a Certificazione
+        <Link className="text-sm font-semibold text-accent hover:underline" to={ddtWorkItemId ? "/quarta-taglio/ddt-da-certificare" : "/quarta-taglio"}>
+          {ddtWorkItemId ? "Torna ai DDT da certificare" : "Torna a Certificazione"}
         </Link>
         <p className="text-sm text-rose-600">{error}</p>
       </section>
@@ -1009,9 +1027,12 @@ export default function QuartaTaglioDetailPage() {
     <section className="space-y-4">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <Link className="text-sm font-semibold text-accent hover:underline" to="/quarta-taglio">
-            Torna a Certificazione
+          <Link className="text-sm font-semibold text-accent hover:underline" to={ddtWorkItemId ? "/quarta-taglio/ddt-da-certificare" : "/quarta-taglio"}>
+            {ddtWorkItemId ? "Torna ai DDT da certificare" : "Torna a Certificazione"}
           </Link>
+          {ddtWorkItemId ? (
+            <p className="mt-2 text-xs text-slate-600">Quota DDT #{ddtWorkItemId} · DDT {data.header?.ddt_raw || data.header?.ddt_finished || "-"}. Le azioni sul certificato seguono questa quota.</p>
+          ) : null}
           <p className="mt-3 text-sm uppercase tracking-[0.3em] text-slate-500">Certificato materiale</p>
           <div className="mt-1 flex flex-wrap items-baseline gap-x-5 gap-y-2">
             <h2 className="text-2xl font-semibold text-slate-950">OL {data.cod_odp}</h2>
@@ -1476,7 +1497,7 @@ export default function QuartaTaglioDetailPage() {
           </div>
         </div>
         </div>
-        {codF3CandidateSummary.count ? (
+        {!ddtWorkItemId && codF3CandidateSummary.count ? (
           <div className="mt-4 border-t border-slate-200 pt-4">
             <h3 className="text-xl font-semibold text-slate-900">Seleziona Lavorazioni - finitura: CODF3</h3>
             {codF3CandidateSummary.status === "review" && hiddenCodF3CandidateCount > 0 ? (

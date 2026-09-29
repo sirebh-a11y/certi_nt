@@ -28,6 +28,7 @@ import SupplierCalendarPage from "../pages/kpi/SupplierCalendarPage";
 import NotesPage from "../pages/notes/NotesPage";
 import QualityEvaluationPage from "../pages/quality/QualityEvaluationPage";
 import QuartaTaglioCertificatesRegisterPage from "../pages/quartaTaglio/QuartaTaglioCertificatesRegisterPage";
+import DdtWorkQueuePage from "../pages/quartaTaglio/DdtWorkQueuePage";
 import QuartaTaglioDetailPage from "../pages/quartaTaglio/QuartaTaglioDetailPage";
 import QuartaTaglioPage from "../pages/quartaTaglio/QuartaTaglioPage";
 import StandardsPage from "../pages/standards/StandardsPage";
@@ -219,6 +220,7 @@ export function AppRouter() {
           <Route path="/supplier-kpi" element={<KpiRoute />} />
           <Route path="/supplier-calendar" element={<SupplierCalendarRoute />} />
           <Route path="/quarta-taglio" element={<AccessGuard page="certification"><QuartaTaglioPage /></AccessGuard>} />
+          <Route path="/quarta-taglio/ddt-da-certificare" element={<AccessGuard page="certification"><DdtWorkQueuePage /></AccessGuard>} />
           <Route path="/quarta-taglio/certificati" element={<AccessGuard page="certificateRegister"><QuartaTaglioCertificatesRegisterPage /></AccessGuard>} />
           <Route path="/quarta-taglio/:codOdp" element={<AccessGuard page="certification"><QuartaTaglioDetailPage /></AccessGuard>} />
           <Route path="/notes" element={<NotesRoute />} />
