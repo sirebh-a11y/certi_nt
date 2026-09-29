@@ -173,6 +173,7 @@ export default function DdtWorkQueuePage() {
         <span>Ultima lettura eSolver riuscita: <strong>{formatTimestamp(lastSuccess?.finished_at)}</strong>.</span>
         {!data?.sync?.enabled ? <span className="ml-2">Sincronizzazione automatica non attiva in questo ambiente.</span> : null}
         {syncFailed ? <span className="ml-2">Ultimo tentativo non riuscito ({formatTimestamp(lastAttempt.finished_at || lastAttempt.started_at)}); i DDT già conservati restano visibili.</span> : null}
+        {syncFailed && lastAttempt.error_code === "empty_source_requires_review" ? <span className="ml-2">eSolver ha restituito zero righe: verificare la sorgente. Sono mantenuti i dati dell’ultima lettura valida.</span> : null}
       </div>
 
       <form className="rounded-xl border border-slate-200 bg-white p-4" onSubmit={applyFilters}>
@@ -227,7 +228,7 @@ export default function DdtWorkQueuePage() {
 
       {error ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p> : null}
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="min-w-[1480px] w-full text-left text-sm">
+        <table className="min-w-[1600px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
             <tr>{["Data DDT", "DDT", "OL", "Cod. F3", "Cliente", "Qta", "Ordine cliente", "Conferma F3", "Incoming", "Certificazione", "Stato", "Ultima lettura", "Azioni"].map((label) => <th key={label} scope="col" className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{label}</th>)}</tr>
           </thead>
@@ -238,15 +239,15 @@ export default function DdtWorkQueuePage() {
               return (
                 <tr key={item.id} className="align-top hover:bg-slate-50/70">
                   <td className="whitespace-nowrap px-3 py-3">{formatDate(item.ddt_date)}</td>
-                  <td className="max-w-40 break-words px-3 py-3 font-medium" title={item.ddt_raw || ""}>{item.ddt_raw || "-"}</td>
-                  <td className="max-w-40 break-all px-3 py-3">{item.cod_odp || <span className="text-amber-700">Da collegare</span>}</td>
-                  <td className="max-w-32 break-all px-3 py-3">{item.cod_f3 || "-"}</td>
-                  <td className="max-w-52 break-words px-3 py-3">{item.cliente || "-"}</td>
+                  <td className="min-w-32 break-words px-3 py-3 font-medium" title={item.ddt_raw || ""}>{item.ddt_raw || "-"}</td>
+                  <td className="min-w-28 whitespace-nowrap px-3 py-3">{item.cod_odp || <span className="text-amber-700">Da collegare</span>}</td>
+                  <td className="min-w-24 whitespace-nowrap px-3 py-3">{item.cod_f3 || "-"}</td>
+                  <td className="min-w-36 break-words px-3 py-3">{item.cliente || "-"}</td>
                   <td className="whitespace-nowrap px-3 py-3">{formatQuantity(item.quantita)}</td>
-                  <td className="max-w-36 break-all px-3 py-3">{item.ordine_cliente || "-"}</td>
-                  <td className="max-w-36 break-all px-3 py-3">{item.conferma_ordine || "-"}</td>
-                  <td className="px-3 py-3 text-xs">{item.state === "quality_rejected" ? "Qualità respinta" : item.incoming_ready ? "Pronto" : "Da verificare"}</td>
-                  <td className="px-3 py-3 text-xs">{item.state === "completed" ? "PDF finale" : item.word_candidate_id ? "Word presente" : item.certificate_id ? "Scheda presente" : "Da fare"}</td>
+                  <td className="min-w-40 break-words px-3 py-3">{item.ordine_cliente || "-"}</td>
+                  <td className="min-w-36 break-words px-3 py-3">{item.conferma_ordine || "-"}</td>
+                  <td className="min-w-20 px-3 py-3 text-xs">{item.state === "quality_rejected" ? "Qualità respinta" : item.incoming_ready ? "Pronto" : "Da verificare"}</td>
+                  <td className="min-w-24 px-3 py-3 text-xs">{item.state === "completed" ? "PDF finale" : item.word_candidate_id ? "Word presente" : item.certificate_id ? "Scheda presente" : "Da fare"}</td>
                   <td className="min-w-52 px-3 py-3">
                     <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[item.state] || STATE_CLASSES.review}`}>{item.label}</span>
                     {item.reasons?.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-600">{item.reasons.map((reason, index) => <li key={`${item.id}-${index}`}>{reason}</li>)}</ul> : null}

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.modules.quarta_taglio.ddt_legacy_audit import _facts_differ, classify_legacy_cache
+from app.modules.quarta_taglio.ddt_legacy_audit import classify_legacy_cache
 from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _apply_snapshot
 from app.modules.quarta_taglio.models import QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem
 
@@ -40,21 +40,17 @@ def import_legacy_cache(db, *, current_rows, now=None):
     for item in existing:
         by_base.setdefault((item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum), []).append(item)
 
-    imported = already_present = existing_conflicts = peer_conflicts = 0
+    imported = 0
+    already_present = report["counts"].get("already_saved_historical", 0)
+    existing_conflicts = report["issues"].get("existing_snapshot_data_changed", 0)
+    peer_conflicts = report["issues"].get("historical_identity_group_ambiguous", 0)
     for candidate in candidates:
         prior = by_key.get(candidate.source_key)
         if prior is not None:
-            if (_facts_differ(prior, candidate)
-                    or prior.certification_unit_key != candidate.certification_unit_key
-                    or prior.ddt_date != candidate.ddt_date):
-                existing_conflicts += 1
-            else:
-                already_present += 1
-            continue
+            raise SnapshotError("legacy_plan_changed")
         base = (candidate.id_documento, candidate.id_riga_doc, candidate.rif_lotto_alfanum)
         if by_base.get(base):
-            peer_conflicts += 1
-            continue
+            raise SnapshotError("legacy_plan_changed")
         cached_at = candidate.cache_checked_at or now
         item = QuartaTaglioDdtWorkItem(
             **{field: getattr(candidate, field) for field in _SOURCE_FIELDS},

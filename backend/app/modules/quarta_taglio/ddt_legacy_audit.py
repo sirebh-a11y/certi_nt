@@ -14,7 +14,7 @@ from app.modules.quarta_taglio.ddt_context import exact_certificate, quantity_ma
 from app.modules.quarta_taglio.ddt_queue import _pdf_valid
 from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _normalize, last_snapshot_runs
 from app.modules.quarta_taglio.models import (
-    QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem,
+    QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun,
     QuartaTaglioEsolverLink, QuartaTaglioFinalCertificate, QuartaTaglioRow,
 )
 
@@ -55,13 +55,23 @@ def _related_certificate(item, cert):
     )
 
 
+def table_exists(db, model):
+    connection = db.connection()
+    schema = connection.get_execution_options().get("schema_translate_map", {}).get(model.__table__.schema, model.__table__.schema)
+    return inspect(connection).has_table(model.__tablename__, schema=schema)
+
+
 def classify_legacy_cache(db, *, current_rows=None):
     """Classify candidates; `current_rows` is a complete, externally read view.
 
     If omitted, use only an existing successful persistent snapshot. A missing
     baseline never causes an old cache row to be labelled safe to import.
     """
-    tables = inspect(db.connection())
+    saved_items = list(db.scalars(select(QuartaTaglioDdtWorkItem))) if table_exists(db, QuartaTaglioDdtWorkItem) else []
+    saved_by_key = {item.source_key: item for item in saved_items}
+    saved_by_base = defaultdict(list)
+    for item in saved_items:
+        saved_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)].append(item)
     source_basis = "unavailable"
     source_index = None
     source_by_base = defaultdict(list)
@@ -83,7 +93,7 @@ def classify_legacy_cache(db, *, current_rows=None):
             item = SimpleNamespace(**values)
             source_index[key] = item
             source_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)].append(item)
-    elif tables.has_table(QuartaTaglioDdtWorkItem.__tablename__) and tables.has_table("quarta_taglio_ddt_sync_runs"):
+    elif table_exists(db, QuartaTaglioDdtWorkItem) and table_exists(db, QuartaTaglioDdtSyncRun):
         _, success = last_snapshot_runs(db)
         if success is not None:
             source_basis = "persisted_successful_snapshot"
@@ -119,6 +129,10 @@ def classify_legacy_cache(db, *, current_rows=None):
             )
 
     counters["distinct_cache_units"] = len(cache_units)
+    cache_keys_by_base = defaultdict(set)
+    for key, group in cache_units.items():
+        item = group[0]
+        cache_keys_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)].add(key)
     cache_dates = [group[0].ddt_date for group in cache_units.values() if group[0].ddt_date]
     source_dates = [item.ddt_date for item in (source_index or {}).values()
                     if item.ddt_date and (source_basis == "live_complete_view" or item.source_present)]
@@ -134,7 +148,7 @@ def classify_legacy_cache(db, *, current_rows=None):
     for cert in db.scalars(select(QuartaTaglioFinalCertificate)):
         certificates_by_ol[cert.cod_odp].append(cert)
     versions_by_cert = defaultdict(list)
-    if tables.has_table(QuartaTaglioCertificatePdfVersion.__tablename__):
+    if table_exists(db, QuartaTaglioCertificatePdfVersion):
         for version in db.scalars(select(QuartaTaglioCertificatePdfVersion)):
             versions_by_cert[version.certificate_id].append(version)
     quarta_ols = set(db.scalars(select(QuartaTaglioRow.cod_odp).distinct()))
@@ -167,6 +181,23 @@ def classify_legacy_cache(db, *, current_rows=None):
             continue
         if source_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)]:
             issues["source_identity_changed"] += 1
+            counters["review_units"] += 1
+            continue
+
+        saved = saved_by_key.get(key)
+        if saved is not None:
+            if (_facts_differ(item, saved) or item.certification_unit_key != saved.certification_unit_key
+                    or item.ddt_date != saved.ddt_date):
+                issues["existing_snapshot_data_changed"] += 1
+                counters["review_units"] += 1
+            else:
+                counters["already_saved_historical"] += 1
+            continue
+        base = (item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)
+        if len(cache_keys_by_base[base]) > 1 or saved_by_base[base]:
+            # Decide for the entire historical group BEFORE inserting anything.
+            # Per-OL caches may be from different dates: never choose the first OL.
+            issues["historical_identity_group_ambiguous"] += 1
             counters["review_units"] += 1
             continue
 

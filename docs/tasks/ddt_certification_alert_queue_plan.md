@@ -1,6 +1,6 @@
 # DDT da certificare - audit Alpha e piano di implementazione
 
-**Stato:** fasi 1, 2A, 2B e 3 pubblicate; recupero storico implementato ed eseguito solo in locale; attivazione e deploy Alpha ancora da decidere
+**Stato:** fasi 1, 2A, 2B e 3 pubblicate; recupero storico eseguito solo in locale; protezioni aggiuntive e comando Alpha implementati/testati in locale; verifica visiva integrata completata in locale; attivazione, recupero dati e deploy Alpha ancora da completare/autorizzare
 
 **Data audit:** 29/09/2026
 
@@ -220,9 +220,9 @@ prima dell'attivazione periodica. Non usare i conteggi locali come dati Alpha.
 
 **Il commit/push del codice non autorizza un'importazione né un deploy Alpha.**
 Lo script `import_ddt_legacy_cache.py` è volutamente limitato al Compose locale:
-non copiarne o aggirarne il controllo per eseguirlo sul server. Prima di un
-eventuale recupero Alpha occorre predisporre e testare una modalità server
-separata, protetta contro la scelta del database sbagliato.
+non copiarne o aggirarne il controllo per eseguirlo sul server. La modalità server
+separata `recover_ddt_alpha.py` è ora implementata e testata in locale (sezione
+4C sotto), ma non installata né eseguita su Alpha.
 
 Ordine richiesto sul server, solo dopo nuova autorizzazione:
 
@@ -247,6 +247,202 @@ Ordine richiesto sul server, solo dopo nuova autorizzazione:
 Se il backup, la sorgente completa, il dry-run o la verifica post-import non
 sono affidabili, fermarsi: il deploy del codice può restare con sincronizzazione
 disattivata e non deve essere spacciato per recupero storico completato.
+
+### Audit Alpha in sola lettura del 29/09/2026, ore 13:21 italiane
+
+Autorizzato dopo il commit `98f06ff1`. Alpha esegue il commit
+`901d491f56e06ab4291ce87d0a1ab96df4ae03d0`; i tre container sono attivi e PostgreSQL
+è healthy. Le nuove tabelle DDT non sono ancora presenti. Il controllo ha usato
+le configurazioni eSolver, la cache, i certificati e i file di **Alpha**: nessun
+dato locale è stato trasferito nel database server. Gli helper di audit sono
+stati caricati esclusivamente nella memoria di un processo Python separato via
+stdin, senza installare file, lanciare bootstrap, sincronizzazione o migrazioni.
+Transazione PostgreSQL `REPEATABLE READ, READ ONLY`, verificata con
+`transaction_read_only = on`; a fine lettura zero oggetti ORM nuovi/modificati
+e rollback. La simulazione della coda ha usato oggetti temporanei.
+
+| Misura Alpha | Esito |
+| --- | ---: |
+| Collegamenti OL nella cache | 1.813 |
+| Collegamenti con righe DDT | 202 |
+| Righe/identità DDT distinte in cache | 415 / 415 |
+| Righe correnti della vista eSolver completa | 393 |
+| Righe correnti già nella cache Alpha | 233 |
+| Righe correnti non ancora nella cache Alpha | 160 |
+| Quote storiche recuperabili dalla cache Alpha | 182 |
+| OL / DDT distinti dello storico recuperabile | 90 / 62 |
+| Duplicati cache o sorgente, quantità discordanti, conflitti certificato identificati | 0 |
+| Totale simulato dopo recupero | 575 |
+| PDF finali esatti verificati su file/versione Alpha | 8 |
+| Segnalazioni attive simulate | 567 |
+
+Le 182 quote storiche sono datate **02/07–30/07/2026**, tutte oltre 60 giorni;
+le 393 correnti **03/08–29/09/2026**. Nessuna candidata storica è ancora dentro
+60 giorni e nessuna quantità corrente/candidata risulta nulla o negativa.
+Le 233 identità comuni tra cache e vista corrente coincidono nei campi
+confrontati. Nessuna collisione aggiuntiva è emersa simulando il controllo
+documento/riga/lotto dell'importatore sulle 182 candidate Alpha.
+
+Distribuzione simulata: **514 in attesa Incoming** (332 correnti + 182 storiche),
+**49 senza OL**, **2 pronti lato Incoming**, **2 Word pronti da completare**,
+**8 completati**. Nessuna nuova ambiguità Word rilevata nel campione. I controlli
+di standard/conformità restano necessari nel normale flusso; "pronto lato
+Incoming" non certifica automaticamente il documento.
+
+La coppia locale `5180631/2`, OL `OL2026000466`, quantità 2100/1 **non è presente
+nella cache Alpha disponibile**. Il caso resta documentato per la futura email:
+la sua assenza su Alpha non dimostra che eSolver lo abbia corretto.
+
+Questi conteggi sono una fotografia: prima dell'importazione reale occorre
+rifare il dry-run. Non garantiscono il recupero di DDT mai memorizzati da Alpha.
+Il limite SQL esatto della vista resta da confermare con eSolver, come già
+documentato; il campione è coerente con una finestra di circa 60 giorni.
+
+### Due limiti rilevati nell'audit (corretti in locale nella fase 4C)
+
+Il campione Alpha non li presenta, ma le prove su SQLite **solo in memoria**
+hanno riprodotto due casi nel codice locale pubblicato:
+
+1. **Candidati storici con stesso documento/riga/lotto e OL differenti.** Il
+   dry-run dichiara due candidate recuperabili; `import_legacy_cache` inserisce
+   la prima e scarta la seconda tramite `by_base`. Invertendo l'ordine della
+   cache cambia l'OL importato. Le cache dei diversi OL potrebbero risalire a
+   momenti diversi: senza prova che siano quote simultanee non si può scegliere
+   arbitrariamente. Proposta: classificazione preventiva dell'intero gruppo,
+   identica per dry-run e import, lasciando entrambe in verifica se non è
+   distinguibile una correzione da due quote reali. Distinti lotti/righe e quote
+   simultanee della vista corrente devono continuare a essere conservati.
+2. **Vista vuota durante una sincronizzazione periodica dopo uno snapshot non
+   vuoto.** `_apply_snapshot([], ...)` conserva le righe ma le marca tutte
+   assenti e restituisce `success`; l'ultimo successo apparirebbe aggiornato.
+   L'importatore iniziale già rifiuta sorgente vuota con cache, il job periodico
+   no. Proposta: mantenere il precedente snapshot e ultimo successo, registrare
+   un esito esplicito di sorgente vuota da verificare. Una prima lettura vuota
+   senza dati precedenti resta un caso distinto; una vista realmente svuotata
+   in seguito richiede verifica, non una cancellazione presunta.
+
+Nessuna correzione applicativa implementata durante questo audit. Nessuna
+evidenza che questi casi abbiano compromesso le 489 quote importate in locale
+o le 182 candidate Alpha; nessuna importazione è stata eseguita su Alpha.
+
+### Intervento proposto nell'audit e poi autorizzato (Astra)
+
+- correggere i due casi limite sopra descritti, con decisioni di gruppo
+  indipendenti dall'ordine e report coerente con ciò che verrà davvero inserito;
+- predisporre una modalità Alpha esplicita per audit/import, verificando
+  ambiente/database di destinazione e richiedendo un report recente approvato;
+  nessun bypass del comando locale o collegamento implicito al database server;
+- testare su PostgreSQL isolato rollback, ripetizione senza duplicati,
+  concorrenza con snapshot, cambi dati tra report e applicazione, errore/zero
+  righe sorgente e preservazione di cache/certificati/PDF;
+- completare il collaudo UI del flusso coda → quota corretta → certificazione
+  e verificare i tempi sui volumi reali prima di dichiarare conclusa la fase 5;
+- per l'esecuzione futura su Alpha: backup prima del cambio codice e recupero
+  nella finestra concordata, con accessi utenti/job che aggiornano la vecchia
+  cache sospesi. Questo evita che un refresh elimini dalla cache i DDT vecchi
+  prima del loro recupero. Rileggere i dati Alpha nella transazione protetta,
+  poi avviare l'app e verificare i risultati. Deploy, import e attivazione del
+  job rimangono autorizzazioni da ottenere secondo il piano concordato.
+
+### Fase 4C - protezioni e procedura Alpha, solo sviluppo locale (29/09/2026)
+
+Dopo il `procedi` sono state implementate e testate le seguenti correzioni:
+
+- **Gruppo storico ambiguo:** stesso documento/riga/lotto con OL diversi nella
+  sola cache storica → tutte le nuove candidate del gruppo restano escluse
+  dall'importazione automatica. Invertire l'ordine non cambia il risultato.
+  Quote simultanee nella vista corrente e lotti/righe distinti restano conservati.
+  Nessuna correzione retroattiva delle quote già salvate.
+- **Vista improvvisamente vuota:** se esistono DDT conservati, zero righe non
+  aggiorna l'ultimo successo né marca tutti i DDT assenti. Registra
+  `empty_source_requires_review`; la pagina spiega che sono mantenuti i dati
+  dell'ultima lettura valida. Primo avvio vuoto senza dati precedenti distinto.
+- **Modalità Alpha dedicata:** `backend/scripts/recover_ddt_alpha.py` usa
+  `ddt_recovery.py`. `--preview` legge soltanto; `--apply` richiede un report,
+  un backup PostgreSQL leggibile e `--maintenance-confirmed`. Nessun bootstrap,
+  avvio del job o importazione implicita al deploy.
+
+Il report vale **un'ora**, identifica il cluster/database Alpha e memorizza
+un'impronta della sorgente completa, cache, righe Quarta, certificati/versioni,
+nuova coda, file Word/PDF (presenza/dimensione/data modifica) e codice di recupero.
+L'applicazione rilegge i dati dopo i lock: se qualcosa è cambiato, il report
+è scaduto o riguarda un altro ambiente, si ferma senza importare e richiede
+un nuovo report da esaminare. Non basta ricopiare il vecchio `plan_id`.
+Il report non è una firma digitale e non deve essere modificato manualmente.
+
+Il recupero usa solo i dati **Alpha**, non i 882 elementi del database locale.
+Lock PostgreSQL comuni al job e lock sulle tabelle coinvolte impediscono una
+scrittura concorrente durante l'operazione; un writer già attivo provoca
+`recovery_inputs_busy`. Cache e certificati preesistenti non vengono riscritti.
+Errore a metà operazione → rollback anche delle due nuove tabelle, se appena
+create. La ripetizione con un nuovo report non duplica le quote storiche.
+Il vecchio report dopo un'applicazione riuscita non è più valido.
+
+Prerequisiti operativi: utenti/job sospesi nella finestra concordata, backup
+DB e storage verificati, nuova immagine backend disponibile, sincronizzazione
+automatica disabilitata. Il controllo dell'intestazione del dump nello script
+**non sostituisce una verifica di ripristinabilità del backup**. Il ruolo di
+manutenzione deve poter leggere `pg_control_system()` e creare le sole due
+tabelle DDT: se non può, non aggirare il controllo con altre credenziali.
+Comandi e ordine nel Markdown di deploy soft, sezione recupero DDT Alpha.
+
+Verifiche locali: **210 test Quarta/eSolver superati, zero saltati**, inclusi
+i test PostgreSQL su container temporaneo isolato senza volumi applicativi.
+Coperti: ordine invertito, quantità discordanti, nessuna riscrittura cache,
+report scaduto/altro ambiente, cambi sorgente/cache/certificati/file dopo
+preview, errore/zero righe, concorrenza, idempotenza, rollback dati e DDL.
+Build frontend riuscita; restano gli avvisi già presenti su Browserslist
+obsoleto e dimensione bundle. Nessun aggiornamento dipendenze.
+
+**Collaudo visivo locale completato:** lo strumento Computer Use continua a non
+avviare Chrome/Edge per `windows sandbox failed: helper_unknown_error`, ma è
+stato usato il browser di collaudo Playwright già presente nel progetto. Con i
+dati locali reali la pagina ha mostrato 882 quote attive e 50 righe nella prima
+pagina; la somma degli stati coincide con il totale. Verificati filtro
+`In attesa Incoming` (807), combinazione con `Solo storico` (469), intervallo
+date non valido, azzeramento filtri e contatori. Il collegamento della quota
+DDT `#393` ha aperto esattamente
+`/quarta-taglio/OL2026000997?ddtWorkItemId=393`; nel dettaglio sono rimasti
+visibili quota, DDT, OL, CDQ e colata corretti.
+
+A 1920 e 1440 px la pagina non deborda orizzontalmente; a 1440 px la tabella
+usa correttamente il proprio scorrimento orizzontale. I due rilievi grafici
+emersi nel primo controllo sono stati corretti e ricollaudati: la voce sidebar
+mostra `DDT da certificare` per intero su due righe; OL e Cod. F3 non vengono
+più spezzati, mentre ordine e conferma possono andare a capo soltanto sui
+separatori normali. A 1920 px resta visibile anche l'azione `Apri
+certificazione`; a 1440 px si usa lo scorrimento interno. L'unico errore console
+è il `404` del solo `favicon.ico`; nessuna API della coda o di Certificazione ha
+restituito errore e nessun errore JavaScript è stato rilevato. Prestazioni e
+campioni reali Alpha restano da ricontrollare nel successivo passaggio
+autorizzato; la fase 5 rimane aperta per Alpha, import e attivazione.
+
+In questa fase nessun accesso/mutazione Alpha, nessuna nuova importazione nel
+database applicativo locale, nessun commit/push/deploy né attivazione del job.
+
+### Audit integrato finale locale (29/09/2026)
+
+Ricontrollati importatore, classificazione dei gruppi storici, protezione della
+sorgente vuota, report Alpha, lock, rollback, configurazione Docker e procedura
+di deploy. Trovato e corretto un errore nei comandi del Markdown: dentro il
+container `python scripts/recover_ddt_alpha.py` fallisce con
+`ModuleNotFoundError: No module named 'app'`. Usare dalla directory `/app`
+`python -m scripts.recover_ddt_alpha`; avvio con `--help` verificato nel container
+locale. Nessuna modifica alla logica backend necessaria da questo audit.
+
+Rieseguita l'intera suite Quarta/eSolver: **210 test superati, zero saltati**.
+Il collaudo ha usato due container temporanei: PostgreSQL 16 senza rete esterna
+e senza volumi applicativi, runner con sorgenti in sola lettura e storage
+temporaneo. Inclusi i test di recupero ripetuto, report superato, writer
+concorrente e rollback anche delle tabelle appena create. Entrambi i container
+sono stati rimossi al termine. Nessun accesso Alpha o importazione applicativa.
+
+Il controllo riguarda i casi della suite e il collaudo UI locale già descritto;
+non sostituisce la verifica sui dati aggiornati Alpha né la prova operativa di
+un nuovo PDF finale. Prossimo passaggio: commit/push del lavoro DDT dopo richiesta
+esplicita, poi audit/preview Alpha e recupero/attivazione nelle autorizzazioni
+previste dal piano. I report temporanei, gli screenshot e il Markdown separato
+sulle dipendenze non fanno parte del commit DDT.
 
 ### Precisazione emersa nell'implementazione
 

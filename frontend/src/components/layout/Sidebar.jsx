@@ -305,7 +305,7 @@ export default function Sidebar() {
                     <span className={`flex w-5 shrink-0 justify-center ${active ? "text-accent" : "text-slate-500"}`}>
                       <SidebarIcon name={item.icon} />
                     </span>
-                    <span className="truncate">{item.label}</span>
+                    <span className={item.badge === "ddt" ? "min-w-0 flex-1 whitespace-normal" : "truncate"}>{item.label}</span>
                     {item.badge === "ddt" && ddtActiveCount !== null ? (
                       <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900" aria-label={`${ddtActiveCount} DDT attivi`}>
                         {ddtActiveCount}

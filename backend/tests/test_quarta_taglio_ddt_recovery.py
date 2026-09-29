@@ -1,0 +1,221 @@
+"""Recovery plans, stale-input refusal and PostgreSQL atomicity/locking."""
+import copy
+import os
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from uuid import uuid4
+
+from sqlalchemy import create_engine, event, select, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.startup import bootstrap as _registry
+from app.core.database import Base
+from app.modules.quarta_taglio import ddt_recovery as recovery
+from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _LOCK_ID, _LOCK_NAMESPACE
+from app.modules.quarta_taglio.models import (
+    QuartaTaglioEsolverLink, QuartaTaglioRow, QuartaTaglioFinalCertificate,
+    QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun,
+)
+
+NOW = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+TARGET = dict(environment="alpha", public_host="certi-test.forgialluminio.it", database_id="test-only", storage_root="/test")
+
+
+def source_rows():
+    return [dict(IdDocumento="200", IdRigaDoc="1", RifLottoAlfanum="L", ORP="OL1", CodF3="F3",
+        DDT="90-29/09/2026", RagSoc="Test", ODVCli="PO", ODVF3="CONF", QtaUmMag=12, CertificatoPresente=0)]
+
+
+def seed(db):
+    db.add(QuartaTaglioRow(cod_odp="OL1", codice_registro="R", cdq="CDQ"))
+    db.add(QuartaTaglioEsolverLink(cod_odp="OL1", rows=[dict(id_documento="100", id_riga_doc="1",
+        rif_lotto_alfanum="L", orp="OL1", cod_f3="F3", ddt="77-01/07/2026", rag_soc="Test",
+        odv_cli="PO", odv_f3="CONF", qta_um_mag=5, certificato_presente=False)]))
+
+
+class RecoveryPlanTest(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.db = Session(self.engine)
+        seed(self.db)
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+        self.engine.dispose()
+
+    def plan(self, rows=None):
+        return recovery.build_recovery_plan(self.db, current_rows=rows or source_rows(), target=TARGET, now=NOW)
+
+    def test_preview_is_read_only_and_order_independent(self):
+        statements = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement.strip().split()[0].upper())
+        event.listen(self.engine, "before_cursor_execute", capture)
+        rows = source_rows() + [{**source_rows()[0], "IdDocumento": "201"}]
+        first = self.plan(rows)
+        second = self.plan(rows[::-1])
+        self.assertEqual(first["plan_id"], second["plan_id"])
+        self.assertEqual(first["audit"]["counts"]["recoverable_historical"], 1)
+        self.assertTrue(set(statements) <= {"SELECT", "PRAGMA"})
+        self.assertFalse(self.db.dirty or self.db.new)
+        recovery.validate_approved_plan(first, second, now=NOW)
+
+    def test_target_age_and_source_changes_are_rejected(self):
+        approved = self.plan()
+        with self.assertRaisesRegex(SnapshotError, "expired"):
+            recovery.validate_approved_plan(approved, approved, now=NOW + timedelta(hours=2))
+        wrong = copy.deepcopy(approved)
+        wrong["target"]["database_id"] = "different-cluster"
+        with self.assertRaisesRegex(SnapshotError, "wrong_target"):
+            recovery.validate_approved_plan(wrong, approved, now=NOW)
+        changed = self.plan([{**source_rows()[0], "QtaUmMag": 99}])
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            recovery.validate_approved_plan(approved, changed, now=NOW)
+
+    def test_cache_and_certificate_edits_invalidate_report(self):
+        approved = self.plan()
+        link = self.db.scalar(select(QuartaTaglioEsolverLink))
+        link.rows = [{**link.rows[0], "qta_um_mag": 10}]
+        self.db.commit()
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            recovery.validate_approved_plan(approved, self.plan(), now=NOW)
+        approved = self.plan()
+        self.db.add(QuartaTaglioFinalCertificate(cod_odp="OL1", draft_number="D1", status="draft"))
+        self.db.commit()
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            recovery.validate_approved_plan(approved, self.plan(), now=NOW)
+
+    def test_missing_pdf_after_preview_invalidates_report(self):
+        self.db.add(QuartaTaglioFinalCertificate(cod_odp="OL1", draft_number="D1", status="pdf_final", storage_key_pdf="sample.pdf"))
+        self.db.commit()
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder) / "sample.pdf"
+            file.write_bytes(b"synthetic fixture")
+            with patch.object(recovery.service, "_certificate_storage_path", return_value=file):
+                approved = self.plan()
+                file.unlink()
+                with self.assertRaisesRegex(SnapshotError, "data_changed"):
+                    recovery.validate_approved_plan(approved, self.plan(), now=NOW)
+
+    def test_alpha_guard_rejects_local_other_host_and_enabled_job(self):
+        settings = SimpleNamespace(database_url="postgresql+psycopg://user:secret@postgres:5432/certi_nt",
+            app_env="production", certi_public_base_url="http://certi-test.forgialluminio.it", ddt_snapshot_enabled=False)
+        recovery.validate_alpha_settings(settings)
+        for key, value in (("app_env", "development"), ("certi_public_base_url", "http://localhost:8080"),
+                           ("database_url", "postgresql://u:p@localhost/certi_nt"), ("ddt_snapshot_enabled", True)):
+            changed = copy.copy(settings)
+            setattr(changed, key, value)
+            with self.subTest(key=key), self.assertRaises(SnapshotError):
+                recovery.validate_alpha_settings(changed)
+
+
+@unittest.skipUnless(os.environ.get("DDT_TEST_POSTGRES_URL"), "isolated PostgreSQL URL required")
+class RecoveryPostgresTest(unittest.TestCase):
+    def setUp(self):
+        url = make_url(os.environ["DDT_TEST_POSTGRES_URL"])
+        if url.host not in {"localhost", "127.0.0.1"} or not (url.database or "").startswith("certi_ddt_test"):
+            self.fail("Only isolated local certi_ddt_test databases are allowed")
+        self.root = create_engine(url, isolation_level="READ COMMITTED")
+        self.schema = "ddt_recovery_" + uuid4().hex
+        with self.root.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{self.schema}"'))
+        self.engine = self.root.execution_options(schema_translate_map={None: self.schema})
+        Base.metadata.create_all(self.engine)
+        self.factory = sessionmaker(self.engine, autoflush=False)
+        with self.factory.begin() as db:
+            seed(db)
+
+    def tearDown(self):
+        with self.root.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{self.schema}" CASCADE'))
+        self.root.dispose()
+
+    def plan(self):
+        with self.factory() as db:
+            return recovery.build_recovery_plan(db, current_rows=source_rows(), target=TARGET, now=NOW)
+
+    def apply(self, approved, fetch=None):
+        with self.factory.begin() as db:
+            return recovery.apply_approved_recovery(db, approved=approved, target=TARGET,
+                fetch_source=fetch or (lambda db: source_rows()), now=NOW)
+
+    def test_apply_repeat_with_new_report_preserves_cache_and_certificates(self):
+        approved = self.plan()
+        self.assertEqual(self.apply(approved)["historical_imported"], 1)
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            self.apply(approved)
+        repeated = self.apply(self.plan())
+        self.assertEqual(repeated["historical_imported"], 0)
+        self.assertEqual(repeated["historical_already_present"], 1)
+        with self.factory() as db:
+            self.assertEqual(len(list(db.scalars(select(QuartaTaglioDdtWorkItem)))), 2)
+            self.assertEqual(db.scalar(select(QuartaTaglioEsolverLink)).rows[0]["qta_um_mag"], 5)
+            self.assertFalse(list(db.scalars(select(QuartaTaglioFinalCertificate))))
+
+    def test_stale_cache_and_empty_or_failed_source_leave_database_untouched(self):
+        approved = self.plan()
+        def failed_source(db):
+            raise SnapshotError("synthetic_source_unavailable")
+        with self.assertRaisesRegex(SnapshotError, "source_unavailable"):
+            self.apply(approved, failed_source)
+        for fetch in (lambda db: [], lambda db: [{**source_rows()[0], "QtaUmMag": 99}]):
+            with self.assertRaises(SnapshotError):
+                self.apply(approved, fetch)
+        with self.factory.begin() as db:
+            link = db.scalar(select(QuartaTaglioEsolverLink))
+            link.rows = [{**link.rows[0], "qta_um_mag": 99}]
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            self.apply(approved)
+        with self.factory() as db:
+            self.assertFalse(list(db.scalars(select(QuartaTaglioDdtWorkItem))))
+            self.assertFalse(list(db.scalars(select(QuartaTaglioDdtSyncRun))))
+
+    def test_failure_after_writes_rolls_back_everything(self):
+        approved = self.plan()
+        original = recovery.import_legacy_cache
+        def fail(db, **kwargs):
+            original(db, **kwargs)
+            raise RuntimeError("synthetic failure")
+        with patch.object(recovery, "import_legacy_cache", side_effect=fail), self.assertRaises(RuntimeError):
+            self.apply(approved)
+        with self.factory() as db:
+            self.assertFalse(list(db.scalars(select(QuartaTaglioDdtWorkItem))))
+            self.assertFalse(list(db.scalars(select(QuartaTaglioDdtSyncRun))))
+
+    def test_snapshot_lock_refuses_import_before_source_is_read(self):
+        approved = self.plan()
+        with self.root.connect() as connection, connection.begin():
+            connection.execute(text("SELECT pg_advisory_xact_lock(:n,:k)"), {"n": _LOCK_NAMESPACE, "k": _LOCK_ID})
+            with self.assertRaisesRegex(SnapshotError, "snapshot_busy"):
+                self.apply(approved, lambda db: self.fail("source must not be read while busy"))
+
+    def test_first_install_ddl_is_transactional(self):
+        # Reproduce Alpha before the first deployment: neither queue table exists.
+        with self.engine.begin() as connection:
+            for model in (QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+                model.__table__.drop(connection)
+        approved = self.plan()
+        original = recovery.import_legacy_cache
+        def fail(db, **kwargs):
+            original(db, **kwargs)
+            raise RuntimeError("synthetic failure after DDL")
+        with patch.object(recovery, "import_legacy_cache", side_effect=fail), self.assertRaises(RuntimeError):
+            self.apply(approved)
+        with self.factory() as db:
+            for model in (QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+                self.assertFalse(recovery.table_exists(db, model))
+        self.assertEqual(self.apply(approved)["historical_imported"], 1)
+
+    def test_cache_writer_prevents_recovery(self):
+        approved = self.plan()
+        with self.factory.begin() as writer:
+            writer.execute(text(f'UPDATE "{self.schema}".quarta_taglio_esolver_links SET status=\'ok\''))
+            with self.assertRaisesRegex(SnapshotError, "recovery_inputs_busy"):
+                self.apply(approved, lambda db: self.fail("source must not be read while writer active"))

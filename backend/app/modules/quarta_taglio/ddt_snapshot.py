@@ -160,6 +160,10 @@ def _apply_snapshot(db, raw_rows, *, now):
         incoming[values["source_key"]] = values
 
     existing = list(db.scalars(select(QuartaTaglioDdtWorkItem)))
+    if not incoming and existing:
+        # A successful SQL SELECT returning zero rows does not prove that every
+        # previous DDT has legitimately left the source. Keep the last baseline.
+        raise SnapshotError("empty_source_requires_review")
     by_key = {item.source_key: item for item in existing}
     old_by_base = defaultdict(list)
     new_by_base = defaultdict(list)

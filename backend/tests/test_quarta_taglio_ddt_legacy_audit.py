@@ -156,6 +156,31 @@ class LegacyDdtAuditTest(unittest.TestCase):
             QuartaTaglioDdtWorkItem.id_documento == "100"))
         self.assertEqual(saved.quantita, 99)
 
+    def test_ambiguous_historical_group_is_excluded_in_both_orders(self):
+        for order in (("OL1", "OL2"), ("OL2", "OL1")):
+            with self.subTest(order=order):
+                self.db.query(QuartaTaglioDdtWorkItem).delete()
+                self.db.query(QuartaTaglioEsolverLink).delete()
+                if not self.db.query(QuartaTaglioRow).filter_by(cod_odp="OL2").first():
+                    self.db.add(QuartaTaglioRow(codice_registro="R2", cod_odp="OL2", cdq="CDQ2"))
+                self.db.commit()
+                for ol in order:
+                    self.add_cache([cached_row(ORP=ol)], ol=ol)
+                result = import_legacy_cache(self.db, current_rows=[source_row(IdDocumento="200")])
+                self.db.commit()
+                self.assertEqual(result["audit"]["counts"].get("recoverable_historical", 0), 0)
+                self.assertEqual(result["audit"]["issues"]["historical_identity_group_ambiguous"], 2)
+                self.assertEqual(result["historical_imported"], 0)
+                self.assertEqual(len(list(self.db.scalars(select(QuartaTaglioDdtWorkItem)))), 1)
+
+    def test_distinct_lots_history_and_simultaneous_current_ols_are_kept(self):
+        self.add_cache([cached_row(RifLottoAlfanum="a"), cached_row(RifLottoAlfanum="b")])
+        result = import_legacy_cache(self.db, current_rows=[source_row(IdDocumento="200"),
+            source_row(IdDocumento="200", ORP="OL2")])
+        self.db.commit()
+        self.assertEqual(result["historical_imported"], 2)
+        self.assertEqual(len(list(self.db.scalars(select(QuartaTaglioDdtWorkItem)))), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -154,11 +154,22 @@ class DdtSnapshotTest(unittest.TestCase):
         self.assertIsNone(self.items()[0].source_disappeared_at)
         self.assertEqual(self.items()[0].first_seen_at, old.first_seen_at)
 
-    def test_successful_empty_snapshot_retains_history(self):
+    def test_empty_snapshot_after_data_preserves_flags_and_last_success(self):
         self.sync([row()])
+        previous = self.items()[0]
         result = self.sync([])
-        self.assertEqual((result.status, result.source_rows, result.disappeared), ("success", 0, 1))
+        self.assertEqual((result.status, result.error_code), ("error", "empty_source_requires_review"))
         self.assertEqual(len(self.items()), 1)
+        self.assertTrue(self.items()[0].source_present)
+        self.assertEqual(self.items()[0].last_seen_at, previous.last_seen_at)
+        with self.factory() as db:
+            latest, success = snapshot.last_snapshot_runs(db)
+            self.assertEqual((latest.status, success.id), ("error", 1))
+        self.assertEqual(self.sync([row()]).status, "success")
+
+    def test_initial_empty_source_without_history_can_succeed(self):
+        self.assertEqual(self.sync([]).status, "success")
+        self.assertEqual(self.items(), [])
 
     def test_source_failure_retains_snapshot_and_last_success(self):
         self.sync([row()])

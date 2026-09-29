@@ -27,6 +27,73 @@ locale e non va lanciato su Alpha. Dettagli e controlli nel piano
 `docs/tasks/ddt_certification_alert_queue_plan.md`, sezione «Passaggio futuro
 su Alpha: dati propri, non copia del locale».
 
+#### Recupero DDT Alpha protetto (procedura pronta in locale, non ancora eseguita)
+
+Comando dedicato: `backend/scripts/recover_ddt_alpha.py`; non usare quello locale.
+Serve autorizzazione specifica al recupero, oltre a quella al deploy. La verifica
+visiva integrata locale è completata; resta il collaudo sui dati Alpha: non attivare
+il job come conseguenza automatica di questa procedura.
+
+Ordine, nella finestra di manutenzione concordata:
+
+1. Verificare run/caricamenti conclusi; sospendere accessi e writer applicativi.
+   Fermare backend/frontend, non PostgreSQL. Non aprire la pagina Certificazione:
+   un refresh della vecchia cache potrebbe rimuovere storico ancora da recuperare.
+2. Fare/verificare backup DB **Alpha**, storage e app secondo questo documento,
+   prima del cambio codice. Il backup deve appartenere a questa manutenzione.
+3. Installare il pacchetto verificato come nel deploy soft ma **non eseguire ancora
+   `up -d --build`**. Costruire la nuova immagine backend con `compose build backend`.
+4. Eseguire `--preview` nel container one-off con configurazione/storage Alpha,
+   senza avviare l'app. Presentare il report all'utente; solo dopo OK, `--apply`.
+5. Confrontare il risultato con il report: quantità/chiavi, storico, PDF completati,
+   duplicati esclusi. Poi riprendere l'avvio e le verifiche del normale deploy soft.
+   Se non si prosegue con il recupero, lasciare il job disattivato e annotare che
+   riaprire la vecchia app può aggiornare la cache. Non dichiarare recupero concluso.
+
+Esempio di comandi **futuri**, dal server `/srv/certi_nt/app`, dopo backup e
+sostituzione codice. Sostituire i nomi segnaposto con i file di questa esecuzione:
+
+```bash
+docker compose --env-file .env -f docker-compose.alpha.yml build backend
+
+# Report nuovo: il comando non sovrascrive un file esistente.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit \
+  backend python -m scripts.recover_ddt_alpha \
+  --preview --report /audit/ddt_preview_TIMESTAMP.json
+
+# Solo dopo esame/OK sul report, con accessi e writer ancora sospesi.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit:ro \
+  backend python -m scripts.recover_ddt_alpha \
+  --apply --report /audit/ddt_preview_TIMESTAMP.json \
+  --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
+```
+
+Usare la forma `python -m scripts.recover_ddt_alpha` dalla directory `/app`
+del container: l'esecuzione diretta del file non trova il package `app`.
+L'avvio con `--help` è stato verificato nel container locale.
+
+Lo script verifica ambiente Alpha, database `certi_nt`, host Compose `postgres`,
+host pubblico e identità del cluster, e richiede il job disabilitato. Il report
+scade dopo un'ora. Prima di scrivere rilegge vista eSolver e dati Alpha sotto lock:
+se sono cambiati sorgente/cache/certificati/coda/file/codice, richiede nuova
+preview e nuova verifica. Non riutilizzare il vecchio report dopo un'applicazione.
+Un writer concorrente, sorgente non affidabile o errore annulla l'importazione;
+anche la creazione delle due tabelle DDT è transazionale. I record ambigui restano
+nella vecchia cache, esclusi dall'importazione automatica: non vengono eliminati
+né sommati. Le righe correnti vengono aggiornate dalla sorgente corrente, lo
+storico già conservato non viene sovrascritto dalla vecchia cache.
+
+Il dump deve essere verificato realmente: il controllo automatico accerta solo
+leggibilità/intestazione, non completezza/ripristinabilità. Il ruolo di manutenzione
+deve poter leggere `pg_control_system()`; un errore va diagnosticato, non aggirato.
+Non esporre report/backup sul web e non inserirli in Git. Il Compose Alpha attuale
+non passa `DDT_SNAPSHOT_ENABLED` al backend: aggiungerlo solo con successiva
+approvazione esplicita; scriverlo soltanto nel `.env` non attiva il job.
+
 ### Separazione obbligatoria della futura linea nuovi fornitori
 
 Il futuro laboratorio per configurare nuovi fornitori non esiste ancora e non deve essere presente su Alpha durante il suo sviluppo.
@@ -592,6 +659,11 @@ Nota: il comando con `"$POSTGRES_USER"` e `"$POSTGRES_DB"` dentro `sh -lc` puo f
 Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliato ma non sempre obbligatorio. In alpha conviene farlo spesso.
 
 ## Aggiornamento soft
+
+**Se è autorizzato anche il primo recupero DDT**, applicare la variante sopra:
+backup con writer fermi e pausa prima del comando finale `up -d --build`, per
+preview/import con la nuova immagine. Non avviare prima l'app, che aggiorna la
+cache utilizzata per recuperare lo storico.
 
 Sul server:
 
