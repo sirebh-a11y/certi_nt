@@ -1,6 +1,6 @@
 # DDT da certificare - audit Alpha e piano di implementazione
 
-**Stato:** fasi 1, 2A, 2B pubblicate; fase 3 (pagina UI) realizzata in locale; importazione storica e attivazione ancora da completare
+**Stato:** fasi 1, 2A, 2B e 3 pubblicate; recupero storico implementato ed eseguito solo in locale; attivazione e deploy Alpha ancora da decidere
 
 **Data audit:** 29/09/2026
 
@@ -130,6 +130,123 @@ La UI della coda e il collegamento alla quota esatta sono stati aggiunti nella f
 - Nessuna variabile di attivazione, migrazione dati, import storico o deploy in questa fase.
 
 Verifica locale: build frontend riuscita. La verifica visiva con dati reali e il collaudo integrato end-to-end restano nella fase 5.
+
+### Fase 4A - dry-run dello storico locale (29/09/2026)
+
+La UI della fase 3 è stata pubblicata con il commit `0bdc2d72`. Dopo il successivo `procedi` è stato aggiunto un **report in sola lettura** in `backend/scripts/audit_ddt_legacy_cache.py`, con classificazione in `ddt_legacy_audit.py` e test isolati. Il comando usa `SET TRANSACTION READ ONLY` su PostgreSQL; non crea la nuova tabella e non importa nessuna riga. `--with-esolver` legge la vista completa attuale, senza scriverla. Se manca una base corrente affidabile, il report usa `source_baseline_required` e non dichiara sicura nessuna quota storica. Sorgente vuota in presenza di cache, chiavi duplicate, identità variate, dati mancanti, certificati ambigui e PDF non verificabili non vengono promossi a recuperabili.
+
+Comando locale (con PostgreSQL del Compose avviato):
+
+```powershell
+$env:PYTHONPATH='backend'
+python backend/scripts/audit_ddt_legacy_cache.py --local-compose --with-esolver
+```
+
+Risultato misurato sul **database locale**, confrontato con la vista eSolver completa il 29/09/2026:
+
+| Misura | Esito |
+| --- | ---: |
+| Collegamenti OL nella vecchia cache | 15.838 |
+| Collegamenti che contengono righe DDT | 244 |
+| Righe DDT nella cache | 491 |
+| Identità distinte nella cache | 490 |
+| Quote storiche recuperabili per identità e campi minimi | 489 |
+| Identità duplicata da verificare | 1 (2 righe con dati discordanti) |
+| Quote attuali nella vista eSolver | 393 |
+
+I DDT conservati nella cache locale sono datati **17/06–29/07/2026**; quelli della vista corrente **03/08–29/09/2026**. Le 489 quote non sovrapposte non hanno un PDF finale esatto e verificabile nel database locale. `Recuperabile` indica che possono entrare in una successiva importazione controllata; non certifica la correttezza commerciale del dato né autorizza automaticamente Word/PDF. La coppia duplicata resta esclusa dall'importazione automatica e richiede ispezione puntuale prima di scegliere se sono due quote o una correzione.
+
+#### Caso da sottoporre al cliente nella prossima email sulle modifiche
+
+Nella cache **locale** la lettura eSolver del 28/07/2026 (09:14 UTC) contiene due record per
+`OL2026000466`, DDT `1934-17/07/2026`, `IdDocumento 5180631`, `IdRigaDoc 2`,
+`RifLottoAlfanum 2026000466`, `CodF3 509001161`. Cliente, ordini e tutti gli altri
+campi coincidono; solo `QtaUmMag` differisce: **2100** e **1**. I due record sono
+nel medesimo snapshot della cache, non derivano da due aggiornamenti successivi.
+Il codice legge entrambe le righe dalla vista `CertiRigheDDT` e le conserva senza
+aggiungerne una seconda. Non è però possibile stabilire dalla cache se la vista
+abbia duplicato la quota o se due registrazioni eSolver distinte richiedano un
+ulteriore identificativo: quel DDT non è più nella finestra della vista corrente.
+
+**Trattamento:** escludere entrambe dall'importazione automatica; non scegliere
+2100, non scegliere 1 e non sommare a 2101. Nessun Word/PDF deve essere creato
+automaticamente sulla base della coppia. Chiedere al cliente/eSolver di
+controllare il documento `5180631`, riga `2`, e spiegare cosa rappresentano le
+due quantità. Nella futura email al cliente richiamare il caso con la formula
+«come volevasi dimostrare, abbiamo trovato un DDT con due righe indistinguibili
+per l'app ma quantità diverse», chiedendo il chiarimento; comunicare che questi
+casi rimangono in verifica fino a una regola confermata. Non inviare l'email
+senza una successiva richiesta dell'utente.
+
+La nuova tabella DDT non esisteva ancora nel database locale consultato, perché l'app aggiornata non era stata avviata lì. Nessuna tabella è stata creata durante il dry-run. Il report non dimostra la completezza di DDT mai transitati nella vecchia cache: per quelli servirebbe un'estrazione storica eSolver separata. I numeri locali non vanno applicati ad Alpha senza un dry-run sul suo database al momento dell'attivazione.
+
+Verifica: 6 nuovi test del report superati; regressioni Quarta/eSolver **189 superate, 4 PostgreSQL opzionali saltate** nella suite offline (già collaudate nella fase 2B su PostgreSQL temporaneo). Prossima decisione: dopo visione del report, autorizzare o meno l'implementazione/esecuzione dell'importazione locale; la riga duplicata rimane comunque in revisione. Nessuna importazione o deploy è stata fatta.
+
+### Fase 4B - recupero storico locale autorizzato (29/09/2026)
+
+Il successivo `procedi` ha autorizzato l'importazione **sul solo PostgreSQL locale**.
+`ddt_legacy_import.py` riusa la classificazione del dry-run e la funzione dello
+snapshot corrente; lo script `import_ddt_legacy_cache.py` accetta solo
+`--local-compose --apply`. Dopo una nuova lettura completa eSolver crea, se
+necessarie, solo le due tabelle DDT già previste e registra snapshot corrente
+e storico nella stessa transazione PostgreSQL, sotto il lock della sincronizzazione.
+Se la sorgente è incompleta/duplicata o l'importazione fallisce, anche la
+creazione delle tabelle viene annullata. La vecchia cache e i certificati non
+vengono modificati. Le righe storiche importate mantengono come ultima lettura
+il timestamp della cache; la data di uscita dalla vista è **data di rilevazione**,
+non data eSolver conosciuta. La pagina le mostra come non più presenti nella
+finestra eSolver, da verificare operativamente prima della certificazione.
+
+Esito locale: 393 righe della vista corrente + 489 quote storiche univoche =
+**882 work item**. La coppia `5180631/2` con quantità 2100/1 è rimasta nella
+vecchia cache ma **non** nella nuova tabella; nessuna quantità è stata scelta o
+sommata. Seconda esecuzione: zero nuove righe, 489 storiche già presenti, zero
+conflitti. La lettura della coda su tutti gli 882 elementi ha restituito 882
+attivi (49 da collegare, 807 in attesa Incoming, 14 pronti lato Incoming,
+12 in verifica), senza oggetti ORM modificati e in circa 3,7 secondi sul PC
+locale. Questi numeri sono una fotografia, non soglie o aspettative fisse.
+
+Test: **192 superati, 4 PostgreSQL opzionali saltati** nella suite Quarta/eSolver;
+9 test mirati di audit/import inclusi. Nessuna modifica a frontend, deploy Alpha,
+flag `DDT_SNAPSHOT_ENABLED`, Word/PDF o dati del server. PostgreSQL locale era
+spento prima della verifica ed è stato fermato nuovamente al termine.
+
+Limite: il recupero riguarda solo le righe ancora presenti nella vecchia cache
+locale. Non dimostra che ogni DDT storico eSolver sia stato visto dall'app; per
+Alpha serve un proprio dry-run, decisione esplicita sull'importazione e collaudo
+prima dell'attivazione periodica. Non usare i conteggi locali come dati Alpha.
+
+### Passaggio futuro su Alpha: dati propri, non copia del locale
+
+**Il commit/push del codice non autorizza un'importazione né un deploy Alpha.**
+Lo script `import_ddt_legacy_cache.py` è volutamente limitato al Compose locale:
+non copiarne o aggirarne il controllo per eseguirlo sul server. Prima di un
+eventuale recupero Alpha occorre predisporre e testare una modalità server
+separata, protetta contro la scelta del database sbagliato.
+
+Ordine richiesto sul server, solo dopo nuova autorizzazione:
+
+1. verificare che non ci siano run/caricamenti utenti in corso, seguire il
+   Markdown di deploy soft e fare backup del **database Alpha** e dei file;
+2. leggere in sola lettura la cache `quarta_taglio_esolver_links.rows`, le
+   righe Quarta, i certificati/Word/PDF e la vista eSolver **dell'ambiente
+   Alpha**, producendo un dry-run con conteggi e identità problematiche;
+3. confrontare il report Alpha con lo stato reale della sua nuova tabella DDT:
+   distinguere quote correnti, già importate, storiche univoche, completate,
+   duplicate, modificate e collegate a certificati non univoci. Non usare i
+   numeri locali (393/489/882) come condizione di importazione;
+4. presentare report, conflitti e piano di gestione all'utente. I record
+   discordanti restano fuori dall'automatismo; nessun DDT locale viene copiato;
+5. solo dopo l'OK specifico, importare nella **stessa transazione** snapshot
+   corrente e sole righe storiche sicure della cache Alpha, con lock e verifica
+   d'idempotenza. Non riscrivere cache, Incoming, Word, PDF o certificati;
+6. confrontare prima/dopo contatori, chiavi e qualche OL campione (più DDT,
+   Word anticipato, PDF chiuso, dato ambiguo), verificare pagina e registro,
+   poi decidere **separatamente** quando abilitare il job periodico.
+
+Se il backup, la sorgente completa, il dry-run o la verifica post-import non
+sono affidabili, fermarsi: il deploy del codice può restare con sincronizzazione
+disattivata e non deve essere spacciato per recupero storico completato.
 
 ### Precisazione emersa nell'implementazione
 

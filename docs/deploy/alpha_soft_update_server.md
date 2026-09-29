@@ -13,6 +13,20 @@ Devono restare intatti:
 - file `.env` del server;
 - configurazioni Nginx/server fatte da IT.
 
+### Coda DDT: deploy del codice distinto dal recupero dati
+
+La funzione `DDT da certificare` conserva uno snapshot locale e richiede un
+recupero storico iniziale. **Non copiare sul server le righe importate nel
+database di sviluppo.** Il recupero Alpha deve usare esclusivamente la cache,
+i certificati e il database Alpha, confrontati con la vista eSolver corrente.
+Prima occorrono backup e dry-run Alpha in sola lettura; conflitti/duplicati
+restano in verifica. L'importazione reale e l'attivazione di
+`DDT_SNAPSHOT_ENABLED` sono due decisioni distinte, ciascuna con OK esplicito.
+Lo script `backend/scripts/import_ddt_legacy_cache.py` è solo per il Compose
+locale e non va lanciato su Alpha. Dettagli e controlli nel piano
+`docs/tasks/ddt_certification_alert_queue_plan.md`, sezione «Passaggio futuro
+su Alpha: dati propri, non copia del locale».
+
 ### Separazione obbligatoria della futura linea nuovi fornitori
 
 Il futuro laboratorio per configurare nuovi fornitori non esiste ancora e non deve essere presente su Alpha durante il suo sviluppo.
