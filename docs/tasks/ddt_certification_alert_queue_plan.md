@@ -1,6 +1,6 @@
 # DDT da certificare - audit Alpha e piano di implementazione
 
-**Stato:** fasi 1, 2A, 2B e 3 pubblicate; recupero storico eseguito solo in locale; protezioni aggiuntive e comando Alpha implementati/testati in locale; verifica visiva integrata completata in locale; attivazione, recupero dati e deploy Alpha ancora da completare/autorizzare
+**Stato:** fasi 1, 2A, 2B e 3 e protezioni 4C pubblicate; recupero storico eseguito solo in locale; verifica visiva integrata locale completata; audit e prerequisiti Alpha verificati in sola lettura; attivazione, recupero dati e deploy Alpha ancora da autorizzare
 
 **Data audit:** 29/09/2026
 
@@ -443,6 +443,34 @@ un nuovo PDF finale. Prossimo passaggio: commit/push del lavoro DDT dopo richies
 esplicita, poi audit/preview Alpha e recupero/attivazione nelle autorizzazioni
 previste dal piano. I report temporanei, gli screenshot e il Markdown separato
 sulle dipendenze non fanno parte del commit DDT.
+
+### Pubblicazione e nuova verifica Alpha in sola lettura (29/09/2026)
+
+Il commit `a0c58bd5cc8c962e7da4ee568d391982efd2ee31` è pubblicato su `main`:
+contiene le protezioni 4C, la procedura di recupero, i test e le correzioni
+visive. L'utente ha autorizzato commit/push e prosecuzione delle verifiche,
+ma ha esplicitamente rinviato il deploy Alpha al proprio successivo via.
+
+Audit Alpha ripetuto alle **15:18 italiane**, usando il codice di classificazione
+appena pubblicato solo nella memoria di un processo separato. Confermati:
+393 quote correnti, 182 storiche recuperabili (62 DDT, 90 OL), zero duplicati,
+zero conflitti identificati, zero differenze sui dati comuni cache/sorgente.
+Simulazione: 575 quote totali, di cui 567 attive e 8 completate con PDF verificato;
+fra le attive, 514 in attesa Incoming, 49 da collegare, 2 pronte e 2 con Word.
+Transazione `READ ONLY` verificata, zero oggetti ORM nuovi/modificati, rollback.
+
+Prerequisiti letti sul server: ambiente `production`, database `certi_nt` su
+`postgres:5432`, URL pubblico Alpha corretto, directory storage presente,
+identità del cluster leggibile e permessi CREATE sul database/schema pubblico
+disponibili. Nessuna tabella creata per provarli. Sincronizzazione DDT disattiva;
+le due nuove tabelle DDT non esistono ancora. Tre servizi attivi, PostgreSQL
+healthy. `SOURCE_COMMIT` resta `901d491f56e06ab4291ce87d0a1ab96df4ae03d0`.
+
+Questa lettura non è il report approvabile di `recover_ddt_alpha --preview`:
+quello andrà generato con la nuova immagine nella finestra autorizzata e vale
+un'ora. Prima di importare servono backup verificati e nuova approvazione sul
+report. Nessun file installato su Alpha, nessun riavvio, deploy, import o avvio
+del job. I numeri vanno riletti al momento dell'intervento.
 
 ### Precisazione emersa nell'implementazione
 
