@@ -308,8 +308,7 @@ class DdtSnapshotPostgresTest(unittest.TestCase):
         with self.root_engine.begin() as conn:
             conn.execute(text(f'CREATE SCHEMA "{self.schema}"'))
         self.engine = self.root_engine.execution_options(schema_translate_map={None: self.schema})
-        for table in (QuartaTaglioDdtWorkItem.__table__, QuartaTaglioDdtSyncRun.__table__):
-            table.create(self.engine)
+        Base.metadata.create_all(self.engine)
         self.factory = sessionmaker(bind=self.engine, autoflush=False)
 
     def tearDown(self):

@@ -1,13 +1,37 @@
-"""Read-only contract for the persistent DDT work queue."""
+"""Queue read models and requests for manual DDT decisions."""
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-DdtState = Literal["completed", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
-DdtScope = Literal["active", "completed", "all"]
+DdtState = Literal["completed", "excluded", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
+DdtScope = Literal["active", "completed", "excluded", "all"]
+
+
+class DdtDecisionRequest(BaseModel):
+    action: Literal["exclude", "restore"]
+    reason: str = Field(min_length=1, max_length=2000)
+    expected_decision_id: int = Field(ge=0)
+    source_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Inserire il motivo della decisione")
+        return value
+
+
+class DdtDecisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    action: str
+    reason: str
+    actor_name: str
+    created_at: datetime
 
 
 class DdtWorkItemResponse(BaseModel):
@@ -40,6 +64,10 @@ class DdtWorkItemResponse(BaseModel):
     word_candidate_id: int | None = None
     # "ready" means Incoming-ready, not permission to bypass standard/PDF checks.
     incoming_ready: bool = False
+    operational_state: DdtState | None = None
+    source_revision: str = ""
+    latest_decision: DdtDecisionResponse | None = None
+    exclusion_active: bool = False
 
 
 class DdtSyncAttemptResponse(BaseModel):

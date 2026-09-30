@@ -34,6 +34,16 @@ configurato e mantenerlo concordato con il termine eSolver. Il deploy non deve
 attivare il job DDT, importare lo storico o cambiare la configurazione eSolver
 implicitamente. Gli avvisi sono informativi, non confermano l'invio al cliente.
 
+Aggiornamento 30/09 — **esclusioni manuali DDT**: il bootstrap aggiunge la tabella
+`quarta_taglio_ddt_decisions`, senza ALTER sulle tabelle esistenti. Contiene
+motivi/autori/date e storico di esclusioni, ripristini e riaperture per dati
+modificati. Includerla nei normali backup PostgreSQL e conservarla nei rollback.
+Verificare dopo deploy permessi admin Qualità, vista Esclusi e conteggio sidebar.
+Il report recupero passa a **versione 2** e controlla anche le decisioni:
+rifare sempre preview; un vecchio report non è riutilizzabile. Nessuna
+esclusione va importata dal database di sviluppo. Dettagli nel documento
+`docs/tasks/ddt_manual_exclusions.md`.
+
 #### Recupero DDT Alpha protetto (procedura pronta in locale, non ancora eseguita)
 
 Comando dedicato: `backend/scripts/recover_ddt_alpha.py`; non usare quello locale.
@@ -89,7 +99,8 @@ scade dopo un'ora. Prima di scrivere rilegge vista eSolver e dati Alpha sotto lo
 se sono cambiati sorgente/cache/certificati/coda/file/codice, richiede nuova
 preview e nuova verifica. Non riutilizzare il vecchio report dopo un'applicazione.
 Un writer concorrente, sorgente non affidabile o errore annulla l'importazione;
-anche la creazione delle due tabelle DDT è transazionale. I record ambigui restano
+anche la creazione delle tre tabelle DDT (quote, sincronizzazioni, decisioni) è
+transazionale. I record ambigui restano
 nella vecchia cache, esclusi dall'importazione automatica: non vengono eliminati
 né sommati. Le righe correnti vengono aggiornate dalla sorgente corrente, lo
 storico già conservato non viene sovrascritto dalla vecchia cache.

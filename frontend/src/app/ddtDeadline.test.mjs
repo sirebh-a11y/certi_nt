@@ -38,6 +38,7 @@ test("missing or malformed dates never invent a deadline", () => {
 test("completed PDFs have no warning; other operational states and history keep their deadline", () => {
   const now = at("2026-10-10T12:00:00Z");
   assert.equal(ddtDeadline({ ...item, state: "completed" }, now), null);
+  assert.equal(ddtDeadline({ ...item, state: "excluded" }, now), null);
   for (const state of ["ready", "review", "waiting_incoming", "quality_rejected", "word_ready", "to_link"]) {
     const original = { ...item, state, source_present: false, first_seen_at: "2026-10-10T11:59:00Z" };
     const copy = { ...original };

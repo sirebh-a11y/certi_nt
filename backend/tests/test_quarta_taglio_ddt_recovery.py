@@ -197,9 +197,10 @@ class RecoveryPostgresTest(unittest.TestCase):
                 self.apply(approved, lambda db: self.fail("source must not be read while busy"))
 
     def test_first_install_ddl_is_transactional(self):
-        # Reproduce Alpha before the first deployment: neither queue table exists.
+        # Reproduce Alpha before first deployment: all queue tables are absent.
+        from app.modules.quarta_taglio.models import QuartaTaglioDdtDecision
         with self.engine.begin() as connection:
-            for model in (QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+            for model in (QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
                 model.__table__.drop(connection)
         approved = self.plan()
         original = recovery.import_legacy_cache
@@ -209,7 +210,7 @@ class RecoveryPostgresTest(unittest.TestCase):
         with patch.object(recovery, "import_legacy_cache", side_effect=fail), self.assertRaises(RuntimeError):
             self.apply(approved)
         with self.factory() as db:
-            for model in (QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+            for model in (QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
                 self.assertFalse(recovery.table_exists(db, model))
         self.assertEqual(self.apply(approved)["historical_imported"], 1)
 
@@ -219,3 +220,44 @@ class RecoveryPostgresTest(unittest.TestCase):
             writer.execute(text(f'UPDATE "{self.schema}".quarta_taglio_esolver_links SET status=\'ok\''))
             with self.assertRaisesRegex(SnapshotError, "recovery_inputs_busy"):
                 self.apply(approved, lambda db: self.fail("source must not be read while writer active"))
+
+    def test_manual_decisions_share_snapshot_lock_and_invalidate_recovery_plan(self):
+        from fastapi import HTTPException
+        from app.modules.quarta_taglio.ddt_decisions import change_decision, source_revision
+        from app.modules.quarta_taglio.ddt_schemas import DdtDecisionRequest
+        self.apply(self.plan())
+        approved = self.plan()
+        user = SimpleNamespace(id=None, name="Test Qualità", role="admin", department=SimpleNamespace(name="Qualità"))
+        with self.factory() as db:
+            item = db.scalar(select(QuartaTaglioDdtWorkItem))
+            payload = DdtDecisionRequest(action="exclude", reason="Test", expected_decision_id=0,
+                                         source_revision=source_revision(item))
+            with self.root.connect() as connection, connection.begin():
+                connection.execute(text("SELECT pg_advisory_xact_lock(:n,:k)"), {"n": _LOCK_NAMESPACE, "k": _LOCK_ID})
+                with self.assertRaises(HTTPException) as caught:
+                    change_decision(db, item.id, payload, user)
+                self.assertEqual(caught.exception.status_code, 409)
+            change_decision(db, item.id, payload, user)
+        with self.assertRaisesRegex(SnapshotError, "data_changed"):
+            self.apply(approved)
+
+    def test_postgres_decision_then_snapshot_change_reopens_in_same_transaction(self):
+        from app.modules.quarta_taglio.ddt_decisions import change_decision, source_revision, latest_decisions
+        from app.modules.quarta_taglio.ddt_schemas import DdtDecisionRequest
+        from app.modules.quarta_taglio.ddt_snapshot import _apply_snapshot
+        from app.modules.quarta_taglio.ddt_queue import read_ddt_queue
+        self.apply(self.plan())
+        user = SimpleNamespace(id=None, name="Test Qualità", role="admin", department=SimpleNamespace(name="Qualità"))
+        with self.factory() as db:
+            item = db.scalar(select(QuartaTaglioDdtWorkItem).where(QuartaTaglioDdtWorkItem.source_present.is_(True)))
+            item_id = item.id
+            change_decision(db, item_id, DdtDecisionRequest(action="exclude", reason="Test", expected_decision_id=0,
+                            source_revision=source_revision(item)), user)
+        with self.factory.begin() as db:
+            _apply_snapshot(db, source_rows(), now=NOW)
+            self.assertEqual(read_ddt_queue(db, scope="excluded").total_items, 1)
+        with self.factory.begin() as db:
+            _apply_snapshot(db, [{**source_rows()[0], "QtaUmMag": 987}], now=NOW)
+        with self.factory() as db:
+            self.assertEqual(latest_decisions(db, [item_id])[item_id].action, "review")
+            self.assertEqual(read_ddt_queue(db, scope="excluded").total_items, 0)

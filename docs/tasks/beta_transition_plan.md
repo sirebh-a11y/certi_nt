@@ -137,8 +137,10 @@ temporale della sorgente faccia perdere la possibilità di recuperarli.
   arretrato. Non cambia lo stato e non significa «tutto ciò che manca».
   Durata ancora da decidere.
 - Non richiede certificazione: eventuale esclusione manuale motivata per casi
-  concordati, con permessi e tracciamento. Non è un PDF completato e non va
-  usata per togliere in massa lo storico. Non implementata né autorizzata.
+  concordati, con permessi e tracciamento. Autorizzata e implementata in locale
+  il 30/09: vista Esclusi, ripristino, storico e riapertura per dati modificati.
+  Non è un PDF completato e non va usata per togliere in massa lo storico.
+  Dettagli in [Esclusioni manuali DDT](ddt_manual_exclusions.md).
 
 ## 5. Mail preliminare già inviata a Marco, Emilio e Walter
 
@@ -167,9 +169,10 @@ Risposte ricevute e decisioni ancora aperte:
    quando la quota ha i dati necessari; verificarli poi su Alpha.
 4. **Marco:** individuare i casi per l'azione `Non richiede certificazione`.
    L'utente ha stabilito che può deciderla solo l'**amministratore Qualità**;
-   motivazione, autore, data e ripristino sono proposti. Non è implementata.
-   Il controllo permessi dovrà verificare specificamente reparto Qualità e
-   ruolo admin: l'helper generico di area Qualità include anche IT.
+   motivazione, autore, data e ripristino sono stati autorizzati e implementati
+   in locale il 30/09. Il controllo permessi verifica specificamente reparto
+   Qualità e ruolo admin: l'helper generico di area Qualità include anche IT.
+   Restano da raccogliere i casi pratici di Marco nel collaudo Alpha.
 5. **Marco:** decidere data iniziale beta, trattamento dei vecchi DDT ancora
    da lavorare e se una riga ormai scaduta debba uscire dalla vista operativa.
    «Togliere» non autorizza la cancellazione dei dati né la marcatura come PDF.
@@ -208,7 +211,9 @@ Risposte ricevute e decisioni ancora aperte:
 - Scadenza solo informativa: non modifica stati, permessi, filtri, badge,
   blocchi di certificazione o Registro; lo scaduto rimane lavoro attivo.
 - Restano fuori da questo intervento esclusione manuale, soglia beta e
-  riconciliazione del duplicato corretto da Walter. Nessun deploy autorizzato.
+  riconciliazione del duplicato corretto da Walter. L'esclusione manuale è stata
+  poi implementata con autorizzazione separata nello stesso giorno; vedere il
+  documento dedicato. Soglia beta e riconciliazione restano aperte. Nessun deploy.
 
 ## Registro aggiornamenti
 
@@ -221,3 +226,4 @@ Risposte ricevute e decisioni ancora aperte:
 | 29/09/2026 | Messaggio di ripartenza e ricarica tabella DDT | Autorizzati, implementati e verificati in locale; nessun deploy |
 | 29/09/2026 | Mail preliminare riportata dall'utente | Inviata a Marco, Emilio e Walter; risposte aperte annotate sopra |
 | 30/09/2026 | Risposta Walter, 7 giorni calendario inclusivi e colori | Autorizzati e implementati in locale; nessun deploy |
+| 30/09/2026 | Esclusione singola quota, ripristino e storico | Autorizzati e verificati in locale, riservati ad admin Qualità; nessun deploy |

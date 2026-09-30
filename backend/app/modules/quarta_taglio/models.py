@@ -115,6 +115,21 @@ class QuartaTaglioDdtWorkItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class QuartaTaglioDdtDecision(Base):
+    """Append-only decisions on one source share, including automatic reopening."""
+
+    __tablename__ = "quarta_taglio_ddt_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_ddt_work_items.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    actor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_facts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class QuartaTaglioDdtSyncRun(Base):
     __tablename__ = "quarta_taglio_ddt_sync_runs"
 

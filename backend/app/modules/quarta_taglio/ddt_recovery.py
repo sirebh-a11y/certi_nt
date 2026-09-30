@@ -18,14 +18,15 @@ from app.modules.quarta_taglio.ddt_legacy_import import import_legacy_cache
 from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _fetch_complete_snapshot, _LOCK_ID, _LOCK_NAMESPACE
 from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem,
-    QuartaTaglioEsolverLink, QuartaTaglioFinalCertificate, QuartaTaglioRow,
+    QuartaTaglioEsolverLink, QuartaTaglioFinalCertificate, QuartaTaglioRow, QuartaTaglioDdtDecision,
 )
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 PLAN_MAX_AGE = timedelta(hours=1)
 ALPHA_HOST = "certi-test.forgialluminio.it"
 INPUT_MODELS = (QuartaTaglioEsolverLink, QuartaTaglioRow, QuartaTaglioFinalCertificate,
-                QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun)
+                QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun,
+                QuartaTaglioDdtDecision)
 
 
 def _json(value):
@@ -81,7 +82,7 @@ def build_recovery_plan(db, *, current_rows, target, now=None):
             for row in records:
                 file_facts.extend([_file_fact(row["storage_key_pdf"]), _file_fact(row["storage_key_docx"])])
     code_files = ("ddt_recovery.py", "ddt_legacy_audit.py", "ddt_legacy_import.py", "ddt_snapshot.py",
-                  "ddt_context.py", "ddt_queue.py", "service.py")
+                  "ddt_context.py", "ddt_queue.py", "ddt_decisions.py", "service.py")
     algorithm = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in code_files}
     facts = dict(target=target, source=sorted(_json(row) for row in current_rows), database=inputs,
                  files=sorted(_json(fact) for fact in file_facts), algorithm=algorithm, audit=audit)
@@ -125,7 +126,7 @@ def lock_recovery_inputs(db):
             schema_map = db.connection().get_execution_options().get("schema_translate_map", {})
             if None in schema_map:  # Isolated PostgreSQL test schemas.
                 table = db.get_bind().dialect.identifier_preparer.quote_schema(schema_map[None]) + "." + table
-            mode = "SHARE ROW EXCLUSIVE" if model in (QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun) else "SHARE"
+            mode = "SHARE ROW EXCLUSIVE" if model in (QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun, QuartaTaglioDdtDecision) else "SHARE"
             try:
                 db.execute(text(f"LOCK TABLE {table} IN {mode} MODE NOWAIT"))
             except DBAPIError as exc:
@@ -140,5 +141,5 @@ def apply_approved_recovery(db, *, approved, target, fetch_source=_fetch_complet
     rows = fetch_source(db)
     current = build_recovery_plan(db, current_rows=rows, target=target, now=now)
     validate_approved_plan(approved, current, now=now)
-    Base.metadata.create_all(db.connection(), tables=[QuartaTaglioDdtWorkItem.__table__, QuartaTaglioDdtSyncRun.__table__])
+    Base.metadata.create_all(db.connection(), tables=[QuartaTaglioDdtWorkItem.__table__, QuartaTaglioDdtSyncRun.__table__, QuartaTaglioDdtDecision.__table__])
     return import_legacy_cache(db, current_rows=rows, now=now)

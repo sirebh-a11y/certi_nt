@@ -223,6 +223,9 @@ def _apply_snapshot(db, raw_rows, *, now):
             item.source_disappeared_at = now
             counts["disappeared"] += 1
     db.flush()
+    from app.modules.quarta_taglio.ddt_decisions import invalidate_changed_exclusions
+    invalidate_changed_exclusions(db, list(db.scalars(select(QuartaTaglioDdtWorkItem))), now)
+    db.flush()
     return SnapshotResult(status="success", **counts)
 
 

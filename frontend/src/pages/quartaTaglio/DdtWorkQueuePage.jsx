@@ -6,6 +6,7 @@ import { useAuth } from "../../app/auth";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
 import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
 import { ddtDeadline } from "../../app/ddtDeadline";
+import DdtDecisionDialog from "./DdtDecisionDialog";
 
 const DEADLINE_CLASSES = {
   normal: "border-slate-200 bg-slate-50 text-slate-600",
@@ -24,6 +25,7 @@ const STATE_OPTIONS = [
   ["to_link", "Da collegare"],
   ["review", "Da verificare"],
   ["completed", "Completati"],
+  ["excluded", "Esclusi"],
 ];
 
 const STATE_CLASSES = {
@@ -34,6 +36,7 @@ const STATE_CLASSES = {
   to_link: "border-amber-200 bg-amber-50 text-amber-800",
   review: "border-amber-200 bg-amber-50 text-amber-800",
   completed: "border-slate-200 bg-slate-50 text-slate-700",
+  excluded: "border-slate-300 bg-slate-100 text-slate-700",
 };
 
 const INITIAL_FILTERS = {
@@ -106,7 +109,11 @@ function StatusCard({ label, value, tone = "slate" }) {
 }
 
 export default function DdtWorkQueuePage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const department = (user?.department || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  const canDecide = user?.role === "admin" && department === "qualita";
+  const [decisionDialog, setDecisionDialog] = useState(null);
+  const [decisionNotice, setDecisionNotice] = useState("");
   const [draftFilters, setDraftFilters] = useState(INITIAL_FILTERS);
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [offset, setOffset] = useState(0);
@@ -122,10 +129,9 @@ export default function DdtWorkQueuePage() {
   const updateDraft = useCallback((field, value) => {
     setDraftFilters((current) => {
       const next = { ...current, [field]: value };
-      if (field === "state" && value === "completed") next.scope = "completed";
-      if (field === "state" && value && value !== "completed" && current.scope === "completed") next.scope = "active";
-      if (field === "scope" && value === "completed" && current.state !== "completed") next.state = "";
-      if (field === "scope" && value === "active" && current.state === "completed") next.state = "";
+      if (field === "state" && ["completed", "excluded"].includes(value)) next.scope = value;
+      if (field === "state" && value && !["completed", "excluded"].includes(value) && ["completed", "excluded"].includes(current.scope)) next.scope = "active";
+      if (field === "scope") next.state = "";
       return next;
     });
   }, []);
@@ -154,6 +160,10 @@ export default function DdtWorkQueuePage() {
     apiRequest(`/quarta-taglio/ddt-work-items?${filterParams(filters, offset)}`, {}, token)
       .then((result) => {
         if (cancelled) return;
+        if (offset > 0 && offset >= result.total_items) {
+          setOffset(Math.max(0, Math.ceil(result.total_items / Number(filters.limit)) - 1) * Number(filters.limit));
+          return;
+        }
         const now = Date.now();
         setClock(now);
         const recovered = ddtSyncRecovered(syncStatusRef.current, result.sync, now);
@@ -243,6 +253,7 @@ export default function DdtWorkQueuePage() {
         <StatusCard label="Da collegare" value={data?.by_state?.to_link} tone="amber" />
         <StatusCard label="Da verificare" value={(data?.by_state?.review || 0) + (data?.by_state?.quality_rejected || 0)} tone="rose" />
         <StatusCard label="Completati" value={data?.by_state?.completed} />
+        <StatusCard label="Esclusi" value={data?.by_state?.excluded} />
       </div>
       <p className="text-xs text-slate-500">I contatori seguono la ricerca e la presenza eSolver; vista, stato e pagina non li restringono.</p>
 
@@ -270,7 +281,7 @@ export default function DdtWorkQueuePage() {
           ))}
           <label className="block text-xs font-semibold text-slate-600">Vista
             <select value={draftFilters.scope} onChange={(event) => updateDraft("scope", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
-              <option value="active">Attivi</option><option value="completed">Completati</option><option value="all">Tutti</option>
+              <option value="active">Attivi</option><option value="completed">Completati</option><option value="excluded">Esclusi</option><option value="all">Tutti</option>
             </select>
           </label>
           <label className="block text-xs font-semibold text-slate-600">Stato
@@ -306,6 +317,7 @@ export default function DdtWorkQueuePage() {
         </div>
       </form>
 
+      {decisionNotice ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{decisionNotice}</p> : null}
       {error ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p> : null}
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="min-w-[1600px] w-full text-left text-sm">
@@ -346,16 +358,25 @@ export default function DdtWorkQueuePage() {
                   <td className="whitespace-nowrap px-3 py-3">{formatQuantity(item.quantita)}</td>
                   <td className="min-w-40 break-words px-3 py-3">{item.ordine_cliente || "-"}</td>
                   <td className="min-w-36 break-words px-3 py-3">{item.conferma_ordine || "-"}</td>
-                  <td className="min-w-20 px-3 py-3 text-xs">{item.state === "quality_rejected" ? "Qualità respinta" : item.incoming_ready ? "Pronto" : "Da verificare"}</td>
-                  <td className="min-w-24 px-3 py-3 text-xs">{item.state === "completed" ? "PDF finale" : item.word_candidate_id ? "Word presente" : item.certificate_id ? "Scheda presente" : "Da fare"}</td>
+                  <td className="min-w-20 px-3 py-3 text-xs">{(item.operational_state || item.state) === "quality_rejected" ? "Qualità respinta" : item.incoming_ready ? "Pronto" : "Da verificare"}</td>
+                  <td className="min-w-24 px-3 py-3 text-xs">{item.state === "completed" ? "PDF finale" : item.state === "excluded" ? "Non richiesta" : item.word_candidate_id ? "Word presente" : item.certificate_id ? "Scheda presente" : "Da fare"}</td>
                   <td className="min-w-52 px-3 py-3">
                     <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[item.state] || STATE_CLASSES.review}`}>{item.label}</span>
+                    {item.latest_decision ? <div className="mt-2 max-w-xs text-xs text-slate-600">
+                      <p className="line-clamp-3 whitespace-pre-wrap break-words" title={item.latest_decision.reason}>{item.latest_decision.reason}</p>
+                      <p className="mt-1">{item.latest_decision.actor_name} · {formatTimestamp(item.latest_decision.created_at)}</p>
+                    </div> : null}
                     {item.reasons?.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-600">{item.reasons.map((reason, index) => <li key={`${item.id}-${index}`}>{reason}</li>)}</ul> : null}
                     {!item.source_present ? <span className="mt-1 block text-xs font-medium text-amber-800">Conservato nello storico</span> : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 text-xs">{formatTimestamp(item.last_seen_at)}</td>
                   <td className="min-w-36 px-3 py-3">
                     <div className="flex flex-col items-start gap-2 text-xs font-semibold">
+                      {canDecide && item.source_revision && item.state !== "completed" && item.state !== "excluded" ?
+                        <button type="button" onClick={() => setDecisionDialog({ item, action: "exclude" })} className="text-slate-700 underline">Non richiede certificazione</button> : null}
+                      {canDecide && item.source_revision && ["exclude", "review"].includes(item.latest_decision?.action) ?
+                        <button type="button" onClick={() => setDecisionDialog({ item, action: "restore" })} className="text-sky-700 underline">Ripristina</button> : null}
+                      {item.latest_decision ? <button type="button" onClick={() => setDecisionDialog({ item, action: "history" })} className="text-slate-600 underline">Storico decisioni</button> : null}
                       {certificationPath && !item.source_review_reason && item.cod_f3 && item.ddt_raw && item.ddt_date ? (
                         <Link to={certificationPath} className="text-accent hover:underline">Apri certificazione</Link>
                       ) : null}
@@ -379,6 +400,13 @@ export default function DdtWorkQueuePage() {
           <button type="button" disabled={loading || offset + pageSize >= data.total_items} onClick={() => setOffset((current) => current + pageSize)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 disabled:opacity-40">Successiva</button>
         </div>
       </div> : null}
+      {decisionDialog ? <DdtDecisionDialog {...decisionDialog} token={token}
+        onClose={() => setDecisionDialog(null)} onSaved={(action) => {
+          setDecisionDialog(null);
+          setDecisionNotice(action === "exclude" ? "Quota esclusa. La ritrovi in Vista → Esclusi." : "Ripristino registrato. La quota compare negli Attivi se il PDF finale non è già pronto.");
+          setRefresh((current) => current + 1);
+          window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
+        }} /> : null}
     </section>
   );
 }

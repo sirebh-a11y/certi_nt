@@ -63,6 +63,13 @@ frontend abituale non riavviato, nessun deploy né attivazione Alpha.
 
 ## Avanzamento locale dopo il procedi
 
+Aggiornamento 30/09: realizzate anche le esclusioni manuali per admin Qualità.
+Vista Esclusi, ripristino motivato, storico e riapertura se eSolver cambia dati
+essenziali. Nuova tabella decisioni, report recupero Alpha versione 2.
+Dettagli e verifiche in [Esclusioni manuali DDT](ddt_manual_exclusions.md).
+Le note storiche sulle «due tabelle» descrivono la versione precedente:
+ora il recupero gestisce anche `quarta_taglio_ddt_decisions` (tre tabelle).
+
 L'utente ha autorizzato lo sviluppo locale. È stata realizzata la fase 1:
 
 - `QuartaTaglioDdtWorkItem` conserva i fatti sorgente anche oltre la finestra eSolver;

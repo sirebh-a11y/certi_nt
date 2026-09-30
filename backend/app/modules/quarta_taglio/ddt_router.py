@@ -1,12 +1,16 @@
-"""Local read-only endpoints, with the same department access as Certification UI."""
+"""Local queue reads and manual decisions restricted to Quality administrators."""
 from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 
 from app.core.deps import CurrentUser, DbSession, user_is_in_department
 from app.modules.quarta_taglio.ddt_queue import read_ddt_queue, read_ddt_sync
 from app.modules.quarta_taglio.ddt_schemas import DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse, DdtScope, DdtState
+from app.modules.quarta_taglio.ddt_schemas import DdtDecisionRequest, DdtDecisionResponse
+from app.modules.quarta_taglio.ddt_decisions import change_decision
+from app.modules.quarta_taglio.models import QuartaTaglioDdtDecision, QuartaTaglioDdtWorkItem
 
 
 def require_certification_reader(current_user: CurrentUser):
@@ -57,3 +61,17 @@ def ddt_sync_status(db: DbSession):
 @router.get("/counters", response_model=DdtQueueCountersResponse)
 def ddt_work_item_counters(db: DbSession, filters: Annotated[dict, Depends(source_filters)]):
     return read_ddt_queue(db, **filters, counters_only=True)
+
+
+@router.post("/{item_id}/decisions")
+def decide_ddt(item_id: int, payload: DdtDecisionRequest, db: DbSession, current_user: CurrentUser):
+    return change_decision(db, item_id, payload, current_user)
+
+
+@router.get("/{item_id}/decisions", response_model=list[DdtDecisionResponse])
+def decision_history(item_id: int, db: DbSession):
+    if db.get(QuartaTaglioDdtWorkItem, item_id) is None:
+        raise HTTPException(404, "Quota DDT non trovata")
+    return list(db.scalars(select(QuartaTaglioDdtDecision)
+                          .where(QuartaTaglioDdtDecision.work_item_id == item_id)
+                          .order_by(QuartaTaglioDdtDecision.id.desc())))

@@ -12,7 +12,7 @@ function calendarDay(value) {
 // The backend owns the deadline and configured duration. Compare calendar dates,
 // not elapsed hours: weekends, daylight saving and the browser timezone do not shift it.
 export function ddtDeadline(item, now = Date.now()) {
-  if (item.state === "completed") return null;
+  if (item.state === "completed" || item.state === "excluded") return null;
   const dueDay = calendarDay(item.certification_due_date);
   if (!item.ddt_date || dueDay === null) {
     return { tone: "unknown", label: "Data DDT da verificare" };

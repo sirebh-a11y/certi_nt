@@ -14,9 +14,12 @@ from app.core.config import settings
 from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio.ddt_context import exact_certificate as _exact_certificate, quantity_matches as _quantity_matches
 from app.modules.quarta_taglio.ddt_snapshot import last_snapshot_runs
+from app.modules.quarta_taglio.ddt_decisions import (
+    exclusion_valid, latest_decisions, source_revision, REVIEW_MESSAGE,
+)
 from app.modules.quarta_taglio.ddt_schemas import (
     DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse,
-    DdtSyncAttemptResponse, DdtWorkItemResponse,
+    DdtSyncAttemptResponse, DdtWorkItemResponse, DdtDecisionResponse,
 )
 from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem,
@@ -28,7 +31,7 @@ LABELS = {
     "completed": "Completato", "to_link": "Da collegare",
     "quality_rejected": "Qualità respinta", "waiting_incoming": "In attesa Incoming",
     "word_ready": "Word pronto - completare PDF", "ready": "Pronto lato Incoming",
-    "review": "Verifica richiesta",
+    "review": "Verifica richiesta", "excluded": "Non richiede certificazione",
 }
 
 SORT_FIELDS = {
@@ -199,10 +202,24 @@ def _project(db, items):
                                   .where(QuartaTaglioFinalCertificate.cod_odp.in_(chunk))):
             versions_by_id[version.certificate_id].append(version)
     incoming_by_ol = {ol: _incoming_status(db, by_ol[ol]) for ol in cod_odps}
+    decisions = latest_decisions(db, [item.id for item in items])
     missing = dict(ready=False, rejected=False, ids=[], reasons=[], ambiguous=False)
     for item in items:
-        result.append(_derive(item, certificates_by_ol[item.cod_odp], versions_by_id,
-                              incoming_by_ol.get(item.cod_odp, missing), family_counts))
+        row = _derive(item, certificates_by_ol[item.cod_odp], versions_by_id,
+                      incoming_by_ol.get(item.cod_odp, missing), family_counts)
+        decision = decisions.get(item.id)
+        row.operational_state = row.state
+        row.source_revision = source_revision(item)
+        if decision:
+            row.latest_decision = DdtDecisionResponse.model_validate(decision)
+            row.exclusion_active = exclusion_valid(item, decision)
+            if row.state != "completed":
+                if row.exclusion_active:
+                    row.state, row.label = "excluded", LABELS["excluded"]
+                elif decision.action in {"exclude", "review"}:
+                    row.state, row.label = "review", LABELS["review"]
+                    row.reasons.insert(0, REVIEW_MESSAGE)
+        result.append(row)
     return result
 
 
@@ -218,9 +235,9 @@ def read_ddt_sync(db):
 
 def _sort_value(item, field):
     if field == "incoming":
-        value = "Qualità respinta" if item.state == "quality_rejected" else "Pronto" if item.incoming_ready else "Da verificare"
+        value = "Qualità respinta" if item.operational_state == "quality_rejected" else "Pronto" if item.incoming_ready else "Da verificare"
     elif field == "certificazione":
-        value = "PDF finale" if item.state == "completed" else "Word presente" if item.word_candidate_id else "Scheda presente" if item.certificate_id else "Da fare"
+        value = "PDF finale" if item.state == "completed" else "Non richiesta" if item.state == "excluded" else "Word presente" if item.word_candidate_id else "Scheda presente" if item.certificate_id else "Da fare"
     elif field == "state":
         value = item.label
     else:
@@ -235,7 +252,7 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
                    date_to: date | None = None, source_present=None,
                    limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
-    if scope not in {"active", "completed", "all"} or (state is not None and state not in LABELS):
+    if scope not in {"active", "completed", "excluded", "all"} or (state is not None and state not in LABELS):
         raise HTTPException(status_code=422, detail="Filtro stato non valido")
     if limit < 1 or limit > 200 or offset < 0 or sort_field not in SORT_FIELDS or sort_direction not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
@@ -263,10 +280,11 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         counts = {key: 0 for key in LABELS}
         counts.update(Counter(item.state for item in projected))
         sync = read_ddt_sync(db)
-        counters = dict(total=len(projected), active=len(projected) - counts["completed"], by_state=counts, sync=sync)
+        counters = dict(total=len(projected), active=len(projected) - counts["completed"] - counts["excluded"], by_state=counts, sync=sync)
         if counters_only:
             return DdtQueueCountersResponse(**counters)
-        selected = [item for item in projected if (scope == "all" or (item.state == "completed") == (scope == "completed"))
+        selected = [item for item in projected if (scope == "all" or item.state == scope
+                    or (scope == "active" and item.state not in {"completed", "excluded"}))
                     and (state is None or item.state == state)]
         # Sort the whole filtered population before pagination; missing values stay last.
         present = sorted((item for item in selected if _sort_value(item, sort_field) is not None),
