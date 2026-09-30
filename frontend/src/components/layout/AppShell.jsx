@@ -18,6 +18,7 @@ export default function AppShell() {
     location.pathname.startsWith("/clients") ||
     location.pathname.startsWith("/standards") ||
     location.pathname.startsWith("/notes") ||
+    location.pathname.startsWith("/departments") ||
     location.pathname.startsWith("/ai");
 
   return (
