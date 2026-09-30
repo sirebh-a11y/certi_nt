@@ -63,7 +63,8 @@ frontend abituale non riavviato, nessun deploy né attivazione Alpha.
 
 ## Avanzamento locale dopo il procedi
 
-Aggiornamento 30/09: realizzate anche le esclusioni manuali per admin Qualità.
+Aggiornamento 30/09: realizzate anche le esclusioni manuali per admin Qualità
+e, su successiva richiesta dell'utente, anche per admin IT.
 Vista Esclusi, ripristino motivato, storico e riapertura se eSolver cambia dati
 essenziali. Nuova tabella decisioni, report recupero Alpha versione 2.
 Dettagli e verifiche in [Esclusioni manuali DDT](ddt_manual_exclusions.md).

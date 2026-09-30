@@ -168,10 +168,11 @@ Risposte ricevute e decisioni ancora aperte:
    I collegamenti `Apri certificazione` e `Apri Incoming` esistono già in locale
    quando la quota ha i dati necessari; verificarli poi su Alpha.
 4. **Marco:** individuare i casi per l'azione `Non richiede certificazione`.
-   L'utente ha stabilito che può deciderla solo l'**amministratore Qualità**;
+   L'utente ha inizialmente riservato la decisione all'**amministratore Qualità**;
    motivazione, autore, data e ripristino sono stati autorizzati e implementati
-   in locale il 30/09. Il controllo permessi verifica specificamente reparto
-   Qualità e ruolo admin: l'helper generico di area Qualità include anche IT.
+   in locale il 30/09. Successivamente, nello stesso giorno, ha autorizzato
+   anche gli **admin IT**. Il controllo usa ora admin nei reparti Qualità o IT;
+   manager, utenti ordinari e admin degli altri reparti restano esclusi.
    Restano da raccogliere i casi pratici di Marco nel collaudo Alpha.
 5. **Marco:** decidere data iniziale beta, trattamento dei vecchi DDT ancora
    da lavorare e se una riga ormai scaduta debba uscire dalla vista operativa.
@@ -227,3 +228,4 @@ Risposte ricevute e decisioni ancora aperte:
 | 29/09/2026 | Mail preliminare riportata dall'utente | Inviata a Marco, Emilio e Walter; risposte aperte annotate sopra |
 | 30/09/2026 | Risposta Walter, 7 giorni calendario inclusivi e colori | Autorizzati e implementati in locale; nessun deploy |
 | 30/09/2026 | Esclusione singola quota, ripristino e storico | Autorizzati e verificati in locale, riservati ad admin Qualità; nessun deploy |
+| 30/09/2026 | Estensione esclusione e ripristino agli admin IT | Richiesta e implementata in locale; controlli server e UI allineati |

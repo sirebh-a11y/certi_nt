@@ -78,16 +78,20 @@ class DdtDecisionTest(DdtQueueFixture):
         self.assertEqual([e["action"] for e in history], ["restore", "exclude"])
         self.assertNotIn("source_facts", history[0])
 
-    def test_only_quality_admin_can_write_backend_not_just_ui(self):
+    def test_only_quality_and_it_admins_can_exclude_and_restore(self):
         item = self.item()
         payload = self.payload(item)
-        for department, role in [("IT", "admin"), ("Qualità", "manager"), ("Qualità", "user"),
+        for department, role in [("IT", "manager"), ("IT", "user"), ("Qualità", "manager"), ("Qualità", "user"),
                                  ("Laboratorio", "admin"), ("Produzione", "admin")]:
             user = SimpleNamespace(id=self.user.id, name="Test", role=role, department=SimpleNamespace(name=department))
             self.app.dependency_overrides[get_current_user] = lambda: user
             self.assertEqual(self.post(item, payload).status_code, 403, (department, role))
+        for department in ("Qualità", "IT"):
+            user = SimpleNamespace(id=self.user.id, name=f"Admin {department}", role="admin", department=SimpleNamespace(name=department))
+            self.app.dependency_overrides[get_current_user] = lambda: user
+            self.assertEqual(self.post(item, self.payload(item)).status_code, 200, department)
+            self.assertEqual(self.post(item, self.payload(item, "restore", "Ripristino di prova")).status_code, 200, department)
         self.app.dependency_overrides[get_current_user] = lambda: self.user
-        self.assertEqual(self.post(item, payload).status_code, 200)
 
     def test_reason_required_and_stale_double_submit_rejected(self):
         item = self.item()

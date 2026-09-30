@@ -4,8 +4,9 @@
 
 ## Uso della pagina
 
-- Solo ruolo `admin` nel reparto **Qualità** può escludere o ripristinare una
-  quota. Admin IT e manager Qualità possono consultare lo storico, ma non decidere.
+- Ruolo `admin` nei reparti **Qualità o IT** può escludere o ripristinare una
+  quota. Estensione ad admin IT richiesta dall'utente il 30/09 dopo la prima
+  implementazione. Manager e utenti ordinari possono consultare, ma non decidere.
 - Nelle Azioni della singola quota: **Non richiede certificazione**. Il dialogo
   mostra DDT, OL, Cod. F3, quantità, documento, riga e lotto, e richiede il motivo.
 - La quota esce dagli Attivi e dal badge sidebar e compare in **Vista → Esclusi**.
@@ -29,7 +30,7 @@ Una modifica a documento/riga/lotto, OL, Cod. F3, DDT/data, cliente, ordine,
 conferma, quantità o segnalazione di identità sorgente richiede nuova verifica:
 la sincronizzazione registra una riapertura **Sistema** e la quota torna attiva
 con **Verifica richiesta**. Se in seguito tornano i vecchi dati, l'esclusione non
-si riattiva da sola. Admin Qualità può confermare una nuova esclusione oppure
+si riattiva da sola. Admin Qualità o IT può confermare una nuova esclusione oppure
 premere Ripristina per tornare al normale flusso.
 
 L'aggancio di un OL prima mancante invalida la vecchia decisione. Se l'identità
@@ -68,7 +69,8 @@ tabella verificati su PostgreSQL isolato. Seguire il Markdown deploy soft.
 - Build frontend riuscita; avvisi preesistenti su Browserslist e bundle.
 - Playwright sulla UI reale con API simulate: annullamento, motivo obbligatorio,
   esclusione di una sola quota, filtro Esclusi, sidebar/conteggi, ripristino,
-  storico, risposta 409 e assenza dei pulsanti per admin IT/manager Qualità.
+  storico e risposta 409. Dopo l'estensione dei permessi: admin IT abilitato,
+  manager Qualità e admin Laboratorio esclusi dalle azioni.
 - Screenshot esaminati a 1920 e 1440 px: 13 colonne, scorrimento tabella interno.
   Script temporaneo: `tmp_eval/packages_qa/ddt_decisions_check.mjs`.
 - Nessuna prova mutante sui dati applicativi reali, nessun accesso Alpha.

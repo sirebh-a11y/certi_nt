@@ -1,4 +1,4 @@
-"""Local queue reads and manual decisions restricted to Quality administrators."""
+"""Local queue reads and manual decisions restricted to Quality and IT administrators."""
 from datetime import date
 from typing import Annotated, Literal
 

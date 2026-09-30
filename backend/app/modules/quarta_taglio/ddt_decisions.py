@@ -7,7 +7,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
 
-from app.core.deps import user_is_in_department
+from app.core.deps import is_quality_area_admin
 from app.modules.quarta_taglio.models import QuartaTaglioDdtDecision as Decision, QuartaTaglioDdtWorkItem
 
 
@@ -59,8 +59,8 @@ def invalidate_changed_exclusions(db, items, now):
 
 
 def require_quality_decider(user):
-    if user.role != "admin" or not user_is_in_department(user, "qualita"):
-        raise HTTPException(403, "Operazione riservata all’amministratore Qualità")
+    if not is_quality_area_admin(user):
+        raise HTTPException(403, "Operazione riservata agli amministratori Qualità e IT")
     return user
 
 

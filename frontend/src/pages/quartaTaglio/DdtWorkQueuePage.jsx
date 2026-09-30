@@ -111,7 +111,7 @@ function StatusCard({ label, value, tone = "slate" }) {
 export default function DdtWorkQueuePage() {
   const { token, user } = useAuth();
   const department = (user?.department || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-  const canDecide = user?.role === "admin" && department === "qualita";
+  const canDecide = user?.role === "admin" && ["qualita", "it"].includes(department);
   const [decisionDialog, setDecisionDialog] = useState(null);
   const [decisionNotice, setDecisionNotice] = useState("");
   const [draftFilters, setDraftFilters] = useState(INITIAL_FILTERS);

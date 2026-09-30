@@ -38,7 +38,8 @@ Aggiornamento 30/09 — **esclusioni manuali DDT**: il bootstrap aggiunge la tab
 `quarta_taglio_ddt_decisions`, senza ALTER sulle tabelle esistenti. Contiene
 motivi/autori/date e storico di esclusioni, ripristini e riaperture per dati
 modificati. Includerla nei normali backup PostgreSQL e conservarla nei rollback.
-Verificare dopo deploy permessi admin Qualità, vista Esclusi e conteggio sidebar.
+Verificare dopo deploy permessi admin Qualità e admin IT (estesi su richiesta
+dell'utente il 30/09), vista Esclusi e conteggio sidebar.
 Il report recupero passa a **versione 2** e controlla anche le decisioni:
 rifare sempre preview; un vecchio report non è riutilizzabile. Nessuna
 esclusione va importata dal database di sviluppo. Dettagli nel documento
