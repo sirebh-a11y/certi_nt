@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
+from urllib.parse import unquote, urlsplit
 
 from docx import Document as WordDocument
 from fastapi import HTTPException, FastAPI
@@ -22,10 +23,12 @@ from app.core.departments.models import Department
 from app.core.users.models import User
 from app.core.deps import get_current_user, get_db
 from app.core.database import Base
+from app.core.pdf.converter import PDFConversionError
+from app.modules.esolver_export.service import list_esolver_pdf_certificates
 from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio.ddt_snapshot import _normalize
 from app.modules.quarta_taglio.ddt_context import resolve_saved_ddt, certificate_for_saved_ddt
-from app.modules.quarta_taglio.models import QuartaTaglioDdtWorkItem, QuartaTaglioFinalCertificate, QuartaTaglioEsolverLink
+from app.modules.quarta_taglio.models import QuartaTaglioDdtWorkItem, QuartaTaglioFinalCertificate, QuartaTaglioEsolverLink, QuartaTaglioCertificatePdfVersion
 from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse
 from app.modules.quarta_taglio.router import router
 from test_quarta_taglio_ddt_queue import DdtQueueFixture
@@ -353,6 +356,75 @@ class DdtHistoryTest(DdtQueueFixture):
         with patch.object(service, "convert_docx_to_pdf", side_effect=convert), self.assertRaises(HTTPException):
             service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=result.id, actor=self.actor)
         self.assertEqual(self.db.get(QuartaTaglioFinalCertificate, result.id).status, "draft")
+        self.assertIsNone(self.db.get(QuartaTaglioFinalCertificate, result.id).pdf_file_name)
+
+    def test_named_pdf_route_persists_export_download_and_version_history(self):
+        item = self.item()
+        self.material()
+        with self.allow_word():
+            draft = self.create(item)
+        certificate_number = self.db.get(QuartaTaglioFinalCertificate, draft.id).certificate_number
+        app = FastAPI()
+        app.include_router(router, prefix="/api/quarta-taglio")
+        app.dependency_overrides[get_db] = lambda: self.db
+        app.dependency_overrides[get_current_user] = lambda: self.actor
+        client = TestClient(app)
+        path = f"/api/quarta-taglio/certificates/{draft.id}"
+
+        def convert(word, pdf):
+            pdf.parent.mkdir(parents=True, exist_ok=True)
+            pdf.write_bytes(b"%PDF test converter output")
+
+        with patch.object(service, "convert_docx_to_pdf", side_effect=convert) as converter:
+            response = client.post(path + "/pdf", json={"pdf_file_name": "Cliente qualità - ordine 123.PDF"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["pdf_file_name"], "Cliente qualità - ordine 123.pdf")
+            self.db.expire_all()
+            export = list_esolver_pdf_certificates(self.db, public_base_url="http://testserver").items[0]
+            self.assertEqual(export.nome_file_pdf, "Cliente qualità - ordine 123.pdf")
+            self.assertEqual(export.numero_certificato, certificate_number)
+            url = urlsplit(export.pdf_url)
+            download = client.get(url.path + "?" + url.query)
+            self.assertEqual(download.status_code, 200)
+            self.assertEqual(download.content, b"%PDF test converter output")
+            self.assertIn(export.nome_file_pdf, unquote(download.headers["content-disposition"]))
+            self.assertEqual(client.post(path + "/pdf").status_code, 200)  # Legacy request is idempotent.
+            self.assertEqual(client.post(path + "/pdf", json={"pdf_file_name": "changed.pdf"}).status_code, 409)
+            self.assertEqual(converter.call_count, 1)
+
+            reopened = client.post(path + "/reopen", json={"reason": "Test nuova versione"})
+            self.assertEqual(reopened.status_code, 200, reopened.text)
+            self.assertEqual(reopened.json()["pdf_file_name"], "Cliente qualità - ordine 123.pdf")
+            self.assertEqual(list_esolver_pdf_certificates(self.db, public_base_url="http://testserver").total_items, 0)
+            regenerated = client.post(path + "/pdf", json={"pdf_file_name": "Nuovo nome"})
+            self.assertEqual(regenerated.status_code, 200, regenerated.text)
+            self.assertEqual(regenerated.json()["pdf_file_name"], "Nuovo nome.pdf")
+            self.assertEqual(regenerated.json()["certificate_number"], certificate_number)
+
+        versions = self.db.scalars(select(QuartaTaglioCertificatePdfVersion).order_by(QuartaTaglioCertificatePdfVersion.version)).all()
+        self.assertEqual([(v.status, v.pdf_file_name) for v in versions], [
+            ("reopened", "Cliente qualità - ordine 123.pdf"), ("active", "Nuovo nome.pdf"),
+        ])
+        self.assertNotEqual(versions[0].storage_key_pdf, versions[1].storage_key_pdf)
+        self.assertEqual(list_esolver_pdf_certificates(self.db, public_base_url="http://testserver").items[0].nome_file_pdf, "Nuovo nome.pdf")
+
+    def test_failed_conversion_does_not_save_new_name_or_close_certificate(self):
+        item = self.item()
+        self.material()
+        with self.allow_word():
+            draft = self.create(item)
+        with patch.object(service, "convert_docx_to_pdf", side_effect=PDFConversionError("Test failure")):
+            with self.assertRaises(HTTPException) as error:
+                service.generate_quarta_taglio_certificate_pdf(
+                    self.db, certificate_id=draft.id, actor=self.actor, pdf_file_name="Cliente.pdf",
+                )
+        self.assertEqual(error.exception.status_code, 502)
+        self.db.expire_all()
+        certificate = self.db.get(QuartaTaglioFinalCertificate, draft.id)
+        self.assertIsNone(certificate.pdf_file_name)
+        self.assertIsNone(certificate.storage_key_pdf)
+        self.assertEqual(certificate.status, "draft")
+        self.assertEqual(self.db.scalars(select(QuartaTaglioCertificatePdfVersion)).all(), [])
 
     def test_saved_routes_accept_positive_id_and_enforce_department(self):
         item = self.item()

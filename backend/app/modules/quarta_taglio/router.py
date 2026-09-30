@@ -11,6 +11,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioIncomingRowOverrideRequest,
     QuartaTaglioListResponse,
     QuartaTaglioPdfReopenRequest,
+    QuartaTaglioPdfGenerateRequest,
     QuartaTaglioStandardSelectionRequest,
     QuartaTaglioWordDraftRequest,
     QuartaTaglioWordDraftResponse,
@@ -101,8 +102,12 @@ def generate_quarta_taglio_certificate_pdf_route(
     certificate_id: int,
     current_user: CurrentUser,
     db: DbSession,
+    payload: QuartaTaglioPdfGenerateRequest | None = Body(default=None),
 ) -> QuartaTaglioFinalCertificateRegisterItem:
-    return generate_quarta_taglio_certificate_pdf(db, certificate_id=certificate_id, actor=current_user)
+    return generate_quarta_taglio_certificate_pdf(
+        db, certificate_id=certificate_id, actor=current_user,
+        pdf_file_name=payload.pdf_file_name if payload is not None else None,
+    )
 
 
 @router.post("/certificates/{certificate_id}/reopen", response_model=QuartaTaglioFinalCertificateRegisterItem)

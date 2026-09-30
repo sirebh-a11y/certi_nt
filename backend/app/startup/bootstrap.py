@@ -75,6 +75,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_ai_processing_columns()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
+    ensure_quarta_taglio_pdf_filename_columns()
     ensure_esolver_export_view(engine, public_base_url=settings.certi_public_base_url)
     ensure_supplier_installation_code_columns()
     ensure_customer_requirement_columns()
@@ -531,6 +532,17 @@ def ensure_quarta_taglio_columns() -> None:
                 for statement in certificate_statements:
                     connection.execute(text(statement))
         ensure_quarta_taglio_certificate_unit_key_uniqueness()
+
+
+def ensure_quarta_taglio_pdf_filename_columns() -> None:
+    inspector = inspect(engine)
+    for table_name in ("quarta_taglio_final_certificates", "quarta_taglio_certificate_pdf_versions"):
+        if not inspector.has_table(table_name):
+            continue
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if "pdf_file_name" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN pdf_file_name VARCHAR(255)"))
 
 
 def ensure_quarta_taglio_certificate_unit_key_uniqueness() -> None:

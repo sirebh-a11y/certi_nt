@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.modules.quarta_taglio.file_names import normalize_pdf_file_name
 
 
 class QuartaTaglioSyncRunResponse(BaseModel):
@@ -147,6 +149,8 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
     has_pdf: bool = False
     word_download_url: str | None = None
     pdf_download_url: str | None = None
+    pdf_file_name: str | None = None
+    default_pdf_file_name: str | None = None
     conformity_status: str = "da_verificare"
     conformity_issues: list["QuartaTaglioConformityIssueResponse"] = Field(default_factory=list)
     created_at: datetime
@@ -376,6 +380,15 @@ class QuartaTaglioWordDraftRequest(BaseModel):
     certificate_id: int | None = None
     candidate_cod_f3: str | None = None
     ddt_work_item_id: int | None = Field(default=None, ge=1)
+
+
+class QuartaTaglioPdfGenerateRequest(BaseModel):
+    pdf_file_name: str | None = None
+
+    @field_validator("pdf_file_name")
+    @classmethod
+    def validate_pdf_file_name(cls, value: str | None) -> str | None:
+        return normalize_pdf_file_name(value) if value is not None else None
 
 
 class QuartaTaglioPdfReopenRequest(BaseModel):

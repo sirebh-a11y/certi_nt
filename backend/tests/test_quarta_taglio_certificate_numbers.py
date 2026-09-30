@@ -9,6 +9,7 @@ from app.modules.quarta_taglio.service import (
     _certificate_suffix_for_ol_or_next,
     _certificate_suffix_parts,
     _certificate_file_name,
+    _certificate_pdf_file_name,
     _cod_f3_certificate_suffix,
     _find_existing_certificate_for_unit,
     _format_certificate_suffix,
@@ -114,18 +115,29 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
 
         self.assertIsNone(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids={1}))
 
-    def test_certificate_file_name_distinguishes_same_number_by_ddt_and_date(self):
+    def test_download_file_names_use_only_certificate_number(self):
         certificate = SimpleNamespace(
-            draft_number="7003_00_00/26",
+            certificate_number="7017_00_30/26",
+            draft_number="7017_00_30/26",
             ddt="1133-22/04/2026",
             cert_date=datetime(2026, 4, 22, tzinfo=timezone.utc),
             cod_odp="OL2026000285",
         )
 
-        self.assertEqual(
-            _certificate_file_name(certificate),
-            "7003_00_00_26_1133-22_04_2026_20260422_OL2026000285.docx",
-        )
+        self.assertEqual(_certificate_file_name(certificate), "7017_00_30_26.docx")
+        self.assertEqual(_certificate_pdf_file_name(certificate), "7017_00_30_26.pdf")
+
+    def test_download_file_names_prefer_assigned_number_to_draft_number(self):
+        certificate = SimpleNamespace(certificate_number="7017_00_30/26", draft_number="bozza_precedente")
+
+        self.assertEqual(_certificate_file_name(certificate), "7017_00_30_26.docx")
+        self.assertEqual(_certificate_pdf_file_name(certificate), "7017_00_30_26.pdf")
+
+    def test_download_file_names_keep_draft_fallback_without_assigned_number(self):
+        certificate = SimpleNamespace(certificate_number=None, draft_number="7001_1/26")
+
+        self.assertEqual(_certificate_file_name(certificate), "7001_1_26.docx")
+        self.assertEqual(_certificate_pdf_file_name(certificate), "7001_1_26.pdf")
 
 
 if __name__ == "__main__":

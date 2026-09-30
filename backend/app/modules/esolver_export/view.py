@@ -50,7 +50,14 @@ def ensure_esolver_export_view(engine: Engine, *, public_base_url: str) -> None:
                     'PDF_CHIUSO'::text AS "Stato",
                     certificate.updated_at AS "UpdatedAt",
                     active_version.version AS "PdfVersion",
-                    certificate.closed_at AS "ClosedAt"
+                    certificate.closed_at AS "ClosedAt",
+                    COALESCE(
+                        NULLIF(certificate.pdf_file_name, ''),
+                        COALESCE(NULLIF(btrim(regexp_replace(
+                            btrim(COALESCE(NULLIF(certificate.certificate_number, ''), certificate.draft_number)),
+                            '[^A-Za-z0-9_.-]+', '_', 'g'
+                        ), '._'), ''), 'certificato') || '.pdf'
+                    ) AS "NomeFilePdf"
                 FROM quarta_taglio_final_certificates AS certificate
                 JOIN LATERAL (
                     SELECT pdf_version.version

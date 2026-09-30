@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.modules.esolver_export.schemas import EsolverPdfCertificateExportItem, EsolverPdfCertificateExportResponse
 from app.modules.esolver_export.view import ESOLVER_EXPORT_QUALIFIED_VIEW
 from app.modules.quarta_taglio.models import QuartaTaglioCertificatePdfVersion, QuartaTaglioFinalCertificate
+from app.modules.quarta_taglio.file_names import certificate_pdf_file_name
 
 
 def list_esolver_pdf_certificates(db: Session, *, public_base_url: str) -> EsolverPdfCertificateExportResponse:
@@ -99,6 +100,7 @@ def _list_esolver_pdf_certificates_from_models(
                 updated_at=certificate.updated_at,
                 pdf_version=pdf_version.version,
                 closed_at=certificate.closed_at,
+                nome_file_pdf=certificate_pdf_file_name(certificate),
             )
         )
     return EsolverPdfCertificateExportResponse(items=items, total_items=len(items))
@@ -121,4 +123,5 @@ def esolver_pdf_export_fields() -> list[str]:
         "UpdatedAt",
         "PdfVersion",
         "ClosedAt",
+        "NomeFilePdf",
     ]

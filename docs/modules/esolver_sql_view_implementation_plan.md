@@ -196,6 +196,28 @@ specifico.
 | `PdfVersion` | integer | versioni PDF | Versione attiva del PDF |
 | `ClosedAt` | timestamptz | certificato finale | Chiusura della versione valida |
 | `UpdatedAt` | timestamptz | certificato finale | Ultima modifica del record |
+| `NomeFilePdf` | varchar/text | nome salvato alla generazione, oppure numero certificato | Nome del PDF restituito anche dal download; aggiunto in coda al contratto |
+
+### Aggiornamento locale del 30/09/2026: nome PDF
+
+Implementati in locale i nomi brevi Word/PDF e il nome PDF modificabile nella
+finestra di generazione del Registro. Il nome scelto viene conservato sul
+certificato e sulla relativa versione PDF. Alla riapertura viene riproposto;
+lo storico conserva il nome della versione precedente.
+
+La vista SQL e l'endpoint JSON espongono `NomeFilePdf` in coda ai campi già
+esistenti. `PdfUrl`, identità e regole di inclusione restano invariati. Il
+download tramite `PdfUrl` restituisce lo stesso nome in `Content-Disposition`.
+Per i certificati preesistenti senza nome salvato viene usato il numero del
+certificato con estensione `.pdf`, senza rinominare il file fisico.
+
+L'avvio applicativo aggiunge due colonne nullable `pdf_file_name`, una sul
+certificato e una sulla versione PDF, prima di aggiornare la vista. Verificato
+in PostgreSQL locale isolato: aggiornamento ripetibile della vecchia vista,
+ordine delle colonne precedenti e permessi SELECT conservati.
+**Non ancora distribuito su Alpha.** Il collaudo eSolver esterno resta da
+eseguire dopo il deploy autorizzato: verificare se il loro importatore usa il
+nome del download oppure deve leggere esplicitamente `NomeFilePdf`.
 
 ## Regole di inclusione
 

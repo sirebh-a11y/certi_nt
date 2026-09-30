@@ -50,6 +50,9 @@ from app.modules.quarta_taglio.models import (
     QuartaTaglioStandardSelection,
     QuartaTaglioSyncRun,
 )
+from app.modules.quarta_taglio.file_names import (
+    certificate_pdf_file_name, normalize_pdf_file_name, standard_certificate_file_name,
+)
 from app.modules.quarta_taglio.ddt_context import (
     certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
@@ -2467,6 +2470,7 @@ def generate_quarta_taglio_certificate_pdf(
     *,
     certificate_id: int,
     actor: User,
+    pdf_file_name: str | None = None,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
     if not is_quality_area_user(actor):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Qualità o IT possono generare il PDF finale")
@@ -2474,7 +2478,13 @@ def generate_quarta_taglio_certificate_pdf(
     certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
+    try:
+        download_name = normalize_pdf_file_name(pdf_file_name) if pdf_file_name is not None else _certificate_pdf_file_name(certificate)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if certificate.status == "pdf_final" and certificate.storage_key_pdf:
+        if download_name != _certificate_pdf_file_name(certificate):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PDF già chiuso: il nome può essere scelto solo durante la generazione.")
         return _serialize_final_certificate_register_items(db, [certificate])[0]
     resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     if not certificate.storage_key_docx:
@@ -2515,11 +2525,13 @@ def generate_quarta_taglio_certificate_pdf(
             version=version,
             status="active",
             storage_key_pdf=storage_key,
+            pdf_file_name=download_name,
             generated_by_user_id=actor.id,
             generated_at=now,
         )
     )
     certificate.storage_key_pdf = storage_key
+    certificate.pdf_file_name = download_name
     certificate.status = "pdf_final"
     certificate.closed_at = now
     db.add(certificate)
@@ -2715,23 +2727,11 @@ def _certificate_storage_path(storage_key: str) -> Path:
 
 
 def _certificate_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
-    parts = [
-        certificate.draft_number,
-        certificate.ddt,
-        certificate.cert_date.strftime("%Y%m%d") if certificate.cert_date else None,
-        certificate.cod_odp,
-    ]
-    return f"{'_'.join(_safe_file_part(part) for part in parts if _clean_text(part))}.docx"
+    return standard_certificate_file_name(certificate, "docx")
 
 
 def _certificate_pdf_file_name(certificate: QuartaTaglioFinalCertificate) -> str:
-    parts = [
-        certificate.draft_number,
-        certificate.ddt,
-        certificate.cert_date.strftime("%Y%m%d") if certificate.cert_date else None,
-        certificate.cod_odp,
-    ]
-    return f"{'_'.join(_safe_file_part(part) for part in parts if _clean_text(part))}.pdf"
+    return certificate_pdf_file_name(certificate)
 
 
 def _next_pdf_version(db: Session, *, certificate_id: int) -> int:
@@ -4932,6 +4932,8 @@ def _serialize_final_certificate_register_item(
         word_download_url=word_download_url,
         pdf_download_url=pdf_download_url,
         conformity_status=conformity_status,
+        pdf_file_name=_certificate_pdf_file_name(certificate),
+        default_pdf_file_name=standard_certificate_file_name(certificate, "pdf"),
         conformity_issues=conformity_issues,
         created_at=certificate.created_at,
         updated_at=certificate.updated_at,
