@@ -22,7 +22,7 @@ from fastapi import HTTPException, status
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from pypdf import PdfReader
-from sqlalchemy import inspect as sqlalchemy_inspect, or_
+from sqlalchemy import inspect as sqlalchemy_inspect, or_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -33,6 +33,7 @@ from app.core.email.service import email_service
 from app.core.email.settings_service import get_effective_email_settings
 from app.core.logs.service import log_service
 from app.modules.acquisition.impol_evidence import assign_note_pages, evidence_type as _note_evidence_type
+from app.modules.acquisition.load_time import certificate_load_time_on_ddt_link, detached_certificate, gemba_time_bounds, row_load_time
 from app.modules.acquisition.incoming_chemistry import (
     IncomingChemistryLimit,
     find_incoming_chemistry_profile,
@@ -149,6 +150,13 @@ from app.modules.acquisition.rematch_bridge import (
     build_certificate_bridge,
     build_ddt_bridge,
     score_bridge_match,
+)
+from app.modules.acquisition.metalba_alloy import (
+    DERIVED_METHOD as METALBA_LST03_METHOD,
+    eligible_alloy as metalba_lst03_eligible_alloy,
+    interpreted_alloy as metalba_lst03_interpreted_alloy,
+    lst03_material_quote,
+    same_interpreted_display as metalba_same_interpreted_display,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
@@ -472,6 +480,7 @@ def serialize_acquisition_row_list_item(row: AcquisitionRow) -> AcquisitionRowLi
         ordine=row.ordine,
         data_documento=row.data_documento,
         ddt_data_upload=row.ddt_document.data_upload if row.ddt_document is not None else None,
+        incoming_loaded_at=row_load_time(row),
         note_documento=row.note_documento,
         stato_tecnico=row.stato_tecnico,
         stato_workflow=row.stato_workflow,
@@ -7811,6 +7820,7 @@ def create_rows_from_document_split_plan(
                 )
             else:
                 ensure_acquisition_row_ai_editable(db, certificate_first_row)
+            certificate_first_row.incoming_loaded_at = certificate_load_time_on_ddt_link(certificate_first_row, document)
             certificate_first_row.document_ddt_id = document.id
             certificate_first_row.fornitore_id = document.fornitore_id
             certificate_first_row.fornitore_raw = document.supplier.ragione_sociale if document.supplier is not None else None
@@ -9760,6 +9770,8 @@ def list_gemba_walk_rows(
     *,
     date_from: date,
     date_to: date,
+    time_from: str = "00:00",
+    time_to: str = "23:59",
     view: str = "open",
     query_one: str = "",
     query_two: str = "",
@@ -9769,8 +9781,13 @@ def list_gemba_walk_rows(
     sort_field: str | None = None,
     sort_direction: str = "asc",
 ) -> list[AcquisitionRowListItemResponse]:
-    start_dt = datetime.combine(date_from, datetime_time.min, tzinfo=UTC)
-    end_dt = datetime.combine(date_to, datetime_time.max, tzinfo=UTC)
+    start_dt, end_dt = gemba_time_bounds(date_from, date_to, time_from, time_to)
+    loaded_at = func.coalesce(
+        AcquisitionRow.incoming_loaded_at,
+        select(Document.data_upload).where(Document.id == AcquisitionRow.document_ddt_id).scalar_subquery(),
+        select(Document.data_upload).where(Document.id == AcquisitionRow.document_certificato_id).scalar_subquery(),
+        AcquisitionRow.created_at,
+    )
     rows = (
         db.query(AcquisitionRow)
         .options(
@@ -9780,9 +9797,9 @@ def list_gemba_walk_rows(
             joinedload(AcquisitionRow.certificate_match),
             joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
         )
-        .filter(AcquisitionRow.created_at >= start_dt)
-        .filter(AcquisitionRow.created_at <= end_dt)
-        .order_by(AcquisitionRow.created_at.asc(), AcquisitionRow.id.asc())
+        .filter(loaded_at >= start_dt)
+        .filter(loaded_at < end_dt)
+        .order_by(loaded_at.asc(), AcquisitionRow.id.asc())
         .all()
     )
     for row in rows:
@@ -10426,6 +10443,7 @@ def create_acquisition_row(
     row = AcquisitionRow(
         document_ddt_id=ddt_document.id if ddt_document is not None else None,
         document_certificato_id=certificate_document.id if certificate_document else None,
+        incoming_loaded_at=(ddt_document or certificate_document).data_upload if (ddt_document or certificate_document) else datetime.now(UTC),
         cdq=payload.cdq,
         fornitore_id=supplier_id,
         fornitore_raw=payload.fornitore_raw,
@@ -10660,6 +10678,7 @@ def create_manual_document_row(
     row = AcquisitionRow(
         document_ddt_id=document.id if payload.side == "ddt" else None,
         document_certificato_id=document.id if payload.side == "certificato" else None,
+        incoming_loaded_at=document.data_upload,
         fornitore_id=supplier_selection.supplier.id if supplier_selection.supplier is not None else None,
         fornitore_raw=supplier_selection.raw_name,
         fornitore_esolver_cod_clifor=supplier_selection.esolver_cod_clifor,
@@ -10817,13 +10836,16 @@ def detach_document_match(
 
     ddt_document_id = current_row.document_ddt_id
     certificate_document_id = current_row.document_certificato_id
+    _restore_metalba_document_alloys(db, current_row, actor_id=actor_id)
     ddt_fields = _ddt_side_fields_for_detach(current_row)
     certificate_fields = _certificate_side_fields_for_detach(current_row)
 
     _reopen_row_if_validated(db, current_row, actor_id=actor_id, reason="match_disaccoppiato")
+    current_row.incoming_loaded_at = row_load_time(current_row)
     certificate_row = AcquisitionRow(
         document_ddt_id=None,
         document_certificato_id=certificate_document_id,
+        incoming_loaded_at=current_row.incoming_loaded_at,
         cdq=certificate_fields.get("cdq"),
         fornitore_id=current_row.fornitore_id,
         fornitore_raw=current_row.fornitore_raw,
@@ -11193,6 +11215,7 @@ def _create_ddt_clone_row_for_manual_link(
     clone = AcquisitionRow(
         document_ddt_id=source_row.document_ddt_id,
         document_certificato_id=None,
+        incoming_loaded_at=row_load_time(source_row),
         cdq=source_row.cdq,
         fornitore_id=source_row.fornitore_id,
         fornitore_raw=source_row.fornitore_raw,
@@ -12267,6 +12290,8 @@ def upsert_match(
         .one_or_none()
     )
     previous_document_id = row.document_certificato_id
+    if previous_document_id != certificate_document.id:
+        _restore_metalba_document_alloys(db, row, actor_id=actor_id)
     action = "match_creato"
 
     if match is None:
@@ -12917,6 +12942,9 @@ def extract_core_fields(db: Session, row: AcquisitionRow, actor_id: int) -> Acqu
             supplier_key=certificate_template.supplier_key if certificate_template is not None else None,
         )
         for field_name, match in certificate_matches.items():
+            if any(value.blocco == "match" and value.campo == field_name
+                   and value.metodo_lettura == METALBA_LST03_METHOD for value in row.values):
+                continue
             evidence = _create_text_evidence(
                 db=db,
                 row_id=row.id,
@@ -14259,7 +14287,7 @@ def _score_metalba_ai_group_against_row(
     row_customer_code = _string_or_none(ddt_values.get("customer_code"))
     row_article = _string_or_none(ddt_values.get("article_code"))
     row_diameter = _string_or_none(ddt_values.get("diametro")) or _string_or_none(row.diametro)
-    row_alloy = _string_or_none(ddt_values.get("lega")) or _string_or_none(row.lega_base)
+    row_alloy = _metalba_source_alloy(row) or _string_or_none(ddt_values.get("lega"))
     row_weight = _string_or_none(ddt_values.get("peso")) or _string_or_none(row.peso)
 
     order_match = bool(row_vs_rif and ai_candidate.customer_order_no and reader_same_token(row_vs_rif, ai_candidate.customer_order_no))
@@ -16250,7 +16278,7 @@ def _extract_metalba_certificate_payload_from_openai(
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; per nota_us_control_class_a_type1_bsh riporta nel raw la frase visibile originale, non true generico: cerca SAE AMS-STD-2154-E Class A Type 1, single indication size >2mm e backwall echo drop > 50% BSH anche con piccole varianti o refusi. Se non trovi la frase estesa ma trovi solo Class A normale, valorizza solo nota_us_control_class_a_raw. "
                 + _us_control_scope_prompt()
                 + _mechanical_requirement_prompt(
-                    "Materiale secondo specifica LST00, Prove meccaniche su stato fisico T62, Prove meccaniche su stato fisico T42, richiami a specifica cliente o ordine"
+                    "Materiale secondo specifica LST00, MATERIALE SECONDO SPECIFICA LST 03 o LST 03-A (riporta tutte le specifiche presenti nelle Note, senza cambiare la lega stampata), Prove meccaniche su stato fisico T62, Prove meccaniche su stato fisico T42, richiami a specifica cliente o ordine"
                 )
                 + "Restituisci solo JSON con questa struttura: "
                 "{\"core\":{\"numero_certificato\":\"string|null\",\"ordine_cliente\":\"string|null\",\"articolo\":\"string|null\","
@@ -16815,6 +16843,8 @@ def _extract_certificate_core_fields_with_vision(
             certificate_ai_cache=None,
         )
         extracted = cast(dict[str, dict[str, str | None]], payload.get("core_fields") or {})
+        if supplier_key == "metalba":
+            _save_metalba_requirement_for_core_vision(db, row, payload, actor_id=actor_id)
     else:
         crop_definitions = _build_certificate_safe_crops(image_pages, supplier_key=supplier_key)
         if not crop_definitions:
@@ -16896,6 +16926,7 @@ def _extract_certificate_core_fields_with_vision(
         extracted_count += 1
 
     _sync_row_from_match_values(db, row)
+    _apply_metalba_lst03_alloy(db, row, actor_id=actor_id)
     _sync_row_statuses(db, row)
     db.add(row)
     _record_history_event(
@@ -17345,6 +17376,7 @@ def _ensure_autonomous_rows_with_ai(
                 processing_status="in_lavorazione",
                 run_id=run_id,
             )
+            certificate_first_row.incoming_loaded_at = certificate_load_time_on_ddt_link(certificate_first_row, ddt_document)
             certificate_first_row.document_ddt_id = ddt_document.id
             certificate_first_row.fornitore_id = ddt_document.fornitore_id
             certificate_first_row.fornitore_raw = ddt_document.supplier.ragione_sociale if ddt_document.supplier is not None else None
@@ -17952,6 +17984,7 @@ def _find_existing_metalba_row_for_certificate(
 
     best_row: AcquisitionRow | None = None
     best_score = 0
+    best_count = 0
 
     for row in rows:
         if row.document_ddt_id is None:
@@ -17987,7 +18020,7 @@ def _find_existing_metalba_row_for_certificate(
                 score += 55
                 material_match_count += 1
 
-        row_alloy = reader_normalize_match_token(row.lega_base)
+        row_alloy = reader_normalize_match_token(_metalba_source_alloy(row))
         if normalized_alloy:
             available_material_signals += 1
             if row_alloy:
@@ -18012,8 +18045,11 @@ def _find_existing_metalba_row_for_certificate(
         if score > best_score:
             best_score = score
             best_row = row
+            best_count = 1
+        elif score == best_score:
+            best_count += 1
 
-    if best_score >= 230:
+    if best_score >= 230 and best_count == 1:
         return best_row
     return None
 
@@ -19049,7 +19085,7 @@ def _certificate_only_row_can_merge(row: AcquisitionRow) -> bool:
 
 def _lock_merge_quality_rows(db: Session, source_row: AcquisitionRow, target_row: AcquisitionRow) -> None:
     for row in sorted((source_row, target_row), key=lambda item: item.id):
-        db.refresh(row, attribute_names=[*MERGE_MANUAL_QUALITY_FIELDS, "qualita_valutazione"], with_for_update=True)
+        db.refresh(row, attribute_names=[*MERGE_MANUAL_QUALITY_FIELDS, "qualita_valutazione", "incoming_loaded_at"], with_for_update=True)
 
 
 def _merge_certificate_only_row_into_ddt_row(
@@ -19074,6 +19110,13 @@ def _merge_certificate_only_row_into_ddt_row(
     manual_quality_values = merge_manual_quality_values(
         source_row, target_row, acceptance_date_choice=acceptance_date_choice,
     )
+
+    # Only a real merge of two initial rows combines their load references.
+    # A certificate detached from an earlier delivery must not backdate a new one.
+    load_times = [row_load_time(target_row)]
+    if not detached_certificate(source_row):
+        load_times.append(row_load_time(source_row))
+    target_row.incoming_loaded_at = min((value for value in load_times if value is not None), default=None)
 
     source_values = [
         value
@@ -19174,6 +19217,7 @@ def _merge_certificate_only_row_into_ddt_row(
 
     db.flush()
     _sync_row_from_match_values(db, target_row)
+    _apply_metalba_lst03_alloy(db, target_row, actor_id=actor_id)
     _sync_row_statuses(db, target_row)
     db.add(target_row)
     _record_history_event(
@@ -19314,6 +19358,7 @@ def _copy_certificate_side_blocks_between_rows(
 
     if copied:
         refreshed_target = get_acquisition_row(db, target_row_id)
+        _apply_metalba_lst03_alloy(db, refreshed_target, actor_id=actor_id)
         _sync_row_statuses(db, refreshed_target)
         db.add(refreshed_target)
         _record_history_event(
@@ -19360,7 +19405,7 @@ def _copy_document_evidence_for_target_row(
 def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
     return build_ddt_bridge(
         row_values=_row_bridge_values(row),
-        read_values=_row_read_values(row, "ddt"),
+        read_values=_row_source_read_values(row, "ddt"),
         supplier_id=row.fornitore_id,
         supplier_name=_row_supplier_name(row),
         row_id=row.id,
@@ -19371,7 +19416,7 @@ def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
 def _build_row_certificate_bridge(row: AcquisitionRow) -> RematchBridge:
     return build_certificate_bridge(
         row_values=_row_certificate_bridge_values(row),
-        read_values=_row_read_values(row, "match"),
+        read_values=_row_source_read_values(row, "match"),
         supplier_id=row.fornitore_id,
         supplier_name=_row_supplier_name(row),
         row_id=row.id,
@@ -19418,6 +19463,167 @@ def _row_read_values(row: AcquisitionRow, block: str) -> dict[str, str | None]:
         for value in row.values
         if value.blocco == block
     }
+
+
+def _row_source_read_values(row: AcquisitionRow, block: str) -> dict[str, str | None]:
+    return {value.campo: _metalba_source_value(value) for value in row.values if value.blocco == block}
+
+
+def _metalba_source_value(value: ReadValue) -> str | None:
+    if value.metodo_lettura == METALBA_LST03_METHOD:
+        return _string_or_none(value.valore_grezzo)
+    return _final_value_for_row(value)
+
+
+def _save_metalba_requirement_for_core_vision(db: Session, row: AcquisitionRow, payload: dict, *, actor_id: int) -> None:
+    match = (payload.get("mechanical_requirement") or {}).get("customer_requirement_quote") or {}
+    quote = _string_or_none(match.get("final"))
+    if not lst03_material_quote(quote):
+        return
+    evidence = _create_text_evidence(
+        db=db, row_id=row.id, document_id=row.document_certificato_id,
+        document_page_id=match.get("page_id"), blocco="requisiti", snippet=quote,
+        actor_id=actor_id, confidence=0.74,
+    )
+    _upsert_read_value_model(
+        db=db, acquisition_row_id=row.id, blocco="requisiti", campo="customer_requirement_quote",
+        valore_grezzo=quote, valore_standardizzato=quote, valore_finale=quote, stato="proposto",
+        document_evidence_id=evidence.id, metodo_lettura="chatgpt", fonte_documentale="certificato",
+        confidenza=0.74, actor_id=actor_id,
+    )
+
+
+def _metalba_source_alloy(row: AcquisitionRow, block: str = "ddt") -> str | None:
+    field = "lega" if block == "ddt" else "lega_certificato"
+    for value in row.values:
+        if value.blocco == block and value.campo == field:
+            return _metalba_source_value(value)
+    return row.lega_base
+
+
+def _metalba_identity_values(row: AcquisitionRow, block: str) -> dict[str, str | None]:
+    # Do not use high-level row fallbacks: those can originate from the other
+    # document after a merge, and would manufacture independent match evidence.
+    values = _row_source_read_values(row, block)
+    fields = (
+        {"lega": "lega", "diametro": "diametro", "peso": "peso", "ordine": "ordine",
+         "colata": "colata", "cdq": "numero_certificato_ddt"}
+        if block == "ddt" else
+        {"lega": "lega_certificato", "diametro": "diametro_certificato", "peso": "peso_certificato",
+         "ordine": "ordine_cliente_certificato", "colata": "colata_certificato", "cdq": "numero_certificato_certificato"}
+    )
+    result = {key: values.get(field) for key, field in fields.items()}
+    if block == "ddt":
+        result["ordine"] = values.get("vs_rif") or values.get("customer_order_no") or result["ordine"]
+        result["cdq"] = result["cdq"] or values.get("cdq")
+    return result
+
+
+def _metalba_pair_identity(ddt_values: dict, certificate_values: dict) -> bool:
+    """Require all three independent material anchors, and reject contradictions."""
+    if not (ddt_values.get("ordine") and certificate_values.get("ordine")):
+        return False
+    if not reader_same_token(ddt_values["ordine"], certificate_values["ordine"]):
+        return False
+    if not (ddt_values.get("diametro") and certificate_values.get("diametro")):
+        return False
+    if not _document_side_values_match("diametro", ddt_values["diametro"], certificate_values["diametro"]):
+        return False
+    if not (ddt_values.get("peso") and certificate_values.get("peso")):
+        return False
+    if not reader_weights_are_compatible(ddt_values["peso"], certificate_values["peso"]):
+        return False
+    if not all(metalba_lst03_eligible_alloy(v.get("lega")) for v in (ddt_values, certificate_values)):
+        return False
+    # Matching still uses the actual source alloy, not the newly assigned H.
+    if not reader_same_token(ddt_values["lega"], certificate_values["lega"]):
+        return False
+    for field in ("colata", "cdq"):
+        if ddt_values.get(field) and certificate_values.get(field):
+            if not _document_side_values_match(field, ddt_values[field], certificate_values[field]):
+                return False
+    return True
+
+
+def _apply_metalba_lst03_alloy(db: Session, row: AcquisitionRow, *, actor_id: int) -> bool:
+    """Apply only after an unambiguous pair exists. Never make a pair using H."""
+    if row.validata_finale or _resolve_row_supplier_key(row) != "metalba":
+        return False
+    if not row.document_ddt_id or not row.document_certificato_id:
+        return False
+    if row.certificate_match is not None and row.certificate_match.stato != "proposto":
+        return False
+    db.flush()
+    values = db.query(ReadValue).filter(ReadValue.acquisition_row_id == row.id).all()
+    by_key = {(v.blocco, v.campo): v for v in values}
+    alloys = [by_key.get(("ddt", "lega")), by_key.get(("match", "lega_certificato"))]
+    if any(v is None or v.stato == "confermato" or v.metodo_lettura == "utente" for v in alloys):
+        return False
+    if all(v.metodo_lettura == METALBA_LST03_METHOD for v in alloys):
+        return False
+    requirement = by_key.get(("requisiti", "customer_requirement_quote"))
+    if requirement is None or requirement.metodo_lettura != "chatgpt":
+        return False
+    evidence = db.get(DocumentEvidence, requirement.document_evidence_id) if requirement.document_evidence_id else None
+    if evidence is None or evidence.document_id != row.document_certificato_id:
+        return False
+    quote = lst03_material_quote(_final_value_for_row(requirement))
+    if quote is None:
+        return False
+    # Refresh after pending ReadValue inserts, so identity uses both real sides.
+    db.expire(row, ["values"])
+    left = _metalba_identity_values(row, "ddt")
+    right = _metalba_identity_values(row, "match")
+    if not _metalba_pair_identity(left, right):
+        return False
+    # A second equally plausible source must not be hidden by the conversion.
+    others = db.query(AcquisitionRow).options(selectinload(AcquisitionRow.values)).filter(
+        AcquisitionRow.fornitore_id == row.fornitore_id, AcquisitionRow.id != row.id,
+    ).all()
+    for other in others:
+        if other.document_certificato_id == row.document_certificato_id:
+            other_material = _metalba_identity_values(other, "match")
+            if any(other_material.get(key) and right.get(key)
+                   and not reader_same_token(other_material[key], right[key])
+                   for key in ("lega", "diametro", "ordine", "colata")):
+                return False
+        if other.document_ddt_id and _metalba_pair_identity(_metalba_identity_values(other, "ddt"), right):
+            return False
+        if other.document_certificato_id and other.document_certificato_id != row.document_certificato_id:
+            if _metalba_pair_identity(left, _metalba_identity_values(other, "match")):
+                return False
+    for value in alloys:
+        original = _metalba_source_value(value)
+        _upsert_read_value_model(
+            db=db, acquisition_row_id=row.id, blocco=value.blocco, campo=value.campo,
+            valore_grezzo=original, valore_standardizzato=metalba_lst03_interpreted_alloy(original),
+            valore_finale=metalba_lst03_interpreted_alloy(original), stato=value.stato,
+            document_evidence_id=value.document_evidence_id, metodo_lettura=METALBA_LST03_METHOD,
+            fonte_documentale=value.fonte_documentale, confidenza=value.confidenza, actor_id=actor_id,
+        )
+    row.lega_base = metalba_lst03_interpreted_alloy(left["lega"])
+    db.add(row)
+    _record_history_event(db=db, acquisition_row_id=row.id, blocco="match",
+                         azione="lega_da_specifica_metalba", user_id=actor_id,
+                         nota_breve=f"6082H: {quote}; dati originali conservati")
+    return True
+
+
+def _restore_metalba_document_alloys(db: Session, row: AcquisitionRow, *, actor_id: int) -> None:
+    """An explicit detach/change must not leave the DDT classified by an old PDF."""
+    for value in row.values:
+        if value.metodo_lettura != METALBA_LST03_METHOD:
+            continue
+        original = value.valore_grezzo
+        _upsert_read_value_model(
+            db=db, acquisition_row_id=row.id, blocco=value.blocco, campo=value.campo,
+            valore_grezzo=original, valore_standardizzato=original, valore_finale=original,
+            stato="proposto", document_evidence_id=value.document_evidence_id,
+            metodo_lettura="sistema", fonte_documentale=value.fonte_documentale,
+            confidenza=value.confidenza, actor_id=actor_id,
+        )
+        if value.blocco == "ddt":
+            row.lega_base = original
 
 
 def _row_supplier_name(row: AcquisitionRow) -> str | None:
@@ -19484,6 +19690,8 @@ def _auto_propose_certificate_match(
     best_candidate = scored_candidates[0]
     second_score = int(scored_candidates[1]["score"]) if len(scored_candidates) > 1 else 0
     best_score = int(best_candidate["score"])
+    if _resolve_row_supplier_key(row) == "metalba" and second_score and best_score - second_score < 20:
+        return False
     should_propose = (
         best_score >= 80
         or (best_score >= 45 and best_score - second_score >= 20)
@@ -19913,8 +20121,8 @@ def _score_certificate_candidate(
             == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
         )
         alloy_match = bool(
-            reader_normalize_match_token(row.lega_base)
-            and reader_normalize_match_token(row.lega_base)
+            reader_normalize_match_token(_metalba_source_alloy(row))
+            and reader_normalize_match_token(_metalba_source_alloy(row))
             == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
         )
         weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
@@ -26299,6 +26507,7 @@ def _apply_aluminium_bozen_certificate_ai_payload(
         )
 
     _sync_row_from_match_values(db, row)
+    _apply_metalba_lst03_alloy(db, row, actor_id=actor_id)
     _sync_row_statuses(db, row)
     db.add(row)
 
@@ -28033,6 +28242,13 @@ def _upsert_read_value_model(
         normalized_standardizzato = _normalize_value_for_field(blocco, campo, normalized_grezzo)
     if normalized_finale is None and normalized_standardizzato is not None:
         normalized_finale = normalized_standardizzato
+
+    # Saving/confirming the displayed H must not erase the documentary alloy.
+    # A real manual change to a different alloy still follows the normal path.
+    if existing.metodo_lettura == METALBA_LST03_METHOD and metalba_same_interpreted_display(before_value, normalized_finale):
+        normalized_grezzo = existing.valore_grezzo
+        metodo_lettura = METALBA_LST03_METHOD
+        document_evidence_id = existing.document_evidence_id
 
     existing.valore_grezzo = normalized_grezzo
     existing.valore_standardizzato = normalized_standardizzato

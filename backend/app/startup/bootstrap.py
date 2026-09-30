@@ -73,6 +73,7 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_acquisition_quality_columns()
     ensure_acquisition_supplier_columns()
     ensure_acquisition_ai_processing_columns()
+    ensure_acquisition_load_time_column()
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
     ensure_quarta_taglio_pdf_filename_columns()
@@ -399,6 +400,27 @@ def ensure_acquisition_ai_processing_columns() -> None:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+
+
+def ensure_acquisition_load_time_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("datimaterialeincoming"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("datimaterialeincoming")}
+    with engine.begin() as connection:
+        if "incoming_loaded_at" not in columns:
+            connection.execute(text("ALTER TABLE datimaterialeincoming ADD COLUMN incoming_loaded_at TIMESTAMP WITH TIME ZONE"))
+        # Historical origin may have been removed by a merge. Keep the existing
+        # DDT reference, certificate for certificate-only rows, then creation.
+        # Never overwrite a reference already assigned by the new workflow.
+        connection.execute(text("""
+            UPDATE datimaterialeincoming SET incoming_loaded_at = COALESCE(
+                (SELECT data_upload FROM documenti_fornitore WHERE id = datimaterialeincoming.document_ddt_id),
+                (SELECT data_upload FROM documenti_fornitore WHERE id = datimaterialeincoming.document_certificato_id),
+                created_at
+            ) WHERE incoming_loaded_at IS NULL
+        """))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_datimaterialeincoming_incoming_loaded_at ON datimaterialeincoming (incoming_loaded_at)"))
 
 
 def ensure_external_connection_columns() -> None:

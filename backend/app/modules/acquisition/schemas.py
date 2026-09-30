@@ -711,6 +711,7 @@ class AcquisitionRowListItemResponse(BaseModel):
     ordine: str | None
     data_documento: date | None
     ddt_data_upload: datetime | None
+    incoming_loaded_at: datetime | None = None
     note_documento: str | None
     stato_tecnico: str
     stato_workflow: str

@@ -886,6 +886,19 @@ Questo punto va fatto solo quando necessario e con backup verificato.
 
 ## Caso colonne nuove nel DB
 
+### Gemba: riferimento caricamento (30/09/2026, sviluppato in locale)
+
+Il bootstrap aggiunge `datimaterialeincoming.incoming_loaded_at` e il relativo
+indice. Valorizza soltanto i riferimenti mancanti: upload DDT, altrimenti upload
+certificato, altrimenti creazione riga. Non copiare valori dal DB locale.
+Fare il backup DB Alpha prima di avviare questa versione. Dopo l'avvio verificare
+presenza colonna, nessun riferimento mancante e filtro Gemba con ore italiane.
+Controllare una riga solo certificato e una abbinata: una sola data `Caricato`
+nello spazio esistente. Non richiede riletture AI o ricalcoli dei match.
+Preservare colonna e dati nel rollback del solo codice. Piano e test:
+`docs/tasks/gemba_upload_time_filter.md`. Questo aggiornamento del Markdown
+non autorizza il deploy, che resta da eseguire soltanto su richiesta.
+
 Oggi l'alpha non ha ancora una gestione migrazioni completa tipo Alembic.
 
 Quindi, se una nuova versione introduce colonne o tabelle:

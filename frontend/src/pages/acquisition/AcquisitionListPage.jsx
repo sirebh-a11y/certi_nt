@@ -225,6 +225,7 @@ function formatUploadDate(value) {
   }
 
   return date.toLocaleString("it-IT", {
+    timeZone: "Europe/Rome",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -234,9 +235,10 @@ function formatUploadDate(value) {
 }
 
 function todayDateInputValue() {
-  const now = new Date();
-  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  return localDate.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  return ["year", "month", "day"].map((key) => parts.find((part) => part.type === key).value).join("-");
 }
 
 function stateSurfaceClasses(state) {
@@ -713,8 +715,9 @@ export default function AcquisitionListPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [gembaModalOpen, setGembaModalOpen] = useState(false);
-  const [gembaDateFrom, setGembaDateFrom] = useState(todayDateInputValue);
-  const [gembaDateTo, setGembaDateTo] = useState(todayDateInputValue);
+  const [gembaDay, setGembaDay] = useState(todayDateInputValue);
+  const [gembaTimeFrom, setGembaTimeFrom] = useState("00:00");
+  const [gembaTimeTo, setGembaTimeTo] = useState("23:59");
   const [gembaError, setGembaError] = useState("");
   const isIncomingResolveScope = certificationScope?.mode === "resolve_row";
 
@@ -1103,8 +1106,9 @@ export default function AcquisitionListPage() {
 
   function openGembaModal() {
     const today = todayDateInputValue();
-    setGembaDateFrom(today);
-    setGembaDateTo(today);
+    setGembaDay(today);
+    setGembaTimeFrom("00:00");
+    setGembaTimeTo("23:59");
     setGembaError("");
     setGembaModalOpen(true);
   }
@@ -1150,17 +1154,19 @@ export default function AcquisitionListPage() {
   }
 
   function openGembaPrint() {
-    if (!gembaDateFrom || !gembaDateTo) {
-      setGembaError("Seleziona entrambe le date.");
+    if (!gembaDay || !gembaTimeFrom || !gembaTimeTo) {
+      setGembaError("Indica il giorno e i due orari.");
       return;
     }
-    if (gembaDateTo < gembaDateFrom) {
-      setGembaError("La data fine non puo essere precedente alla data inizio.");
+    if (gembaTimeTo < gembaTimeFrom) {
+      setGembaError("L'orario finale non può precedere quello iniziale.");
       return;
     }
     const params = new URLSearchParams({
-      date_from: gembaDateFrom,
-      date_to: gembaDateTo,
+      date_from: gembaDay,
+      date_to: gembaDay,
+      time_from: gembaTimeFrom,
+      time_to: gembaTimeTo,
       view: showConfirmedOnly ? "confirmed" : "open",
       query_one: queryOne,
       query_two: queryTwo,
@@ -1485,7 +1491,7 @@ export default function AcquisitionListPage() {
                         onKeyDown={(event) => handleSectionKeyDown(event, row.id, "document-matching")}
                         state={displayCellState(row, supplierFieldState(row))}
                         value={displaySupplierName(row)}
-                        secondary={row.ddt_data_upload ? `DDT ${formatUploadDate(row.ddt_data_upload)}` : ""}
+                        secondary={row.incoming_loaded_at ? `Caricato ${formatUploadDate(row.incoming_loaded_at)}` : ""}
                         wide
                       />
                     </td>
@@ -1748,28 +1754,38 @@ export default function AcquisitionListPage() {
             <p className="text-sm uppercase tracking-[0.18em] text-slate-500">Incoming materiale</p>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">Gemba walk</h2>
             <p className="mt-2 text-sm text-slate-600">
-              Stampa le righe match e solo certificato create nell'intervallo selezionato.
+              Stampa le righe caricate nel giorno e negli orari scelti, anche con solo certificato.
             </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-4 grid gap-3 sm:grid-cols-[1.4fr_1fr_1fr]">
               <label className="text-sm font-semibold text-slate-700">
-                Data inizio
+                Giorno
                 <input
                   className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-slate-900"
                   type="date"
-                  value={gembaDateFrom}
-                  onChange={(event) => setGembaDateFrom(event.target.value)}
+                  value={gembaDay}
+                  onChange={(event) => { setGembaDay(event.target.value); setGembaError(""); }}
                 />
               </label>
               <label className="text-sm font-semibold text-slate-700">
-                Data fine
+                Dalle ore
                 <input
                   className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-slate-900"
-                  type="date"
-                  value={gembaDateTo}
-                  onChange={(event) => setGembaDateTo(event.target.value)}
+                  type="time"
+                  value={gembaTimeFrom}
+                  onChange={(event) => { setGembaTimeFrom(event.target.value); setGembaError(""); }}
+                />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Alle ore
+                <input
+                  className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm font-medium text-slate-900"
+                  type="time"
+                  value={gembaTimeTo}
+                  onChange={(event) => { setGembaTimeTo(event.target.value); setGembaError(""); }}
                 />
               </label>
             </div>
+            <p className="mt-2 text-sm text-slate-500">00:00–23:59 comprende tutta la giornata. Restano applicati i filtri Incoming.</p>
             {gembaError ? <p className="mt-3 text-sm font-semibold text-rose-600">{gembaError}</p> : null}
             <div className="mt-5 flex justify-end gap-2">
               <button

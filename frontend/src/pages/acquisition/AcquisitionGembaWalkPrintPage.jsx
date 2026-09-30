@@ -7,9 +7,10 @@ import { normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 
 function todayDateInputValue() {
-  const now = new Date();
-  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  return localDate.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  return ["year", "month", "day"].map((key) => parts.find((part) => part.type === key).value).join("-");
 }
 
 function formatDate(value) {
@@ -50,6 +51,8 @@ export default function AcquisitionGembaWalkPrintPage() {
   const today = useMemo(() => todayDateInputValue(), []);
   const dateFrom = searchParams.get("date_from") || today;
   const dateTo = searchParams.get("date_to") || today;
+  const timeFrom = searchParams.get("time_from") || "00:00";
+  const timeTo = searchParams.get("time_to") || "23:59";
   const view = searchParams.get("view") === "confirmed" ? "confirmed" : "open";
   const queryOne = searchParams.get("query_one") || "";
   const queryTwo = searchParams.get("query_two") || "";
@@ -67,6 +70,8 @@ export default function AcquisitionGembaWalkPrintPage() {
     const params = new URLSearchParams({
       date_from: dateFrom,
       date_to: dateTo,
+      time_from: timeFrom,
+      time_to: timeTo,
       view,
       query_one: queryOne,
       query_two: queryTwo,
@@ -100,7 +105,7 @@ export default function AcquisitionGembaWalkPrintPage() {
     return () => {
       ignore = true;
     };
-  }, [dateFrom, dateTo, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, sortDirection, sortField, token, view]);
+  }, [dateFrom, dateTo, timeFrom, timeTo, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, sortDirection, sortField, token, view]);
 
   return (
     <section className="min-h-screen bg-white p-6 text-slate-950" id="gemba-print-root">
@@ -141,6 +146,7 @@ export default function AcquisitionGembaWalkPrintPage() {
           className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
           type="button"
           onClick={() => window.print()}
+          disabled={loading || Boolean(error) || rows.length === 0}
         >
           Stampa
         </button>
@@ -150,7 +156,7 @@ export default function AcquisitionGembaWalkPrintPage() {
         <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Incoming materiale</p>
         <h1 className="mt-1 text-3xl font-bold">Gemba walk</h1>
         <p className="mt-2 text-sm font-medium">
-          Periodo: {formatDate(dateFrom)} - {formatDate(dateTo)} · Vista: {view === "confirmed" ? "Valutate" : "Aperte"} · Righe: {rows.length}
+          Caricamento: {formatDate(dateFrom)} {timeFrom} – {dateFrom !== dateTo ? `${formatDate(dateTo)} ` : ""}{timeTo} · Vista: {view === "confirmed" ? "Valutate" : "Aperte"} · Righe: {rows.length}
         </p>
       </header>
 

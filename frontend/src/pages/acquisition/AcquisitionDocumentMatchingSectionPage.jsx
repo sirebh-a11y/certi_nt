@@ -87,6 +87,9 @@ function sourceTextForSide(row, side, field, override) {
     return `${label} - utente`;
   }
   const found = findSideValue(row, side, field);
+  if (found?.metodo_lettura === "metalba_lst03") {
+    return `${label} - LST03`;
+  }
   if (found?.metodo_lettura === "utente" || found?.fonte_documentale === "utente") {
     return `${label} - utente`;
   }
