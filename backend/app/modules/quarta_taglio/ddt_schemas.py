@@ -21,6 +21,8 @@ class DdtWorkItemResponse(BaseModel):
     cod_f3: str | None
     ddt_raw: str | None
     ddt_date: date | None
+    # Calendar deadline for the queue only; not confirmation of external delivery.
+    certification_due_date: date | None = None
     cliente: str | None
     ordine_cliente: str | None
     conferma_ordine: str | None

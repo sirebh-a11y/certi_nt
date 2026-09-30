@@ -29,10 +29,37 @@ ora. Riduzione dei campi e data iniziale operativa beta vanno concordate con
 il cliente, senza cancellare automaticamente lo storico. Nessuna modifica
 applicativa o attivazione Alpha è autorizzata da questa nota.
 
-Decisioni, stato UI, spiegazione dei passaggi mancanti e punti per la futura
-email sono mantenuti in [Passaggio alla beta](beta_transition_plan.md).
+Decisioni, stato UI, spiegazione dei passaggi mancanti e risposte alla mail
+sono mantenuti in [Passaggio alla beta](beta_transition_plan.md).
 Le sezioni successive conservano la cronologia delle singole fasi: le note
 di lavoro ancora da fare nelle fasi iniziali vanno lette con gli esiti successivi.
+
+### Scadenza calendario (30/09/2026, solo locale)
+
+Autorizzata e implementata la scadenza di 7 giorni dalla **data DDT**, inclusa
+come giorno 1: termine data + 6. Unico parametro `DDT_CERTIFICATION_DAYS=7`.
+L'API calcola `certification_due_date` senza scrivere dati; la UI mostra il
+termine sotto Data DDT. Giallo con due giorni residui contando oggi, arancione
+nell'ultimo giorno, rosso da quello successivo. Il timer UI esistente aggiorna
+l'avviso secondo il giorno `Europe/Rome`, anche al ritorno sulla scheda.
+Data non disponibile: «Data DDT da verificare». PDF finale valido completato:
+nessun avviso; stati, conteggi, filtri e collegamenti restano quelli esistenti.
+Una scadenza superata non chiude né blocca la quota. Lo storico non viene
+ringiovanito dalla data di recupero. Nessuna modifica al calendario KPI.
+
+Walter ha comunicato invio serale eSolver alle 23:00 e raggruppamento delle
+righe sorgente identiche sommando le quantità. Questa modifica non attua la
+riconciliazione del duplicato locale, né conferma la spedizione esterna del PDF.
+Dettagli e decisioni aperte nella sezione 6 del piano beta.
+
+Verifica locale: 68 test backend superati e 2 saltati (prove PostgreSQL opzionali
+non configurate in questa esecuzione); 8 test frontend superati, build riuscita.
+Collaudo Playwright con API simulate a 1920/1440 px: avvisi, data mancante,
+completati, campi lunghi e cambio giorno italiano verificati; nessuna scrittura
+DB. Procedura browser recuperata e registrata in
+`docs/development/browser_verification_windows.md`, richiamata da `AGENTS.md`.
+Usato Vite temporaneo 5174 perché 5173 serviva ancora codice precedente;
+frontend abituale non riavviato, nessun deploy né attivazione Alpha.
 
 ## Avanzamento locale dopo il procedi
 

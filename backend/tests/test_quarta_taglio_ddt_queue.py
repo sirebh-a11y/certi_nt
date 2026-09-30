@@ -107,6 +107,50 @@ class DdtQueueFixture(unittest.TestCase):
 
 
 class DdtQueueTest(DdtQueueFixture):
+    def test_deadline_uses_ddt_date_and_includes_day_one_not_first_seen(self):
+        item = self.item(DDT="77-30/09/2026")
+        item.first_seen_at = datetime(2026, 10, 10, 21, 59, tzinfo=timezone.utc)
+        self.db.commit()
+        with patch.object(queue.settings, "ddt_certification_days", 7):
+            result = self.read().items[0]
+        self.assertEqual(result.certification_due_date, date(2026, 10, 6))
+        self.assertEqual(result.first_seen_at.date(), date(2026, 10, 10))
+        self.assertEqual(result.model_dump(mode="json")["certification_due_date"], "2026-10-06")
+        self.assertFalse(self.db.dirty)
+
+    def test_deadline_calendar_boundaries_and_configured_duration(self):
+        with patch.object(queue.settings, "ddt_certification_days", 7):
+            for start, expected in [(date(2026, 9, 25), date(2026, 10, 1)),
+                                    (date(2028, 2, 25), date(2028, 3, 2)),
+                                    (date(2026, 12, 29), date(2027, 1, 4))]:
+                self.assertEqual(queue._certification_due_date(start), expected)
+        with patch.object(queue.settings, "ddt_certification_days", 1):
+            self.assertEqual(queue._certification_due_date(date(2026, 9, 30)), date(2026, 9, 30))
+
+    def test_unreadable_or_out_of_range_ddt_date_has_no_deadline(self):
+        self.item(DDT="77-data non leggibile")
+        self.item(IdRigaDoc="2", DDT="78-31/12/9999")
+        result = self.read()
+        self.assertEqual(result.active, 2)
+        self.assertTrue(all(row.certification_due_date is None for row in result.items))
+
+    def test_deadline_does_not_change_pdf_completion_states_or_counts(self):
+        ready = self.item(DDT="77-01/01/2020")
+        completed = self.item(IdRigaDoc="2", DDT="78-01/01/2020")
+        rejected = self.item(IdRigaDoc="3", ORP="OL2", DDT="79-01/01/2020")
+        self.material()
+        self.material(ol="OL2", cdq="CDQ2", evaluation="respinto")
+        self.cert(completed, pdf=True)
+        with patch.object(queue.settings, "ddt_certification_days", 7):
+            before = self.read(scope="all")
+        with patch.object(queue.settings, "ddt_certification_days", 30):
+            after = self.read(scope="all")
+        self.assertEqual(before.active, 2)
+        self.assertEqual(before.by_state, after.by_state)
+        self.assertEqual({row.id: row.state for row in after.items},
+                         {ready.id: "ready", completed.id: "completed", rejected.id: "quality_rejected"})
+        self.assertEqual({row.id for row in self.read().items}, {ready.id, rejected.id})
+
     def test_empty_queue_has_zero_counts_and_uninitialized_sync(self):
         result = self.read()
         self.assertEqual((result.total, result.active, result.total_items), (0, 0, 0))

@@ -5,6 +5,15 @@ import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
 import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
+import { ddtDeadline } from "../../app/ddtDeadline";
+
+const DEADLINE_CLASSES = {
+  normal: "border-slate-200 bg-slate-50 text-slate-600",
+  unknown: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  soon: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  today: "border-orange-200 bg-orange-50 text-orange-800",
+  overdue: "border-rose-300 bg-rose-100 text-rose-900",
+};
 
 const STATE_OPTIONS = [
   ["", "Tutti gli stati"],
@@ -146,6 +155,7 @@ export default function DdtWorkQueuePage() {
       .then((result) => {
         if (cancelled) return;
         const now = Date.now();
+        setClock(now);
         const recovered = ddtSyncRecovered(syncStatusRef.current, result.sync, now);
         const warning = ddtSyncWarning(result.sync, now);
         syncStatusRef.current = result.sync;
@@ -317,9 +327,18 @@ export default function DdtWorkQueuePage() {
             {(data?.items || []).map((item) => {
               const certificationPath = ddtCertificationPath(item);
               const linkedPath = incomingPath(item, returnTo);
+              const deadline = ddtDeadline(item, clock);
               return (
                 <tr key={item.id} className="align-top hover:bg-slate-50/70">
-                  <td className="whitespace-nowrap px-3 py-3">{formatDate(item.ddt_date)}</td>
+                  <td className="whitespace-nowrap px-3 py-3">
+                    <div>{formatDate(item.ddt_date)}</div>
+                    {deadline ? (
+                      <div className={`mt-1 inline-flex flex-col rounded-md border px-2 py-1 text-xs leading-4 ${DEADLINE_CLASSES[deadline.tone]}`}>
+                        {deadline.tone !== "unknown" ? <span>Scade il {formatDate(item.certification_due_date)}</span> : null}
+                        {deadline.label ? <span className="font-semibold">{deadline.label}</span> : null}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="min-w-32 break-words px-3 py-3 font-medium" title={item.ddt_raw || ""}>{item.ddt_raw || "-"}</td>
                   <td className="min-w-28 whitespace-nowrap px-3 py-3">{item.cod_odp || <span className="text-amber-700">Da collegare</span>}</td>
                   <td className="min-w-24 whitespace-nowrap px-3 py-3">{item.cod_f3 || "-"}</td>

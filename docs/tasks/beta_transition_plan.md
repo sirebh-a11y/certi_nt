@@ -1,6 +1,6 @@
 # Passaggio alla beta - decisioni e verifiche aperte
 
-Aggiornato: 29/09/2026.
+Aggiornato: 30/09/2026, dopo risposta Walter e regole scadenza confermate dall'utente.
 Stato: documento di lavoro, non autorizzazione a modificare codice o server.
 
 La versione locale pubblicata è `0.1.0.alpha.10`. La nuova coda DDT è stata
@@ -8,6 +8,7 @@ sviluppata e collaudata in locale; il suo deploy, recupero storico e avvio
 automatico su Alpha richiedono ancora il via libera dell'utente.
 
 Riferimenti:
+
 - [Piano e audit DDT](ddt_certification_alert_queue_plan.md).
 - [Procedura deploy soft Alpha](../deploy/alpha_soft_update_server.md).
 
@@ -52,10 +53,9 @@ frontend riuscita. Resta la verifica finale su Alpha dopo un deploy autorizzato.
 Campi attuali: Data DDT, DDT, OL, Cod. F3, Cliente, Qta, Ordine cliente,
 Conferma F3, Incoming, Certificazione, Stato, Ultima lettura, Azioni.
 
-Non togliere campi ora. Chiedere quali servono subito e quali possono stare
-nel dettaglio o essere nascosti su scelta dell'operatore. Decidere anche se
-alcuni filtri possono stare in una sezione aggiuntiva. Riportare il punto nella
-prossima email richiesta dall'utente, senza inviarla autonomamente.
+Non togliere campi ora. Marco è stato invitato nella mail preliminare a provare
+la pagina e dire quali campi gli servono. La scelta resta aperta fino al suo
+riscontro; non aggiungere un selettore colonne per semplice deduzione.
 
 ## 3. Storico DDT e numero nella sidebar
 
@@ -75,7 +75,9 @@ La data dell'esempio NON è una decisione.
 
 Decisioni necessarie:
 - Data di partenza: da concordare con l'utente/cliente.
-- Proposta di criterio: Data DDT, non giorno di importazione; da confermare.
+- Criterio confermato il 30/09: **7 giorni di calendario dalla data sul DDT**;
+  giorno DDT = giorno 1 anche alle 23:59. Scadenza = data DDT + 6 giorni.
+  Weekend, festività e chiusure contano; non usare `first_seen_at`.
 - DDT vecchi ancora realmente da certificare: stabilire eventuali eccezioni
   per non nascondere lavoro necessario.
 - DDT senza data: proporre una segnalazione Da verificare, non esclusione muta.
@@ -106,6 +108,8 @@ consultazione dello storico, rimozione della soglia senza perdita di dati.
 | Lettura automatica | Rileggere periodicamente eSolver per conservare nuovi DDT e correzioni | Codice predisposto, attivazione da fare; ciclo circa 15 minuti |
 | Chiusura corretta | Il PDF della quota A chiude A, non anche B dello stesso DDT/OL | Logica e test locali presenti; verifica integrata Alpha dopo deploy |
 | Collegamento fermo | Avvisare dopo 4 ore senza lettura riuscita | Soglia e testo concordati; implementato in locale |
+| Scadenza certificazione | Sotto Data DDT: termine e colori a 2 giorni/ultimo giorno/termine superato | Implementato in locale il 30/09; nessun deploy |
+| Data iniziale beta | Alleggerire il lavoro visibile senza cancellare lo storico | Data e regole ancora da concordare con Marco |
 
 L'avviso usa il riquadro già esistente dell'ultima lettura eSolver. Dopo quattro
 ore dall'ultimo successo diventa giallo tenue e mostra: «DDT eSolver non
@@ -120,7 +124,6 @@ riquadro diventa verde tenue e comunica l'ora del ripristino. La pagina ricarica
 la tabella DDT e solo dopo la risposta mostra «Elenco DDT aggiornato»; se il
 caricamento della tabella fallisce lo segnala senza dichiarare l'elenco
 aggiornato. Nessun numero di nuovi DDT è mostrato.
-| Data iniziale beta | Alleggerire il lavoro visibile senza cancellare lo storico | Data e regole ancora da concordare |
 
 Non promettere «nessuna lacuna»: si conserva ciò che la sorgente rende
 disponibile e viene letto correttamente. Per DDT mai transitati nella cache
@@ -137,17 +140,75 @@ temporale della sorgente faccia perdere la possibilità di recuperarli.
   concordati, con permessi e tracciamento. Non è un PDF completato e non va
   usata per togliere in massa lo storico. Non implementata né autorizzata.
 
-## 5. Punti per la futura email al cliente
+## 5. Mail preliminare già inviata a Marco, Emilio e Walter
 
-Quando l'utente chiederà l'email:
-1. Far scegliere campi essenziali, campi di dettaglio ed eventuali filtri avanzati.
-2. Spiegare che ogni riga è una quota DDT/OL e che lo storico alza il conteggio.
-3. Concordare data iniziale beta ed eccezioni per arretrati ancora da lavorare.
-4. Richiamare il caso locale DDT 1934-17/07/2026, OL2026000466,
-   documento/riga 5180631/2, con quantità discordanti 2100 e 1: dettagli nel
-   piano DDT. Chiedere chiarimento, senza attribuire una causa non dimostrata;
-   nessuna scelta/somma automatica. Non presentarlo come caso trovato su Alpha.
-5. Concordare tempi degli avvisi di lettura ferma ed eventuali opzioni aggiuntive.
+L'utente ha riportato il testo effettivamente inviato. Non inviare altre mail
+senza sua richiesta. La mail anticipa una prova su Alpha con recupero dei DDT
+storici **già raccolti su Alpha**, anche quando non sono più nella vista eSolver,
+per testare casi anomali. Questo è un intento di prova, non un deploy già fatto:
+anteprima, backup, recupero e attivazione richiedono ancora l'autorizzazione
+operativa dell'utente secondo il piano Alpha.
+
+Risposte ricevute e decisioni ancora aperte:
+
+1. **Walter, risposta 30/09:** eSolver invierà i PDF disponibili alle 23:00,
+   a partire dal giorno successivo alla registrazione DDT; riproverà i mancanti
+   fino al termine configurato e ne terrà traccia nei propri log. I 7 giorni
+   sono il limite ai tentativi, non prova di consegna al cliente. L'utente ha
+   poi confermato con Marco 7 giorni di calendario, giorno DDT = giorno 1.
+   Al collaudo allineare il giorno finale e l'ultima richiesta delle 23:00;
+   CERTI non dichiara spedito un PDF solo perché pronto. Nessuna richiesta di
+   inviare una nuova mail o modificare eSolver.
+2. **Marco:** segnalazione confermata dall'utente: giallo quando restano due
+   giorni contando oggi, arancione nell'ultimo, rosso dal giorno successivo.
+   Implementata in locale il 30/09 sotto Data DDT, senza nuova colonna.
+3. **Marco:** provare i molti campi della nuova pagina e indicare quali servono.
+   I collegamenti `Apri certificazione` e `Apri Incoming` esistono già in locale
+   quando la quota ha i dati necessari; verificarli poi su Alpha.
+4. **Marco:** individuare i casi per l'azione `Non richiede certificazione`.
+   L'utente ha stabilito che può deciderla solo l'**amministratore Qualità**;
+   motivazione, autore, data e ripristino sono proposti. Non è implementata.
+   Il controllo permessi dovrà verificare specificamente reparto Qualità e
+   ruolo admin: l'helper generico di area Qualità include anche IT.
+5. **Marco:** decidere data iniziale beta, trattamento dei vecchi DDT ancora
+   da lavorare e se una riga ormai scaduta debba uscire dalla vista operativa.
+   «Togliere» non autorizza la cancellazione dei dati né la marcatura come PDF.
+6. **Marco:** verificare con esempi il rapporto fra nuova pagina e Registro.
+   Il Registro attuale mostra certificati con numero e Word, non tutti i DDT
+   recuperati. Nell'audit **locale**: 489 quote storiche anteriori al 03/08,
+   164 DDT distinti, solo 4 quote abbinate con certezza a voci visibili del
+   Registro (tutte bozze Word, nessun PDF finale). Attendere il giudizio di
+   Marco prima di cambiare la logica del Registro. Non attribuire questi numeri
+   ad Alpha.
+7. **Walter, Marco, Emilio:** chiarire il caso **locale** DDT
+   `1934-17/07/2026`, documento/riga `5180631/2`, OL `OL2026000466`, con
+   quantità 2100 e 1 negli stessi riferimenti. Walter il 30/09 comunica di aver
+   attivato nella vista il raggruppamento delle righe con tutti i dati uguali,
+   sommando le quantità. Verificare la sorgente aggiornata prima di riconciliare
+   lo storico: nessuna somma locale automatica o correzione dei PDF già chiusi.
+   Le due vecchie quote restano fuori dal recupero automatico finché non
+   verificate. Non presentarlo come caso trovato su Alpha.
+8. **Emilio** e, se necessario, altri referenti come Michele: raccogliere
+   avvertenze sui casi pratici da provare in Alpha.
+
+## 6. Scadenza software autorizzata e implementata in locale (30/09)
+
+- Unico parametro backend `DDT_CERTIFICATION_DAYS`, default 7, intero 1–365,
+  passato da entrambi i Compose. Nessuna nuova schermata impostazioni.
+- L'API restituisce `certification_due_date` calcolata dalla data DDT;
+  nessuna nuova colonna DB, nessuna scrittura durante la lettura della coda.
+- La UI mostra sotto Data DDT il termine e l'avviso. Usa il giorno italiano
+  (`Europe/Rome`) e il timer esistente di un minuto, anche senza nuova lettura
+  eSolver. Aggiorna l'ora anche tornando sulla scheda del browser.
+- Esempio: DDT 30/09 → termine 06/10; giallo 05/10, arancione 06/10,
+  rosso 07/10. Arrivi tardivi e storico conservano il termine originale.
+- Data assente/non leggibile: «Data DDT da verificare», nessun termine inventato.
+- PDF finale valido: sparisce dagli attivi con la logica esistente; nelle
+  viste completati/tutti non riceve più l'avviso di scadenza.
+- Scadenza solo informativa: non modifica stati, permessi, filtri, badge,
+  blocchi di certificazione o Registro; lo scaduto rimane lavoro attivo.
+- Restano fuori da questo intervento esclusione manuale, soglia beta e
+  riconciliazione del duplicato corretto da Walter. Nessun deploy autorizzato.
 
 ## Registro aggiornamenti
 
@@ -158,3 +219,5 @@ Quando l'utente chiederà l'email:
 | 29/09/2026 | Soglia di partenza per beta | Intenzione utente; data e trattamento eccezioni da definire |
 | 29/09/2026 | Frecce e avviso a 4 ore con referente interno IT | Autorizzati, implementati e verificati in locale; nessun deploy |
 | 29/09/2026 | Messaggio di ripartenza e ricarica tabella DDT | Autorizzati, implementati e verificati in locale; nessun deploy |
+| 29/09/2026 | Mail preliminare riportata dall'utente | Inviata a Marco, Emilio e Walter; risposte aperte annotate sopra |
+| 30/09/2026 | Risposta Walter, 7 giorni calendario inclusivi e colori | Autorizzati e implementati in locale; nessun deploy |

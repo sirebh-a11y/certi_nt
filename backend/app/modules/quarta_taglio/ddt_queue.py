@@ -4,7 +4,7 @@ Detail retrieval can confirm Incoming or create register records. This projectio
 only reads local facts and uses the same Incoming evaluator on transient results.
 """
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -40,6 +40,16 @@ SORT_FIELDS = {
 
 def _clean(value):
     return str(value).strip() if value is not None else ""
+
+
+def _certification_due_date(ddt_date):
+    # The date printed on the DDT is day 1, regardless of when CERTI reads it.
+    if ddt_date is None:
+        return None
+    try:
+        return ddt_date + timedelta(days=settings.ddt_certification_days - 1)
+    except OverflowError:
+        return None
 
 
 def _file_available(key):
@@ -162,6 +172,7 @@ def _derive(item, certificates, versions_by_id, incoming, family_counts):
     values = {name: getattr(item, name) for name in DdtWorkItemResponse.model_fields
               if hasattr(item, name)}
     return DdtWorkItemResponse(**values, state=state, label=LABELS[state], reasons=reasons,
+                               certification_due_date=_certification_due_date(item.ddt_date),
                                incoming_row_ids=incoming["ids"], incoming_ready=incoming["ready"],
                                certificate_id=certificate_id, word_candidate_id=word_id)
 

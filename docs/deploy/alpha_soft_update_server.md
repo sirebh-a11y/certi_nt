@@ -27,6 +27,13 @@ locale e non va lanciato su Alpha. Dettagli e controlli nel piano
 `docs/tasks/ddt_certification_alert_queue_plan.md`, sezione «Passaggio futuro
 su Alpha: dati propri, non copia del locale».
 
+La scadenza visiva DDT usa `DDT_CERTIFICATION_DAYS` (default 7; giorni di
+calendario, data DDT inclusa come giorno 1). Il parametro è passato dal Compose
+Alpha; non occorre migrare dati per la scadenza. Preservare il valore server se
+configurato e mantenerlo concordato con il termine eSolver. Il deploy non deve
+attivare il job DDT, importare lo storico o cambiare la configurazione eSolver
+implicitamente. Gli avvisi sono informativi, non confermano l'invio al cliente.
+
 #### Recupero DDT Alpha protetto (procedura pronta in locale, non ancora eseguita)
 
 Comando dedicato: `backend/scripts/recover_ddt_alpha.py`; non usare quello locale.
