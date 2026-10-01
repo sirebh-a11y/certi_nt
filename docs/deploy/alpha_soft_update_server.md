@@ -46,12 +46,17 @@ rifare sempre preview; un vecchio report non è riutilizzabile. Nessuna
 esclusione va importata dal database di sviluppo. Dettagli nel documento
 `docs/tasks/ddt_manual_exclusions.md`.
 
-#### Recupero DDT Alpha protetto (procedura pronta in locale, non ancora eseguita)
+#### Recupero DDT Alpha protetto
+
+Prima esecuzione completata il 01/10/2026 su Alpha.10, con autorizzazione
+esplicita al recupero e all'attivazione. Risultati e backup nel verbale
+`docs/deploy/alpha10_deploy_20261001.md`. La procedura sotto resta il riferimento
+operativo: non ripetere il recupero iniziale nei normali deploy successivi.
 
 Comando dedicato: `backend/scripts/recover_ddt_alpha.py`; non usare quello locale.
-Serve autorizzazione specifica al recupero, oltre a quella al deploy. La verifica
-visiva integrata locale è completata; resta il collaudo sui dati Alpha: non attivare
-il job come conseguenza automatica di questa procedura.
+Serve autorizzazione specifica al recupero, oltre a quella al deploy. Per ogni
+esecuzione occorre un nuovo collaudo sui dati Alpha: non attivare il job come
+conseguenza automatica di questa procedura.
 
 Ordine, nella finestra di manutenzione concordata:
 
@@ -73,7 +78,7 @@ Ordine, nella finestra di manutenzione concordata:
    Se non si prosegue con il recupero, lasciare il job disattivato e annotare che
    riaprire la vecchia app può aggiornare la cache. Non dichiarare recupero concluso.
 
-Esempio di comandi **futuri**, dal server `/srv/certi_nt/app`, dopo backup e
+Esempio di comandi, dal server `/srv/certi_nt/app`, dopo backup e
 sostituzione codice. Sostituire i nomi segnaposto con i file di questa esecuzione:
 
 ```bash
@@ -717,6 +722,10 @@ ssh -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" `
 
 I due hash devono essere identici, ignorando maiuscole e minuscole. Se non coincidono, non proseguire.
 
+Il contenuto di `SOURCE_COMMIT` può terminare con LF o CRLF. Nei confronti shell
+normalizzare soltanto questi fine-riga con `tr -d '\r\n'`, senza cambiare il
+file dell'archivio/installato. Il confronto dell'archivio resta sullo SHA-256 completo.
+
 ## Backup prima dell'aggiornamento
 
 Sul server:
@@ -771,7 +780,7 @@ test -f "backup/$ARCHIVE"
 test -f app/.env
 test -d data/postgres
 test -d data/storage
-test "$(tar -xOf "backup/$ARCHIVE" SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
+test "$(tar -xOf "backup/$ARCHIVE" SOURCE_COMMIT | tr -d '\r\n')" = "$EXPECTED_SOURCE_COMMIT"
 
 tar -czf "backup/app_before_${TAG}_${TS}.tgz" app
 
@@ -781,7 +790,7 @@ docker compose --env-file .env -f docker-compose.alpha.yml stop backend frontend
 
 find . -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf {} +
 tar -xf "../backup/$ARCHIVE" -C .
-test "$(cat SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
+test "$(tr -d '\r\n' < SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 
 docker compose --env-file .env -f docker-compose.alpha.yml up -d --build
 docker compose --env-file .env -f docker-compose.alpha.yml ps
@@ -833,7 +842,7 @@ ARCHIVE=alpha-produzione-${TAG}.tar
 EXPECTED_SOURCE_COMMIT=HASH_COMPLETO_COMMIT_APP
 
 cd /srv/certi_nt/app
-test "$(cat SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
+test "$(tr -d '\r\n' < SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 test ! -e backend/tmp
 test ! -e backend/tmp_eval
 test ! -e backend/app/modules/supplier_lab
