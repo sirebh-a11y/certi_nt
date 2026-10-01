@@ -360,6 +360,66 @@ Non procedere se:
 - mancano le cartelle `data/postgres` o `data/storage`;
 - l'app e in mezzo a un caricamento importante.
 
+### Spazio server: controllo obbligatorio a ogni deploy
+
+Prima di **ogni** deploy Alpha, misurare e riferire all'utente spazio totale,
+occupato e libero, insieme alle dimensioni di backup, storage, database e Docker.
+Stimare anche lo spazio richiesto dai nuovi backup e dalle build. Comunicare il
+risultato **prima** di iniziare la parte che consuma spazio; decidere con l'utente
+se fare una pulizia e quali elementi specifici includere. Una pulizia non e una
+conseguenza automatica del deploy. Se lo spazio non basta, fermarsi e concordare
+come procedere.
+
+Controlli in sola lettura sul server:
+
+```bash
+df -h /srv/certi_nt
+du -sh /srv/certi_nt/backup /srv/certi_nt/data/storage /srv/certi_nt/app
+du -sh /srv/certi_nt/data/storage_before_hard_reset_* 2>/dev/null || true
+docker system df
+docker exec app-postgres-1 du -sh /var/lib/postgresql/data
+find /srv/certi_nt/backup -maxdepth 1 -type f -printf '%s %TY-%Tm-%Td %f\n' \
+  | sort -nr | head -20
+```
+
+Misurare PostgreSQL **dentro il container**: l'utente SSH non puo leggere tutta
+la directory dati e un `du` sul percorso host potrebbe indicare erroneamente
+pochi kilobyte. Le dimensioni Docker sono stime con layer condivisi: non
+sommare ingenuamente ogni riga al totale del filesystem.
+
+Riferimento del **01/10/2026**, da ricontrollare a ogni deploy: filesystem 23 GB,
+20 GB occupati (91%), 2,2 GB liberi. Backup 3,9 GB; documenti correnti 1,2 GB;
+vecchio storage conservato dopo il reset di luglio 637 MB; PostgreSQL 297 MB su
+disco (database `certi_nt` circa 98 MB); immagini Docker 3,8 GB; cache build
+Docker 3,0 GB, di cui circa 2,9 GB segnalati come recuperabili. Il server ospita
+anche un'altra applicazione Docker: non trattare tutte le sue immagini come
+materiale CERTI eliminabile.
+
+Possibili pulizie da **valutare con l'utente**, dopo nuovo inventario:
+
+- Cache build Docker: materiale intermedio ricreabile (installazioni OCR,
+  LibreOffice, librerie Python e JavaScript, compilazione frontend). La pulizia
+  non cancella database, PDF o immagini dei container attivi, ma puo allungare
+  i prossimi deploy e richiedere nuovi download. Verificare prima che non sia in
+  corso una build e quali cache appartengano anche all'altra applicazione.
+- Sei grandi archivi di luglio relativi ad Alpha.9.4/9.5/9.5.1: circa 1,4 GB
+  complessivi. Contengono anche immagini temporanee di test. Prima di rimuoverli
+  dal server, verificare contenuto, esigenza di rollback e presenza di una copia
+  esterna affidabile. Non sono necessari per il rollback immediato di Alpha.10.
+- Vecchia cartella `storage_before_hard_reset_20260715_080925`: 637 MB.
+  Esiste anche un archivio storico `.tgz` di circa 620 MB, risultato leggibile;
+  non e ancora stata verificata la corrispondenza completa dei contenuti. Non
+  eliminare la cartella finche questo confronto e la necessita storica non sono
+  chiariti.
+
+**ATTENZIONE:** prima di qualsiasi cancellazione ricontrollare attentamente i
+percorsi esatti, il contenuto, le dipendenze, i backup e la possibilita reale di
+ripristino. Conservare i documenti e il database attuali, i backup del deploy
+Alpha.10 e le immagini di rollback `before-alpha10-20261001` finche servono.
+Non usare una pulizia generale Docker o cancellazioni per nome generico. Nessuna
+delle possibili pulizie sopra e autorizzata da questa sezione: mostrare ogni
+volta i dati aggiornati all'utente e scegliere insieme cosa fare.
+
 Se i due parametri PostgreSQL non sono ancora presenti, aggiungerli al `.env` prima di
 installare la versione del compose che contiene il mapping. Usare `127.0.0.1` finché Matteo
 non ha confermato l'apertura controllata verso Nemesi:
