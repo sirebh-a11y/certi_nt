@@ -557,14 +557,10 @@ def ensure_quarta_taglio_columns() -> None:
 
 
 def ensure_quarta_taglio_pdf_filename_columns() -> None:
-    inspector = inspect(engine)
-    for table_name in ("quarta_taglio_final_certificates", "quarta_taglio_certificate_pdf_versions"):
-        if not inspector.has_table(table_name):
-            continue
-        columns = {column["name"] for column in inspector.get_columns(table_name)}
-        if "pdf_file_name" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN pdf_file_name VARCHAR(255)"))
+    from app.modules.quarta_taglio.pdf_schema import ensure_pdf_filename_columns
+
+    with engine.begin() as connection:
+        ensure_pdf_filename_columns(connection)
 
 
 def ensure_quarta_taglio_certificate_unit_key_uniqueness() -> None:

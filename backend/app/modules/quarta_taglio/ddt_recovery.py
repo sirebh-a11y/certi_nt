@@ -16,6 +16,7 @@ from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio.ddt_legacy_audit import classify_legacy_cache, table_exists
 from app.modules.quarta_taglio.ddt_legacy_import import import_legacy_cache
 from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _fetch_complete_snapshot, _LOCK_ID, _LOCK_NAMESPACE
+from app.modules.quarta_taglio.pdf_schema import ensure_pdf_filename_columns, missing_pdf_filename_columns
 from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem,
     QuartaTaglioEsolverLink, QuartaTaglioFinalCertificate, QuartaTaglioRow, QuartaTaglioDdtDecision,
@@ -71,6 +72,7 @@ def _file_fact(key):
 
 def build_recovery_plan(db, *, current_rows, target, now=None):
     """No writes and no credentials in the report. Hash all decision inputs."""
+    require_recovery_schema(db)
     now = now or datetime.now(timezone.utc)
     audit, candidates = classify_legacy_cache(db, current_rows=current_rows)
     inputs, file_facts = {}, []
@@ -82,7 +84,7 @@ def build_recovery_plan(db, *, current_rows, target, now=None):
             for row in records:
                 file_facts.extend([_file_fact(row["storage_key_pdf"]), _file_fact(row["storage_key_docx"])])
     code_files = ("ddt_recovery.py", "ddt_legacy_audit.py", "ddt_legacy_import.py", "ddt_snapshot.py",
-                  "ddt_context.py", "ddt_queue.py", "ddt_decisions.py", "service.py")
+                  "ddt_context.py", "ddt_queue.py", "ddt_decisions.py", "service.py", "models.py", "pdf_schema.py")
     algorithm = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in code_files}
     facts = dict(target=target, source=sorted(_json(row) for row in current_rows), database=inputs,
                  files=sorted(_json(fact) for fact in file_facts), algorithm=algorithm, audit=audit)
@@ -135,9 +137,29 @@ def lock_recovery_inputs(db):
                 raise
 
 
+def require_recovery_schema(db):
+    try:
+        missing = missing_pdf_filename_columns(db.connection())
+    except ValueError:
+        raise SnapshotError("pdf_certificate_tables_required") from None
+    if missing:
+        raise SnapshotError("prepare_pdf_filename_schema_before_recovery")
+
+
+def prepare_recovery_schema(db):
+    """Offline prerequisite only. Does not create the queue or touch source data."""
+    lock_recovery_inputs(db)
+    try:
+        added = ensure_pdf_filename_columns(db.connection())
+    except ValueError:
+        raise SnapshotError("pdf_certificate_tables_required") from None
+    return {"added_columns": added}
+
+
 def apply_approved_recovery(db, *, approved, target, fetch_source=_fetch_complete_snapshot, now=None):
     """Caller owns a READ COMMITTED transaction. Any failure rolls back all writes."""
     lock_recovery_inputs(db)
+    require_recovery_schema(db)
     rows = fetch_source(db)
     current = build_recovery_plan(db, current_rows=rows, target=target, now=now)
     validate_approved_plan(approved, current, now=now)

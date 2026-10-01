@@ -20,7 +20,9 @@ from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _LOCK_ID, _LOC
 from app.modules.quarta_taglio.models import (
     QuartaTaglioEsolverLink, QuartaTaglioRow, QuartaTaglioFinalCertificate,
     QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun,
+    QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtDecision,
 )
+from app.modules.quarta_taglio.pdf_schema import PDF_TABLES, missing_pdf_filename_columns
 
 NOW = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
 TARGET = dict(environment="alpha", public_host="certi-test.forgialluminio.it", database_id="test-only", storage_root="/test")
@@ -115,6 +117,39 @@ class RecoveryPlanTest(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(SnapshotError):
                 recovery.validate_alpha_settings(changed)
 
+    def test_preview_on_old_schema_requests_preparation_without_writes(self):
+        with self.engine.begin() as connection:
+            for table in PDF_TABLES:
+                connection.execute(text(f'ALTER TABLE {table} DROP COLUMN pdf_file_name'))
+        statements = []
+        event.listen(self.engine, "before_cursor_execute",
+                     lambda conn, cursor, sql, params, context, many: statements.append(sql.split()[0].upper()))
+        with self.assertRaisesRegex(SnapshotError, "prepare_pdf_filename_schema_before_recovery"):
+            self.plan()
+        self.assertTrue(set(statements) <= {"SELECT", "PRAGMA"})
+
+
+class RecoveryCommandTest(unittest.TestCase):
+    def test_writes_need_maintenance_and_backup_before_opening_database(self):
+        from scripts import recover_ddt_alpha as command
+        for argv in (["--prepare-schema"], ["--prepare-schema", "--maintenance-confirmed"],
+                     ["--apply", "--report", "report.json"], ["--preview"],
+                     ["--prepare-schema", "--maintenance-confirmed", "--backup", "backup.sql", "--report", "r.json"]):
+            with self.subTest(argv=argv), patch("sys.argv", ["recover", *argv]), \
+                    patch.object(command, "create_engine") as connect, self.assertRaises(SystemExit):
+                command.main()
+            connect.assert_not_called()
+
+    def test_invalid_backup_refused_before_opening_database(self):
+        from scripts import recover_ddt_alpha as command
+        with tempfile.TemporaryDirectory() as folder:
+            backup = Path(folder) / "not-a-dump.sql"
+            backup.write_text("not a backup", encoding="utf-8")
+            with patch("sys.argv", ["recover", "--prepare-schema", "--maintenance-confirmed", "--backup", str(backup)]), \
+                    patch.object(command, "validate_alpha_settings"), patch.object(command, "create_engine") as connect:
+                self.assertEqual(command.main(), 1)
+                connect.assert_not_called()
+
 
 @unittest.skipUnless(os.environ.get("DDT_TEST_POSTGRES_URL"), "isolated PostgreSQL URL required")
 class RecoveryPostgresTest(unittest.TestCase):
@@ -145,6 +180,65 @@ class RecoveryPostgresTest(unittest.TestCase):
         with self.factory.begin() as db:
             return recovery.apply_approved_recovery(db, approved=approved, target=TARGET,
                 fetch_source=fetch or (lambda db: source_rows()), now=NOW)
+
+    def old_alpha_schema(self):
+        with self.factory.begin() as db:
+            certificate = QuartaTaglioFinalCertificate(cod_odp="OL1", draft_number="OLD-1", status="pdf_final",
+                                                       storage_key_pdf="old.pdf", pdf_file_name="old.pdf")
+            db.add(certificate)
+            db.flush()
+            db.add(QuartaTaglioCertificatePdfVersion(certificate_id=certificate.id, version=1,
+                    status="active", storage_key_pdf="old.pdf", pdf_file_name="old.pdf"))
+        with self.engine.begin() as connection:
+            for model in (QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+                model.__table__.drop(connection)
+            for table in PDF_TABLES:
+                connection.execute(text(f'ALTER TABLE "{self.schema}".{table} DROP COLUMN pdf_file_name'))
+
+    def test_old_alpha_prepare_preview_apply_preserves_existing_data(self):
+        self.old_alpha_schema()
+        with self.assertRaisesRegex(SnapshotError, "prepare_pdf_filename_schema_before_recovery"):
+            self.plan()
+        with self.factory.begin() as db:
+            result = recovery.prepare_recovery_schema(db)
+            self.assertEqual(result["added_columns"], [t + ".pdf_file_name" for t in PDF_TABLES])
+        with self.factory.begin() as db:
+            self.assertEqual(recovery.prepare_recovery_schema(db)["added_columns"], [])
+            self.assertFalse(recovery.table_exists(db, QuartaTaglioDdtWorkItem))
+            self.assertEqual(db.scalar(select(QuartaTaglioEsolverLink)).rows[0]["qta_um_mag"], 5)
+            cert = db.scalar(select(QuartaTaglioFinalCertificate))
+            self.assertEqual((cert.draft_number, cert.status, cert.storage_key_pdf, cert.pdf_file_name),
+                             ("OLD-1", "pdf_final", "old.pdf", None))
+            version = db.scalar(select(QuartaTaglioCertificatePdfVersion))
+            self.assertEqual((version.version, version.status, version.storage_key_pdf), (1, "active", "old.pdf"))
+        approved = self.plan()
+        self.assertEqual(self.apply(approved)["historical_imported"], 1)
+        with self.factory.begin() as db:
+            cert = db.scalar(select(QuartaTaglioFinalCertificate))
+            cert.pdf_file_name = "custom-name.pdf"
+        with self.factory.begin() as db:
+            self.assertEqual(recovery.prepare_recovery_schema(db)["added_columns"], [])
+            self.assertEqual(db.scalar(select(QuartaTaglioFinalCertificate)).pdf_file_name, "custom-name.pdf")
+            self.assertEqual(len(list(db.scalars(select(QuartaTaglioDdtWorkItem)))), 2)
+
+    def test_preparation_rolls_back_both_columns_on_failure(self):
+        self.old_alpha_schema()
+        with self.assertRaisesRegex(RuntimeError, "synthetic"):
+            with self.factory.begin() as db:
+                recovery.prepare_recovery_schema(db)
+                raise RuntimeError("synthetic failure")
+        with self.engine.connect() as connection:
+            self.assertEqual(missing_pdf_filename_columns(connection), list(PDF_TABLES))
+
+    def test_preparation_refuses_concurrent_writer(self):
+        self.old_alpha_schema()
+        with self.factory.begin() as writer:
+            writer.execute(text(f'UPDATE "{self.schema}".quarta_taglio_esolver_links SET status=\'ok\''))
+            with self.assertRaisesRegex(SnapshotError, "recovery_inputs_busy"):
+                with self.factory.begin() as db:
+                    recovery.prepare_recovery_schema(db)
+        with self.engine.connect() as connection:
+            self.assertEqual(missing_pdf_filename_columns(connection), list(PDF_TABLES))
 
     def test_apply_repeat_with_new_report_preserves_cache_and_certificates(self):
         approved = self.plan()

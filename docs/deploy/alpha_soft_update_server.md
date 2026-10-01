@@ -4,11 +4,12 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 
 ## Obiettivo
 
-Aggiornare solo il codice applicativo alpha sul server.
+Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
+senza sostituire il database con quello locale.
 
 Devono restare intatti:
 
-- database PostgreSQL;
+- dati PostgreSQL esistenti (sono ammesse soltanto le migrazioni additive e il recupero approvati);
 - file caricati e generati dall'app;
 - file `.env` del server;
 - configurazioni Nginx/server fatte da IT.
@@ -61,9 +62,13 @@ Ordine, nella finestra di manutenzione concordata:
    prima del cambio codice. Il backup deve appartenere a questa manutenzione.
 3. Installare il pacchetto verificato come nel deploy soft ma **non eseguire ancora
    `up -d --build`**. Costruire la nuova immagine backend con `compose build backend`.
-4. Eseguire `--preview` nel container one-off con configurazione/storage Alpha,
+4. Eseguire prima `--prepare-schema`, con backup e manutenzione confermati:
+   aggiunge soltanto `pdf_file_name` alle due tabelle dei certificati/versioni PDF.
+   Non avvia bootstrap/job, non legge eSolver, non aggiorna la vecchia cache,
+   non crea la coda e non modifica nomi/file o certificati esistenti.
+5. Eseguire `--preview` nel container one-off con configurazione/storage Alpha,
    senza avviare l'app. Presentare il report all'utente; solo dopo OK, `--apply`.
-5. Confrontare il risultato con il report: quantità/chiavi, storico, PDF completati,
+6. Confrontare il risultato con il report: quantità/chiavi, storico, PDF completati,
    duplicati esclusi. Poi riprendere l'avvio e le verifiche del normale deploy soft.
    Se non si prosegue con il recupero, lasciare il job disattivato e annotare che
    riaprire la vecchia app può aggiornare la cache. Non dichiarare recupero concluso.
@@ -73,6 +78,14 @@ sostituzione codice. Sostituire i nomi segnaposto con i file di questa esecuzion
 
 ```bash
 docker compose --env-file .env -f docker-compose.alpha.yml build backend
+
+# Prerequisito esplicito: due colonne additive, in un'unica transazione.
+# Necessario anche se il job DDT rimane disattivato.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit:ro \
+  backend python -m scripts.recover_ddt_alpha \
+  --prepare-schema --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
 
 # Report nuovo: il comando non sovrascrive un file esistente.
 docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
@@ -94,6 +107,14 @@ Usare la forma `python -m scripts.recover_ddt_alpha` dalla directory `/app`
 del container: l'esecuzione diretta del file non trova il package `app`.
 L'avvio con `--help` è stato verificato nel container locale.
 
+Non saltare `--prepare-schema` sulle versioni precedenti: il codice del report
+legge anche il nome PDF, assente su Alpha. La preview **non migra automaticamente**
+e restituisce `prepare_pdf_filename_schema_before_recovery` se mancano i campi.
+La preparazione è ripetibile: i campi e i nomi già presenti restano intatti;
+un errore annulla entrambe le aggiunte. Richiede gli stessi lock del recupero
+e rifiuta writer concorrenti. Non usare l'avvio normale dell'app per ottenere
+questi campi prima del recupero: potrebbe aggiornare la cache storica.
+
 Lo script verifica ambiente Alpha, database `certi_nt`, host Compose `postgres`,
 host pubblico e identità del cluster, e richiede il job disabilitato. Il report
 scade dopo un'ora. Prima di scrivere rilegge vista eSolver e dati Alpha sotto lock:
@@ -109,9 +130,61 @@ storico già conservato non viene sovrascritto dalla vecchia cache.
 Il dump deve essere verificato realmente: il controllo automatico accerta solo
 leggibilità/intestazione, non completezza/ripristinabilità. Il ruolo di manutenzione
 deve poter leggere `pg_control_system()`; un errore va diagnosticato, non aggirato.
-Non esporre report/backup sul web e non inserirli in Git. Il Compose Alpha attuale
-non passa `DDT_SNAPSHOT_ENABLED` al backend: aggiungerlo solo con successiva
-approvazione esplicita; scriverlo soltanto nel `.env` non attiva il job.
+Non esporre report/backup sul web e non inserirli in Git.
+
+#### Attivazione esplicita della raccolta DDT
+
+Dal 01/10 il Compose Alpha passa `DDT_SNAPSHOT_ENABLED` al backend, con default
+**false**. L'esempio `.env.alpha.example` resta false. Questa preparazione locale
+non autorizza né modifica il `.env` Alpha: verificare il valore effettivo prima
+di avviare l'app; non sovrascrivere l'intero `.env` con quello di esempio.
+
+Soltanto dopo recupero verificato e OK specifico all'attivazione:
+
+1. Impostare `DDT_SNAPSHOT_ENABLED=true` nel solo `.env` Alpha.
+2. Ricreare il backend con `docker compose --env-file .env -f docker-compose.alpha.yml up -d --no-deps backend`.
+   Un semplice `restart` non rilegge le variabili del container.
+3. Verificare che il parametro del container sia true e attendere il primo ciclo
+   automatico (ogni 15 minuti). Controllare l'ultima esecuzione riuscita, i dati
+   conservati e l'avviso di collegamento della pagina. L'avvio del container da
+   solo non dimostra che la lettura eSolver sia riuscita.
+4. Se il ciclo fallisce, mantenere gli utenti informati e diagnosticare: non
+   ripetere l'importazione alla cieca e non dichiarare la sincronizzazione pronta.
+
+Il job conserva anche le quote che escono dalla finestra eSolver. Il recupero
+iniziale può però recuperare solo ciò che è effettivamente presente nelle fonti
+Alpha controllate: non garantisce dati storici mai acquisiti.
+
+#### Esito audit preparatorio 01/10/2026 (sola lettura, non è un deploy)
+
+- Alpha: `901d491f`, versione `0.1.0.alpha.9.8`; nuove tabelle DDT, campi nome
+  PDF e `incoming_loaded_at` ancora assenti. Nessun run AI attivo al controllo.
+- Simulazione: 455 quote correnti e 162 storiche recuperabili (55 DDT, 82 OL;
+  storico 02/07–30/07). Totale 617, 9 completate e 608 attive; nessun duplicato
+  d'identità rilevato. Quattro quote hanno un Word non assegnabile univocamente:
+  devono restare in verifica. Sono numeri indicativi da ricalcolare in manutenzione.
+- Preservare mapping PostgreSQL `10.10.1.10:5432` e SELECT del ruolo
+  `certi_esolver_reader` sulla vista, senza ricreare utenti o password.
+- Spazio: circa 3,6 GB liberi; storage 1,2 GB, backup 2,8 GB, database 97 MB,
+  cache build Docker circa 3,6 GB. Misurare di nuovo prima dei backup/build.
+  Se insufficiente, fermarsi e concordare spazio aggiuntivo o pulizia mirata della
+  sola cache build; non eliminare automaticamente backup, immagini di rollback,
+  volumi, container di altri servizi o documenti. Non usare `docker system prune`.
+
+Al normale avvio successivo al recupero, il bootstrap completa la colonna/data
+Gemba e aggiorna la vista `esolver_export.certi_certificati_pdf` aggiungendo in
+coda `NomeFilePdf`. Verificare le colonne precedenti, i permessi read-only,
+download PDF e nomi personalizzati, senza rinominare retroattivamente i file.
+Le due colonne PDF sono additive e vanno conservate nel rollback del solo codice.
+
+Collaudo locale della preparazione (01/10): **508 test backend superati, nessuno
+saltato**, inclusi i test PostgreSQL su un contenitore dedicato senza volumi
+applicativi. Provati schema precedente senza colonne PDF/tabelle DDT,
+preparazione ripetibile, conservazione di certificati/versioni/cache, recupero
+successivo, rollback delle colonne e rifiuto dei writer concorrenti. Verificati
+anche `--help`, protezioni manutenzione/backup e Compose con flag assente/false
+e true esplicito. Nessuna chiamata AI o modifica ai dati Alpha; frontend invariato.
+Il collaudo non sostituisce preview, backup e verifiche nella futura manutenzione.
 
 ### Separazione obbligatoria della futura linea nuovi fornitori
 
