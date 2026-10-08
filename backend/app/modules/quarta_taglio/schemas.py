@@ -318,6 +318,9 @@ class QuartaTaglioDetailResponse(BaseModel):
     ready: bool
     status_color: str
     status_message: str
+    # Presentation only: do not replace status_color/ready used by business rules.
+    display_status_label: str | None = None
+    display_status_color: str | None = None
     can_create_word: bool = False
     word_creation_blockers: list[str] = Field(default_factory=list)
     header: dict[str, str | None]

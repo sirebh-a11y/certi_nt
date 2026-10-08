@@ -1060,8 +1060,8 @@ export default function QuartaTaglioDetailPage() {
           </div>
           <p className="mt-1 text-sm text-slate-500">{data.status_message}</p>
         </div>
-        <span className={`inline-flex w-fit rounded-lg border px-3 py-1.5 text-sm font-semibold ${statusClass(data.status_color)}`}>
-          {STATUS_LABELS[data.status_color] || data.status_color}
+        <span className={`inline-flex w-fit rounded-lg border px-3 py-1.5 text-sm font-semibold ${statusClass(data.display_status_color || data.status_color)}`}>
+          {data.display_status_label || "Dati da verificare"}
         </span>
       </div>
 

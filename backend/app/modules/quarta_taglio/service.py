@@ -840,7 +840,7 @@ def get_quarta_taglio_detail(
     if saved_ddt is not None and not (open_certificate and open_certificate.storage_key_docx):
         base_word = _existing_word_for_workmanship(db, cod_odp=group.cod_odp, cod_f3=saved_ddt.cod_f3)
         if base_word is not None:
-            word_creation_blockers.append("Word già preparato per questa lavorazione: attendere il collegamento automatico alla quota DDT o verificare la segnalazione")
+            word_creation_blockers.append("Word già esistente per questa lavorazione: non occorre generarne uno nuovo")
             can_create_word = False
 
     detail = QuartaTaglioDetailResponse(
@@ -852,9 +852,9 @@ def get_quarta_taglio_detail(
         ready=ready,
         status_color=detail_status_color,
         status_message=(
-            "Certificato pronto da preparare; uno o più CDQ accettati con riserva"
+            "Incoming pronto; uno o più CDQ accettati con riserva"
             if ready and has_quality_reservations
-            else "Certificato pronto da preparare"
+            else "Incoming pronto"
             if ready
             else "Dati ancora mancanti per creare il certificato"
         ),
@@ -940,14 +940,54 @@ def get_quarta_taglio_detail(
     if saved_ddt is None and _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
         _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
         db.commit()
-    if open_certificate and open_certificate.storage_key_docx:
-        detail.status_message = (
-            "PDF pronto per questo DDT" if _certificate_is_pdf_final(open_certificate)
-            else "Word pronto - in attesa di DDT" if not open_certificate.ddt
-            else "Word pronto - PDF da preparare per questo DDT" if ready
-            else "Word presente - verificare i dati prima del PDF"
-        )
+    _set_detail_display_status(db, detail, open_certificate, saved_ddt=saved_ddt,
+                               has_quality_reservations=has_quality_reservations)
     return detail
+
+
+def _set_detail_display_status(db, detail, certificate, *, saved_ddt=None,
+                               has_quality_reservations=False):
+    """Read-only presentation; no new workflow state or permission changes.
+
+    Share the queue's physical-file and active-version checks. In a saved DDT
+    context a source document from another shipment cannot describe this one.
+    """
+    from app.modules.quarta_taglio.ddt_queue import _file_available, _pdf_valid
+
+    detail.display_status_color = detail.status_color
+    detail.display_status_label = (
+        "Incoming pronto con riserva" if detail.ready and has_quality_reservations
+        else "Incoming pronto" if detail.ready else "Dati da verificare"
+    )
+    if certificate is None or (saved_ddt is not None and not exact_certificate(saved_ddt, certificate)):
+        return
+    if certificate.status == "pdf_final":
+        versions = db.query(QuartaTaglioCertificatePdfVersion).filter_by(certificate_id=certificate.id).all()
+        valid = _pdf_valid(certificate, versions)
+        if saved_ddt is not None:
+            from app.modules.quarta_taglio.ddt_context import quantity_matches
+            valid = valid and quantity_matches(saved_ddt, certificate)
+        detail.display_status_label = "PDF chiuso" if valid else "PDF da verificare"
+        detail.display_status_color = "green" if valid else "yellow"
+        detail.status_message = (
+            "PDF chiuso per questo DDT" if valid
+            else "PDF finale non verificabile: controllare file, versione attiva e quantità"
+        )
+    elif certificate.storage_key_docx:
+        if not _file_available(certificate.storage_key_docx):
+            detail.display_status_label = "Word da verificare"
+            detail.display_status_color = "yellow"
+            detail.status_message = "File Word non disponibile"
+        elif not certificate.ddt:
+            detail.display_status_label = "Word presente"
+            detail.status_message = "Word pronto - in attesa di DDT"
+        elif detail.ready:
+            detail.display_status_label = "PDF da preparare"
+            detail.status_message = "Word presente per questo DDT - PDF da preparare"
+        else:
+            detail.status_message = "Word presente per questo DDT - verificare i dati prima del PDF"
+    if has_quality_reservations and "accettati con riserva" not in detail.status_message:
+        detail.status_message += "; uno o più CDQ accettati con riserva"
 
 
 def confirm_quarta_taglio_standard(

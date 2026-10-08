@@ -418,10 +418,70 @@ class DdtQueueTest(DdtQueueFixture):
         cert = self.cert(item, ddt=None, esolver_id_documento=None, esolver_id_riga_doc=None,
                          esolver_rif_lotto_alfanum=None, unit_key="OL1|001230|-|-|-")
         result = self.read().items[0]
-        self.assertEqual(result.state, "word_ready")
+        self.assertEqual(result.state, "ready")
         self.assertIsNone(result.certificate_id)
-        self.assertEqual(result.word_candidate_id, cert.id)
+        self.assertIsNone(result.word_candidate_id)
         self.assertIsNone(cert.ddt)
+
+    def test_ready_reason_does_not_invent_pending_checks_or_background_work(self):
+        self.item()
+        self.material(evaluation="accettato_con_riserva")
+        row = self.read().items[0]
+        self.assertEqual(row.state, "ready")
+        text = " ".join(row.reasons)
+        self.assertIn("accettato con riserva", text)
+        for invented in ("restano i controlli", "in corso", "in attesa di elaborazione", "completare il collegamento"):
+            self.assertNotIn(invented, text)
+
+    def test_display_pdf_closed_with_reservation_preserves_business_state(self):
+        item = self.item()
+        cert = self.cert(item, pdf=True)
+        detail = SimpleNamespace(ready=True, status_color="yellow", status_message="Incoming pronto")
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item, has_quality_reservations=True)
+        self.assertEqual(detail.display_status_label, "PDF chiuso")
+        self.assertEqual(detail.display_status_color, "green")
+        self.assertIn("accettati con riserva", detail.status_message)
+        self.assertEqual(detail.status_color, "yellow")
+        self.assertTrue(detail.ready)
+        self.assertFalse(self.db.dirty or self.db.new or self.db.deleted)
+
+    def test_display_checks_pdf_version_file_quantity_and_own_quota(self):
+        item = self.item()
+        cert = self.cert(item, pdf=True, active=False)
+        detail = SimpleNamespace(ready=True, status_color="green", status_message="Incoming pronto")
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item)
+        self.assertEqual(detail.display_status_label, "PDF da verificare")
+        version = self.db.scalar(select(QuartaTaglioCertificatePdfVersion))
+        version.status = "active"
+        version.annulled_at = None
+        self.db.commit()
+        item.quantita = Decimal("999")
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item)
+        self.assertEqual(detail.display_status_label, "PDF da verificare")
+        item.quantita = Decimal("42")
+        Path(self.files.name, cert.storage_key_pdf).unlink()
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item)
+        self.assertEqual(detail.display_status_label, "PDF da verificare")
+        other = self.item(IdDocumento="101")
+        detail.status_message = "Incoming pronto"
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=other)
+        self.assertEqual(detail.display_status_label, "Incoming pronto")
+        self.assertEqual(detail.status_message, "Incoming pronto")
+
+    def test_display_word_requires_file_and_does_not_hide_incomplete_incoming(self):
+        item = self.item()
+        cert = self.cert(item)
+        detail = SimpleNamespace(ready=True, status_color="yellow", status_message="Incoming pronto")
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item, has_quality_reservations=True)
+        self.assertEqual(detail.display_status_label, "PDF da preparare")
+        detail.ready = False
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item)
+        self.assertEqual(detail.display_status_label, "Dati da verificare")
+        self.assertIn("verificare i dati", detail.status_message)
+        Path(self.files.name, cert.storage_key_docx).unlink()
+        service._set_detail_display_status(self.db, detail, cert, saved_ddt=item)
+        self.assertEqual(detail.display_status_label, "Word da verificare")
+        self.assertEqual(detail.status_message, "File Word non disponibile")
 
     def test_early_word_ambiguity_unchanged_by_filter_or_page_size(self):
         item = self.item()

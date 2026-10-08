@@ -151,10 +151,9 @@ def _derive(item, certificates, versions_by_id, incoming, family_counts):
                      and cert.storage_key_docx]
             if early:
                 if len(early) == 1 and family_counts[(item.cod_odp, item.cod_f3)] == 1:
-                    if _file_available(early[0].storage_key_docx):
-                        word_id = early[0].id
-                        reasons.append("Word preparato prima del DDT: completare il collegamento nel flusso Certificazione")
-                    else:
+                    # A source Word is not yet the Word of this shipment.
+                    # Only an exact certificate above can expose word_ready.
+                    if not _file_available(early[0].storage_key_docx):
                         state = "review"
                         reasons.append("Word preparato prima del DDT ma file non disponibile")
                 else:
@@ -171,7 +170,6 @@ def _derive(item, certificates, versions_by_id, incoming, family_counts):
             state = "word_ready"
         else:
             state = "ready"
-            reasons.append("Incoming completo; restano i controlli previsti in Certificazione")
     values = {name: getattr(item, name) for name in DdtWorkItemResponse.model_fields
               if hasattr(item, name)}
     return DdtWorkItemResponse(**values, state=state, label=LABELS[state], reasons=reasons,
@@ -215,7 +213,6 @@ def _project(db, items):
             if reuse['action'] == 'reuse':
                 row.state, row.label = 'ready', LABELS['ready']
                 row.reasons = [r for r in row.reasons if 'Word senza DDT associabile' not in r]
-                row.reasons.append('Word già preparato: collegamento automatico a questo DDT in attesa di elaborazione')
             elif reuse['reason'] in {'different_word_sources', 'source_file_or_controls_invalid',
                                       'no_compatible_word', 'target_material_changed', 'legacy_or_changed_identity',
                                       'target_content_requires_review'}:

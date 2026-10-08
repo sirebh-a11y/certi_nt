@@ -188,8 +188,28 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         self.assertEqual(detail.header['certificate_id'], str(source.id))
         self.assertTrue(detail.word_info.has_word)
         self.assertTrue(detail.word_info.is_pdf_final)
-        self.assertEqual(detail.status_message, 'PDF pronto per questo DDT')
+        self.assertEqual(detail.status_message, 'PDF chiuso per questo DDT')
+        self.assertEqual(detail.display_status_label, 'PDF chiuso')
         self.assertEqual(self.db.query(Certificate).count(), 2)
+
+    def test_queue_labels_before_and_after_automatic_reuse_no_imagined_processing(self):
+        from app.modules.quarta_taglio.ddt_queue import read_ddt_queue
+        first, source = self.base_word(closed=False)
+        source.ddt = source.esolver_id_documento = source.esolver_id_riga_doc = source.esolver_rif_lotto_alfanum = None
+        source.unit_key = 'early'
+        self.db.commit()
+        before = read_ddt_queue(self.db).items[0]
+        self.assertEqual(before.state, 'ready')
+        self.assertIsNone(before.word_candidate_id)
+        self.assertIsNone(before.certificate_id)
+        self.assertFalse(any('collegamento' in reason or 'restano i controlli' in reason
+                             or 'elaborazione' in reason for reason in before.reasons))
+        self.assertEqual(self.run_worker()['prepared'], 1)
+        after = read_ddt_queue(self.db).items[0]
+        self.assertEqual(after.state, 'word_ready')
+        self.assertIsNotNone(after.word_candidate_id)
+        self.assertNotEqual(after.word_candidate_id, source.id)
+        self.assertEqual(after.certificate_id, after.word_candidate_id)
 
     def test_manual_text_and_attachments_are_preserved(self):
         _, source = self.base_word(closed=False)

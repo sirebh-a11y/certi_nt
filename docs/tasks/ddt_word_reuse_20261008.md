@@ -102,3 +102,50 @@ l'esclusione gia presente, dopo decisione operativa, senza cancellare lo storico
 
 Procedura e comandi: `docs/deploy/alpha_soft_update_server.md`, sezione 08/10.
 Nessun commit, push, deploy o recupero Alpha implicito in questo lavoro.
+
+## Audit messaggi e correzione locale successiva (08/10)
+
+Caso OL2026000998 verificato su Alpha in sola lettura: certificato 17,
+7014_00_00/26, DDT 2229-10/09/2026, 380 pezzi, PDF chiuso con file/versione
+attiva. La quota 635, DDT 2386-02/10/2026, 1701 pezzi, non aveva ancora
+record certificato/Word/PDF. Il Word fonte e riutilizzabile secondo la
+pianificazione locale. Non sono due stati discordanti del medesimo PDF.
+
+Audit esteso precedente alla modifica messaggi: 678 quote, 18 riutilizzabili
+(8 record vuoti e 10 quote senza record), 73 senza OL. I numeri sono una
+fotografia, non un'autorizzazione o un elenco immutabile per il recupero.
+
+Correzione approvata e limitata alla rappresentazione dei fatti:
+
+- Rimossa la frase generica "Incoming completo; restano i controlli previsti
+  in Certificazione". Nessuno stato inventato di Word "in corso" o in attesa
+  di un'elaborazione di cui la pagina non conosce l'esecuzione.
+- Word anticipato: non e ancora il documento della singola quota. La coda
+  mostra Word presente/PDF da preparare solo quando trova quel documento
+  effettivamente associato. Il riuso automatico resta invariato: non si chiede
+  all'utente di creare, collegare o confermare nuovamente il Word.
+- Dettaglio: indicatori di presentazione separati da `ready/status_color`
+  usati dalle regole applicative. Incoming pronto/con riserva senza documento;
+  PDF da preparare con Word associato; PDF chiuso solo con file e versione
+  attiva verificati (anche quantita, nel contesto quota). I dati tecnici e le
+  conferme restano invariati. La riserva resta informazione, non lavoro residuo.
+- File Word mancante, PDF non verificabile, Incoming incompleto e ambiguita
+  restano segnalati. Nessuna rimozione dei controlli prima del PDF.
+- Nessuna migrazione DB, nessuna modifica al worker, ai permessi, ai documenti
+  esistenti o all'export. La distribuzione fra stati derivati puo cambiare per
+  Word anticipati; la sola assenza del collegamento non chiude la quota e non
+  cambia il totale attivi/sidebar. Diagnostiche reali possono spostare in verifica.
+
+Al deploy rimangono necessari preview aggiornata, recupero autorizzato e
+attivazione esplicita del worker: il solo cambio dei messaggi non ripara i
+collegamenti Alpha. Verificare OL998 separatamente per i due DDT.
+
+Verifica successiva alla correzione messaggi: **553 test backend superati,
+nessuno saltato**, in container Linux locale con codice in sola lettura e
+PostgreSQL temporaneo isolato (concorrenza/recupero inclusi). La prima prova
+Windows aveva due errori del fake convertitore eseguibile solo su Linux; nessun
+cambio al convertitore, ripetizione Linux riuscita. Build frontend riuscita,
+avvisi preesistenti Browserslist/dimensione bundle. Chromium con API simulate:
+dettaglio PDF chiuso con riserva, quota non ancora associata, Word riutilizzato
+e coda DDT; 1440/1920 px, nessun errore JS o richiesta mutante. Frontend
+abituale non riavviato; strumenti temporanei fermati dopo il collaudo.

@@ -230,6 +230,17 @@ non ripetere l'importazione iniziale del 01/10 per correggere i Word.
 
 #### Evidenze e requisiti prima del deploy
 
+Aggiornamento audit messaggi 08/10: OL2026000998 ha il PDF chiuso per il DDT
+2229 (380 pezzi), non per il successivo 2386 (1701 pezzi, quota 635 senza
+record). L'audit esteso ha trovato 18 quote riutilizzabili, incluse le 8 gia
+note: rifare sempre la preview, non usare questo numero come vincolo.
+La correzione messaggi locale non cambia l'automatismo: nessuna nuova azione
+manuale di collegamento Word. Al controllo dopo recupero verificare che la
+quota 635 mostri il Word associato/PDF da preparare e che il certificato 17
+rimanga PDF chiuso. Non mostrare "in corso" o "restano i controlli" per una
+semplice disponibilita della base Word. Riserva qualita separata dallo stato
+documento. Nessuna nuova migrazione per gli indicatori di presentazione.
+
 Audit Alpha del 08/10 sul codice installato
 `3951822fa3790bd7e1b1b6ced33d384a2fb5edd1`, confrontato con il codice locale:
 
