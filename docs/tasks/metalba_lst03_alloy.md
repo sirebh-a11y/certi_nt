@@ -94,3 +94,36 @@ Verifica finale: **479 test backend superati, 12 saltati**, inclusi 14 test
 dedicati a Metalba LST03. Build frontend riuscita, `git diff --check` pulito.
 Gli avvisi di deprecazione, Browserslist e dimensione bundle restano quelli
 delle dipendenze esistenti. Nessun riavvio frontend effettuato.
+
+## Chiarimento nella schermata Match (08/10/2026)
+
+Audit locale riconfermato prima della modifica informativa: 27 test LST03 e
+confronto dei dati documentali, piu 53 test del ciclo di match, tutti superati.
+La classificazione avviene su coppia verificabile; non basta caricare il secondo
+documento. I valori originali restano usati dal confronto, mentre i due campi
+visibili possono diventare 6082H con lo stato fisico conservato. Le conferme
+e le modifiche manuali precedenti possono impedire tale trasformazione.
+
+La normalizzazione nella lista Incoming e invece solo visiva: per esempio
+6082F F appare come 6082, e 6082H F come 6082H. Non cambia i campi Match.
+
+Testo finale approvato: la nota generale conserva la formulazione iniziale;
+quella Metalba chiarisce che la proposta puo arrivare quando entrambi i
+documenti sono collegati, la lettura e completa e i dati concordano. Carattere
+portato da 12 a 18 px, anche per lo stato LST03 gia applicato.
+
+Aggiunta una nota azzurra tenue in apertura della schermata Match:
+
+- per tutti, spiega valore completo e stato fisico nascosto nella lista;
+- per Metalba, spiega la possibile proposta LST03 dopo le verifiche e la
+  protezione dei valori confermati/manuali;
+- solo quando entrambi i campi riportano il metodo metalba_lst03 e i due
+  documenti sono presenti, indica che 6082H e stata proposta da LST03;
+- durante una modifica manuale non ancora salvata torna alla spiegazione
+  generale, evitando di presentare il valore digitato come proposta automatica.
+
+Nessuna modifica alle regole di classificazione, ai salvataggi o ai documenti.
+Build frontend riuscita. Componente reale verificato in Chromium per altro
+fornitore, documento Metalba solo, coppia interpretata, modifica manuale e
+modifica non salvata; larghezze 600/1440/1920 px senza debordi o errori JS.
+Prova visiva isolata senza chiamate API. Nessun intervento su Alpha.

@@ -5,6 +5,7 @@ import { apiRequest, fetchApiBlob } from "../../app/api";
 import { documentTone } from "./documentTone";
 import { formatRowFieldDisplay } from "./fieldFormatting";
 import { focusFirstOverlayItemInViewport } from "./overlayScroll";
+import AlloyMatchNotice from "./AlloyMatchNotice";
 
 const HIGH_LEVEL_FIELDS = [
   { key: "lega_base", label: "lega" },
@@ -1457,6 +1458,7 @@ export default function AcquisitionDocumentMatchingSectionPage({
 
   return (
     <section className="space-y-4">
+      <AlloyMatchNotice row={row} alloyEdited={Boolean(ddtSourceOverrides.lega_base || certificateSourceOverrides.lega_base)} />
       {ddtDocument ? (
         <DocumentPdfPanel
           document={ddtDocument}
