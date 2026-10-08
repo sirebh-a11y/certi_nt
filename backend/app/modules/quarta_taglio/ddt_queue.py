@@ -19,7 +19,7 @@ from app.modules.quarta_taglio.ddt_decisions import (
 )
 from app.modules.quarta_taglio.ddt_schemas import (
     DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse,
-    DdtSyncAttemptResponse, DdtWorkItemResponse, DdtDecisionResponse,
+    DdtSyncAttemptResponse, DdtWorkItemResponse, DdtDecisionResponse, DdtPdfAction,
 )
 from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtWorkItem,
@@ -230,8 +230,32 @@ def _project(db, items):
                 elif decision.action in {"exclude", "review"}:
                     row.state, row.label = "review", LABELS["review"]
                     row.reasons.insert(0, REVIEW_MESSAGE)
+        if row.state == 'word_ready' and row.certificate_id == row.word_candidate_id:
+            certificate = next((c for c in certificates_by_ol[item.cod_odp] if c.id == row.certificate_id), None)
+            if (certificate and _exact_certificate(item, certificate) and _quantity_matches(item, certificate)
+                    and not item.source_review_reason and item.ddt_date and certificate.cert_date
+                    and certificate.certificate_number and not certificate.storage_key_pdf
+                    and certificate.status != 'pdf_final'
+                    and service._certificate_conformity_status(certificate) == 'conforme'):
+                row.pdf_action = DdtPdfAction(
+                    id=certificate.id, certificate_number=certificate.certificate_number,
+                    pdf_file_name=certificate.pdf_file_name,
+                    default_pdf_file_name=service.standard_certificate_file_name(certificate, 'pdf'),
+                    word_source=certificate.word_source, ddt=item.ddt_raw,
+                    cod_odp=item.cod_odp, cod_f3=item.cod_f3,
+                )
         result.append(row)
     return result
+
+
+def require_queue_pdf_action(db, item, certificate_id, expected_revision):
+    """Recheck the clicked share, including exclusions and live Incoming, before PDF."""
+    if not expected_revision or source_revision(item) != expected_revision:
+        raise HTTPException(409, "La riga DDT è cambiata: aggiorna la vista prima di generare il PDF")
+    with db.no_autoflush:
+        row = _project(db, [item])[0]
+    if row.pdf_action is None or row.pdf_action.id != certificate_id:
+        raise HTTPException(409, "PDF non generabile per questa riga: aggiorna la vista e verifica il certificato")
 
 
 def read_ddt_sync(db):

@@ -241,6 +241,17 @@ rimanga PDF chiuso. Non mostrare "in corso" o "restano i controlli" per una
 semplice disponibilita della base Word. Riserva qualita separata dallo stato
 documento. Nessuna nuova migrazione per gli indicatori di presentazione.
 
+Nuove azioni coda sviluppate in locale (08/10): targhetta `Requisiti cliente`
+sotto il cliente e pulsante `Genera PDF` al posto dello stato Word pronto,
+con conferma nella stessa pagina. Distribuire frontend e backend insieme;
+nessuna migrazione DB aggiuntiva. Il pulsante richiede il Word della quota
+esatta: NON sostituisce il recupero e l'attivazione del riuso descritti sotto.
+Verificare dopo il recupero requisiti per CodF3, permessi e disponibilita
+azione sulla quota corretta; non chiudere un PDF reale per semplice smoke test.
+In caso di piu schede requisiti della stessa famiglia, senza codice esatto,
+la UI segnala le alternative invece di sceglierne arbitrariamente una.
+Dettagli e collaudo: `docs/tasks/ddt_word_reuse_20261008.md`.
+
 Audit Alpha del 08/10 sul codice installato
 `3951822fa3790bd7e1b1b6ced33d384a2fb5edd1`, confrontato con il codice locale:
 

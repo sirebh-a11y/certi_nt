@@ -2568,6 +2568,8 @@ def generate_quarta_taglio_certificate_pdf(
     certificate_id: int,
     actor: User,
     pdf_file_name: str | None = None,
+    ddt_work_item_id: int | None = None,
+    ddt_source_revision: str | None = None,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
     if not is_quality_area_user(actor):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Qualità o IT possono generare il PDF finale")
@@ -2575,6 +2577,11 @@ def generate_quarta_taglio_certificate_pdf(
     certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
+    if ddt_work_item_id is not None:
+        from app.modules.quarta_taglio.ddt_queue import require_queue_pdf_action
+        item = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, work_item_id=ddt_work_item_id,
+                                 certificate=certificate, lock=True)
+        require_queue_pdf_action(db, item, certificate.id, ddt_source_revision)
     try:
         download_name = normalize_pdf_file_name(pdf_file_name) if pdf_file_name is not None else _certificate_pdf_file_name(certificate)
     except ValueError as exc:
@@ -2613,7 +2620,11 @@ def generate_quarta_taglio_certificate_pdf(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Generazione PDF fallita: {exc}") from exc
 
     # Word refresh may commit. Recheck the share after conversion before closure.
-    resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    final_item = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    if ddt_work_item_id is not None:
+        if final_item is None or final_item.id != ddt_work_item_id:
+            raise HTTPException(409, "Quota DDT modificata durante la generazione: aggiorna la vista")
+        require_queue_pdf_action(db, final_item, certificate.id, ddt_source_revision)
     now = datetime.now(timezone.utc)
     version = _next_pdf_version(db, certificate_id=certificate.id)
     db.add(

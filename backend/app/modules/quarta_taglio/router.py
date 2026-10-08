@@ -107,6 +107,8 @@ def generate_quarta_taglio_certificate_pdf_route(
     return generate_quarta_taglio_certificate_pdf(
         db, certificate_id=certificate_id, actor=current_user,
         pdf_file_name=payload.pdf_file_name if payload is not None else None,
+        ddt_work_item_id=payload.ddt_work_item_id if payload is not None else None,
+        ddt_source_revision=payload.ddt_source_revision if payload is not None else None,
     )
 
 

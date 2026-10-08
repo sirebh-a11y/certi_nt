@@ -3,10 +3,14 @@ import { Link } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { canGenerateFinalCertificatePdf } from "../../app/access";
+import { resolveCustomerRequirements } from "../../app/customerRequirements";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
 import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
 import { ddtDeadline } from "../../app/ddtDeadline";
 import DdtDecisionDialog from "./DdtDecisionDialog";
+import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
+import ConfirmPdfDialog from "./ConfirmPdfDialog";
 
 const DEADLINE_CLASSES = {
   normal: "border-slate-200 bg-slate-50 text-slate-600",
@@ -125,6 +129,46 @@ export default function DdtWorkQueuePage() {
   const [clock, setClock] = useState(() => Date.now());
   const syncStatusRef = useRef(null);
   const [recovery, setRecovery] = useState(null);
+  const [requirements, setRequirements] = useState([]);
+  const [requirementsError, setRequirementsError] = useState(false);
+  const [requirementsDialog, setRequirementsDialog] = useState(null);
+  const [pdfDialog, setPdfDialog] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const [pdfNotice, setPdfNotice] = useState("");
+  const pdfBusyRef = useRef(false);
+  const canGeneratePdf = canGenerateFinalCertificatePdf(user);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiRequest("/customer-requirements", {}, token)
+      .then(response => { if (!cancelled) { setRequirements(response.items || []); setRequirementsError(false); } })
+      .catch(() => { if (!cancelled) { setRequirements([]); setRequirementsError(true); } });
+    return () => { cancelled = true; };
+  }, [token, refresh]);
+
+  async function generatePdf(fileName) {
+    if (pdfBusyRef.current || !pdfDialog?.pdf_action) return;
+    pdfBusyRef.current = true;
+    setPdfBusy(true);
+    setPdfError("");
+    setPdfNotice("");
+    try {
+      await apiRequest(`/quarta-taglio/certificates/${pdfDialog.pdf_action.id}/pdf`, {
+        method: "POST", body: JSON.stringify({ pdf_file_name: fileName,
+          ddt_work_item_id: pdfDialog.id, ddt_source_revision: pdfDialog.source_revision }),
+      }, token);
+      setPdfNotice(`PDF generato per ${pdfDialog.cod_odp}, DDT ${pdfDialog.ddt_raw}. La riga è nei Completati.`);
+      setPdfDialog(null);
+      window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
+      setRefresh(current => current + 1);
+    } catch (requestError) {
+      setPdfError(requestError.message || "Generazione PDF non riuscita.");
+    } finally {
+      pdfBusyRef.current = false;
+      setPdfBusy(false);
+    }
+  }
 
   const updateDraft = useCallback((field, value) => {
     setDraftFilters((current) => {
@@ -267,6 +311,8 @@ export default function DdtWorkQueuePage() {
         {recovery && !syncAlert ? <span className="ml-2 font-medium text-emerald-800">Collegamento eSolver ripristinato alle {formatTimestamp(recovery.time)}. {recovery.phase === "updated" ? "Elenco DDT aggiornato." : recovery.phase === "error" ? "Aggiornamento dell’elenco non riuscito: riprovare." : "Aggiornamento elenco DDT in corso..."}</span> : null}
       </div>
 
+      {requirementsError ? <p role="alert" className="text-sm text-amber-800">Requisiti cliente non disponibili: premi Aggiorna vista per verificarli.</p> : null}
+      {pdfNotice ? <p role="status" className="text-sm font-semibold text-emerald-800">{pdfNotice}</p> : null}
       <form className="rounded-xl border border-slate-200 bg-white p-4" onSubmit={applyFilters}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
           {[
@@ -340,6 +386,7 @@ export default function DdtWorkQueuePage() {
               const certificationPath = ddtCertificationPath(item);
               const linkedPath = incomingPath(item, returnTo);
               const deadline = ddtDeadline(item, clock);
+              const requirementMatch = resolveCustomerRequirements(requirements, item.cod_odp ? item.cod_f3 : null);
               return (
                 <tr key={item.id} className="align-top hover:bg-slate-50/70">
                   <td className="whitespace-nowrap px-3 py-3">
@@ -354,14 +401,27 @@ export default function DdtWorkQueuePage() {
                   <td className="min-w-32 break-words px-3 py-3 font-medium" title={item.ddt_raw || ""}>{item.ddt_raw || "-"}</td>
                   <td className="min-w-28 whitespace-nowrap px-3 py-3">{item.cod_odp || <span className="text-amber-700">Da collegare</span>}</td>
                   <td className="min-w-24 whitespace-nowrap px-3 py-3">{item.cod_f3 || "-"}</td>
-                  <td className="min-w-36 break-words px-3 py-3">{item.cliente || "-"}</td>
+                  <td className="min-w-36 break-words px-3 py-3">
+                    <div>{item.cliente || "-"}</div>
+                    {requirementMatch.candidates.length ? <button type="button"
+                      onClick={() => setRequirementsDialog({ item, match: requirementMatch })}
+                      className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100"
+                      aria-label={`Requisiti cliente per ${item.cod_odp}, Cod. F3 ${item.cod_f3}, DDT ${item.ddt_raw}`}>
+                      Requisiti cliente
+                    </button> : null}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-3">{formatQuantity(item.quantita)}</td>
                   <td className="min-w-40 break-words px-3 py-3">{item.ordine_cliente || "-"}</td>
                   <td className="min-w-36 break-words px-3 py-3">{item.conferma_ordine || "-"}</td>
                   <td className="min-w-20 px-3 py-3 text-xs">{(item.operational_state || item.state) === "quality_rejected" ? "Qualità respinta" : item.incoming_ready ? "Pronto" : "Da verificare"}</td>
                   <td className="min-w-24 px-3 py-3 text-xs">{item.state === "completed" ? "PDF finale" : item.state === "excluded" ? "Non richiesta" : item.word_candidate_id ? "Word presente" : item.certificate_id ? "Scheda presente" : "Da fare"}</td>
                   <td className="min-w-52 px-3 py-3">
-                    <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[item.state] || STATE_CLASSES.review}`}>{item.label}</span>
+                    {canGeneratePdf && item.pdf_action ? <button type="button" disabled={loading}
+                      onClick={() => { setPdfError(""); setPdfDialog(item); }}
+                      className="inline-block rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50"
+                      aria-label={`Genera PDF per ${item.cod_odp}, DDT ${item.ddt_raw}, Cod. F3 ${item.cod_f3}`}>
+                      Genera PDF
+                    </button> : <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[item.state] || STATE_CLASSES.review}`}>{item.label}</span>}
                     {item.latest_decision ? <div className="mt-2 max-w-xs text-xs text-slate-600">
                       <p className="line-clamp-3 whitespace-pre-wrap break-words" title={item.latest_decision.reason}>{item.latest_decision.reason}</p>
                       <p className="mt-1">{item.latest_decision.actor_name} · {formatTimestamp(item.latest_decision.created_at)}</p>
@@ -400,6 +460,11 @@ export default function DdtWorkQueuePage() {
           <button type="button" disabled={loading || offset + pageSize >= data.total_items} onClick={() => setOffset((current) => current + pageSize)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 disabled:opacity-40">Successiva</button>
         </div>
       </div> : null}
+      {requirementsDialog ? <CustomerRequirementsDialog {...requirementsDialog} onClose={() => setRequirementsDialog(null)} /> : null}
+      {pdfDialog ? <ConfirmPdfDialog key={`${pdfDialog.id}-${pdfDialog.pdf_action.id}`}
+        item={pdfDialog.pdf_action} busy={pdfBusy} error={pdfError}
+        onCancel={() => { if (!pdfBusyRef.current) setPdfDialog(null); }}
+        onClearError={() => setPdfError("")} onConfirm={generatePdf} /> : null}
       {decisionDialog ? <DdtDecisionDialog {...decisionDialog} token={token}
         onClose={() => setDecisionDialog(null)} onSaved={(action) => {
           setDecisionDialog(null);

@@ -34,6 +34,18 @@ class DdtDecisionResponse(BaseModel):
     created_at: datetime
 
 
+class DdtPdfAction(BaseModel):
+    id: int
+    certificate_number: str
+    pdf_file_name: str | None = None
+    default_pdf_file_name: str
+    word_source: str | None = None
+    has_word: bool = True
+    ddt: str
+    cod_odp: str
+    cod_f3: str
+
+
 class DdtWorkItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +74,7 @@ class DdtWorkItemResponse(BaseModel):
     incoming_row_ids: list[int] = Field(default_factory=list)
     certificate_id: int | None = None
     word_candidate_id: int | None = None
+    pdf_action: DdtPdfAction | None = None
     # "ready" means Incoming-ready, not permission to bypass standard/PDF checks.
     incoming_ready: bool = False
     operational_state: DdtState | None = None

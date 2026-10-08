@@ -149,3 +149,30 @@ avvisi preesistenti Browserslist/dimensione bundle. Chromium con API simulate:
 dettaglio PDF chiuso con riserva, quota non ancora associata, Word riutilizzato
 e coda DDT; 1440/1920 px, nessun errore JS o richiesta mutante. Frontend
 abituale non riavviato; strumenti temporanei fermati dopo il collaudo.
+
+## Requisiti cliente e PDF direttamente dalla coda (08/10, locale)
+
+- Sotto il cliente, senza nuove colonne, compare la targhetta rossa
+  `Requisiti cliente`: apre nella stessa pagina i requisiti del CodF3 della
+  riga. Non indica una non conformita e non dipende dal solo nome cliente.
+- Risoluzione condivisa con il dettaglio OL: codice esatto prioritario,
+  altrimenti famiglia come prima. Se esistono piu schede candidate non si
+  sceglie la prima: la finestra le presenta come alternative da verificare,
+  non come requisiti cumulativi. Le schede sono quelle attive correnti,
+  non uno snapshot storico del certificato. Errori di lettura sono visibili.
+- `Genera PDF` sostituisce la targhetta Word pronto solo per utenti autorizzati
+  e per un Word effettivo della precisa quota, con Incoming pronto, conformita,
+  numero e date disponibili e senza esclusioni/conflitti. Apre la stessa
+  conferma con nome modificabile usata dal Registro, senza cambiare pagina.
+- Il server ricontrolla identita e revisione della quota, quantita, esclusioni
+  e condizioni operative prima e dopo la conversione. Un errore lascia la
+  finestra aperta; il successo aggiorna elenco e sidebar. Nessun PDF automatico,
+  nessun nuovo collegamento manuale, nessuna modifica al riuso Word.
+- Nessuna migrazione DB. Richiede frontend e backend aggiornati insieme;
+  il recupero Word Alpha resta un passaggio separato e autorizzato.
+
+Verifiche: 558 test backend superati senza salti in Linux con PostgreSQL
+temporaneo isolato; 3 test del risolutore requisiti e build frontend riusciti.
+Browser React con API simulate: coda a 1440/1920 px, requisiti esatti/ambigui,
+permessi, errore e riprova PDF, chiusura della sola quota scelta; regressione
+dialogo del Registro a 600/1440/1920 px. Nessuna chiamata mutante ad Alpha.

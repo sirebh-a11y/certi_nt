@@ -387,6 +387,8 @@ class QuartaTaglioWordDraftRequest(BaseModel):
 
 class QuartaTaglioPdfGenerateRequest(BaseModel):
     pdf_file_name: str | None = None
+    ddt_work_item_id: int | None = Field(default=None, ge=1)
+    ddt_source_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
     @field_validator("pdf_file_name")
     @classmethod
