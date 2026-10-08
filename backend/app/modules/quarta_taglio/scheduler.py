@@ -28,3 +28,11 @@ async def quarta_taglio_periodic_sync_loop() -> None:
             log_service.record("quarta_taglio", f"Aggiornamento periodico fallito: {exc}")
         finally:
             db.close()
+        if settings.ddt_word_reuse_enabled:
+            from app.modules.quarta_taglio.ddt_word_reuse import sync_ddt_words
+            try:
+                outcome = await asyncio.to_thread(sync_ddt_words)
+                if outcome['prepared'] or outcome['errors']:
+                    log_service.record('ddt_word_reuse', f"Word DDT: {outcome}")
+            except Exception:
+                log_service.record('ddt_word_reuse', 'Preparazione Word DDT non riuscita: verificare il Registro')

@@ -220,7 +220,7 @@ function codF3CandidateStatusClass(candidate) {
   if (candidate.has_word && candidate.word_source === "inherited") {
     return "border-amber-200 bg-amber-50 text-amber-800";
   }
-  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated"].includes(candidate.word_source)) {
+  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated", "ddt_reused"].includes(candidate.word_source)) {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
   if (candidate.has_word) {
@@ -256,7 +256,7 @@ function wordSourceBadgeClass(source) {
   if (source === "inherited") {
     return "border-amber-200 bg-amber-50 text-amber-800";
   }
-  if (["generated", "user_uploaded", "fields_updated"].includes(source)) {
+  if (["generated", "user_uploaded", "fields_updated", "ddt_reused"].includes(source)) {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
   return "border-slate-200 bg-slate-50 text-slate-700";
@@ -267,7 +267,7 @@ function codF3CandidateCardClass(candidate, isActive) {
   if (candidate.has_word && candidate.word_source === "inherited") {
     return `border-amber-300 bg-amber-50 ${activeClass}`;
   }
-  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated"].includes(candidate.word_source)) {
+  if (candidate.has_word && ["generated", "user_uploaded", "fields_updated", "ddt_reused"].includes(candidate.word_source)) {
     return `border-emerald-300 bg-emerald-50 ${activeClass}`;
   }
   if (isActive) {
@@ -626,6 +626,7 @@ export default function QuartaTaglioDetailPage() {
     setWordDraftState({ status: "saving", message: "" });
     setError("");
     try {
+      const targetCertificateId = forceRegenerate ? activeCertificateId : certificateId;
       const response = await apiRequest(
         `/quarta-taglio/${encodeURIComponent(codOdp)}/word-draft`,
         {
@@ -633,8 +634,8 @@ export default function QuartaTaglioDetailPage() {
           body: JSON.stringify({
             force_non_conforming: forceNonConforming,
             force_regenerate: forceRegenerate,
-            certificate_id: certificateId ? Number(certificateId) : null,
-            candidate_cod_f3: ddtWorkItemId ? null : candidateCodF3 || null,
+            certificate_id: targetCertificateId ? Number(targetCertificateId) : null,
+            candidate_cod_f3: ddtWorkItemId || targetCertificateId ? null : candidateCodF3 || null,
             ddt_work_item_id: ddtWorkItemId ? Number(ddtWorkItemId) : null,
           }),
         },
@@ -995,7 +996,7 @@ export default function QuartaTaglioDetailPage() {
   const isPdfFinal = Boolean(wordInfo.is_pdf_final || wordInfo.certificate_status === "pdf_final");
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
   const activeCertificateId = certificateId || data?.header?.certificate_id || "";
-  const isManualWord = wordInfo.source === "user_uploaded" || wordInfo.source === "fields_updated";
+  const isManualWord = ["user_uploaded", "fields_updated", "ddt_reused"].includes(wordInfo.source);
   const activeWordLabel = certificateId
     ? `${data?.header?.codice_f3 || "CodF3"}${certificateNumber ? ` - ${certificateNumber}` : ""}`
     : activeCodF3Candidate
@@ -1356,7 +1357,7 @@ export default function QuartaTaglioDetailPage() {
           ) : (
             <button
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-dark disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={wordDraftState.status === "saving" || !canGenerateActiveWord}
+              disabled={wordDraftState.status === "saving" || !canGenerateActiveWord || hasWord}
               onClick={() => generateWordDraft()}
               type="button"
             >

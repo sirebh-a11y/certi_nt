@@ -489,7 +489,6 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         db.query(QuartaTaglioFinalCertificate)
         .filter(
             QuartaTaglioFinalCertificate.certificate_number.isnot(None),
-            QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
         )
         .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
@@ -802,6 +801,17 @@ def get_quarta_taglio_detail(
     open_certificate = selected_certificate
     if open_certificate is None and saved_ddt is None:
         open_certificate = _find_open_certificate_for_detail(db, cod_odp=group.cod_odp, unit_key=primary_unit.unit_key if primary_unit else None)
+        base_word = _existing_word_for_workmanship(db, cod_odp=group.cod_odp,
+            cod_f3=selected_candidate.cod_f3 if selected_candidate else primary_unit.cod_f3 if primary_unit else None)
+        if base_word is not None and (open_certificate is None or not open_certificate.storage_key_docx):
+            open_certificate = base_word
+            primary_unit = _select_unit_for_certificate(certifiable_units, base_word) or QuartaTaglioCertifiableUnitResponse(
+                unit_key=base_word.unit_key or '', cod_odp=base_word.cod_odp, cod_f3=base_word.cod_f3,
+                ddt=base_word.ddt, quantita=base_word.quantita, cliente=base_word.fornitore_cliente,
+                ordine_cliente=base_word.ordine_cliente, conferma_ordine=base_word.cdo_lega,
+                source='certificate',
+            )
+            esolver_qta = base_word.quantita
     header_flow = _certificate_header_flow(
         current_unit=primary_unit,
         certifiable_units=certifiable_units,
@@ -827,6 +837,11 @@ def get_quarta_taglio_detail(
         selected_standard_confirmed=selected_standard_confirmed,
     )
     can_create_word = not word_creation_blockers
+    if saved_ddt is not None and not (open_certificate and open_certificate.storage_key_docx):
+        base_word = _existing_word_for_workmanship(db, cod_odp=group.cod_odp, cod_f3=saved_ddt.cod_f3)
+        if base_word is not None:
+            word_creation_blockers.append("Word già preparato per questa lavorazione: attendere il collegamento automatico alla quota DDT o verificare la segnalazione")
+            can_create_word = False
 
     detail = QuartaTaglioDetailResponse(
         cod_odp=group.cod_odp,
@@ -925,6 +940,13 @@ def get_quarta_taglio_detail(
     if saved_ddt is None and _has_numbered_certificate_for_ol(db, cod_odp=group.cod_odp):
         _sync_certifiable_unit_register(db, detail=detail, actor=None, create_missing=True)
         db.commit()
+    if open_certificate and open_certificate.storage_key_docx:
+        detail.status_message = (
+            "PDF pronto per questo DDT" if _certificate_is_pdf_final(open_certificate)
+            else "Word pronto - in attesa di DDT" if not open_certificate.ddt
+            else "Word pronto - PDF da preparare per questo DDT" if ready
+            else "Word presente - verificare i dati prima del PDF"
+        )
     return detail
 
 
@@ -1121,6 +1143,7 @@ def create_quarta_taglio_word_draft(
 ) -> QuartaTaglioWordDraftResponse:
     if ddt_work_item_id is not None and candidate_cod_f3:
         raise HTTPException(status_code=422, detail="Scegliere una quota DDT oppure un candidato CodF3, non entrambi")
+    _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
     context_certificate = _get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id)
     if context_certificate is not None:
         _ensure_certificate_word_is_editable(context_certificate)
@@ -1146,6 +1169,18 @@ def create_quarta_taglio_word_draft(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=candidate.blocked_reason)
         candidate_unit = _unit_from_certiol_candidate(cod_odp=detail.cod_odp, candidate=candidate)
         detail = _detail_for_certiol_candidate(detail=detail, candidate=candidate, unit=candidate_unit)
+    existing_word = _existing_word_for_workmanship(db, cod_odp=cod_odp,
+        cod_f3=candidate_cod_f3 or (detail.header or {}).get('codice_f3'))
+    if existing_word is not None and certificate_id is None:
+        if (not force_regenerate and existing_word.status != 'pdf_final'
+                and (saved_ddt is None or exact_certificate(saved_ddt, existing_word))):
+            # A retry of creation downloads the same Word; it never regenerates it.
+            return QuartaTaglioWordDraftResponse(
+                id=existing_word.id, cod_odp=existing_word.cod_odp, draft_number=existing_word.draft_number,
+                file_name=_certificate_file_name(existing_word), created_at=existing_word.created_at,
+                download_url=f"/api/quarta-taglio/word-drafts/{existing_word.id}/file?download_token={existing_word.download_token}",
+            )
+        raise HTTPException(status_code=409, detail="Word già preparato per questa lavorazione: usare il documento esistente; i nuovi DDT non richiedono un nuovo Word Raw")
     _ensure_word_draft_can_be_created(detail)
     if detail.conformity_issues and not force_non_conforming:
         raise HTTPException(
@@ -1706,7 +1741,7 @@ def _apply_word_file_state(
 
 
 def _is_manual_word(certificate: QuartaTaglioFinalCertificate | None) -> bool:
-    return _clean_text(getattr(certificate, "word_source", None)) in {"user_uploaded", "fields_updated"}
+    return _clean_text(getattr(certificate, "word_source", None)) in {"user_uploaded", "fields_updated", "ddt_reused"}
 
 
 def _ensure_certificate_word_is_editable(certificate: QuartaTaglioFinalCertificate | None) -> None:
@@ -1735,6 +1770,11 @@ def _propagate_shared_certificate_word(
         .all()
     )
     for sibling in siblings:
+        if sibling.storage_key_docx or sibling.storage_key_pdf or sibling.cod_odp != source_certificate.cod_odp or sibling.cod_f3 != source_certificate.cod_f3:
+            continue
+        # Persistent quotas are prepared independently by the reviewed reuse worker.
+        if db.query(QuartaTaglioDdtWorkItem.id).filter(QuartaTaglioDdtWorkItem.certification_unit_key == sibling.unit_key).first():
+            continue
         sibling.storage_key_docx = source_certificate.storage_key_docx
         sibling.download_token = secrets.token_urlsafe(32)
         sibling.word_source = source_certificate.word_source
@@ -2088,6 +2128,17 @@ def _apply_certificate_esolver_identity_fields(
         certificate.esolver_rif_lotto_alfanum = rif_lotto
 
 
+def _existing_word_for_workmanship(db: Session, *, cod_odp: str, cod_f3: str | None):
+    if not _clean_text(cod_f3):
+        return None
+    return (db.query(QuartaTaglioFinalCertificate).filter(
+        QuartaTaglioFinalCertificate.cod_odp == cod_odp,
+        QuartaTaglioFinalCertificate.cod_f3 == cod_f3,
+        QuartaTaglioFinalCertificate.storage_key_docx.isnot(None),
+        QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+    ).order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc()).first())
+
+
 def _has_numbered_certificate_for_ol(db: Session, *, cod_odp: str) -> bool:
     return (
         db.query(QuartaTaglioFinalCertificate.id)
@@ -2129,6 +2180,12 @@ def _sync_certifiable_unit_register(
     cert_date = datetime.now(timezone.utc)
     cdq_key = _cdq_key_from_detail(detail)
     for unit in units:
+        if db.query(QuartaTaglioDdtWorkItem.id).filter(
+            QuartaTaglioDdtWorkItem.certification_unit_key == unit.unit_key
+        ).first():
+            # No implicit historic repair during GET/bootstrap. Dedicated worker/tool
+            # uses exact identities and never changes an existing Word or closed PDF.
+            continue
         certificate = existing_by_unit_key.get(unit.unit_key) or _find_existing_certificate_for_unit(
             existing_certificates,
             unit=unit,
@@ -2601,6 +2658,24 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         return path
     # Validate even manual files without content controls before download/PDF.
     saved_ddt = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    if certificate.word_source == 'ddt_reused':
+        if saved_ddt is None:
+            raise HTTPException(status_code=409, detail="Quota DDT del Word riutilizzato non disponibile: verifica richiesta")
+        from app.modules.quarta_taglio.ddt_word_reuse import shipment_values, word_facts
+        try:
+            controls, _ = word_facts(certificate.storage_key_docx)
+            values = shipment_values(saved_ddt, certificate, controls)
+        except (OSError, ValueError, zipfile.BadZipFile):
+            raise HTTPException(status_code=409, detail="Campi del Word riutilizzato non verificabili") from None
+        if any(controls.get(key) != str(value) for key, value in values.items()):
+            raise HTTPException(status_code=409, detail="Dati DDT diversi dal Word predisposto: verifica richiesta")
+        # Preserve the existing live conformity check before download/PDF without
+        # rebuilding technical or manually edited contents of the reused Word.
+        detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
+        _apply_certificate_conformity(certificate, detail)
+        db.add(certificate)
+        db.commit()
+        return path
     try:
         present, missing = inspect_docx_content_controls(path)
     except (OSError, zipfile.BadZipFile):
@@ -2928,6 +3003,8 @@ def _serialize_word_info(certificate: QuartaTaglioFinalCertificate | None) -> Qu
 
 
 def _word_source_label(source: str | None) -> str:
+    if source == "ddt_reused":
+        return "Word riutilizzato per questo DDT"
     if source == "user_uploaded":
         return "Caricato dall'utente"
     if source == "fields_updated":
@@ -5188,7 +5265,9 @@ def _word_pending_reasons(
     reasons = [
         QuartaTaglioWordPendingReason(
             kind="ddt",
-            message=f"Word mancante per DDT {unit.ddt}, articolo {unit.cod_f3}",
+            message=(f"Word già preparato; collegamento al DDT {unit.ddt}, articolo {unit.cod_f3} da verificare nella coda DDT"
+                     if any(c.storage_key_docx and _norm(c.cod_f3) == _norm(unit.cod_f3) for c in certificates)
+                     else f"Word mancante per DDT {unit.ddt}, articolo {unit.cod_f3}"),
         )
         for unit in missing_units
     ]
@@ -5291,12 +5370,23 @@ def _build_certification_progress_by_odp(
         certiol_rows_by_odp.update(_fetch_certiol_rows_batch(db, missing_certiol_odps))
 
     groups_by_odp = {group_rows[0].cod_odp: group_rows for group_rows in groups if group_rows}
+    saved_by_ol: dict[str, list[QuartaTaglioDdtWorkItem]] = defaultdict(list)
+    for start in range(0, len(needs_candidate_check), 400):
+        for saved in db.query(QuartaTaglioDdtWorkItem).filter(
+            QuartaTaglioDdtWorkItem.cod_odp.in_(needs_candidate_check[start:start + 400])
+        ).all():
+            saved_by_ol[saved.cod_odp].append(saved)
+    from app.modules.quarta_taglio.ddt_decisions import latest_decisions, exclusion_valid
+    decisions = latest_decisions(db, [i.id for items in saved_by_ol.values() for i in items])
     for cod_odp in needs_candidate_check:
         progress[cod_odp] = _certification_progress_for_group(
             group_rows=groups_by_odp.get(cod_odp) or [],
             certiol_rows=certiol_rows_by_odp.get(cod_odp, []),
             esolver_link=esolver_links.get(cod_odp),
             certificates=certificates_by_odp.get(cod_odp, []),
+            saved_items=[i for i in saved_by_ol[cod_odp]
+                         if not (decisions.get(i.id) and exclusion_valid(i, decisions[i.id]))]
+                        if saved_by_ol[cod_odp] else None,
         )
     return {cod_odp: progress[cod_odp] for cod_odp in cod_odps if cod_odp in progress}
 
@@ -5336,7 +5426,26 @@ def _certification_progress_for_group(
     certiol_rows: list[_CertiOlRow],
     esolver_link: QuartaTaglioEsolverLink | None,
     certificates: list[QuartaTaglioFinalCertificate],
+    saved_items: list[QuartaTaglioDdtWorkItem] | None = None,
 ) -> _OlCertificationProgress:
+    if saved_items is not None:
+        from app.modules.quarta_taglio.ddt_context import quantity_matches
+        pending = []
+        for item in saved_items:
+            exact = [c for c in certificates if exact_certificate(item, c)]
+            if (item.source_review_reason or len(exact) != 1 or not _certificate_is_pdf_final(exact[0])
+                    or not quantity_matches(item, exact[0])):
+                pending.append(item)
+        if saved_items and not pending:
+            return _OlCertificationProgress(status='completed', color='green',
+                label='PDF pronti per tutti i DDT ricevuti',
+                message='Tutti i DDT ricevuti che richiedono certificazione hanno il PDF pronto. Eventuali nuovi DDT apriranno un nuovo lavoro.')
+        if pending:
+            return _OlCertificationProgress(status='partial', color='yellow',
+                label='PDF da completare per DDT ricevuti',
+                message='Restano spedizioni ricevute senza PDF pronto; consultare DDT da certificare. Non occorre ricreare un Word già preparato.')
+        return _OlCertificationProgress(status='partial', color='yellow',
+            label='Nessun DDT ricevuto da certificare', message='Le quote ricevute sono escluse dalla certificazione.')
     cod_odp = group_rows[0].cod_odp if group_rows else ""
     esolver_rows = _esolver_rows_from_link(esolver_link)
     pdf_final_certificates = [certificate for certificate in certificates if _certificate_is_pdf_final(certificate)]
@@ -5749,7 +5858,8 @@ def _enrich_certiol_candidates_from_certificates(
     latest_by_cod_f3: dict[str, QuartaTaglioFinalCertificate] = {}
     for certificate in certificates:
         key = _norm(certificate.cod_f3)
-        if key and key not in latest_by_cod_f3:
+        if key and (key not in latest_by_cod_f3 or
+                    (certificate.storage_key_docx and not latest_by_cod_f3[key].storage_key_docx)):
             latest_by_cod_f3[key] = certificate
 
     raw_key = _norm(next((_clean_text(candidate.cod_f3_odp) for candidate in candidates if _clean_text(candidate.cod_f3_odp)), None))

@@ -207,6 +207,20 @@ def _project(db, items):
     for item in items:
         row = _derive(item, certificates_by_ol[item.cod_odp], versions_by_id,
                       incoming_by_ol.get(item.cod_odp, missing), family_counts)
+        # Reuse diagnostics are distinct from a missing OL in eSolver. Never guess
+        # an OL from the numeric lot; no write/remote query in this projection.
+        if (row.state == 'ready' or (row.state == 'review' and any('Word senza DDT associabile' in reason for reason in row.reasons))):
+            from app.modules.quarta_taglio.ddt_word_reuse import plan_item
+            reuse = plan_item(db, item)
+            if reuse['action'] == 'reuse':
+                row.state, row.label = 'ready', LABELS['ready']
+                row.reasons = [r for r in row.reasons if 'Word senza DDT associabile' not in r]
+                row.reasons.append('Word già preparato: collegamento automatico a questo DDT in attesa di elaborazione')
+            elif reuse['reason'] in {'different_word_sources', 'source_file_or_controls_invalid',
+                                      'no_compatible_word', 'target_material_changed', 'legacy_or_changed_identity',
+                                      'target_content_requires_review'}:
+                row.state, row.label = 'review', LABELS['review']
+                row.reasons.append('Word esistente non collegabile automaticamente: verificare compatibilità, file e campi DDT')
         decision = decisions.get(item.id)
         row.operational_state = row.state
         row.source_revision = source_revision(item)

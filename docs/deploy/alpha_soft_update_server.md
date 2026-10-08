@@ -191,6 +191,206 @@ anche `--help`, protezioni manutenzione/backup e Compose con flag assente/false
 e true esplicito. Nessuna chiamata AI o modifica ai dati Alpha; frontend invariato.
 Il collaudo non sostituisce preview, backup e verifiche nella futura manutenzione.
 
+### Correzione Word per DDT successivi e recupero Alpha (piano 08/10/2026)
+
+**Stato 08/10: implementata e collaudata in locale; NON installata/applicata su Alpha.**
+Questa sezione non autorizza deploy o recupero. Restano necessari commit/push
+richiesti dall'utente, pacchetto verificato e nuova preview/OK sui dati Alpha.
+Comando dedicato: `backend/scripts/recover_ddt_words_alpha.py`, report versione 1.
+Verificati `--help`, pianificazione/applicazione ripetibile e lock su PostgreSQL
+locale isolato. I comandi operativi sotto andranno eseguiti solo in manutenzione.
+Verifica finale locale: 535 test backend superati senza salti, build frontend e
+controllo visivo con API simulate superati; dettagli nel documento di audit.
+`recover_ddt_alpha.py` recupera gli snapshot DDT, NON ripara questo problema:
+non ripetere l'importazione iniziale del 01/10 per correggere i Word.
+
+#### Regola concordata e limiti
+
+- Il Word gia preparato per OL/lavorazione resta la base utilizzabile quando
+  arrivano altre spedizioni, anche mesi dopo. Non si conosce a priori il numero
+  di DDT di un OL; nessun limite di 60 giorni nella ricerca della base Word o
+  nel recupero delle quote gia conservate. Questo non recupera dati mai acquisiti.
+- Ogni quota DDT ricevuta mantiene la propria identita completa (documento,
+  riga, OL, CodF3 e riferimenti previsti dal modello), non il solo numero DDT.
+  Si predispone automaticamente il suo Word con dati della sua spedizione,
+  riutilizzando la base compatibile senza chiedere un nuovo "Genera Word Raw".
+  Il riuso della base non significa associare una stessa istanza certificato
+  a piu quote, ne modificare un file condiviso in-place.
+- L'utente completa il PDF della singola quota. Un PDF pronto chiude quella
+  quota, non definitivamente l'OL. Un DDT successivo apre solo il nuovo lavoro.
+- Messaggi concordati: "Word pronto - in attesa di DDT", "PDF da preparare",
+  "PDF pronto". Riepilogo OL: "PDF pronti per tutti i DDT ricevuti" oppure
+  "PDF da completare per DDT ricevuti". Mancanza Word, dati incompleti o
+  ambiguita devono avere una spiegazione specifica; non dichiarare la quota
+  pronta se altri blocchi esistenti impediscono la certificazione.
+- Non modificare Incoming, match, standard confermati, conformita, esclusioni
+  manuali, scadenze, numerazione, PDF chiusi o modalita di invio eSolver.
+  Non introdurre la diversa ereditarieta tra lavorazioni proposta (ma non
+  approvata qui) in `docs/modules/quarta_taglio_word_inheritance_rules.md`.
+
+#### Evidenze e requisiti prima del deploy
+
+Audit Alpha del 08/10 sul codice installato
+`3951822fa3790bd7e1b1b6ced33d384a2fb5edd1`, confrontato con il codice locale:
+
+- OL2026000997: certificato 16, DDT 2354-29/09/2026, 3000 pezzi, Word e PDF
+  chiuso; certificato 148, DDT 2397-05/10/2026, 1398 pezzi, stessa lavorazione
+  ma Word assente. Il backup Alpha del 01/10 prova che il Word era gia stato
+  preparato il 28/07 senza DDT. Non occorre un secondo lavoro manuale Raw.
+- Rilevate 8 righe candidate su 7 OL. Successiva verifica della nuova funzione
+  di pianificazione sui dati/file Alpha, in processo temporaneo con transazione
+  read-only e senza installazioni: tutte e 8 risultano riutilizzabili. Non e la
+  preview ufficiale del deploy: ricalcolare ciascuna riga al prossimo deploy,
+  incluse quote senza record certificato. Dettagli in
+  `docs/tasks/ddt_word_reuse_20261008.md`.
+- In `backend/app/modules/quarta_taglio/service.py`, la ricerca della fonte
+  (`_previous_word_certificate_for_inheritance`) esclude lo stesso numero di
+  certificato, anche quando appartiene alla stessa lavorazione su un altro DDT.
+  La selezione del record recente/aperto puo nascondere il Word gia esistente.
+- Il Registro filtra i record senza Word e il suo refresh non riprende gli OL
+  con sole righe visibili gia chiuse. La propagazione del Word e esclusa nel
+  contesto DDT puntuale. Non rimuovere per questo le protezioni sull'identita
+  della quota o sulla scrittura separata dei file.
+- Il job in `backend/app/modules/quarta_taglio/scheduler.py` raccoglie DDT e
+  aggiorna Quarta, ma non garantisce la preparazione automatica dei Word per
+  tutte le nuove quote nella versione Alpha installata. La correzione copre anche l'arrivo senza pagine
+  aperte e il successivo completamento dei dati mancanti, non solo il pulsante.
+
+La versione locale aggiunge `DDT_WORD_REUSE_ENABLED` (default **false** anche nel
+Compose Alpha). Non modifica lo schema DB; usa record/campi esistenti e distingue
+il Word riutilizzato con `word_source=ddt_reused`. Il worker opera ogni 15 minuti
+sulle quote conservate, senza limite temporale, ed e attivabile separatamente dal
+job snapshot. Non aggiungere `true` implicitamente al `.env` server. Con flag false
+le aperture generiche non recuperano indirettamente le quote persistenti.
+
+Prerequisiti bloccanti da dimostrare in locale:
+
+1. Nuovo DDT dopo Word, dopo PDF chiuso e dopo mesi; piu DDT contemporanei;
+   Word iniziale senza DDT; storico non piu presente nella vista eSolver.
+2. Ripetizione e concorrenza tra job/pagina: nessuna duplicazione, stesso risultato
+   a parita di dati; nessun recupero massivo al bootstrap prima dell'OK sul report.
+3. Distinzione tra riuso della stessa lavorazione e regole preesistenti per altre
+   lavorazioni. Stesso OL/numero non basta: verificare CodF3, CDQ/colate e
+   compatibilita tecnica. Fonti multiple discordanti richiedono verifica.
+4. Word manuali, controlli dinamici mancanti, seconde pagine e allegati PDF:
+   conservare i contenuti; non dichiarare automaticamente aggiornato un Word
+   che non permette di sostituire tutti i dati della spedizione necessari.
+5. File mancanti/corrotti, errore di scrittura/commit e riavvio: nessun record che
+   dichiari un file pronto inesistente; nessuna alterazione della fonte o dei
+   certificati chiusi. Il rollback SQL da solo NON annulla le scritture su disco.
+6. Test PostgreSQL di lock/transazioni, Registro/coda/sidebar, filtri, pulsanti,
+   dati nel Word, PDF ed export. PDF chiusi, nomi, token e versioni preesistenti
+   devono restare invariati. Verificare anche la UI con il percorso browser locale.
+
+#### Sequenza del prossimo deploy con recupero Word
+
+1. **Prima del fermo:** audit Alpha in sola lettura, stato spazio e stima di
+   backup/build/nuovi Word; riferire all'utente. Inventariare tutte le quote
+   conservate e le fonti Word, senza una finestra temporale arbitraria. Non usare
+   apertura del dettaglio OL/download Word come audit read-only: alcuni percorsi
+   attuali scrivono dati o file anche su GET. Nessuna pulizia implicita.
+2. **Manutenzione concordata:** verificare run AI e generazioni Word/PDF conclusi;
+   sospendere accessi e writer, inclusi job, fermando backend/frontend. Lasciare
+   PostgreSQL e gli altri stack attivi. Salvare e verificare backup coerenti DB,
+   storage e app/configurazione della stessa manutenzione; conservare le immagini
+   di rollback. Registrare impronte di record/versioni e file dei PDF chiusi,
+   Word sorgenti, allegati e risultato export prima di intervenire.
+3. **Installazione senza avvio automatico:** seguire pacchetto/SOURCE_COMMIT/hash
+   del normale deploy, preservare `.env`, mapping, ruoli e dati. Costruire le
+   immagini ma sospendere il normale `up -d --build`. Il nuovo codice non deve
+   recuperare lo storico in bootstrap. Se emergono migrazioni, documentarle e
+   collaudarle separatamente prima: non assumere che siano gia disponibili.
+4. **Preview dedicata:** container one-off con DB/storage Alpha e scheduler non
+   avviato; transazione PostgreSQL read-only e storage montato in sola lettura,
+   senza importare il bootstrap applicativo. Scrivere soltanto il report privato
+   in backup. Mostrare per quota: identita, record di destinazione esistente o da
+   creare, fonte Word, motivo di compatibilita, dati DDT da inserire, azione ed
+   eventuale esclusione dal recupero. Includere fingerprint di codice/dati/fonti
+   e confronti di conteggio; distinguere sicure, gia corrette e da verificare.
+   Nessun dato, documento o collegamento viene copiato dallo sviluppo locale.
+5. **OK esplicito sul report:** il deploy non autorizza il recupero. Se rinviato,
+   la riapertura richiede un percorso collaudato che non applichi lo storico
+   indirettamente tramite job o pagine. Se tale separazione non e disponibile,
+   fermarsi e concordare rinvio/rollback: non riaprire contando sulla sola preview.
+6. **Applicazione controllata:** writer ancora fermi, sole quote approvate;
+   rivalidare sotto lock sorgenti, destinazioni e codice. Report superato o dati
+   cambiati richiedono nuova preview/OK. Riutilizzare la riga corretta se esiste;
+   creare solo quella mancante con identita certa. Scrivere nuovi file per le
+   destinazioni, mai sovrascrivere la fonte. Proteggere insieme transazione e file
+   con gestione degli errori e registro preciso delle modifiche. Non chiudere
+   PDF, rinumerare, riaprire certificati o sostituire Word gia presenti.
+7. **Verifica prima della riapertura:** confrontare esito e report, impronte dei
+   documenti protetti e risultato export (non deve crescere per il solo recupero
+   Word). Seconda preview senza ulteriori modifiche sulle quote recuperate.
+   Per OL997: riga 2354 e PDF intatti; riga 2397 con Word aggiornato e PDF ancora
+   da preparare. Non usare generazione PDF reale su Alpha come test.
+8. **Riapertura e sorveglianza:** riprendere avvio/controlli generali sotto,
+   conservando configurazione e cadenza DDT gia autorizzate (15 minuti).
+   Verificare primo ciclo riuscito, nessuna duplicazione o riscrittura, Registro,
+   coda e messaggi. Il caso di nuovo DDT a distanza di mesi si prova in locale:
+   non inserire spedizioni fittizie su Alpha. Alla prossima spedizione reale
+   controllare la preparazione automatica. Annotare separatamente deploy, quote
+   recuperate, escluse con motivo e controlli ancora da osservare.
+
+Comandi da `/srv/certi_nt/app` dopo fermo writer, backup verificati e installazione
+del pacchetto. Sostituire `TIMESTAMP` con i nomi di questa manutenzione. Non
+modificano le impostazioni persistenti del `.env`: i due flag false valgono solo
+nel container one-off, che non avvia job o bootstrap.
+
+```bash
+docker compose --env-file .env -f docker-compose.alpha.yml build backend frontend
+
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/data/storage:/app/storage:ro \
+  -v /srv/certi_nt/backup:/audit \
+  backend python -m scripts.recover_ddt_words_alpha \
+  --preview --report /audit/word_ddt_preview_TIMESTAMP.json
+
+# Solo dopo esame e OK esplicito sul report, writer ancora fermi.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit \
+  backend python -m scripts.recover_ddt_words_alpha \
+  --apply --report /audit/word_ddt_preview_TIMESTAMP.json \
+  --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql \
+  --storage-backup /audit/storage_before_alpha_TIMESTAMP.tgz
+```
+
+La preview e PostgreSQL read-only e non interroga eSolver: usa esclusivamente i
+dati Alpha gia conservati e i file Alpha. Il report scade dopo un'ora, identifica
+cluster/configurazione/codice e impronte DB/file, e non si puo riutilizzare se i
+dati sono cambiati. Nessuna password e inclusa nel report. Il recupero rifiuta
+writer attivi tramite lock NOWAIT; non li interrompe.
+
+Il file `word_ddt_preview_TIMESTAMP.applied.json` registra destinazioni/fonti e
+nuovi file con stato `pending_commit` prima del commit. Per confermare l'esito
+servono output `committed`, controlli DB/file e nuova preview: il solo journal
+non prova il commit. In caso di esito incerto conservare i file creati e verificare
+prima di rimuoverli; un rollback DB non annulla il filesystem. I backup devono
+essere verificati/ripristinabili: il comando controlla soltanto leggibilita e
+intestazione del dump e presenza dell'archivio storage.
+
+Solo dopo recupero verificato e OK all'automatismo impostare nel `.env` server
+`DDT_WORD_REUSE_ENABLED=true`; conservare il valore preesistente di
+`DDT_SNAPSHOT_ENABLED`. Ricreare il backend, non limitarsi a `restart`, e
+verificare il primo ciclo e il log `ddt_word_reuse`. Se si rinvia il recupero,
+lasciare false e dichiarare che i Word mancanti non sono stati recuperati.
+Non esporre report/journal/backup via web o Git. Nessun PDF viene chiuso o inviato
+dal recupero: l'utente completa i PDF delle nuove quote.
+
+#### Fallimento e rollback specifici
+
+Prima dell'applicazione e possibile il rollback del solo codice se schema e dati
+sono compatibili. Dopo il recupero Word, il rollback codice NON annulla le nuove
+associazioni o i nuovi file: usare il registro modifiche e un piano verificato
+DB + storage. Conservare anche lo stato del fallimento. Ripristino dati e rimozione
+file richiedono decisione esplicita; non cancellare file condivisi o sorgenti.
+Se gli utenti hanno ripreso a lavorare, non ripristinare integralmente il vecchio
+dump: perderebbe i lavori successivi. Fermarsi, fare un nuovo backup e pianificare
+una correzione mirata. Non dichiarare recupero riuscito se rimangono errori non
+spiegati; i casi ambigui restano visibili senza associazioni forzate.
+
 ### Separazione obbligatoria della futura linea nuovi fornitori
 
 Il futuro laboratorio per configurare nuovi fornitori non esiste ancora e non deve essere presente su Alpha durante il suo sviluppo.
@@ -820,6 +1020,12 @@ Nota: il comando con `"$POSTGRES_USER"` e `"$POSTGRES_DB"` dentro `sh -lc` puo f
 Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliato ma non sempre obbligatorio. In alpha conviene farlo spesso.
 
 ## Aggiornamento soft
+
+**Se il deploy include la correzione Word per DDT successivi**, seguire anche la
+sezione dedicata del 08/10/2026: stop dei writer, backup DB/storage, build senza
+avvio, preview e OK separato al recupero prima della riapertura. Non eseguire
+alla cieca l'ultimo `up -d --build` del blocco sotto. La procedura dedicata deve
+essere stata implementata e collaudata: questo Markdown non la sostituisce.
 
 **Se è autorizzato anche il primo recupero DDT**, applicare la variante sopra:
 backup con writer fermi e pausa prima del comando finale `up -d --build`, per

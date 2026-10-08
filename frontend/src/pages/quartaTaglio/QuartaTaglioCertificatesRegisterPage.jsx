@@ -259,6 +259,9 @@ function registerStatusLabel(item) {
   if (item.status === "pdf_final") {
     return STATUS_LABELS.pdf_final;
   }
+  if (!item.has_word) {
+    return "Word non disponibile - verificare";
+  }
   if (item.ddt && hasInheritedWord(item) && !item.has_pdf) {
     return "PDF da generare - Word ereditato";
   }
