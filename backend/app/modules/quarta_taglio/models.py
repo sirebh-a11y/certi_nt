@@ -130,6 +130,22 @@ class QuartaTaglioDdtDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class QuartaTaglioDdtArchiveEvent(Base):
+    """Reversible start-of-operation boundary, distinct from quality exclusions."""
+    __tablename__ = "quarta_taglio_ddt_archive_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_ddt_work_items.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    cutoff_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    actor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_facts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    batch_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class QuartaTaglioDdtSyncRun(Base):
     __tablename__ = "quarta_taglio_ddt_sync_runs"
 

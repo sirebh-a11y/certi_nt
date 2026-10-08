@@ -4,7 +4,7 @@ Detail retrieval can confirm Incoming or create register records. This projectio
 only reads local facts and uses the same Incoming evaluator on transient results.
 """
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -32,6 +32,7 @@ LABELS = {
     "quality_rejected": "Qualità respinta", "waiting_incoming": "In attesa Incoming",
     "word_ready": "Word pronto - completare PDF", "ready": "Pronto lato Incoming",
     "review": "Verifica richiesta", "excluded": "Non richiede certificazione",
+    "archived": "Archiviato per avvio",
 }
 
 SORT_FIELDS = {
@@ -201,6 +202,11 @@ def _project(db, items):
             versions_by_id[version.certificate_id].append(version)
     incoming_by_ol = {ol: _incoming_status(db, by_ol[ol]) for ol in cod_odps}
     decisions = latest_decisions(db, [item.id for item in items])
+    from app.modules.quarta_taglio.ddt_archive import archive_state, REVIEW_MESSAGE as ARCHIVE_REVIEW
+    archived, archive_events = archive_state(db, items)
+    from app.modules.quarta_taglio.models import QuartaTaglioDdtArchiveEvent
+    boundary = db.scalar(select(QuartaTaglioDdtArchiveEvent).where(
+        QuartaTaglioDdtArchiveEvent.action == 'archive').order_by(QuartaTaglioDdtArchiveEvent.id.desc()).limit(1))
     missing = dict(ready=False, rejected=False, ids=[], reasons=[], ambiguous=False)
     for item in items:
         row = _derive(item, certificates_by_ol[item.cod_odp], versions_by_id,
@@ -244,6 +250,19 @@ def _project(db, items):
                     word_source=certificate.word_source, ddt=item.ddt_raw,
                     cod_odp=item.cod_odp, cod_f3=item.cod_f3,
                 )
+        archive_event = archive_events.get(item.id)
+        if (boundary and not archive_event and item.ddt_date and item.ddt_date < boundary.cutoff_date
+                and item.first_seen_at.replace(tzinfo=timezone.utc) >= boundary.created_at.replace(tzinfo=timezone.utc)):
+            row.reasons.insert(0, 'DDT acquisito dopo l’avvio con data precedente: mantenuto disponibile, verificare se da certificare.')
+        if archive_event:
+            row.latest_archive = DdtDecisionResponse.model_validate(archive_event)
+            if item.id in archived:
+                row.state, row.label = 'archived', LABELS['archived']
+                row.pdf_action = None
+                row.certification_due_date = None
+                row.reasons = [archive_event.reason]
+            elif archive_event.action in {'archive', 'review'}:
+                row.reasons.insert(0, ARCHIVE_REVIEW)
         result.append(row)
     return result
 
@@ -287,7 +306,7 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
                    date_to: date | None = None, source_present=None,
                    limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
-    if scope not in {"active", "completed", "excluded", "all"} or (state is not None and state not in LABELS):
+    if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS):
         raise HTTPException(status_code=422, detail="Filtro stato non valido")
     if limit < 1 or limit > 200 or offset < 0 or sort_field not in SORT_FIELDS or sort_direction not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
@@ -315,11 +334,11 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         counts = {key: 0 for key in LABELS}
         counts.update(Counter(item.state for item in projected))
         sync = read_ddt_sync(db)
-        counters = dict(total=len(projected), active=len(projected) - counts["completed"] - counts["excluded"], by_state=counts, sync=sync)
+        counters = dict(total=len(projected), active=len(projected) - counts["completed"] - counts["excluded"] - counts["archived"], by_state=counts, sync=sync)
         if counters_only:
             return DdtQueueCountersResponse(**counters)
         selected = [item for item in projected if (scope == "all" or item.state == scope
-                    or (scope == "active" and item.state not in {"completed", "excluded"}))
+                    or (scope == "active" and item.state not in {"completed", "excluded", "archived"}))
                     and (state is None or item.state == state)]
         # Sort the whole filtered population before pagination; missing values stay last.
         present = sorted((item for item in selected if _sort_value(item, sort_field) is not None),

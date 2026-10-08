@@ -6,8 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-DdtState = Literal["completed", "excluded", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
-DdtScope = Literal["active", "completed", "excluded", "all"]
+DdtState = Literal["completed", "excluded", "archived", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
+DdtScope = Literal["active", "completed", "excluded", "archived", "all"]
 
 
 class DdtDecisionRequest(BaseModel):
@@ -81,6 +81,7 @@ class DdtWorkItemResponse(BaseModel):
     source_revision: str = ""
     latest_decision: DdtDecisionResponse | None = None
     exclusion_active: bool = False
+    latest_archive: DdtDecisionResponse | None = None
 
 
 class DdtSyncAttemptResponse(BaseModel):

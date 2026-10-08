@@ -4787,17 +4787,20 @@ def _refresh_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow])
         _apply_esolver_link_values(link, esolver_rows=esolver_rows, status_value=esolver_status, message=esolver_message, checked_at=now)
         db.add(link)
     db.commit()
-    return existing_links
+    from app.modules.quarta_taglio.ddt_history_links import operational_links
+    return operational_links(db, existing_links, groups.keys())
 
 
 def _load_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow]) -> dict[str, QuartaTaglioEsolverLink]:
     cod_odps = sorted({row.cod_odp for row in rows if row.cod_odp})
     if not cod_odps:
         return {}
-    return {
+    links = {
         link.cod_odp: link
         for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps)).all()
     }
+    from app.modules.quarta_taglio.ddt_history_links import operational_links
+    return operational_links(db, links, cod_odps)
 
 
 def _apply_esolver_link_values(
@@ -5429,6 +5432,8 @@ def _build_certification_progress_by_odp(
             saved_by_ol[saved.cod_odp].append(saved)
     from app.modules.quarta_taglio.ddt_decisions import latest_decisions, exclusion_valid
     decisions = latest_decisions(db, [i.id for items in saved_by_ol.values() for i in items])
+    from app.modules.quarta_taglio.ddt_archive import archived_ids
+    archived = archived_ids(db, [i for items in saved_by_ol.values() for i in items])
     for cod_odp in needs_candidate_check:
         progress[cod_odp] = _certification_progress_for_group(
             group_rows=groups_by_odp.get(cod_odp) or [],
@@ -5436,7 +5441,7 @@ def _build_certification_progress_by_odp(
             esolver_link=esolver_links.get(cod_odp),
             certificates=certificates_by_odp.get(cod_odp, []),
             saved_items=[i for i in saved_by_ol[cod_odp]
-                         if not (decisions.get(i.id) and exclusion_valid(i, decisions[i.id]))]
+                         if i.id not in archived and not (decisions.get(i.id) and exclusion_valid(i, decisions[i.id]))]
                         if saved_by_ol[cod_odp] else None,
         )
     return {cod_odp: progress[cod_odp] for cod_odp in cod_odps if cod_odp in progress}

@@ -10,7 +10,8 @@ export default function DdtDecisionDialog({ item, action, token, onClose, onSave
   const [error, setError] = useState("");
   const [history, setHistory] = useState(null);
   const isHistory = action === "history";
-  const title = isHistory ? "Storico decisioni" : action === "exclude" ? "Non richiede certificazione" : "Ripristina quota";
+  const isArchive = action === "archive_restore";
+  const title = isHistory ? "Storico decisioni" : isArchive ? "Ripristina DDT" : action === "exclude" ? "Non richiede certificazione" : "Ripristina quota";
 
   useEffect(() => { dialog.current.showModal(); }, []);
   useEffect(() => {
@@ -28,9 +29,9 @@ export default function DdtDecisionDialog({ item, action, token, onClose, onSave
     setBusy(true);
     setError("");
     try {
-      await apiRequest(`/quarta-taglio/ddt-work-items/${item.id}/decisions`, {
-        method: "POST", body: JSON.stringify({ action, reason: reason.trim(),
-          expected_decision_id: item.latest_decision?.id || 0, source_revision: item.source_revision }),
+      await apiRequest(`/quarta-taglio/ddt-work-items/${item.id}/${isArchive ? "archive/restore" : "decisions"}`, {
+        method: "POST", body: JSON.stringify({ action: isArchive ? "restore" : action, reason: reason.trim(),
+          expected_decision_id: (isArchive ? item.latest_archive?.id : item.latest_decision?.id) || 0, source_revision: item.source_revision }),
       }, token);
       onSaved(action);
     } catch (err) {
@@ -62,7 +63,7 @@ export default function DdtDecisionDialog({ item, action, token, onClose, onSave
         {error ? <p role="alert" className="mt-3 text-sm text-rose-700">{error}</p> : null}
         <button type="button" onClick={onClose} className="mt-4 rounded-lg border px-4 py-2 text-sm">Chiudi</button>
       </> : <form onSubmit={save} className="mt-4 space-y-4">
-        <p className="text-sm text-slate-600">{action === "exclude"
+        <p className="text-sm text-slate-600">{isArchive ? "Tutte le righe archiviate di questo DDT torneranno disponibili, con le scadenze originali. Nessun Word o PDF viene creato da questo pulsante." : action === "exclude"
           ? "Questa quota uscirà dagli Attivi e dal numero nella sidebar. La ritroverai in Vista → Esclusi e potrai ripristinarla."
           : "La quota tornerà negli Attivi con la scadenza originale, se il suo PDF finale non è già pronto."}</p>
         <label className="block text-sm font-semibold">Motivo della decisione

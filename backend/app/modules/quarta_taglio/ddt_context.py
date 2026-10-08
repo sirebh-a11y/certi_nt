@@ -61,6 +61,8 @@ def resolve_saved_ddt(db, *, cod_odp, work_item_id=None, certificate=None, lock=
     if len(items) != 1:
         raise HTTPException(status_code=409, detail="Quota DDT ambigua: verifica richiesta")
     item = items[0]
+    from app.modules.quarta_taglio.ddt_archive import require_operational
+    require_operational(db, item)
     if item.source_review_reason or not item.cod_f3 or not item.ddt_raw or not item.ddt_date:
         raise HTTPException(status_code=409, detail="Dati della quota DDT da verificare prima di certificare")
     if certificate is not None and not exact_certificate(item, certificate):

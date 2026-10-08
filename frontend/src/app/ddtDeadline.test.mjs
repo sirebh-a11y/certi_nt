@@ -39,6 +39,8 @@ test("completed PDFs have no warning; other operational states and history keep 
   const now = at("2026-10-10T12:00:00Z");
   assert.equal(ddtDeadline({ ...item, state: "completed" }, now), null);
   assert.equal(ddtDeadline({ ...item, state: "excluded" }, now), null);
+  assert.equal(ddtDeadline({ ...item, state: "archived" }, now), null);
+  assert.equal(ddtDeadline({ ...item, state: "archived", certification_due_date: null }, now), null);
   for (const state of ["ready", "review", "waiting_incoming", "quality_rejected", "word_ready", "to_link"]) {
     const original = { ...item, state, source_present: false, first_seen_at: "2026-10-10T11:59:00Z" };
     const copy = { ...original };

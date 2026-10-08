@@ -30,6 +30,7 @@ const STATE_OPTIONS = [
   ["review", "Da verificare"],
   ["completed", "Completati"],
   ["excluded", "Esclusi"],
+  ["archived", "Archiviati per avvio"],
 ];
 
 const STATE_CLASSES = {
@@ -41,6 +42,7 @@ const STATE_CLASSES = {
   review: "border-amber-200 bg-amber-50 text-amber-800",
   completed: "border-slate-200 bg-slate-50 text-slate-700",
   excluded: "border-slate-300 bg-slate-100 text-slate-700",
+  archived: "border-slate-300 bg-slate-100 text-slate-700",
 };
 
 const INITIAL_FILTERS = {
@@ -173,8 +175,8 @@ export default function DdtWorkQueuePage() {
   const updateDraft = useCallback((field, value) => {
     setDraftFilters((current) => {
       const next = { ...current, [field]: value };
-      if (field === "state" && ["completed", "excluded"].includes(value)) next.scope = value;
-      if (field === "state" && value && !["completed", "excluded"].includes(value) && ["completed", "excluded"].includes(current.scope)) next.scope = "active";
+      if (field === "state" && ["completed", "excluded", "archived"].includes(value)) next.scope = value;
+      if (field === "state" && value && !["completed", "excluded", "archived"].includes(value) && ["completed", "excluded", "archived"].includes(current.scope)) next.scope = "active";
       if (field === "scope") next.state = "";
       return next;
     });
@@ -328,6 +330,7 @@ export default function DdtWorkQueuePage() {
           <label className="block text-xs font-semibold text-slate-600">Vista
             <select value={draftFilters.scope} onChange={(event) => updateDraft("scope", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
               <option value="active">Attivi</option><option value="completed">Completati</option><option value="excluded">Esclusi</option><option value="all">Tutti</option>
+              <option value="archived">Archiviati per avvio</option>
             </select>
           </label>
           <label className="block text-xs font-semibold text-slate-600">Stato
@@ -432,12 +435,13 @@ export default function DdtWorkQueuePage() {
                   <td className="whitespace-nowrap px-3 py-3 text-xs">{formatTimestamp(item.last_seen_at)}</td>
                   <td className="min-w-36 px-3 py-3">
                     <div className="flex flex-col items-start gap-2 text-xs font-semibold">
-                      {canDecide && item.source_revision && item.state !== "completed" && item.state !== "excluded" ?
+                      {canDecide && item.source_revision && !["completed", "excluded", "archived"].includes(item.state) ?
                         <button type="button" onClick={() => setDecisionDialog({ item, action: "exclude" })} className="text-slate-700 underline">Non richiede certificazione</button> : null}
                       {canDecide && item.source_revision && ["exclude", "review"].includes(item.latest_decision?.action) ?
                         <button type="button" onClick={() => setDecisionDialog({ item, action: "restore" })} className="text-sky-700 underline">Ripristina</button> : null}
                       {item.latest_decision ? <button type="button" onClick={() => setDecisionDialog({ item, action: "history" })} className="text-slate-600 underline">Storico decisioni</button> : null}
-                      {certificationPath && !item.source_review_reason && item.cod_f3 && item.ddt_raw && item.ddt_date ? (
+                      {canDecide && item.state === "archived" ? <button type="button" onClick={() => setDecisionDialog({ item, action: "archive_restore" })} className="text-sky-700 underline">Ripristina DDT</button> : null}
+                      {certificationPath && item.state !== "archived" && !item.source_review_reason && item.cod_f3 && item.ddt_raw && item.ddt_date ? (
                         <Link to={certificationPath} className="text-accent hover:underline">Apri certificazione</Link>
                       ) : null}
                       {linkedPath ? <Link to={linkedPath} className="text-sky-700 hover:underline">Apri Incoming</Link> : null}
@@ -468,7 +472,7 @@ export default function DdtWorkQueuePage() {
       {decisionDialog ? <DdtDecisionDialog {...decisionDialog} token={token}
         onClose={() => setDecisionDialog(null)} onSaved={(action) => {
           setDecisionDialog(null);
-          setDecisionNotice(action === "exclude" ? "Quota esclusa. La ritrovi in Vista → Esclusi." : "Ripristino registrato. La quota compare negli Attivi se il PDF finale non è già pronto.");
+          setDecisionNotice(action === "exclude" ? "Quota esclusa. La ritrovi in Vista → Esclusi." : action === "archive_restore" ? "Ripristino registrato. Tutte le righe archiviate del DDT sono nuovamente disponibili." : "Ripristino registrato. La quota compare negli Attivi se il PDF finale non è già pronto.");
           setRefresh((current) => current + 1);
           window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
         }} /> : null}

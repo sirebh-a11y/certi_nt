@@ -1,11 +1,17 @@
 # Passaggio alla beta - decisioni e verifiche aperte
 
-Aggiornato: 30/09/2026, dopo risposta Walter e regole scadenza confermate dall'utente.
+Aggiornato: 08/10/2026, dopo audit di riduzione arretrato locale e Alpha.
 Stato: documento di lavoro, non autorizzazione a modificare codice o server.
 
-La versione locale pubblicata è `0.1.0.alpha.10`. La nuova coda DDT è stata
-sviluppata e collaudata in locale; il suo deploy, recupero storico e avvio
-automatico su Alpha richiedono ancora il via libera dell'utente.
+La versione è `0.1.0.alpha.10`. Al controllo del 08/10 la coda DDT, il recupero
+storico e la raccolta automatica sono già presenti su Alpha. Le correzioni
+locali successive non vanno considerate installate senza verificarne il commit.
+Le annotazioni del 29–30/09 sotto sono il resoconto di quelle date, non lo stato
+attuale del deploy. La sezione 7 registra la nuova proposta, ancora da approvare.
+
+**Decisione utente: Beta significa utilizzo reale in produzione, non più test.**
+La data ufficiale di avvio e quanti giorni precedenti includere sono ancora da
+decidere; non confondere questa scelta con la scadenza dei sette giorni.
 
 Riferimenti:
 
@@ -98,7 +104,10 @@ Test beta: giorno prima/uguale/dopo soglia, data mancante/corretta, arrivo tardi
 OL storico con nuovo DDT, più quote nello stesso documento, coerenza badge/vista,
 consultazione dello storico, rimozione della soglia senza perdita di dati.
 
-## 4. Cosa manca: spiegazione pratica
+## 4. Situazione registrata al 30/09: spiegazione pratica
+
+Questa tabella è storica. Al 08/10 coda, recupero e sincronizzazione sono su
+Alpha; non ripetere importazioni o attivazioni basandosi sulle voci sotto.
 
 | Passaggio | Significato pratico | Situazione |
 | --- | --- | --- |
@@ -147,9 +156,9 @@ temporale della sorgente faccia perdere la possibilità di recuperarli.
 L'utente ha riportato il testo effettivamente inviato. Non inviare altre mail
 senza sua richiesta. La mail anticipa una prova su Alpha con recupero dei DDT
 storici **già raccolti su Alpha**, anche quando non sono più nella vista eSolver,
-per testare casi anomali. Questo è un intento di prova, non un deploy già fatto:
-anteprima, backup, recupero e attivazione richiedono ancora l'autorizzazione
-operativa dell'utente secondo il piano Alpha.
+per testare casi anomali. Al momento della mail era un intento di prova;
+al 08/10 recupero e raccolta risultano eseguiti su Alpha. Ogni ulteriore
+recupero o modifica richiede una nuova anteprima e autorizzazione operativa.
 
 Risposte ricevute e decisioni ancora aperte:
 
@@ -216,6 +225,219 @@ Risposte ricevute e decisioni ancora aperte:
   poi implementata con autorizzazione separata nello stesso giorno; vedere il
   documento dedicato. Soglia beta e riconciliazione restano aperte. Nessun deploy.
 
+## 7. Riduzione arretrato Alpha e avvio reale Beta — audit 08/10/2026
+
+### Richiesta e limiti
+
+L'utente propone di alleggerire già Alpha togliendo i DDT vecchi senza lavoro
+avviato, indicativamente per avere 75–100 righe da gestire. Prima della Beta
+farà una cernita più precisa: data ufficiale di avvio più giorni precedenti
+concordati. Non occorre districare adesso tutto lo storico di prova.
+
+È autorizzato questo audit e l'aggiornamento del documento, **non** la
+cancellazione, una modifica al codice, il deploy o un cambiamento dei dati Alpha.
+I 75–100 sono un obiettivo indicativo, non un limite che nasconde nuovi arrivi.
+
+### Verifica concreta, in sola lettura
+
+Database locale e Alpha interrogati in transazioni `READ ONLY`, senza importare
+dati, generare documenti o attivare sincronizzazioni. Conteggi Alpha alle
+19:09–19:10 UTC del 08/10, destinati a cambiare con il lavoro degli utenti.
+
+- Alpha: 678 quote DDT, 660 attive, 17 completate, 1 esclusa.
+- Locale: 882 quote, 881 attive e 1 completata; i due database sono diversi.
+- Alpha: 173 record certificato numerati, dei quali 165 con Word e 18 con PDF.
+  Il Registro non è una copia della coda DDT: non cancellare certificati per
+  obbligare anche il Registro a restare entro 100 voci.
+
+Simulazione prudente: proteggere l'intero OL se esiste qualsiasi record
+certificato, anche incompleto o preparato prima del DDT, e gli OL con allegati
+o pagine aggiuntive. Proteggere decisioni manuali, anomalie e date mancanti.
+Se una quota è protetta, proteggere tutto il suo documento DDT. Non dividere
+documenti con date incoerenti. È una stima conservativa, non una lista da eliminare.
+
+| Alpha: mantenere dal giorno incluso | Quote vecchie candidabili | Quote complessive rimaste | Attive rimaste |
+| --- | ---: | ---: | ---: |
+| 29/09/2026 | 531 | 147 | 129 |
+| 01/10/2026 | 557 | 121 | 103 |
+| 02/10/2026 | 587 | 91 | 73 |
+| 05/10/2026 | 598 | 80 | 62 |
+
+Proposta: usare il **01/10 come ipotesi per la prova Alpha**, non come data
+Beta decisa. Circa 103 attive permette una settimana di esempi recenti senza
+forzare il numero a 100. Con la stessa soglia il locale avrebbe solo 43 attive:
+non deve essere fatto coincidere numericamente con Alpha.
+
+### Perché non eseguire un DELETE per data
+
+1. Delle 557 quote candidabili prima del 01/10, 387 sono ancora nella vista
+   eSolver: cancellandole, la raccolta le ricreerebbe.
+2. Il riuso Word locale esamina tutte le quote salvate, anche storiche: un
+   semplice filtro grafico non impedisce di generare lavoro fuori perimetro.
+3. Stato OL, conteggio sidebar, selezione DDT e Registro devono usare regole
+   coerenti. Togliere la sola riga salvata potrebbe riattivare percorsi legacy
+   basati sulla cache eSolver, oltre a perdere riferimenti utili.
+4. Le decisioni hanno un vincolo al DDT; documenti e relative versioni hanno
+   legami propri. Il PDF chiuso e i dati esposti a eSolver non vanno alterati.
+
+### Proposta di intervento, da approvare
+
+1. **Prima archiviazione reversibile fuori avvio**, distinta da `Non richiede
+   certificazione`: togliere dall'operativo e dal badge, conservare i dati e
+   permettere il ripristino a admin IT/Qualità. Non segnare completato un DDT.
+   La cancellazione definitiva resta una possibile fase pre-Beta, dopo cernita
+   e backup verificato, con approvazione separata e controllo dipendenze.
+2. Un'unica regola persistente di perimetro, usata da coda, badge, stato OL,
+   associazione automatica dei Word e percorsi di certificazione. Continuare
+   a raccogliere e conservare eSolver; rileggere una quota archiviata invariata
+   non la deve riattivare. Non usare il campo `source_present` per archiviarla.
+3. Per le quote operative, usare anche il DDT conservato quando esce dalla
+   vista eSolver: nessuna scadenza del collegamento a 60 giorni. La soglia di
+   avvio è fissa, non una finestra mobile che scarta lavoro dopo due mesi.
+4. Un OL vecchio con un nuovo DDT continua a funzionare e riusa il Word.
+   Un DDT mai visto prima che arriva con data vecchia, oppure dati sostanziali
+   modificati di uno archiviato, richiede una segnalazione/verifica: non
+   scartarlo silenziosamente per la data. Nessuna ricostruzione OL per deduzione.
+5. Proteggere Word, PDF, certificati anche incompleti, allegati, versioni e
+   decisioni già esistenti. Il Registro conserva quei documenti; un'eventuale
+   vista più corta è un filtro di consultazione, non cancellazione documentale.
+6. Prima implementazione e simulazione sul locale: anteprima dettagliata,
+   backup, applicazione dopo approvazione, controllo conteggi, ripristino,
+   successiva sincronizzazione, arrivi tardivi, Word riutilizzato dopo mesi,
+   PDF chiusi ed export invariati. Non promettere copertura di DDT mai acquisiti.
+7. Alpha soltanto su richiesta: stessa versione di codice ma **nuova anteprima
+   sui dati Alpha**, elenco e numeri aggiornati, backup DB/storage e consenso
+   prima dell'applicazione secondo il Markdown deploy. Nessuna copia di database,
+   ID o elenco dei candidati locali. Gestire worker e utenti nella finestra
+   concordata, poi controllare anche il ciclo automatico successivo.
+
+Da decidere prima dell'implementazione: approvazione dell'archiviazione reversibile,
+data della prova (proposta 01/10), modalità semplice di consultazione/ripristino.
+Data ufficiale Beta, giorni di recupero iniziale e cancellazione definitiva
+restano decisioni successive. Il futuro piano deploy dovrà recepire il perimetro
+prima di applicare un recupero Word massivo, evitando di lavorare lo storico
+che è stato deliberatamente messo fuori avvio.
+
+### Successiva richiesta: soglia dal primo certificato Alpha
+
+L'utente chiede di simulare il recupero/aggancio dalla data del certificato
+più vecchio, invece di usare il 01/10. Nessuna applicazione Alpha autorizzata.
+
+Audit successivo del 08/10, transazione `READ ONLY`:
+
+- Il record più vecchio che oggi possiede un Word è `7000_00_00/26`,
+  OL `OL2026000970`, creato il **20/07/2026**. Non ha `cert_date` né DDT.
+  `created_at` è la creazione del record, non una prova dell'istante di
+  generazione del file. È comunque la soglia prudente per includere il lavoro
+  iniziato. Ben 136 documenti preparati non hanno `cert_date`.
+- La data documento valorizzata più vecchia è **27/07/2026**:
+  `7015_02_00/26`, OL `OL2026000724`, DDT `2028-27/07/2026`, PDF finale.
+  Il relativo record è stato creato il 21/09: le due date non sono intercambiabili.
+- Per la simulazione principale si adotta quindi **20/07 incluso**, conservando
+  le protezioni della sezione precedente. Restano 668 quote (246 documenti DDT):
+  650 attive, 17 completate, 1 esclusa. Delle quote rimaste 161 sono storiche.
+  Solo 10 quote / 4 documenti sarebbero archiviabili; una quota anteriore resta
+  protetta. Questa soglia non realizza l'obiettivo indicativo delle 75–100 attive.
+- La simulazione alternativa al 27/07 lascia 562 quote / 544 attive; non è stata
+  scelta automaticamente al posto della soglia prudente.
+
+Provata sui dati e sui file Alpha la funzione locale `plan_item`, caricata
+solamente in memoria nel processo di audit, senza installarla o applicarla:
+
+| Risultato sulle 668 quote mantenute | Quote |
+| --- | ---: |
+| Riuso Word compatibile proponibile | 18 |
+| Documento della quota già presente e preservato | 20 |
+| Word non ancora preparato | 555 |
+| OL non fornito da eSolver | 73 |
+| Incoming non pronto | 1 |
+| Decisione manuale da preservare | 1 |
+
+Le 18 quote riguardano 11 DDT e 16 OL; il planner controlla identità, materiale,
+Word reale e campi di spedizione. Comprendono OL finali 997 e 998 già discussi.
+Nelle 161 quote storiche mantenute, 160 non hanno ancora Word e una è esclusa:
+non confondere conservazione del DDT con disponibilità immediata del certificato.
+
+Esito: nessuna eccezione del planner, nessun oggetto DB modificato, nessuna
+scrittura server. Non è una prova di applicazione completa su Alpha, né un
+collaudo di una nuova funzione di archiviazione (ancora da implementare).
+Regressione locale del riuso Word: 19 test superati, 22 test opzionali PostgreSQL
+saltati nel comando eseguito; comprende storico, DDT successivo e preservazione
+del PDF precedente. Per applicare servono comunque anteprima aggiornata, backup,
+deploy autorizzato e verifica dell'esecuzione effettiva.
+
+### Decisione successiva: 01/10 con protezione del lavoro parziale
+
+L'utente sceglie nuovamente **01/10/2026 incluso**, chiedendo di mantenere anche
+righe precedenti con certificato o parzialmente complete. Questa indicazione
+supera l'ipotesi del 20/07: si richiedono ricalcolo e piano, non applicazione.
+
+Ricalcolo Alpha 08/10 alle 19:23 UTC, `READ ONLY`. Per "parzialmente complete"
+la proposta prudente comprende anche standard già scelto, scelte manuali
+materiale/articolo e righe Incoming individuate dal valutatore esistente, pure
+se non ancora pronte. I candidati ambigui vengono conservati, non abbinati
+automaticamente. Restano tutte le protezioni precedenti, incluso l'intero
+documento DDT quando una sua quota è protetta.
+
+| Alpha | Quote |
+| --- | ---: |
+| Totale prima della simulazione | 678 |
+| Vecchie candidabili ad archiviazione reversibile | 538 |
+| Mantenute complessivamente (50 documenti DDT) | 140 |
+| Attive mantenute / futuro badge con questi dati | 122 |
+| Completate mantenute | 17 |
+| Escluse manualmente mantenute | 1 |
+
+Le 140 quote sono 102 dal 01/10 e 38 precedenti protette. Fra le attive ci sono
+23 senza OL, 77 in attesa Incoming, 13 pronte lato Incoming e 9 con stato Word
+pronto nella versione Alpha installata: non confondere questi stati con un
+risultato post-deploy. Le quote archiviate sarebbero 50 senza OL e 488 in attesa
+Incoming; 368 risultano ancora nella vista eSolver e non devono riapparire dopo
+la successiva raccolta.
+
+Rispetto alle 103 attive stimate inizialmente, vengono protette altre 19 quote:
+5 segnalate dal contesto Incoming, più 14 appartenenti agli stessi documenti.
+Esempi: DDT 2143 del 02/09 (Incoming #22), 2145 del 02/09 (#79), 2254 del 16/09
+(#65). Tutte e tre le righe Incoming hanno un certificato fornitore e una
+valutazione salvata; questo non garantisce che ogni collegamento OL/materiale
+sia già coerente, e non autorizza a forzarlo.
+
+Il planner locale in memoria, sui dati/file Alpha mantenuti, propone ancora
+18 riusi Word su 11 DDT / 16 OL, preserva 20 documenti già presenti e non forza
+le altre 102 quote (77 senza Word, 23 senza OL, 1 Incoming non pronto, 1 decisione
+manuale). Nessuna scrittura Alpha. Tutti i 173 record certificato, inclusi i
+165 con Word e i 18 con PDF, restano fuori dalla pulizia documentale.
+
+La stessa simulazione sul database locale mantiene 222 quote (221 attive,
+1 completata), propone 660 archiviazioni e 2 riusi Word. Le differenze derivano
+dai dati locali, non devono essere corrette copiando dati o ID su Alpha.
+
+Piano da approvare: implementare prima in locale un'archiviazione persistente,
+reversibile e distinta dalle esclusioni manuali; applicare la regola comune a
+coda/badge/stati OL e automazioni Word, mantenere il recupero da storico per le
+quote operative anche oltre 60 giorni. Prevedere consultazione/ripristino
+admin e segnalazione di arrivi tardivi o modifiche sostanziali. Verificare che
+nessun documento, scelta o PDF sia perso e che il ciclo eSolver non reintroduca
+lo storico archiviato. Poi nuova anteprima e backup specifici Alpha, consenso
+e deploy separato secondo MD. I 122 non sono un tetto: i nuovi arrivi rimangono
+visibili. Beta resta produzione reale con cernita e data ufficiale successive.
+
+### Implementazione e prova locale autorizzate
+
+L'utente ha successivamente approvato audit esteso e implementazione locale;
+il deploy resta rinviato a sua indicazione. Implementati archivio reversibile,
+protezione del lavoro parziale e dell'intero DDT, recupero operativo da storico
+oltre la finestra eSolver e procedura separata per il DB Alpha nel MD deploy.
+
+Prova locale 08/10: 660 quote archiviate, 222 mantenute (221 attive + 1 completata),
+nessuna cancellazione. Impronte delle altre 43 tabelle e dei 45 file Word/PDF
+invariate. 582 test backend superati, inclusi PostgreSQL isolato; verifica UI e
+build superate. Alpha solo audit read-only: confermati 538 archiviabili e 140
+mantenuti come simulazione, non come modifica già applicata.
+
+Dettagli, eccezioni e prove:
+[`ddt_archive_history_20261008.md`](ddt_archive_history_20261008.md).
+
 ## Registro aggiornamenti
 
 | Data | Decisione o aggiornamento | Stato |
@@ -229,3 +451,8 @@ Risposte ricevute e decisioni ancora aperte:
 | 30/09/2026 | Risposta Walter, 7 giorni calendario inclusivi e colori | Autorizzati e implementati in locale; nessun deploy |
 | 30/09/2026 | Esclusione singola quota, ripristino e storico | Autorizzati e verificati in locale, riservati ad admin Qualità; nessun deploy |
 | 30/09/2026 | Estensione esclusione e ripristino agli admin IT | Richiesta e implementata in locale; controlli server e UI allineati |
+| 08/10/2026 | Beta = uso reale in produzione, non test | Decisione utente registrata; data ufficiale e giorni precedenti da scegliere |
+| 08/10/2026 | Audit alleggerimento storico locale e Alpha | Sola lettura; proposta archiviazione reversibile e soglia 01/10, nessuna modifica applicativa o cancellazione |
+| 08/10/2026 | Simulazione dalla data del primo certificato Alpha | Soglia prudente 20/07: 650 attive, 18 agganci Word proponibili; nessuna applicazione sul server |
+| 08/10/2026 | Ritorno al 01/10, mantenere anche lavoro parziale | Ricalcolo Alpha: 122 attive, 538 quote archiviabili, 18 agganci Word proponibili; piano non applicato |
+| 08/10/2026 | Implementazione e prova locale autorizzate | 660 quote archiviate reversibilmente, 221 attive; 582 test backend superati; Alpha non modificato, procedura nel MD deploy |

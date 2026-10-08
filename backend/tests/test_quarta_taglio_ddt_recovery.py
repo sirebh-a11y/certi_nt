@@ -20,7 +20,7 @@ from app.modules.quarta_taglio.ddt_snapshot import SnapshotError, _LOCK_ID, _LOC
 from app.modules.quarta_taglio.models import (
     QuartaTaglioEsolverLink, QuartaTaglioRow, QuartaTaglioFinalCertificate,
     QuartaTaglioDdtWorkItem, QuartaTaglioDdtSyncRun,
-    QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtDecision,
+    QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtDecision, QuartaTaglioDdtArchiveEvent,
 )
 from app.modules.quarta_taglio.pdf_schema import PDF_TABLES, missing_pdf_filename_columns
 
@@ -190,7 +190,7 @@ class RecoveryPostgresTest(unittest.TestCase):
             db.add(QuartaTaglioCertificatePdfVersion(certificate_id=certificate.id, version=1,
                     status="active", storage_key_pdf="old.pdf", pdf_file_name="old.pdf"))
         with self.engine.begin() as connection:
-            for model in (QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+            for model in (QuartaTaglioDdtArchiveEvent, QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
                 model.__table__.drop(connection)
             for table in PDF_TABLES:
                 connection.execute(text(f'ALTER TABLE "{self.schema}".{table} DROP COLUMN pdf_file_name'))
@@ -294,7 +294,7 @@ class RecoveryPostgresTest(unittest.TestCase):
         # Reproduce Alpha before first deployment: all queue tables are absent.
         from app.modules.quarta_taglio.models import QuartaTaglioDdtDecision
         with self.engine.begin() as connection:
-            for model in (QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
+            for model in (QuartaTaglioDdtArchiveEvent, QuartaTaglioDdtDecision, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem):
                 model.__table__.drop(connection)
         approved = self.plan()
         original = recovery.import_legacy_cache

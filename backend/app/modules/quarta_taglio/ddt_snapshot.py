@@ -225,6 +225,8 @@ def _apply_snapshot(db, raw_rows, *, now):
     db.flush()
     from app.modules.quarta_taglio.ddt_decisions import invalidate_changed_exclusions
     invalidate_changed_exclusions(db, list(db.scalars(select(QuartaTaglioDdtWorkItem))), now)
+    from app.modules.quarta_taglio.ddt_archive import invalidate_archives
+    invalidate_archives(db, list(db.scalars(select(QuartaTaglioDdtWorkItem))), now)
     db.flush()
     return SnapshotResult(status="success", **counts)
 

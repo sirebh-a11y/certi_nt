@@ -68,6 +68,14 @@ def decide_ddt(item_id: int, payload: DdtDecisionRequest, db: DbSession, current
     return change_decision(db, item_id, payload, current_user)
 
 
+@router.post("/{item_id}/archive/restore")
+def restore_archived_ddt(item_id: int, payload: DdtDecisionRequest, db: DbSession, current_user: CurrentUser):
+    from app.modules.quarta_taglio.ddt_archive import restore_document
+    if payload.action != 'restore':
+        raise HTTPException(422, "È consentito solo il ripristino dall’archivio")
+    return restore_document(db, item_id, payload, current_user)
+
+
 @router.get("/{item_id}/decisions", response_model=list[DdtDecisionResponse])
 def decision_history(item_id: int, db: DbSession):
     if db.get(QuartaTaglioDdtWorkItem, item_id) is None:

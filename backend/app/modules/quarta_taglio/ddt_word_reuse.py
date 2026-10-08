@@ -105,6 +105,9 @@ def plan_item(db, item):
     def stop(reason):
         result['reason'] = reason
         return result
+    from app.modules.quarta_taglio.ddt_archive import archived_ids
+    if item.id in archived_ids(db, [item]):
+        return stop('archived_before_start')
     if not item.cod_odp:
         return stop('missing_ol_from_esolver')
     if item.source_review_reason or not item.ddt_date or not item.certification_unit_key or not item.cod_f3:
@@ -228,7 +231,10 @@ def sync_ddt_words(*, session_factory=SessionLocal):
     """Retry eligible local snapshots even if eSolver's rolling window has moved on."""
     counts = {'prepared': 0, 'review_or_waiting': 0, 'errors': 0}
     with session_factory() as db:
-        ids = list(db.scalars(select(QuartaTaglioDdtWorkItem.id).order_by(QuartaTaglioDdtWorkItem.id)))
+        from app.modules.quarta_taglio.ddt_archive import archived_ids
+        items = list(db.scalars(select(QuartaTaglioDdtWorkItem).order_by(QuartaTaglioDdtWorkItem.id)))
+        archived = archived_ids(db, items)
+        ids = [i.id for i in items if i.id not in archived]
     for item_id in ids:
         created = []
         commit_started = False

@@ -80,6 +80,8 @@ def change_decision(db, item_id, payload, user):
                          .with_for_update().execution_options(populate_existing=True))
         if item is None:
             raise HTTPException(404, "Quota DDT non trovata")
+        from app.modules.quarta_taglio.ddt_archive import require_operational
+        require_operational(db, item)
         previous = latest_decisions(db, [item.id]).get(item.id)
         if (payload.expected_decision_id != (previous.id if previous else 0)
                 or payload.source_revision != source_revision(item)):

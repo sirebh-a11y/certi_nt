@@ -193,6 +193,12 @@ Il collaudo non sostituisce preview, backup e verifiche nella futura manutenzion
 
 ### Correzione Word per DDT successivi e recupero Alpha (piano 08/10/2026)
 
+**Precedenza operativa aggiunta il 08/10:** se il pacchetto include l'archiviazione
+per avvio, eseguire PRIMA schema/preview/archiviazione della sezione seguente
+«Perimetro operativo e storico persistente». Solo dopo creare una NUOVA preview
+Word. Non usare un report Word calcolato prima dell'archiviazione. L'aggiunta
+della tabella archivio è necessaria anche se si rinvia l'archiviazione dei dati.
+
 **Stato 08/10: implementata e collaudata in locale; NON installata/applicata su Alpha.**
 Questa sezione non autorizza deploy o recupero. Restano necessari commit/push
 richiesti dall'utente, pacchetto verificato e nuova preview/OK sui dati Alpha.
@@ -412,6 +418,124 @@ Se gli utenti hanno ripreso a lavorare, non ripristinare integralmente il vecchi
 dump: perderebbe i lavori successivi. Fermarsi, fare un nuovo backup e pianificare
 una correzione mirata. Non dichiarare recupero riuscito se rimangono errori non
 spiegati; i casi ambigui restano visibili senza associazioni forzate.
+
+### Perimetro operativo e storico persistente (08/10/2026)
+
+**Solo sviluppo locale autorizzato. Nessun deploy/applicazione Alpha autorizzati
+da questa sezione.** Piano corrente: dal **01/10/2026 incluso**, mantenendo anche
+il lavoro precedente avviato/parziale; Beta significa uso reale in produzione,
+con data ufficiale ancora da definire. Riferimento decisioni:
+`docs/tasks/beta_transition_plan.md`, ultima sottosezione del punto 7.
+
+Collaudo locale completato il 08/10: 582 test backend superati (PostgreSQL incluso),
+build/UI verificate; archiviazione locale 660 quote, 221 attive e 1 completata,
+con dati delle altre 43 tabelle e 45 file Word/PDF invariati. Non usare questi
+numeri o i report locali come input Alpha. Verbale e limiti:
+`docs/tasks/ddt_archive_history_20261008.md`.
+
+#### Cosa cambia e cosa non cambia
+
+- Nuova tabella additiva `quarta_taglio_ddt_archive_events`: eventi di archivio,
+  ripristino e riapertura per cambiamenti, con autore, motivo, soglia, fatti
+  sorgente e identificativo del report. Non cancellare le quote né usare
+  `source_present=false` come archiviazione.
+- Nessuna archiviazione automatica all'avvio del backend. La soglia è applicata
+  esclusivamente attraverso una preview approvata: non diventa una finestra
+  mobile e non nasconde nuovi DDT arrivati con data precedente.
+- Restano protetti tutti i certificati (anche record incompleti), Word/PDF,
+  allegati, selezioni standard/materiale/articolo, decisioni manuali e lavoro
+  Incoming individuato, anche incompleto/in elaborazione o ambiguo. Si protegge
+  tutto il documento DDT se una sua quota è protetta. Nessun abbinamento forzato.
+- La lettura di Certificazione combina in memoria cache corrente e DDT conservati
+  operativi, senza reimportarli nella cache o duplicarli. Il job Word esclude
+  l'archivio e continua a usare lo storico operativo oltre la finestra eSolver.
+- Coda, badge, progressi OL e accesso diretto alla quota rispettano l'archivio.
+  Vista `Archiviati per avvio` e `Ripristina DDT` per admin IT/Qualità consentono
+  il recupero dell'intero documento. Nuovi dati/lavoro rendono subito disponibile
+  la quota; il successivo snapshot registra l'evento di riapertura.
+- Registro e PDF già prodotti rimangono consultabili. Non chiudere PDF, inviarli,
+  rinumerare o cancellare file come conseguenza di questo recupero.
+- Il vecchio comando di primo recupero snapshot resta distinto: il suo report
+  è ora versione **3**, include gli eventi archivio e, su database legacy, crea
+  anche la tabella archivio nella stessa transazione. Non ripeterlo per questo
+  aggiornamento: su Alpha il primo recupero è già stato eseguito il 01/10.
+
+#### Ordine obbligatorio nel futuro deploy
+
+1. Audit in sola lettura, spazio disponibile riferito all'utente, run AI/Word/PDF
+   conclusi e finestra concordata. Nessuna pulizia automatica dello spazio.
+2. Fermare writer/accessi e backend/frontend come nella procedura generale;
+   PostgreSQL resta attivo. Backup verificati DB, storage, app/configurazione.
+   Salvare conteggi e impronte certificati/versioni/file/export prima delle scritture.
+3. Installare pacchetto verificato e costruire le immagini, **senza avviare l'app**.
+   Preservare `.env`, mapping PostgreSQL, utenti e permessi eSolver. Nei container
+   di manutenzione disattivare entrambi i job con gli override sotto.
+4. Preparare SOLO la nuova tabella con `archive_ddt --prepare-schema` (idempotente).
+   Niente bootstrap, chiamate remote, copie dal locale o archiviazione implicita.
+5. `--preview` sul DB Alpha: report privato, transazione read-only, identità cluster
+   e configurazione Alpha; ogni quota ha azione/protezioni/fatti sorgente. Mostrare
+   il report all'utente. La stima del 08/10 è 538 quote archiviabili e 140 mantenute
+   (122 attive, 17 completate, 1 esclusa); NON imporre questi numeri se i dati cambiano.
+6. Dopo OK specifico, `--apply` sotto lock NOWAIT su tutti gli input. Un report
+   scaduto (>1 ora), modificato, di altro DB/cutoff/codice o con dati cambiati viene
+   respinto. Operazione atomica, nessuna scrittura documentale. Il journal
+   `.applied.json` viene scritto `pending_commit`; verificare output `committed`
+   e dati effettivi, non usare il solo journal come prova.
+7. Verificare archivio, badge e protezioni; nuova preview deve proporre zero nuove
+   archiviazioni. **Ora** fare la preview Word della sezione precedente: il planner
+   deve saltare gli archiviati. Audit 08/10: 18 riusi Word su 11 DDT/16 OL e 20
+   documenti già presenti preservati, da ricalcolare. Approvazione/applicazione
+   Word rimangono separate dall'archiviazione.
+8. Confrontare impronte PDF/Word sorgenti/export e integrità delle associazioni.
+   Solo poi riprendere l'avvio e gli automatismi autorizzati. Dopo il primo ciclo
+   eSolver verificare che le quote archiviate invariate non siano ricomparse e
+   che i nuovi arrivi siano visibili. Non simulare spedizioni modificando Alpha.
+
+Comandi Alpha, da `/srv/certi_nt/app`, DOPO backup/manutenzione/installazione:
+
+```bash
+# TIMESTAMP indica i file della manutenzione corrente, non quelli di un vecchio deploy.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit:ro \
+  backend python -m scripts.archive_ddt --environment alpha --cutoff 2026-10-01 \
+  --prepare-schema --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
+
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/data/storage:/app/storage:ro -v /srv/certi_nt/backup:/audit \
+  backend python -m scripts.archive_ddt --environment alpha --cutoff 2026-10-01 \
+  --preview --report /audit/ddt_archive_TIMESTAMP.json
+
+# SOLO dopo esame e approvazione del nuovo report Alpha.
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/data/storage:/app/storage:ro -v /srv/certi_nt/backup:/audit \
+  backend python -m scripts.archive_ddt --environment alpha --cutoff 2026-10-01 \
+  --apply --report /audit/ddt_archive_TIMESTAMP.json --actor 'Manutenzione autorizzata' \
+  --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
+```
+
+Il comando locale usa `--environment local` e rifiuta ambienti non development;
+Alpha usa `--environment alpha` e verifica cluster/configurazione. Non copiare
+mai il report locale, gli ID, il database o gli eventi archivio sul server.
+I report sono nuovi file, non sovrascrivibili, e non vanno in Git o sul web.
+
+#### Rollback e punti da non saltare
+
+- Prima di applicare, un problema schema/report va diagnosticato lasciando gli
+  utenti protetti. L'aggiunta della tabella non elimina o converte dati esistenti.
+- Per annullare una scelta operativa usare il ripristino tracciato, non DELETE
+  degli eventi. Per un ripristino massivo preparare un piano dedicato e ottenere
+  OK. Non ripristinare un vecchio dump sopra il lavoro nuovo degli utenti.
+- **Il vecchio codice ignora l'archivio.** Un rollback del solo codice lascia
+  gli eventi intatti ma può mostrare/lavorare di nuovo tutte le quote: mantenere
+  il worker Word disattivato e concordare la riapertura. Non descriverlo come
+  rollback operativo trasparente. Dopo riuso Word valgono inoltre i vincoli
+  DB/storage della sezione precedente.
+- La conservazione vale per DDT effettivamente acquisiti; non garantisce recupero
+  di righe mai esposte da eSolver o mai lette. Nessun limite di 60 giorni è
+  introdotto nel collegamento dei DDT operativi.
 
 ### Separazione obbligatoria della futura linea nuovi fornitori
 
@@ -1042,6 +1166,11 @@ Nota: il comando con `"$POSTGRES_USER"` e `"$POSTGRES_DB"` dentro `sh -lc` puo f
 Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliato ma non sempre obbligatorio. In alpha conviene farlo spesso.
 
 ## Aggiornamento soft
+
+**Se è incluso il perimetro operativo DDT**, applicare PRIMA del recupero Word
+la sezione «Perimetro operativo e storico persistente»: nuova tabella, preview,
+OK e archiviazione controllata sul database Alpha. Non saltare la preparazione
+schema anche quando l'archiviazione viene rinviata. Poi rifare la preview Word.
 
 **Se il deploy include la correzione Word per DDT successivi**, seguire anche la
 sezione dedicata del 08/10/2026: stop dei writer, backup DB/storage, build senza
