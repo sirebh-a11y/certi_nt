@@ -13,6 +13,7 @@ const EMPTY_STANDARD = {
   trattamento_termico: "",
   tipo_prodotto: "",
   misura_tipo: "diametro",
+  elongation_basis: "",
   fonte_excel_foglio: "",
   fonte_excel_blocco: "",
   stato_validazione: "bozza",
@@ -193,6 +194,7 @@ function hydrateDraft(item) {
     trattamento_termico: textValue(item.trattamento_termico),
     tipo_prodotto: textValue(item.tipo_prodotto),
     misura_tipo: textValue(item.misura_tipo),
+    elongation_basis: textValue(item.elongation_basis),
     fonte_excel_foglio: textValue(item.fonte_excel_foglio),
     fonte_excel_blocco: textValue(item.fonte_excel_blocco),
     note: textValue(item.note),
@@ -220,7 +222,8 @@ function standardDisplayLabel(item) {
   if (variant && !alloy.toLowerCase().includes(variant.toLowerCase())) {
     alloy = `${alloy} ${variant}`.trim();
   }
-  return [alloy, item.norma, item.trattamento_termico, item.tipo_prodotto, item.misura_tipo].filter(Boolean).join(" · ");
+  return [alloy, item.norma, item.trattamento_termico, item.tipo_prodotto, item.misura_tipo,
+    item.elongation_basis ? `${item.elongation_basis} (%)` : null].filter(Boolean).join(" · ");
 }
 
 function serializeDraft(draft) {
@@ -228,7 +231,7 @@ function serializeDraft(draft) {
   const variante = draft.variante_lega.trim();
   const legaDesignazione = variante ? `${legaBase} ${variante}` : legaBase;
   const generatedCode = slugify(
-    [legaDesignazione, draft.norma, draft.trattamento_termico, draft.tipo_prodotto, draft.misura_tipo]
+    [legaDesignazione, draft.norma, draft.trattamento_termico, draft.tipo_prodotto, draft.misura_tipo, draft.elongation_basis]
       .filter((value) => String(value || "").trim())
       .join(" "),
   );
@@ -241,6 +244,7 @@ function serializeDraft(draft) {
     trattamento_termico: draft.trattamento_termico.trim() || null,
     tipo_prodotto: draft.tipo_prodotto.trim() || null,
     misura_tipo: draft.misura_tipo.trim() || null,
+    elongation_basis: draft.elongation_basis || null,
     fonte_excel_foglio: draft.fonte_excel_foglio.trim() || null,
     fonte_excel_blocco: draft.fonte_excel_blocco.trim() || null,
     stato_validazione: draft.stato_validazione,
@@ -336,6 +340,7 @@ export default function StandardsPage() {
         item.trattamento_termico,
         item.tipo_prodotto,
         item.misura_tipo,
+        item.elongation_basis,
         item.stato_validazione,
       ]
         .filter(Boolean)
@@ -579,6 +584,17 @@ function addPropertyRow() {
             <Input label="Stato / trattamento" value={draft.trattamento_termico} onChange={(value) => updateDraft("trattamento_termico", value)} />
             <Input label="Tipo prodotto" value={draft.tipo_prodotto} onChange={(value) => updateDraft("tipo_prodotto", value)} placeholder="BARRE, PROFILI..." />
             <Input label="Misura" value={draft.misura_tipo} onChange={(value) => updateDraft("misura_tipo", value)} placeholder="diametro, spessore" />
+            {draft.lega_base.trim() === "7003" && (
+              <label className="block text-sm font-medium text-slate-700">
+                Allungamento nel certificato
+                <select className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-ink"
+                  value={draft.elongation_basis} onChange={(event) => updateDraft("elongation_basis", event.target.value)}>
+                  <option value="">A (%) — impostazione storica</option>
+                  <option value="A">A (%)</option>
+                  <option value="A50mm">A50mm (%)</option>
+                </select>
+              </label>
+            )}
             <Select
               label="Stato standard"
               value={draft.stato_validazione}
@@ -623,7 +639,7 @@ function addPropertyRow() {
                     <tr key={`${entry.elemento}-${index}`}>
                       <td className="px-3 py-2">
                         <select
-                          className={`w-28 rounded-lg border px-3 py-2 ${inputStateClass({
+                          className={`w-36 rounded-lg border px-3 py-2 ${inputStateClass({
                             changed: isChanged(entry.elemento, original.elemento),
                             invalid: duplicateElement,
                           })}`}
@@ -743,7 +759,7 @@ function addPropertyRow() {
                         >
                           {PROPERTY_FIELDS.map((field) => (
                             <option key={field} value={field}>
-                              {field}
+                              {field === "A%" && draft.elongation_basis === "A50mm" ? "A50mm (%)" : field}
                             </option>
                           ))}
                         </select>

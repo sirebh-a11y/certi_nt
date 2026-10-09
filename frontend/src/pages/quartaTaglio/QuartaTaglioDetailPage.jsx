@@ -1612,7 +1612,7 @@ export default function QuartaTaglioDetailPage() {
 
             <div className="space-y-4">
               <Panel title="Proprietà">
-                <ValueTable numberDigits={2} values={data.properties || []} />
+                <ValueTable numberDigits={2} values={data.properties || []} elongationBasis={data.selected_standard?.elongation_basis} />
               </Panel>
               <Panel title="Note">
                 <Table
@@ -1821,12 +1821,12 @@ function Table({ columns, rows, emptyText = "Nessun dato." }) {
   );
 }
 
-function ValueTable({ numberDigits = 4, values }) {
+function ValueTable({ numberDigits = 4, values, elongationBasis }) {
   return (
     <Table
       columns={["Campo", "Valore", "Metodo", "Standard", "Stato", "Messaggio"]}
       rows={values.map((item) => [
-        item.field,
+        item.field === "A%" && elongationBasis === "A50mm" ? <>A<sub>50mm</sub> (%)</> : item.field,
         formatNumber(item.value, numberDigits),
         METHOD_LABELS[item.method] || item.method,
         item.standard_label || formatLimit(item.standard_min, item.standard_max, numberDigits),

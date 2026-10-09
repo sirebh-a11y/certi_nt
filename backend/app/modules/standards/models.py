@@ -20,6 +20,8 @@ class NormativeStandard(Base):
     trattamento_termico: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     tipo_prodotto: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     misura_tipo: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # None preserves historical standards; never rename the numeric A% property.
+    elongation_basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
     fonte_excel_foglio: Mapped[str | None] = mapped_column(String(128), nullable=True)
     fonte_excel_blocco: Mapped[str | None] = mapped_column(String(255), nullable=True)
     stato_validazione: Mapped[str] = mapped_column(String(32), default="attivo", nullable=False, index=True)

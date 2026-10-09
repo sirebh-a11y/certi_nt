@@ -77,6 +77,9 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_external_connection_columns()
     ensure_quarta_taglio_columns()
     ensure_quarta_taglio_pdf_filename_columns()
+    from app.modules.standards.elongation import ensure_schema as ensure_elongation_schema
+    with engine.begin() as connection:
+        ensure_elongation_schema(connection)
     ensure_esolver_export_view(engine, public_base_url=settings.certi_public_base_url)
     ensure_supplier_installation_code_columns()
     ensure_customer_requirement_columns()

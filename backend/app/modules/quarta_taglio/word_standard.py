@@ -26,6 +26,11 @@ def snapshot(db, ol):
     if row is None:
         return None
     result = dict(zip(fields, row))
+    # Omit the new key for legacy standards: adding the column alone must NOT
+    # invalidate every existing Word. Explicit metadata changes are monitored.
+    elongation_basis = db.scalar(select(S.elongation_basis).where(S.id == row.id))
+    if elongation_basis is not None:
+        result['elongation_basis'] = elongation_basis
     for key, model, names in [('chemistry', C, ('elemento', 'min_value', 'max_value')),
                               ('properties', P, ('proprieta', 'misura_min', 'misura_max', 'range_label', 'min_value', 'max_value'))]:
         values = [dict(zip(names, r)) for r in db.execute(select(*(getattr(model, f) for f in names)).where(model.standard_id == row.id))]

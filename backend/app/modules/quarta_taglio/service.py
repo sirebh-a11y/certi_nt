@@ -4001,6 +4001,7 @@ def _selection_to_candidate(selection: QuartaTaglioStandardSelection | None) -> 
         misura_tipo=standard.misura_tipo,
         certificate_material_label=_standard_certificate_material_label(standard),
         confidence="confermata",
+        elongation_basis=standard.elongation_basis,
         score=999,
         reasons=["confermato manualmente"],
         warnings=[],
@@ -4557,6 +4558,7 @@ def _suggest_standard_candidates(
                 misura_tipo=standard.misura_tipo,
                 certificate_material_label=_standard_certificate_material_label(standard),
                 confidence=candidate.confidence,
+                elongation_basis=standard.elongation_basis,
                 score=candidate.score,
                 reasons=list(candidate.reasons),
                 warnings=list(candidate.warnings),
@@ -4592,6 +4594,7 @@ def _standard_label(standard: NormativeStandard) -> str:
         standard.trattamento_termico,
         standard.tipo_prodotto,
         standard.misura_tipo,
+        f"{standard.elongation_basis} (%)" if standard.elongation_basis else None,
     ]
     return " · ".join(_unique_clean(parts)) or standard.code
 

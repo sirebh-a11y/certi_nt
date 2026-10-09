@@ -335,7 +335,9 @@ Prerequisiti bloccanti da dimostrare in locale:
    recuperare lo storico in bootstrap. Se emergono migrazioni, documentarle e
    collaudarle separatamente prima: non assumere che siano gia disponibili.
    Per il pacchetto del 09/10 preparare prima `word_standard_snapshot` e baseline
-   con `prepare_word_standard`, poi schema/preview/OK dell'archivio DDT. Vedere
+   con `prepare_word_standard` (include anche la colonna allungamento 7003),
+   poi preview/creazione dei nuovi standard 7003 secondo la sezione dedicata,
+   quindi schema/preview/OK dell'archivio DDT. Vedere
    «Cambio standard e Word (09/10/2026)»: nessuna preview Word prima di tali passi.
 4. **Preview dedicata:** container one-off con DB/storage Alpha e scheduler non
    avviato; transazione PostgreSQL read-only e storage montato in sola lettura,
@@ -480,7 +482,8 @@ numeri o i report locali come input Alpha. Verbale e limiti:
    Preservare `.env`, mapping PostgreSQL, utenti e permessi eSolver. Nei container
    di manutenzione disattivare entrambi i job con gli override sotto.
 4. Se il pacchetto include la correzione standard del 09/10, eseguire PRIMA
-   `prepare_word_standard` come nella sezione dedicata (colonna e baseline).
+   `prepare_word_standard` come nella sezione dedicata (colonne e baseline),
+   quindi la sezione «7003 T6: A e A50mm» prima delle preview dati.
    Preparare poi SOLO la tabella archivio con `archive_ddt --prepare-schema` (idempotente).
    Niente bootstrap, chiamate remote, copie dal locale o archiviazione implicita.
 5. `--preview` sul DB Alpha: report privato, transazione read-only, identità cluster
@@ -1179,7 +1182,8 @@ Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliat
 ## Aggiornamento soft
 
 **Ordine cumulativo per il pacchetto corrente (09/10):** dopo fermo writer,
-backup e build senza avvio, preparare colonna/baseline Word standard; preparare
+backup e build senza avvio, preparare colonne/baseline Word standard; verificare
+e creare i nuovi standard 7003 T6 come sotto, senza cambiare le selezioni OL; preparare
 schema archivio DDT; preview/OK/applicazione archivio se autorizzati; NUOVA
 preview/OK/recupero Word se autorizzati; verifiche; riapertura e soli job
 autorizzati. Le due approvazioni dati restano separate. Non ripetere il primo
@@ -1406,7 +1410,11 @@ Questo punto va fatto solo quando necessario e con backup verificato.
 ### Cambio standard e Word (09/10/2026)
 
 Sviluppo locale; nessun deploy autorizzato da questa annotazione. Aggiunge
-soltanto `quarta_taglio_final_certificates.word_standard_snapshot` (JSON).
+`quarta_taglio_final_certificates.word_standard_snapshot` (JSON).
+Nel pacchetto cumulativo aggiunge prima anche
+`normative_standards.elongation_basis` nullable (vedere sezione 7003 sotto):
+necessaria per leggere gli standard con il nuovo modello, anche se la creazione
+dei due standard viene rinviata. Nessuno standard viene creato dal bootstrap.
 Nuovi Word/rigenerazioni salvano standard e limiti; copie/riusi conservano la
 provenienza della sorgente. Standard diverso o limiti modificati rendono il
 Word da aggiornare e bloccano nuova chiusura PDF/riuso, non il download del
@@ -1464,6 +1472,81 @@ Ricontrollo locale 09/10: coperti anche selezione rimossa/ripristinata, limiti
 meccanici sullo stesso standard, più quote/F3 dello stesso OL con PDF chiusi e
 Word aperti, isolamento dagli altri OL, baseline senza selezione e rollback
 atomico ALTER/baseline. Esiti aggiornati nel documento di audit citato sopra.
+
+### 7003 T6: A e A50mm (09/10/2026, sviluppato in locale)
+
+Configurazione approvata: SOLO 7003, due nuovi standard T6 BARRE/diametro,
+uno A minimo 10%, l'altro A50mm minimo 8%. Fasce <=50 e >50 fino a 150 mm;
+Rp0.2 290/280 e Rm 350/340. Conferma finale sempre all'operatore. Il valore 9%
+è un indizio, non una prova della base di misura; non viene convertito.
+Dettagli e test: `docs/tasks/7003_elongation_a50mm_20261009.md`.
+
+Audit Alpha in SOLA LETTURA del 09/10: unico 7003 ID19, T62 BARRE, A minimo 8%,
+quattro selezioni OL. Nessun altro 7003 creato dagli utenti rilevato in quella
+fotografia. **Ricontrollare al deploy:** utenti e dati possono essere cambiati.
+Non correggere ID19, non sostituire le selezioni esistenti né rigenerare file.
+
+Ordine nella stessa manutenzione del deploy, dopo backup verificati e build,
+senza avviare l'app e con writer/job fermi:
+
+1. Inventario degli standard 7003 Alpha, limiti, selezioni e codici nuovi già
+   presenti. Se esistono equivalenti creati dall'utente, fermarsi e confrontarli;
+   non duplicarli o sovrascriverli. Identificare lo standard sorgente della chimica
+   nel DB Alpha; ID19 è il risultato dell'audit, non un ID da imporre a priori.
+2. Eseguire `prepare_word_standard` della sezione precedente: aggiunge la
+   colonna nullable prima della baseline. I vecchi standard restano NULL:
+   nessun nuovo campo entra nel loro snapshot e nessun Word diventa obsoleto
+   soltanto per questa migrazione. Il bootstrap esegue la stessa aggiunta
+   idempotente, ma non va usato per anticipare avvio/job durante la manutenzione.
+3. Preview dei due nuovi standard usando lo standard sorgente Alpha verificato.
+   Controllare chimica copiata, limiti e stato attivo. Niente database/ID/file locali.
+4. Con configurazione ancora approvata e report coerente, applicare il comando
+   protetto sotto. Se i dati differiscono da quelli approvati, chiedere prima.
+5. Verificare due nuovi standard, sei limiti meccanici ciascuno, chimica uguale
+   alla sorgente Alpha, vecchi record/selezioni/file invariati. Ripetere preview:
+   entrambi `existing_unchanged`, non nuove creazioni. Continuare poi con le altre
+   preview/approvazioni archivio e riuso Word previste dal deploy cumulativo.
+
+Sostituire `ID_SORGENTE_VERIFICATO` e `TIMESTAMP`, non incollare i segnaposto:
+
+```bash
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  backend python -m scripts.prepare_7003_standards \
+  --source-standard-id ID_SORGENTE_VERIFICATO --activate
+
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/backup:/audit:ro \
+  backend python -m scripts.prepare_7003_standards \
+  --source-standard-id ID_SORGENTE_VERIFICATO --activate --apply \
+  --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
+```
+
+La preview è read-only e richiede la colonna già preparata. L'applicazione
+usa una sola transazione/lock NOWAIT e verifica il backup. Non avvia job,
+non legge eSolver e non scrive certificati. Codici stabili:
+`7003_t6_barre_a_20261009`, `7003_t6_barre_a50mm_20261009`.
+Se già presenti non ne modifica limiti, note o attivazione; confrontarli nel
+report e nel DB, non considerare la sola uscita zero prova di configurazione corretta.
+
+Compatibilità DB molto vecchi: se esistono ancora colonne non mappate
+`regola_tipo`/`is_active` senza default, la preparazione assegna default
+`generale`/TRUE per i SOLI futuri inserimenti; non cambia i valori precedenti.
+Queste colonne non erano presenti su Alpha all'audit, ma esistevano in locale.
+
+Verifiche dopo deploy: etichette A/A50mm distinguibili; selezioni storiche
+invariate; proposta A50 con 9% solo nel contesto compatibile e conferma utente;
+7055 e altre leghe invariate. Per Word/PDF di prova usare un ambiente isolato,
+non generare certificati reali di collaudo in Alpha. Il nuovo header A50mm (%)
+ha 50mm a pedice; documenti già generati non sono riscritti.
+Cambiare base di allungamento di uno standard già usato rende i Word aperti
+da aggiornare secondo la protezione standard esistente; PDF chiusi invariati.
+
+Rollback: conservare colonna e dati, non cancellare standard referenziati.
+Il vecchio codice non conosce A50mm e può stampare A: non riaprire generazione,
+riuso o chiusura PDF con codice precedente finché non concordata una gestione
+compatibile. Un rollback codice non è quindi un rollback operativo trasparente.
 
 ### Gemba: riferimento caricamento (30/09/2026, sviluppato in locale)
 

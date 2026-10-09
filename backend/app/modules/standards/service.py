@@ -99,6 +99,9 @@ def update_standard(
 ) -> StandardResponse:
     # Serialize a limit replacement with the final Word/PDF publication check.
     db.query(NormativeStandard.id).filter(NormativeStandard.id == standard.id).with_for_update().all()
+    # An older client omitting the new optional field must not erase it.
+    if "elongation_basis" not in payload.model_fields_set:
+        payload = payload.model_copy(update={"elongation_basis": standard.elongation_basis})
     if standard.code != payload.code:
         _ensure_unique_code(db, payload.code)
     _ensure_unique_display_label(db, payload, exclude_id=standard.id)
@@ -164,6 +167,7 @@ def serialize_standard(item: NormativeStandard) -> StandardResponse:
         trattamento_termico=item.trattamento_termico,
         tipo_prodotto=item.tipo_prodotto,
         misura_tipo=item.misura_tipo,
+        elongation_basis=item.elongation_basis,
         fonte_excel_foglio=item.fonte_excel_foglio,
         fonte_excel_blocco=item.fonte_excel_blocco,
         stato_validazione=item.stato_validazione,
@@ -196,6 +200,7 @@ def _apply_standard_payload(item: NormativeStandard, payload: StandardCreateRequ
     item.trattamento_termico = payload.trattamento_termico
     item.tipo_prodotto = payload.tipo_prodotto
     item.misura_tipo = payload.misura_tipo
+    item.elongation_basis = payload.elongation_basis
     item.fonte_excel_foglio = payload.fonte_excel_foglio
     item.fonte_excel_blocco = payload.fonte_excel_blocco
     item.stato_validazione = payload.stato_validazione
@@ -223,6 +228,8 @@ def _property_from_payload(payload: StandardPropertyPayload) -> NormativeStandar
 
 
 def _validate_payload_limits(payload: StandardCreateRequest | StandardUpdateRequest) -> None:
+    if payload.elongation_basis == "A50mm" and payload.lega_base.strip() != "7003":
+        raise HTTPException(422, "A50mm è previsto solo per la lega 7003.")
     seen_elements: set[str] = set()
     for limit in payload.chemistry:
       element = limit.elemento.strip()
@@ -282,6 +289,7 @@ def _standard_payload_display_label(payload: StandardCreateRequest | StandardUpd
         payload.trattamento_termico,
         payload.tipo_prodotto,
         payload.misura_tipo,
+        f"{payload.elongation_basis} (%)" if payload.elongation_basis else None,
     )
 
 
@@ -297,6 +305,7 @@ def _standard_model_display_label(standard: NormativeStandard) -> str:
         standard.trattamento_termico,
         standard.tipo_prodotto,
         standard.misura_tipo,
+        f"{standard.elongation_basis} (%)" if standard.elongation_basis else None,
     )
 
 

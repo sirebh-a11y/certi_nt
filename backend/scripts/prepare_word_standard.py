@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.startup import bootstrap as _registry  # model registration only
 from app.modules.quarta_taglio.word_standard import ensure_schema, baseline_legacy
+from app.modules.standards.elongation import ensure_schema as ensure_elongation_schema
 from scripts.recover_ddt_alpha import check_backup
 
 
@@ -25,6 +26,7 @@ def main():
                 connection.execute(text("SET LOCAL lock_timeout = '5s'"))
                 connection.execute(text('LOCK TABLE quarta_taglio_final_certificates, quarta_taglio_standard_selections, normative_standards, normative_standard_chemistry, normative_standard_properties IN ACCESS EXCLUSIVE MODE NOWAIT'))
             added = ensure_schema(connection)
+            ensure_elongation_schema(connection)
             with Session(bind=connection) as db:
                 count = baseline_legacy(db)
                 db.flush()

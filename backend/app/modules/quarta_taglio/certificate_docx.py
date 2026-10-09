@@ -435,6 +435,18 @@ def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailRespo
     extra_fields = [field for field in available_properties if field not in fields]
     fields.extend(extra_fields)
     table = _new_table(document, [""] + [_property_header(field) for field in fields])
+    # Real OOXML subscript, not Unicode approximations or a renamed numeric key.
+    # Legacy/other standards retain their existing exact header and layout.
+    selected = detail.selected_standard
+    if selected and selected.lega_base == "7003" and selected.elongation_basis == "A50mm" and "A%" in fields:
+        cell = table.rows[0].cells[fields.index("A%") + 1]
+        cell.text = ""
+        paragraph = cell.paragraphs[0]
+        paragraph.add_run("A")
+        paragraph.add_run("50mm").font.subscript = True
+        paragraph.add_run(" (%)")
+        for run in paragraph.runs:
+            run.bold = True
     for cell in table.rows[0].cells:
         _set_cell_no_wrap(cell)
     min_row = table.add_row().cells

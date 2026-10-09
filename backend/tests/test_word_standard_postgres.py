@@ -16,6 +16,25 @@ class WordStandardPostgresTest(unittest.TestCase):
     setUp = history.DdtHistoryPostgresTest.setUp
     tearDown = history.DdtHistoryPostgresTest.tearDown
 
+    def test_elongation_additive_schema_legacy_defaults_without_changing_rows(self):
+        from app.modules.standards.elongation import ensure_schema
+        self.seed()
+        with self.engine.begin() as conn:
+            table = f'"{self.schema}".normative_standards'
+            conn.execute(text(f'ALTER TABLE {table} DROP COLUMN elongation_basis'))
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN regola_tipo VARCHAR(64) NOT NULL DEFAULT 'variante'"))
+            conn.execute(text(f'ALTER TABLE {table} ALTER COLUMN regola_tipo DROP DEFAULT'))
+            conn.execute(text(f'ALTER TABLE {table} ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT FALSE'))
+            conn.execute(text(f'ALTER TABLE {table} ALTER COLUMN is_active DROP DEFAULT'))
+            assert ensure_schema(conn)
+            assert not ensure_schema(conn)
+            old = conn.execute(text(f'SELECT regola_tipo,is_active FROM {table}')).one()
+            assert old == ('variante', False)
+        with self.factory.begin() as db:
+            std = S(code='new', lega_base='7003', lega_designazione='7003', elongation_basis='A50mm')
+            db.add(std); db.flush()
+            assert std.id is not None
+
     def seed(self):
         with self.factory.begin() as db:
             standard = S(code='TEST', lega_base='6082', lega_designazione='6082', trattamento_termico='T6')

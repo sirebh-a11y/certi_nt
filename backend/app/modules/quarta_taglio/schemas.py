@@ -203,6 +203,7 @@ class QuartaTaglioStandardCandidateResponse(BaseModel):
     trattamento_termico: str | None = None
     tipo_prodotto: str | None = None
     misura_tipo: str | None = None
+    elongation_basis: str | None = None
     certificate_material_label: str | None = None
     confidence: str
     score: int

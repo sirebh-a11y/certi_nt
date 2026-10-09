@@ -50,6 +50,7 @@ class StandardBasePayload(BaseModel):
     trattamento_termico: str | None = Field(default=None, max_length=64)
     tipo_prodotto: str | None = Field(default=None, max_length=64)
     misura_tipo: str | None = Field(default=None, max_length=32)
+    elongation_basis: Literal["A", "A50mm"] | None = None
     fonte_excel_foglio: str | None = Field(default=None, max_length=128)
     fonte_excel_blocco: str | None = Field(default=None, max_length=255)
     stato_validazione: ValidationState = "attivo"
@@ -116,6 +117,7 @@ class StandardResponse(BaseModel):
     trattamento_termico: str | None
     tipo_prodotto: str | None
     misura_tipo: str | None
+    elongation_basis: Literal["A", "A50mm"] | None = None
     fonte_excel_foglio: str | None
     fonte_excel_blocco: str | None
     stato_validazione: str

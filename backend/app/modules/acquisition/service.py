@@ -978,6 +978,7 @@ def _standard_preview_label(standard: NormativeStandard) -> str:
         standard.trattamento_termico,
         standard.tipo_prodotto,
         standard.misura_tipo,
+        f"{standard.elongation_basis} (%)" if standard.elongation_basis else None,
     ]
     return " · ".join(part for part in parts if _standard_preview_text(part))
 
@@ -1063,6 +1064,7 @@ def _standard_preview_find_match(
     db: Session,
     *,
     row: AcquisitionRow,
+    elongation_overrides: dict[int, Any] | None = None,
 ) -> RankedStandard | None:
     confirmed_standard = _standard_preview_confirmed_standard(db, row=row)
     if confirmed_standard is not None:
@@ -1089,7 +1091,7 @@ def _standard_preview_find_match(
         .filter(NormativeStandard.stato_validazione == "attivo")
         .all()
     )
-    candidates = rank_standard_candidates(standards, rows=[row])
+    candidates = rank_standard_candidates(standards, rows=[row], elongation_overrides=elongation_overrides)
     return candidates[0] if candidates else None
 
 
@@ -1262,7 +1264,10 @@ def preview_acquisition_row_standard_conformity(
         return _preview_incoming_chemistry_conformity(row=row, payload=payload)
     raw_fields = _standard_preview_raw_field_map(row, block, payload.fields)
     fields = _standard_preview_field_map(row, block, payload.fields)
-    standard_match = _standard_preview_find_match(db, row=row)
+    elongation_overrides = None
+    if block == "proprieta" and "A%" in fields:
+        elongation_overrides = {row.id: fields["A%"]}
+    standard_match = _standard_preview_find_match(db, row=row, elongation_overrides=elongation_overrides)
     standard = standard_match.standard if standard_match is not None else None
     material_form = assess_material_form(row)
     preview_context = {

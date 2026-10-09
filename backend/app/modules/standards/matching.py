@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -117,9 +118,11 @@ def rank_standard_candidates(
     standards: Iterable[Any],
     *,
     rows: list[Any],
+    elongation_overrides: dict[int, Any] | None = None,
 ) -> list[RankedStandard]:
     if not rows:
         return []
+    standards = list(standards)
 
     assessments = material_form_summary(rows)
     row_alloys = [_row_alloy(row) for row in rows]
@@ -225,6 +228,13 @@ def rank_standard_candidates(
         if not getattr(standard, "chemistry_limits", None):
             warnings.append("chimica standard non presente")
 
+        adjustment, elongation_reasons, elongation_warnings = _elongation_preference(
+            standard, standards, rows, assessments, elongation_overrides or {}
+        )
+        score += adjustment
+        reasons.extend(elongation_reasons)
+        warnings.extend(elongation_warnings)
+
         ranked_data.append(
             (
                 score,
@@ -273,3 +283,110 @@ def rank_standard_candidates(
             )
         )
     return result
+
+
+def _strict_number(value):
+    text = str(value if value is not None else "").strip().replace(",", ".")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return None
+    number = float(text)
+    return number if math.isfinite(number) else None
+
+
+def _elongation_reading(row, overrides):
+    values = [v for v in getattr(row, "values", []) if _key(getattr(v, "blocco", "")) == "proprieta"
+              and _key(getattr(v, "campo", "")) in {"a", "a5", "a50", "a50mm"}]
+    if not values and getattr(row, "id", None) in overrides:
+        return _strict_number(overrides[row.id]), None
+    if len(values) != 1:
+        return None, None
+    value = values[0]
+    raw = next((getattr(value, k, None) for k in ("valore_finale", "valore_standardizzato", "valore_grezzo")
+                if getattr(value, k, None) is not None), None)
+    if getattr(row, "id", None) in overrides:
+        raw = overrides[row.id]
+    # A% is the canonical storage key, NOT evidence of a proportional test.
+    field = _key(getattr(value, "campo", ""))
+    basis = "A50mm" if field in {"a50", "a50mm"} else "A" if field == "a5" else None
+    evidence = getattr(value, "primary_evidence", None)
+    source = str(getattr(evidence, "testo_grezzo", "") or "").strip()
+    method = str(getattr(evidence, "metodo_estrazione", "") or "").lower()
+    # Only bounded, directly associated OCR excerpts, never normalized AI JSON
+    # or an entire document containing several tables/methods.
+    if source and len(source) <= 200 and not source.startswith(("{", "[")) and "ocr" in method:
+        fixed = bool(re.search(r"\bA\s*50\s*(?:mm)?\s*\(?\s*%", source, re.I))
+        proportional = bool(re.search(r"\bA\s*(?:5\s*)?\(?\s*%", source, re.I))
+        if fixed and proportional:
+            basis = "conflict"
+        elif fixed:
+            basis = "conflict" if basis == "A" else "A50mm"
+        elif proportional:
+            basis = "conflict" if basis == "A50mm" else "A"
+    return _strict_number(raw), basis
+
+
+def _elongation_limit(standard, diameter):
+    candidates = []
+    for prop in getattr(standard, "property_limits", []):
+        if _key(getattr(prop, "proprieta", "")) != "a":
+            continue
+        lower, upper = prop.misura_min, prop.misura_max
+        if (lower is None or diameter > lower) and (upper is None or diameter <= upper):
+            candidates.append(prop)
+    if len(candidates) != 1 or candidates[0].min_value is None:
+        return None
+    return candidates[0]
+
+
+def _elongation_preference(standard, standards, rows, assessments, overrides):
+    basis = getattr(standard, "elongation_basis", None)
+    if basis not in {"A", "A50mm"} or _standard_alloy(standard) != "7003":
+        return 0, [], []
+    # Unknown/incompatible material never gains confidence from a low number.
+    eligible = all(_row_alloy(row) == "7003" and assessment.code == "BARRE"
+                   for row, assessment in zip(rows, assessments))
+    eligible &= normalize_standard_product_type(standard.tipo_prodotto) == "BARRE"
+    eligible &= _key(standard.misura_tipo) == "diametro"
+    eligible &= all(_key(getattr(row, "variante_lega", None)) in
+                    {"", _key(getattr(standard, "variante_lega", None))} for row in rows)
+    eligible &= all((_extract_temper(row.lega_designazione, row.lega_base, row.variante_lega) in
+                     {None, _extract_temper(standard.trattamento_termico)}) for row in rows)
+    fallback = (-40, [], ["A50mm non deducibile automaticamente: verificare il tipo di prova."]) if basis == "A50mm" else (0, [], [])
+    if not eligible:
+        return fallback
+    samples = []
+    for row in rows:
+        diameter = _strict_number(getattr(row, "diametro", None))
+        value, source_basis = _elongation_reading(row, overrides)
+        limit = _elongation_limit(standard, diameter) if diameter and diameter > 0 else None
+        if value is None or limit is None or source_basis == "conflict":
+            return fallback
+        samples.append((diameter, value, source_basis, limit))
+    sources = {s[2] for s in samples if s[2]}
+    if len(sources) > 1:
+        return -40, [], ["Tipi di prova allungamento diversi tra le righe: verificare manualmente."]
+    if sources:
+        if sources == {basis} and all(s[2] == basis for s in samples):
+            return 35, [f"tipo di prova {basis} presente nelle evidenze"], []
+        if basis not in sources:
+            return -40, [], [f"Il tipo di prova letto non corrisponde a {basis}."]
+    if basis == "A":
+        return 15, ["standard A ordinario; eventuali fuori limite restano visibili"], []
+    ordinary = [s for s in standards if getattr(s, "elongation_basis", None) == "A"
+                and _standard_alloy(s) == "7003"
+                and all(_key(getattr(s, f, None)) == _key(getattr(standard, f, None))
+                        for f in ("norma", "trattamento_termico", "tipo_prodotto", "misura_tipo", "variante_lega"))]
+    if len(ordinary) != 1:
+        return fallback
+    below_ordinary = False
+    for diameter, value, source_basis, limit in samples:
+        reference = _elongation_limit(ordinary[0], diameter)
+        if reference is None or source_basis == "A" or value < limit.min_value or (limit.max_value is not None and value > limit.max_value):
+            return fallback
+        below_ordinary |= value < reference.min_value
+    if not below_ordinary:
+        return fallback
+    return 35, ["allungamento compatibile con A50mm, sotto il minimo di A"], [
+        "Proposto standard A50mm: l'allungamento rientra nei suoi limiti, ma non in quelli di A. "
+        "Verifica il tipo di prova nel certificato prima di confermare."
+    ]
