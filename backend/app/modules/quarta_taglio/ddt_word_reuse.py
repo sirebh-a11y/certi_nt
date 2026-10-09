@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.core.database import SessionLocal
 from app.modules.quarta_taglio import service
+from app.modules.quarta_taglio import word_standard
 from app.modules.quarta_taglio.certificate_docx import update_docx_content_controls
 from app.modules.quarta_taglio.ddt_context import exact_certificate, quantity_matches
 from app.modules.quarta_taglio.ddt_decisions import exclusion_valid, latest_decisions
@@ -140,6 +141,9 @@ def plan_item(db, item):
                and c.storage_key_docx and c.certificate_number]
     if not sources:
         return stop('word_not_prepared')
+    sources = [c for c in sources if not word_standard.is_stale(c, db, for_reuse=True)]
+    if not sources:
+        return stop('word_standard_outdated')
     rows = service._load_quarta_rows_for_detail(db, cod_odp=item.cod_odp)
     from app.modules.quarta_taglio.ddt_queue import _incoming_status
     incoming = _incoming_status(db, rows)
@@ -176,7 +180,7 @@ def plan_item(db, item):
     result['fingerprint'] = digest([
         {c.key: getattr(item, c.key) for c in item.__table__.columns},
         [{col.key: getattr(c, col.key) for col in c.__table__.columns} for c in certificates],
-        result, current, incoming,
+        result, current, incoming, word_standard.snapshot(db, item.cod_odp),
     ])
     return result
 
@@ -213,6 +217,7 @@ def apply_item(db, item, plan, created_paths):
     target.cert_date = datetime.combine(item.ddt_date, datetime.min.time(), tzinfo=timezone.utc)
     target.fornitore_cliente, target.cdo_lega, target.lega_cod_f3 = item.cliente, item.conferma_ordine, item.cod_f3
     target.storage_key_docx, target.download_token = key, secrets.token_urlsafe(32)
+    word_standard.copy_provenance(source, target)
     target.certified_by_user_id, target.quality_manager_user_id = source.certified_by_user_id, source.quality_manager_user_id
     service._apply_word_file_state(target, path, source='ddt_reused')
     db.flush()

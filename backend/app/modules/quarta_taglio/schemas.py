@@ -125,6 +125,7 @@ class QuartaTaglioListResponse(BaseModel):
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
+    standard_outdated: bool = False
     id: int
     cod_odp: str
     status: str
@@ -293,6 +294,7 @@ class QuartaTaglioPdfAttachmentResponse(BaseModel):
 
 
 class QuartaTaglioWordInfoResponse(BaseModel):
+    standard_outdated: bool = False
     has_word: bool = False
     source: str | None = None
     source_label: str = "Nessun Word"

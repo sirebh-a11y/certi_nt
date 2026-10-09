@@ -82,6 +82,9 @@ def initialize_application(*, recover_interrupted_jobs: bool = False) -> None:
     ensure_customer_requirement_columns()
     db: Session = SessionLocal()
     try:
+        from app.modules.quarta_taglio.word_standard import baseline_legacy
+        baseline_legacy(db)
+        db.commit()
         seed_departments(db)
         bootstrap_admin_user(db)
         seed_ai_configuration(db)
@@ -523,6 +526,8 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN conformity_issues JSON DEFAULT '[]' NOT NULL")
         if "word_source" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_source VARCHAR(32)")
+        if "word_standard_snapshot" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_standard_snapshot JSON")
         if "word_original_filename" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_original_filename VARCHAR(255)")
         if "word_content_controls" not in certificate_columns:

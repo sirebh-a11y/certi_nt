@@ -261,6 +261,7 @@ function registerStatusLabel(item) {
   if (item.status === "pdf_final") {
     return STATUS_LABELS.pdf_final;
   }
+  if (item.standard_outdated) return "Word da aggiornare";
   if (!item.has_word) {
     return "Word non disponibile - verificare";
   }
@@ -861,6 +862,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                       {normalizedConformityStatus(item.conformity_status) === "non_conforme" ? "! " : ""}
                       {CONFORMITY_LABELS[normalizedConformityStatus(item.conformity_status)]}
                     </span>
+                    {item.standard_outdated ? <p className="mt-1 text-xs text-amber-800">Esito sullo standard attuale; Word non aggiornato.</p> : null}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex rounded-lg border px-2.5 py-1 text-xs font-semibold ${statusClass(item)}`}>
@@ -891,7 +893,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                       >
                         PDF
                       </a>
-                    ) : canGeneratePdf && item.ddt && item.has_word && !item.has_pdf ? (
+                    ) : canGeneratePdf && item.ddt && item.has_word && !item.has_pdf && !item.standard_outdated ? (
                       <button
                         className="ml-3 font-semibold text-accent hover:underline"
                         onClick={() => {

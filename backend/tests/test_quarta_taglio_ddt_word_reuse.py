@@ -47,6 +47,9 @@ class DdtWordReuseTest(history.DdtHistoryTest):
 
     def test_late_ddt_after_closed_pdf_reuses_word_and_preserves_source(self):
         first, source = self.base_word()
+        from app.modules.quarta_taglio.word_standard import provenance
+        source.word_standard_snapshot = provenance(None, 'generated')
+        self.db.commit()
         old_word = reuse.file_hash(source.storage_key_docx)
         old_pdf = reuse.file_hash(source.storage_key_pdf)
         second = self.later()
@@ -54,6 +57,7 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         target = self.db.scalar(select(Certificate).where(Certificate.unit_key == second.certification_unit_key))
         self.assertEqual(target.certificate_number, source.certificate_number)
         self.assertEqual(target.word_source, 'ddt_reused')
+        self.assertEqual(target.word_standard_snapshot, source.word_standard_snapshot)
         self.assertEqual(target.quantita, 1398)
         self.assertIsNone(target.storage_key_pdf)
         controls, _ = reuse.word_facts(target.storage_key_docx)

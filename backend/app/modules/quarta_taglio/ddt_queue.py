@@ -219,12 +219,19 @@ def _project(db, items):
             if reuse['action'] == 'reuse':
                 row.state, row.label = 'ready', LABELS['ready']
                 row.reasons = [r for r in row.reasons if 'Word senza DDT associabile' not in r]
+            elif reuse['reason'] == 'word_standard_outdated':
+                row.state, row.label = 'review', 'Word da aggiornare'
+                row.reasons.append(service.word_standard.MESSAGE)
             elif reuse['reason'] in {'different_word_sources', 'source_file_or_controls_invalid',
                                       'no_compatible_word', 'target_material_changed', 'legacy_or_changed_identity',
                                       'target_content_requires_review'}:
                 row.state, row.label = 'review', LABELS['review']
                 row.reasons.append('Word esistente non collegabile automaticamente: verificare compatibilità, file e campi DDT')
         decision = decisions.get(item.id)
+        certificate = next((c for c in certificates_by_ol[item.cod_odp] if c.id == row.certificate_id), None)
+        if row.state != 'completed' and certificate and service.word_standard.is_stale(certificate, db):
+            row.state, row.label = 'review', 'Word da aggiornare'
+            row.reasons = [service.word_standard.MESSAGE]
         row.operational_state = row.state
         row.source_revision = source_revision(item)
         if decision:

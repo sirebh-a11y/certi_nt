@@ -97,6 +97,8 @@ def update_standard(
     payload: StandardUpdateRequest,
     actor_email: str,
 ) -> StandardResponse:
+    # Serialize a limit replacement with the final Word/PDF publication check.
+    db.query(NormativeStandard.id).filter(NormativeStandard.id == standard.id).with_for_update().all()
     if standard.code != payload.code:
         _ensure_unique_code(db, payload.code)
     _ensure_unique_display_label(db, payload, exclude_id=standard.id)

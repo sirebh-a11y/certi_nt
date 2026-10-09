@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { apiRequest, fetchApiBlob, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { CUSTOMER_REQUIREMENT_FIELDS, resolveCustomerRequirements } from "../../app/customerRequirements";
+import { wordGenerationPayload } from "./wordGeneration";
 
 const STATUS_CLASSES = {
   green: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -308,6 +309,7 @@ export default function QuartaTaglioDetailPage() {
   const [standardConformityDialogOpen, setStandardConformityDialogOpen] = useState(false);
   const [wordRegenerateDialogOpen, setWordRegenerateDialogOpen] = useState(false);
   const [pendingWordCandidateCodF3, setPendingWordCandidateCodF3] = useState(null);
+  const [pendingWordRegenerate, setPendingWordRegenerate] = useState(false);
   const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
   const [incomingRefreshNonce, setIncomingRefreshNonce] = useState("");
   const articleTimersRef = useRef({});
@@ -587,6 +589,7 @@ export default function QuartaTaglioDetailPage() {
       return;
     }
     setPendingWordCandidateCodF3(candidateCodF3);
+    setPendingWordRegenerate(false);
     if ((data?.conformity_issues || []).length > 0) {
       setWordConformityDialogOpen(true);
       return;
@@ -598,18 +601,12 @@ export default function QuartaTaglioDetailPage() {
     setWordDraftState({ status: "saving", message: "" });
     setError("");
     try {
-      const targetCertificateId = forceRegenerate ? activeCertificateId : certificateId;
       const response = await apiRequest(
         `/quarta-taglio/${encodeURIComponent(codOdp)}/word-draft`,
         {
           method: "POST",
-          body: JSON.stringify({
-            force_non_conforming: forceNonConforming,
-            force_regenerate: forceRegenerate,
-            certificate_id: targetCertificateId ? Number(targetCertificateId) : null,
-            candidate_cod_f3: ddtWorkItemId || targetCertificateId ? null : candidateCodF3 || null,
-            ddt_work_item_id: ddtWorkItemId ? Number(ddtWorkItemId) : null,
-          }),
+          body: JSON.stringify(wordGenerationPayload({ forceNonConforming, regenerate: forceRegenerate,
+            activeCertificateId, certificateId, candidateCodF3, ddtWorkItemId })),
         },
         token,
       );
@@ -623,6 +620,7 @@ export default function QuartaTaglioDetailPage() {
       setData(refreshed);
       navigate(quartaDetailUiPath(codOdp, { certificateId: response.id, ddtWorkItemId }), { replace: true });
       setPendingWordCandidateCodF3(null);
+      setPendingWordRegenerate(false);
       setWordDraftState({ status: "saved", message: `Word certificato creato: ${response.draft_number}` });
     } catch (requestError) {
       setWordDraftState({
@@ -702,6 +700,16 @@ export default function QuartaTaglioDetailPage() {
     }
     if (isManualWord) {
       setWordRegenerateDialogOpen(true);
+      return;
+    }
+    continueWordRegeneration();
+  }
+
+  function continueWordRegeneration() {
+    setPendingWordRegenerate(true);
+    setPendingWordCandidateCodF3(null);
+    if ((data?.conformity_issues || []).length > 0) {
+      setWordConformityDialogOpen(true);
       return;
     }
     void performGenerateWordDraft(false, true, null);
@@ -1245,6 +1253,8 @@ export default function QuartaTaglioDetailPage() {
           <p className="mt-1 text-sm text-slate-600">
             {isPdfFinal
               ? "Certificato PDF chiuso. Il Word resta consultabile, ma non modificabile da questa pagina."
+              : wordInfo.standard_outdated
+              ? "Il Word corrente non è aggiornato allo standard selezionato. Prima del PDF occorre rigenerarlo."
               : canCreateWord
               ? "Certificato creabile: standard e righe Incoming sono pronti. Se manca la data DDT, resterà come campo mancante."
               : "Serve standard confermato e righe Incoming accettate o accettate con riserva."}
@@ -1292,6 +1302,12 @@ export default function QuartaTaglioDetailPage() {
           </span>
           <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${wordInfoPanelClass(wordInfo)}`}>
             <div className="font-semibold uppercase tracking-[0.16em] text-current opacity-70">Word corrente</div>
+            {wordInfo.standard_outdated ? (
+              <p role="alert" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                Word da aggiornare. Lo standard è cambiato: usa «Rigenera da zero» prima di creare il PDF.
+                Il Word precedente resta disponibile per il confronto.
+              </p>
+            ) : null}
             <p className="mt-1">
               {wordInfo.source_label || "Nessun Word"}
               {wordInfo.original_filename ? `: ${wordInfo.original_filename}` : ""}
@@ -1372,14 +1388,14 @@ export default function QuartaTaglioDetailPage() {
               <input
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700"
-                disabled={isPdfFinal || !hasWord || !activeCertificateId}
+                disabled={isPdfFinal || wordInfo.standard_outdated || !hasWord || !activeCertificateId}
                 id="quarta-word-upload"
                 onChange={(event) => setWordUploadFile(event.target.files?.[0] || null)}
                 type="file"
               />
               <button
                 className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isPdfFinal || wordUploadState.status === "saving" || !wordUploadFile || !hasWord || !activeCertificateId}
+                disabled={isPdfFinal || wordInfo.standard_outdated || wordUploadState.status === "saving" || !wordUploadFile || !hasWord || !activeCertificateId}
                 onClick={uploadEditedWord}
                 type="button"
               >
@@ -1617,9 +1633,9 @@ export default function QuartaTaglioDetailPage() {
                 !
               </div>
               <div>
-                <h3 className="text-lg font-bold text-slate-950">Creare il Word con non conformità?</h3>
+                <h3 className="text-lg font-bold text-slate-950">{pendingWordRegenerate ? "Rigenerare il Word con non conformità?" : "Creare il Word con non conformità?"}</h3>
                 <p className="mt-2 text-sm text-slate-600">
-                  Il numero certificato verrà assegnato ora. Sono presenti valori fuori standard:
+                  {pendingWordRegenerate ? "Il Word sarà rigenerato con lo standard attuale, mantenendo il numero certificato. Sono presenti valori fuori standard:" : "Il numero certificato verrà assegnato ora. Sono presenti valori fuori standard:"}
                 </p>
                 <ul className="mt-3 max-h-44 space-y-1 overflow-y-auto text-sm font-semibold text-rose-800">
                   {conformityIssues.map((issue) => (
@@ -1634,6 +1650,7 @@ export default function QuartaTaglioDetailPage() {
                 onClick={() => {
                   setWordConformityDialogOpen(false);
                   setPendingWordCandidateCodF3(null);
+                  setPendingWordRegenerate(false);
                 }}
                 type="button"
               >
@@ -1643,11 +1660,11 @@ export default function QuartaTaglioDetailPage() {
                 className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-800"
                 onClick={() => {
                   setWordConformityDialogOpen(false);
-                  void performGenerateWordDraft(true);
+                  void performGenerateWordDraft(true, pendingWordRegenerate, pendingWordRegenerate ? null : pendingWordCandidateCodF3);
                 }}
                 type="button"
               >
-                Crea comunque Word numerato
+                {pendingWordRegenerate ? "Rigenera comunque" : "Crea comunque Word numerato"}
               </button>
             </div>
           </div>
@@ -1693,7 +1710,7 @@ export default function QuartaTaglioDetailPage() {
           onCancel={() => setWordRegenerateDialogOpen(false)}
           onConfirm={() => {
             setWordRegenerateDialogOpen(false);
-            void performGenerateWordDraft(false, true, null);
+            continueWordRegeneration();
           }}
           title="Rigenerare il Word?"
         />

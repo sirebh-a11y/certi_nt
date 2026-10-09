@@ -216,6 +216,7 @@ class QuartaTaglioFinalCertificate(Base):
     storage_key_pdf: Mapped[str | None] = mapped_column(String(512), nullable=True)
     pdf_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     word_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    word_standard_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     word_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     word_content_controls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     word_missing_content_controls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

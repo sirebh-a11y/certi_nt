@@ -193,6 +193,12 @@ Il collaudo non sostituisce preview, backup e verifiche nella futura manutenzion
 
 ### Correzione Word per DDT successivi e recupero Alpha (piano 08/10/2026)
 
+**Prerequisito aggiunto 09/10 — tracciabilità standard Word:** se il pacchetto
+include questa correzione, dopo backup/build e PRIMA delle preview/recuperi
+che leggono i certificati, applicare la preparazione dedicata descritta nella
+sezione «Cambio standard e Word (09/10/2026)» sotto. Non avviare l'app per
+ottenere indirettamente la migrazione e non riutilizzare report precedenti.
+
 **Precedenza operativa aggiunta il 08/10:** se il pacchetto include l'archiviazione
 per avvio, eseguire PRIMA schema/preview/archiviazione della sezione seguente
 «Perimetro operativo e storico persistente». Solo dopo creare una NUOVA preview
@@ -328,6 +334,9 @@ Prerequisiti bloccanti da dimostrare in locale:
    immagini ma sospendere il normale `up -d --build`. Il nuovo codice non deve
    recuperare lo storico in bootstrap. Se emergono migrazioni, documentarle e
    collaudarle separatamente prima: non assumere che siano gia disponibili.
+   Per il pacchetto del 09/10 preparare prima `word_standard_snapshot` e baseline
+   con `prepare_word_standard`, poi schema/preview/OK dell'archivio DDT. Vedere
+   «Cambio standard e Word (09/10/2026)»: nessuna preview Word prima di tali passi.
 4. **Preview dedicata:** container one-off con DB/storage Alpha e scheduler non
    avviato; transazione PostgreSQL read-only e storage montato in sola lettura,
    senza importare il bootstrap applicativo. Scrivere soltanto il report privato
@@ -470,7 +479,9 @@ numeri o i report locali come input Alpha. Verbale e limiti:
 3. Installare pacchetto verificato e costruire le immagini, **senza avviare l'app**.
    Preservare `.env`, mapping PostgreSQL, utenti e permessi eSolver. Nei container
    di manutenzione disattivare entrambi i job con gli override sotto.
-4. Preparare SOLO la nuova tabella con `archive_ddt --prepare-schema` (idempotente).
+4. Se il pacchetto include la correzione standard del 09/10, eseguire PRIMA
+   `prepare_word_standard` come nella sezione dedicata (colonna e baseline).
+   Preparare poi SOLO la tabella archivio con `archive_ddt --prepare-schema` (idempotente).
    Niente bootstrap, chiamate remote, copie dal locale o archiviazione implicita.
 5. `--preview` sul DB Alpha: report privato, transazione read-only, identità cluster
    e configurazione Alpha; ogni quota ha azione/protezioni/fatti sorgente. Mostrare
@@ -1167,6 +1178,13 @@ Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliat
 
 ## Aggiornamento soft
 
+**Ordine cumulativo per il pacchetto corrente (09/10):** dopo fermo writer,
+backup e build senza avvio, preparare colonna/baseline Word standard; preparare
+schema archivio DDT; preview/OK/applicazione archivio se autorizzati; NUOVA
+preview/OK/recupero Word se autorizzati; verifiche; riapertura e soli job
+autorizzati. Le due approvazioni dati restano separate. Non ripetere il primo
+recupero snapshot del 01/10. I comandi dettagliati sono nelle sezioni dedicate.
+
 **Se è incluso il perimetro operativo DDT**, applicare PRIMA del recupero Word
 la sezione «Perimetro operativo e storico persistente»: nuova tabella, preview,
 OK e archiviazione controllata sul database Alpha. Non saltare la preparazione
@@ -1384,6 +1402,68 @@ docker compose --env-file .env -f docker-compose.alpha.yml up -d backend fronten
 Questo punto va fatto solo quando necessario e con backup verificato.
 
 ## Caso colonne nuove nel DB
+
+### Cambio standard e Word (09/10/2026)
+
+Sviluppo locale; nessun deploy autorizzato da questa annotazione. Aggiunge
+soltanto `quarta_taglio_final_certificates.word_standard_snapshot` (JSON).
+Nuovi Word/rigenerazioni salvano standard e limiti; copie/riusi conservano la
+provenienza della sorgente. Standard diverso o limiti modificati rendono il
+Word da aggiornare e bloccano nuova chiusura PDF/riuso, non il download del
+documento precedente. I PDF chiusi non sono rivalutati o riscritti; alla
+riapertura tornano applicabili i controlli.
+
+**Storico concordato:** niente rigenerazione generale. La preparazione salva
+per i Word precedenti una `legacy_baseline` dello standard corrente: è il
+punto d'inizio del monitoraggio, NON una prova dello standard originario del
+documento. Preserva `updated_at`, file, numero, stato, conformità e versioni.
+Ripetere la preparazione non sostituisce snapshot già presenti. Il bootstrap
+esegue la stessa inizializzazione idempotente quando l'app parte normalmente.
+
+Audit 09/10: singolo disallineamento certo OL2026001232, Word 7033_01_00/26
+(ID 174 in quella fotografia): standard corrente 7075 T62, Word 7150 T76.
+L'utente ha scelto correzione esplicita da operatore: ricontrollare al deploy
+se già sistemato e segnalarlo se ancora aperto, NON considerarlo risolto dalla
+baseline. Non attivare riuso di quel documento finché non verificato/corretto;
+se irrisolto, rinviare l'attivazione del worker e il recupero che lo coinvolge.
+Non esiste una quarantena automatica del solo OL1232: la baseline non riconosce
+retroattivamente l'errore. Se il report include un riuso da questa fonte, non
+modificarlo a mano o applicarlo parzialmente: fermarsi, concordare la correzione
+e rifare la preview. Tenere `DDT_WORD_REUSE_ENABLED=false` finché irrisolto;
+la raccolta snapshot DDT è distinta e può restare attiva se già autorizzata.
+OL0986/OL1012 non sono errori di cambio standard: materiali aggiunti dopo il
+Word, lasciarli invariati. Audit completo: `docs/tasks/word_standard_alignment_20261009.md`.
+
+Con manutenzione già concordata, writer/job fermi e backup DB/storage verificati,
+usare l'immagine nuova in container one-off (non avvia job né bootstrap):
+
+```bash
+docker compose --env-file .env -f docker-compose.alpha.yml run --rm --no-deps \
+  -e DDT_SNAPSHOT_ENABLED=false -e DDT_WORD_REUSE_ENABLED=false \
+  -v /srv/certi_nt/data/storage:/app/storage:ro \
+  -v /srv/certi_nt/backup:/audit:ro \
+  backend python -m scripts.prepare_word_standard \
+  --maintenance-confirmed --backup /audit/db_before_alpha_TIMESTAMP.sql
+```
+
+La preparazione esegue ALTER e baseline nella stessa transazione, con lock NOWAIT;
+se trova writer/conflitti interrompere e verificare, non forzare. Nessun dato
+proviene dal DB locale. Dopo `committed`, verificare colonna, conteggi baseline,
+timestamp e hash documenti protetti; poi rifare tutte le preview archivio/Word
+previste dal deploy con il nuovo codice e i dati Alpha. Il codice del planner
+è incluso nelle impronte del report: report antecedenti non sono validi.
+
+Distribuire backend/frontend insieme. Smoke test senza creare PDF reali:
+Registro e dettaglio mostrano `Word da aggiornare` dove applicabile; la coda
+non propone `Genera PDF` per quei documenti. Verificare riuso ordinario e file
+chiusi invariati. Il rollback del solo codice conserva la colonna aggiunta ma
+perde i nuovi blocchi: fermare writer/worker e concordare la ripresa; non
+presentarlo come rollback operativo trasparente, non eliminare snapshot o file.
+
+Ricontrollo locale 09/10: coperti anche selezione rimossa/ripristinata, limiti
+meccanici sullo stesso standard, più quote/F3 dello stesso OL con PDF chiusi e
+Word aperti, isolamento dagli altri OL, baseline senza selezione e rollback
+atomico ALTER/baseline. Esiti aggiornati nel documento di audit citato sopra.
 
 ### Gemba: riferimento caricamento (30/09/2026, sviluppato in locale)
 
