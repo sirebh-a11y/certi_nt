@@ -7,6 +7,69 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Preparazione per la sera del 09/10/2026 — punto di ingresso
+
+Preparazione documentale e collaudo locali autorizzati; **non costituiscono
+autorizzazione a pulizia, fermo, scritture o deploy sul server**. Le sezioni
+datate sotto includono verbali precedenti: prevale questa sequenza cumulativa.
+Il codice di riferimento è `03f9ea9f` più il successivo commit della presente
+documentazione; scegliere per il pacchetto il commit completo realmente pubblicato.
+Alpha e il vecchio pacchetto deploy risultavano ancora a `3951822f`.
+
+1. Ricontrollare spazio, utenti/run attivi e OL1232; concordare la finestra.
+   Eventuale pulizia cache richiede OK specifico e nuovo inventario (sezione spazio).
+2. Rigenerare integralmente il pacchetto dal commit `main` pubblicato, confrontare
+   alberi/hash e collaudare il pacchetto. Non copiare working tree o DB locale.
+   Versione app resta `0.1.0.alpha.10`; candidato tag distinto
+   `v0.1.0-alpha.10.1-deploy`, verificando che sia libero. Non spostare il tag esistente.
+3. Solo dopo autorizzazione deploy: fermare writer/accessi e backend/frontend,
+   lasciare PostgreSQL e l'altro stack attivi; backup app/configurazione, DB e
+   storage con UN SOLO `TS`, verifica archivi e spazio residuo.
+4. Sostituire il codice preservando `.env`, costruire immagini **senza avvio**.
+5. `prepare_word_standard`: due colonne additive e baseline legacy; poi preview
+   e creazione protetta dei due standard 7003 usando la chimica Alpha verificata.
+   Conservare il vecchio ID19 e tutte le selezioni. Nessuna rigenerazione massiva.
+6. `archive_ddt --prepare-schema`; preview con soglia 01/10/2026, nuovo OK sui
+   dati Alpha, eventuale applicazione/verifica. Nessuna cancellazione di DDT.
+7. NUOVA preview del recupero Word, dopo il passo archivio; nuovo OK prima di
+   applicarla. Non riutilizzare vecchi report né modificarli/eseguirli parzialmente.
+   Ricontrollare OL997/998 e conservare tutti i PDF chiusi/export.
+8. Verifiche DB/file/report, poi riapertura separata: mantenere la raccolta DDT
+   già autorizzata e il riuso Word disattivato finché OL1232 resta irrisolto.
+   Controllare primo ciclo, UI, permessi, export, bundle e spazio finale.
+
+**OL1232:** Silvano lo segnalerà al cliente via mail. Audit read-only 09/10:
+Word ID174 `7033_01_00/26` contiene 7150 T76; selezione attuale 7075 T62.
+Non correggerlo in automatico e non considerarlo sanato dalla baseline. Non ha
+quote DDT al momento dell'audit, ma può riceverne in futuro. Lasciare
+`DDT_WORD_REUSE_ENABLED=false`; se la preview di recupero lo coinvolge, fermarsi.
+Le altre modifiche possono essere distribuite con tale limite dichiarato;
+la piena attivazione del riuso automatico resta un passo successivo autorizzato.
+
+Fotografia Alpha, da ricontrollare in manutenzione: 43 tabelle rispetto alle 44
+attese, mancanti solo `quarta_taglio_ddt_archive_events`,
+`normative_standards.elongation_basis` e
+`quarta_taglio_final_certificates.word_standard_snapshot`. 169 Word e 19 PDF
+presenti su disco, 19 righe export; 697 quote DDT (464 correnti, 233 storiche).
+62 quote su 31 DDT prive di OL nella sorgente: non forzare collegamenti durante
+il deploy, non confondere questi casi con il recupero Word. Nessun run AI attivo
+al controllo, raccolta DDT riuscita; non è garanzia dello stato di stasera.
+
+Collaudo locale concluso il 09/10 sul codice `03f9ea9f`, confrontato con il
+`SOURCE_COMMIT` Alpha `3951822fa3790bd7e1b1b6ced33d384a2fb5edd1`:
+
+- backend: **679 test superati, nessuno saltato**, con PostgreSQL temporaneo
+  isolato; 7 warning di deprecazione delle librerie, nessun test fallito;
+- frontend: **28 test superati** e build di produzione riuscita;
+- simulazione cumulativa su schema legacy isolato: preparazioni additive,
+  baseline, creazione dei due standard 7003 e preview archivio/Word riuscite;
+  ripetizione senza duplicare gli standard, vecchi dati campione preservati;
+- sintassi dei 19 blocchi Bash del documento verificata con `bash -n`, senza
+  eseguire i comandi di deploy. Nessuna pulizia o scrittura effettuata su Alpha.
+
+Questi esiti non sostituiscono le nuove preview sui dati Alpha nella finestra
+di manutenzione, il collaudo del pacchetto rigenerato e i controlli dopo avvio.
+
 Devono restare intatti:
 
 - dati PostgreSQL esistenti (sono ammesse soltanto le migrazioni additive e il recupero approvati);
@@ -697,7 +760,7 @@ ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.for
 13. Backup dell'app server attuale.
 14. Sostituzione soft del codice, preservando `.env`, database e storage.
 15. Verifica dei parametri PostgreSQL preservati nel `.env`.
-16. Avvio Docker.
+16. Preparazioni database e preview/recuperi approvati, poi avvio separato di backend/frontend.
 17. Verifica del contenuto, delle versioni, dell'assenza del Lab non autorizzato e del mapping PostgreSQL realmente installati.
 
 ## Prima di aggiornare
@@ -755,7 +818,58 @@ Docker 3,0 GB, di cui circa 2,9 GB segnalati come recuperabili. Il server ospita
 anche un'altra applicazione Docker: non trattare tutte le sue immagini come
 materiale CERTI eliminabile.
 
-Possibili pulizie da **valutare con l'utente**, dopo nuovo inventario:
+#### Proposta limitata del 09/10 — non eseguita
+
+Disco: circa 1,9 GiB liberi su 23 GiB (92%); storage 1,47 GB decimali,
+backup 4,16 GB; DB logico 100 MB (directory PostgreSQL circa 331 MB).
+Cache totale 2,984 GB, di cui 2,884 GB privata. `df -h` e Docker usano unità
+diverse: non promettere spazio finale sommando direttamente queste cifre.
+
+Proposta prudente: 17 record identificati sotto, circa 1,43 GB nominali, con
+descrizione nota, non mutabili, non condivisi e recuperabili all'audit; ultimo
+uso tra due e quattro mesi fa. Conservare tutta la cache recente del 01/10,
+immagini correnti e `before-alpha10-20261001`, database, documenti e backup.
+Lo spazio recuperato può essere inferiore per le dipendenze tra record.
+
+```text
+ysv9hedb6g8vjbyj3323jbnas  WORKDIR frontend
+rhrpsg1z0gpgxz0b74m5b91i9  WORKDIR backend
+mkglu5dv74igeu852c07c5oyq  base Python
+qcmw9k4u1vs5yy36wwr1yq6f8  base Node
+rerzggldabvttz0xon0lblptw  base Python
+59chjftn42pe46a18r27660iy  base Python
+si0m812nuoqly3p7rob67scjh  base Python
+n72iwr672sstwhoete3zuvw2a  base Node
+lhskktdrw755bgxjkdd8ojbar  base Node
+eahfc1sducw0ma63sob0o8rsk  base Python
+zlfyb7y6x6bi12q2jqzonnw9f  base Python
+wophyfklk4gjpq73co9khymlw  base Python
+0ol7xzjb55ulp4e9hsqwl7qev  base Python
+ep6n5pp5ba6rhpgve7bdvgfwg  base Python
+jgerb6seqesoewavpuumx65lo  base Python
+1oy1bydvtr94p7hoehtlt54hd  base Node
+7z9zsw7h89ia1na9jiq8cuykj  installazione LibreOffice/OCR/font (~637 MB)
+```
+
+Non è un'autorizzazione alla cancellazione. Prima occorrono OK specifico, nuovo
+`docker buildx du --verbose`, verifica degli ID e delle proprietà, assenza di
+build attive e immagini di rollback presenti. Il builder è condiviso con l'altro
+stack: `/app` non prova appartenenza esclusiva CERTI. Database e documenti sono
+bind mount separati (`/srv/certi_nt/data/postgres`, `/srv/certi_nt/data/storage`;
+DB dell'altro stack `/srv/certi/postgres`), non record della cache.
+
+Non usare prune generale, `--all`, image/container/volume prune o cancellazioni
+manuali sotto `/var/lib/docker`. Sul builder installato i filtri generici di
+preview temporali/booleani non hanno selezionato il sottoinsieme atteso: usare
+solo ID espliciti ricontrollati. Nessun comando distruttivo prima di verifica/OK.
+Dopo l'eventuale pulizia confrontare immagini/container e salute applicazioni,
+misurare lo spazio reale. Se insufficiente, chiedere una nuova decisione senza
+estendere la lista. Ricompilazioni successive possono richiedere download e
+fallire se i repository non rispondono; le immagini conservate restano distinte.
+Riferimenti: [Docker du](https://docs.docker.com/reference/cli/docker/buildx/du/),
+[Docker prune](https://docs.docker.com/reference/cli/docker/buildx/prune/).
+
+Possibili altre pulizie da **valutare separatamente con l'utente**, dopo nuovo inventario:
 
 - Cache build Docker: materiale intermedio ricreabile (installazioni OCR,
   LibreOffice, librerie Python e JavaScript, compilazione frontend). La pulizia
@@ -1148,36 +1262,56 @@ file dell'archivio/installato. Il confronto dell'archivio resta sullo SHA-256 co
 
 ## Backup prima dell'aggiornamento
 
-Sul server:
+Per il pacchetto cumulativo del 09/10 sono OBBLIGATORI backup app/configurazione,
+database e documenti, nella stessa finestra con writer fermi. Prima servono
+spazio verificato e OK al fermo. Non eseguire durante il solo audit/preparazione.
+Impostare UN SOLO `TS` e conservarlo per backup, report e verifiche: se si cambia
+shell riprendere i valori registrati nel verbale, non calcolare un nuovo timestamp.
 
 ```bash
-set -e
+set -euo pipefail
 TAG=v0.1.0-alpha.X-deploy
 TS=$(date +%Y%m%d_%H%M%S)
 cd /srv/certi_nt
-
+test "$(pwd -P)" = /srv/certi_nt
+test -f app/.env
+test -d data/storage
+test -d data/postgres
+cd app
+docker compose --env-file .env -f docker-compose.alpha.yml stop backend frontend
+cd ..
+test ! -e "backup/app_before_${TAG}_${TS}.tgz"
+test ! -e "backup/db_before_alpha_${TS}.sql"
+test ! -e "backup/storage_before_alpha_${TS}.tgz"
+test ! -e "backup/manifest_before_alpha_${TS}.sha256"
 tar -czf "backup/app_before_${TAG}_${TS}.tgz" app
-```
-
-Questo backup salva il codice applicativo corrente e il `.env`, ma non duplica tutto il database.
-
-### Backup database
-
-Fare sempre un dump DB prima di aggiornamenti che cambiano tabelle, colonne o logiche dati.
-
-Sul server alpha attuale usare esplicitamente utente e database:
-
-```bash
-cd /srv/certi_nt/app
-TS=$(date +%Y%m%d_%H%M%S)
-docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
+docker compose --env-file app/.env -f app/docker-compose.alpha.yml exec -T postgres \
   pg_dump -U certi_nt certi_nt \
-  > "/srv/certi_nt/backup/db_before_alpha_${TS}.sql"
+  > "backup/db_before_alpha_${TS}.sql"
+tar -czf "backup/storage_before_alpha_${TS}.tgz" -C /srv/certi_nt/data storage
+test -s "backup/db_before_alpha_${TS}.sql"
+grep -q '^-- PostgreSQL database dump complete' "backup/db_before_alpha_${TS}.sql"
+gzip -t "backup/app_before_${TAG}_${TS}.tgz"
+gzip -t "backup/storage_before_alpha_${TS}.tgz"
+tar -tzf "backup/app_before_${TAG}_${TS}.tgz" >/dev/null
+tar -tzf "backup/storage_before_alpha_${TS}.tgz" >/dev/null
+sha256sum "backup/app_before_${TAG}_${TS}.tgz" \
+  "backup/db_before_alpha_${TS}.sql" "backup/storage_before_alpha_${TS}.tgz" \
+  > "backup/manifest_before_alpha_${TS}.sha256"
+sha256sum -c "backup/manifest_before_alpha_${TS}.sha256"
+df -h /srv/certi_nt
 ```
 
-Nota: il comando con `"$POSTGRES_USER"` e `"$POSTGRES_DB"` dentro `sh -lc` puo fallire se quelle variabili non sono disponibili nel processo shell del container. In quel caso `pg_dump` prova l'utente `root` e fallisce. Per questo, nella procedura alpha, usare `pg_dump -U certi_nt certi_nt`.
+L'archivio app contiene anche `.env`: accessi protetti, mai Git/web. Lo storage
+contiene la radice `storage/`, non il PostgreSQL fisico: il DB si salva con
+`pg_dump`, non copiando la directory di un database acceso.
+Leggibilità, hash e completamento del dump non provano da soli il ripristino:
+verificarne la ripristinabilità in un DB isolato prima delle scritture critiche,
+mai effettuare prove di restore sul DB operativo Alpha.
 
-Per aggiornamenti solo frontend/backend senza modifiche DB, il dump e consigliato ma non sempre obbligatorio. In alpha conviene farlo spesso.
+Usare esplicitamente `pg_dump -U certi_nt certi_nt`, senza dipendere da variabili
+POSTGRES nella shell del container. Se un backup fallisce, non sostituire il
+codice né riaprire automaticamente: diagnosticare e concordare la ripresa.
 
 ## Aggiornamento soft
 
@@ -1197,22 +1331,22 @@ schema anche quando l'archiviazione viene rinviata. Poi rifare la preview Word.
 **Se il deploy include la correzione Word per DDT successivi**, seguire anche la
 sezione dedicata del 08/10/2026: stop dei writer, backup DB/storage, build senza
 avvio, preview e OK separato al recupero prima della riapertura. Non eseguire
-alla cieca l'ultimo `up -d --build` del blocco sotto. La procedura dedicata deve
+alcun avvio prima dei passaggi dati. La procedura dedicata deve
 essere stata implementata e collaudata: questo Markdown non la sostituisce.
 
 **Se è autorizzato anche il primo recupero DDT**, applicare la variante sopra:
-backup con writer fermi e pausa prima del comando finale `up -d --build`, per
+backup con writer fermi e pausa prima della riapertura separata, per
 preview/import con la nuova immagine. Non avviare prima l'app, che aggiorna la
 cache utilizzata per recuperare lo storico.
 
 Sul server:
 
 ```bash
-set -e
-TAG=v0.1.0-alpha.X-deploy
+set -euo pipefail
+: "${TAG:?Riprendere TAG della manutenzione}"
+: "${TS:?Riprendere TS dei backup verificati}"
 ARCHIVE=alpha-produzione-${TAG}.tar
 EXPECTED_SOURCE_COMMIT=HASH_COMPLETO_COMMIT_APP
-TS=$(date +%Y%m%d_%H%M%S)
 
 cd /srv/certi_nt
 test -f "backup/$ARCHIVE"
@@ -1221,7 +1355,10 @@ test -d data/postgres
 test -d data/storage
 test "$(tar -xOf "backup/$ARCHIVE" SOURCE_COMMIT | tr -d '\r\n')" = "$EXPECTED_SOURCE_COMMIT"
 
-tar -czf "backup/app_before_${TAG}_${TS}.tgz" app
+test -s "backup/app_before_${TAG}_${TS}.tgz"
+test -s "backup/db_before_alpha_${TS}.sql"
+test -s "backup/storage_before_alpha_${TS}.tgz"
+sha256sum -c "backup/manifest_before_alpha_${TS}.sha256"
 
 cd app
 test "$(pwd -P)" = "/srv/certi_nt/app"
@@ -1231,11 +1368,30 @@ find . -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf {} +
 tar -xf "../backup/$ARCHIVE" -C .
 test "$(tr -d '\r\n' < SOURCE_COMMIT)" = "$EXPECTED_SOURCE_COMMIT"
 
-docker compose --env-file .env -f docker-compose.alpha.yml up -d --build
+docker compose --env-file .env -f docker-compose.alpha.yml build backend frontend
+```
+
+**FERMARSI QUI:** questo blocco esegue solo installazione/build, non avvia l'app.
+Eseguire ora preparazioni, preview, approvazioni e verifiche del punto di ingresso.
+Nei comandi dedicati sostituire `TIMESTAMP` con il `TS` dei backup verificati.
+Non avviare bootstrap per aggirare un errore di migrazione o preview.
+
+### Riapertura separata, solo dopo tutte le verifiche
+
+Controllare `.env` senza stamparne i segreti: mapping PostgreSQL preservato,
+raccolta DDT come già autorizzata, `DDT_WORD_REUSE_ENABLED=false` finché OL1232
+è irrisolto o manca l'OK al riuso. Pacchetto/preparazioni incompleti impediscono
+la riapertura. Solo al termine della manutenzione autorizzata:
+
+```bash
+cd /srv/certi_nt/app
+docker compose --env-file .env -f docker-compose.alpha.yml up -d --no-deps backend frontend
 docker compose --env-file .env -f docker-compose.alpha.yml ps
 ```
 
-Nota importante: non usare `docker compose down -v`, perche puo cancellare volumi se la configurazione cambia.
+Si usano le immagini già costruite, senza ricreare PostgreSQL o altri servizi.
+Completare i controlli seguenti, primo ciclo DDT ed export; non chiudere PDF
+reali per fare smoke test. Non usare `docker compose down -v`.
 
 ## Controlli dopo aggiornamento
 
@@ -1354,6 +1510,12 @@ Da browser:
 
 ## Rollback codice
 
+**Pacchetto cumulativo 09/10:** non usare il blocco generico sotto per riaprire
+automaticamente. Il vecchio codice ignora archivio DDT/base A50mm e perde i
+controlli sulla provenienza Word. Il solo rollback codice non annulla nuove
+associazioni/file. Tenere writer/riuso fermi, salvare lo stato del fallimento
+e concordare compatibilità DB/storage prima della ripresa.
+
 Usare se il nuovo codice non parte o rompe l'app, ma il database non e stato modificato.
 
 Sul server:
@@ -1377,6 +1539,11 @@ docker compose --env-file .env -f docker-compose.alpha.yml ps
 Il rollback codice non tocca `/srv/certi_nt/data`.
 
 ## Rollback database
+
+Se gli utenti hanno ripreso a lavorare, il vecchio dump perderebbe il lavoro
+successivo: NON ripristinarlo senza nuova decisione esplicita, backup dello stato
+attuale e piano concordato. Dopo recupero Word trattare DB e storage insieme;
+nessuna cancellazione automatica di file o associazioni.
 
 Da usare solo se abbiamo cambiato struttura dati o se il database e stato alterato in modo sbagliato.
 
