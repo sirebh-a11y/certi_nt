@@ -9,6 +9,14 @@ tracciabilità, avvisi, blocchi PDF/riuso, rigenerazione e preparazione database
 Alpha NON aggiornato. Lo storico non viene rigenerato: scelta dell'utente
 successiva all'audit; il singolo OL1232 resta da correggere esplicitamente.
 
+**Decisione successiva durante il deploy del 09/10:** l'utente richiede di
+attivare il riuso automatico anche per OL1232, senza blocco generale o speciale;
+Silvano avviserà il cliente per la correzione manuale. Questa decisione supera
+le cautele di sospensione riportate più sotto, non i normali controlli del
+software. PDF fornitore Metalba26-1974 verificato direttamente: lega7075 F,
+prove meccaniche T62; Word7150 T76 non corretto automaticamente. Stato del
+deploy e attivazione effettiva nel verbale `../deploy/alpha10_1_preflight_20261009.md`.
+
 Parte indipendente già corretta in locale:
 
 1. `Rigenera da zero` propone la conferma esplicita per chimica/proprietà fuori
@@ -48,7 +56,8 @@ Il loro elenco di attività mancanti è superato dal completamento descritto qui
 - Preparazione offline `python -m scripts.prepare_word_standard`: nuova colonna
   e baseline atomiche, flag manutenzione/backup, nessun bootstrap/job né file.
   Aggiornato il markdown deploy: preparare PRIMA delle preview Word/archivio,
-  ricontrollare OL1232, non attivare il suo riuso finché irrisolto.
+  ricontrollare OL1232. La successiva scelta esplicita del 09/10 permette il
+  riuso anche prima della sua correzione manuale (vedere nota iniziale).
 
 La decisione di NON intervenire sui materiali aggiunti agli OL0986/1012 è
 rispettata: questo controllo riguarda lo standard, non nuove invalidazioni

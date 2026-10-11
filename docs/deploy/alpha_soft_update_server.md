@@ -7,68 +7,80 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Preparazione per la sera del 09/10/2026 — punto di ingresso
+### Punto di ingresso per i prossimi deploy — aggiornato 11/10/2026
 
-Preparazione documentale e collaudo locali autorizzati; **non costituiscono
-autorizzazione a pulizia, fermo, scritture o deploy sul server**. Le sezioni
-datate sotto includono verbali precedenti: prevale questa sequenza cumulativa.
-Il codice di riferimento è `03f9ea9f` più il successivo commit della presente
-documentazione; scegliere per il pacchetto il commit completo realmente pubblicato.
-Alpha e il vecchio pacchetto deploy risultavano ancora a `3951822f`.
+**Il deploy del 09/10 è concluso e Alpha è online.** Questo documento non
+autorizza nuove pulizie, commit/push, fermi, scritture dati o deploy. Ogni nuova
+operazione richiede l'indicazione dell'utente; l'OK al deploy non equivale
+all'OK a cancellazioni o recuperi massivi.
 
-1. Ricontrollare spazio, utenti/run attivi e OL1232; concordare la finestra.
-   Eventuale pulizia cache richiede OK specifico e nuovo inventario (sezione spazio).
-2. Rigenerare integralmente il pacchetto dal commit `main` pubblicato, confrontare
-   alberi/hash e collaudare il pacchetto. Non copiare working tree o DB locale.
-   Versione app resta `0.1.0.alpha.10`; candidato tag distinto
-   `v0.1.0-alpha.10.1-deploy`, verificando che sia libero. Non spostare il tag esistente.
-3. Solo dopo autorizzazione deploy: fermare writer/accessi e backend/frontend,
-   lasciare PostgreSQL e l'altro stack attivi; backup app/configurazione, DB e
-   storage con UN SOLO `TS`, verifica archivi e spazio residuo.
-4. Sostituire il codice preservando `.env`, costruire immagini **senza avvio**.
-5. `prepare_word_standard`: due colonne additive e baseline legacy; poi preview
-   e creazione protetta dei due standard 7003 usando la chimica Alpha verificata.
-   Conservare il vecchio ID19 e tutte le selezioni. Nessuna rigenerazione massiva.
-6. `archive_ddt --prepare-schema`; preview con soglia 01/10/2026, nuovo OK sui
-   dati Alpha, eventuale applicazione/verifica. Nessuna cancellazione di DDT.
-7. NUOVA preview del recupero Word, dopo il passo archivio; nuovo OK prima di
-   applicarla. Non riutilizzare vecchi report né modificarli/eseguirli parzialmente.
-   Ricontrollare OL997/998 e conservare tutti i PDF chiusi/export.
-8. Verifiche DB/file/report, poi riapertura separata: mantenere la raccolta DDT
-   già autorizzata e il riuso Word disattivato finché OL1232 resta irrisolto.
-   Controllare primo ciclo, UI, permessi, export, bundle e spazio finale.
+Ultimo pacchetto installato: `v0.1.0-alpha.10.1-deploy`, commit deploy `b6b9e44`,
+`SOURCE_COMMIT=b91c0b0973bbae3d4095c947bb91b822dbc434e0`, versione app
+`0.1.0.alpha.10`. Sono riferimenti storici da confrontare col server, NON tag
+da riutilizzare o spostare al prossimo aggiornamento.
+Esiti, backup, approvazioni e arresti intermedi sono conservati nel
+[verbale Alpha 10.1](alpha10_1_preflight_20261009.md): le sue prime sezioni
+descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
 
-**OL1232:** Silvano lo segnalerà al cliente via mail. Audit read-only 09/10:
-Word ID174 `7033_01_00/26` contiene 7150 T76; selezione attuale 7075 T62.
-Non correggerlo in automatico e non considerarlo sanato dalla baseline. Non ha
-quote DDT al momento dell'audit, ma può riceverne in futuro. Lasciare
-`DDT_WORD_REUSE_ENABLED=false`; se la preview di recupero lo coinvolge, fermarsi.
-Le altre modifiche possono essere distribuite con tale limite dichiarato;
-la piena attivazione del riuso automatico resta un passo successivo autorizzato.
+**Sequenza operativa corrente:**
 
-Fotografia Alpha, da ricontrollare in manutenzione: 43 tabelle rispetto alle 44
-attese, mancanti solo `quarta_taglio_ddt_archive_events`,
-`normative_standards.elongation_basis` e
-`quarta_taglio_final_certificates.word_standard_snapshot`. 169 Word e 19 PDF
-presenti su disco, 19 righe export; 697 quote DDT (464 correnti, 233 storiche).
-62 quote su 31 DDT prive di OL nella sorgente: non forzare collegamenti durante
-il deploy, non confondere questi casi con il recupero Word. Nessun run AI attivo
-al controllo, raccolta DDT riuscita; non è garanzia dello stato di stasera.
+1. Audit read-only di versione, dati/schema, utenti/run, servizi e spazio.
+   Presentare spazio disponibile, stima di backup/build e margine finale.
+   **Prima di eseguire il deploy chiedere esplicitamente all'utente se autorizza
+   la pulizia proposta nella sezione spazio**: prima scelta i tre pacchetti
+   duplicati di luglio, circa 802 MB. Nessuna risposta o solo OK al deploy
+   non autorizzano la pulizia. Se lo spazio non basta, fermarsi e concordare
+   una soluzione; non usare backup di sicurezza come spazio sacrificabile.
+2. Scegliere il nuovo commit `main` pubblicato, rigenerare integralmente il
+   pacchetto, confrontare alberi/hash e testare il contenuto effettivo. Verificare
+   versione backend/footer/bundle ed esclusione Lab. Nuovo tag libero, mai force.
+3. Dopo autorizzazione e finestra concordata, attendere conclusione di attività
+   utenti, AI, Word/PDF e job; fermare backend/frontend, non PostgreSQL o altro
+   stack. Backup verificati app/configurazione, DB e storage con UN SOLO `TS`.
+4. Installare il codice preservando `.env` e dati; costruire senza avvio.
+   Le nuove immagini possono ricostruire dipendenze e consumare più spazio:
+   misurare anche dopo backup e build; collaudare le immagini realmente ottenute.
+5. Applicare **soltanto nuove preparazioni necessarie, collaudate e autorizzate**.
+   Le operazioni del 01/10 e 09/10 elencate sotto sono già concluse: non ripeterle
+   perché il loro codice è ancora nel pacchetto. Nuove archiviazioni/recuperi
+   richiedono nuove preview sui dati Alpha, backup e OK specifici; mai copie del DB locale.
+6. Verificare dati/file/export e riaprire separatamente. Preservare
+   `DDT_SNAPSHOT_ENABLED=true` e `DDT_WORD_REUSE_ENABLED=true`, già autorizzati,
+   senza quarantena speciale OL1232. Gli override `false` negli esempi one-off
+   isolano la manutenzione: NON sono il valore da lasciare nell'app riaperta.
+7. Verificare health pubblico, mapping/permessi DB, UI e bundle, job automatici,
+   messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
+   Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
 
-Collaudo locale concluso il 09/10 sul codice `03f9ea9f`, confrontato con il
-`SOURCE_COMMIT` Alpha `3951822fa3790bd7e1b1b6ced33d384a2fb5edd1`:
+### Stato verificato e attività già concluse
 
-- backend: **679 test superati, nessuno saltato**, con PostgreSQL temporaneo
-  isolato; 7 warning di deprecazione delle librerie, nessun test fallito;
-- frontend: **28 test superati** e build di produzione riuscita;
-- simulazione cumulativa su schema legacy isolato: preparazioni additive,
-  baseline, creazione dei due standard 7003 e preview archivio/Word riuscite;
-  ripetizione senza duplicare gli standard, vecchi dati campione preservati;
-- sintassi dei 19 blocchi Bash del documento verificata con `bash -n`, senza
-  eseguire i comandi di deploy. Nessuna pulizia o scrittura effettuata su Alpha.
+- Primo recupero DDT e attivazione snapshot: 01/10, non da ripetere.
+- Il 09/10: colonne `word_standard_snapshot` / `elongation_basis`, baseline
+  legacy e tabella archivio preparate; standard 7003 T6 A/A50mm creati su Alpha
+  (ID39/40 all'esecuzione), vecchio ID19 e selezioni preservati.
+- Archiviazione reversibile di 534 quote / 199 DDT e 23 riusi Word completati
+  con OK separati; nessuna cancellazione DDT o generazione PDF implicita.
+- Controllo read-only 11/10: 193 Word e 19 PDF finali referenziati presenti,
+  697 quote totali, 534 archiviate, 144 attive, 18 completate e 1 esclusa.
+  Le 20 quote attive senza OL non vanno collegate forzatamente. Sono fotografie,
+  non conteggi da imporre ai dati futuri né prova di recupero di dati mai acquisiti.
+- Nelle 40 ore controllate l'11/10: 152 snapshot riusciti e 154 sincronizzazioni
+  Quarta riuscite; ultima lettura DDT alle 11:11 italiane. Entrambi i flag true.
+- **OL1232:** il 09/10 il Word ID174 aveva 7150 T76 invece di 7075 T62; baseline
+  non sufficiente a sanarlo. Nel controllo dell'11/10, dopo il rifiuto iniziale
+  409 risulta una rigenerazione HTTP200 del 09/10 alle 20:23 italiane e una nuova
+  provenienza `generated` con standard ID21 7075 T62. Non trattarlo ancora come
+  correzione pendente sulla sola base del vecchio audit. Questo controllo è su
+  log/metadati, non un nuovo collaudo visivo del Word. Conservare la lezione:
+  una baseline legacy non certifica retroattivamente il contenuto del documento.
+- Collaudo del pacchetto 09/10: 679 test backend senza salti e 28 frontend;
+  verifica browser e conversione LibreOffice isolata riuscite. Da ripetere in
+  proporzione alle modifiche del prossimo pacchetto, non vale come test futuro.
 
-Questi esiti non sostituiscono le nuove preview sui dati Alpha nella finestra
-di manutenzione, il collaudo del pacchetto rigenerato e i controlli dopo avvio.
+Le sezioni storiche e di migrazione sotto conservano regole, motivazioni,
+comandi condizionati e mitigazioni. Non sono una lista di operazioni da
+rieseguire a ogni deploy. Le istruzioni di backup, isolamento, rollback e
+protezione del lavoro utenti restano obbligatorie.
 
 Devono restare intatti:
 
@@ -200,7 +212,11 @@ leggibilità/intestazione, non completezza/ripristinabilità. Il ruolo di manute
 deve poter leggere `pg_control_system()`; un errore va diagnosticato, non aggirato.
 Non esporre report/backup sul web e non inserirli in Git.
 
-#### Attivazione esplicita della raccolta DDT
+#### Attivazione esplicita della raccolta DDT — già eseguita il 01/10
+
+Su Alpha il valore autorizzato è già true, ricontrollato l'11/10. La procedura
+seguente resta per un'eventuale prima attivazione su ambiente non preparato:
+non disattivare il job nei normali deploy e non sostituire `.env` con l'esempio.
 
 Dal 01/10 il Compose Alpha passa `DDT_SNAPSHOT_ENABLED` al backend, con default
 **false**. L'esempio `.env.alpha.example` resta false. Questa preparazione locale
@@ -268,9 +284,10 @@ per avvio, eseguire PRIMA schema/preview/archiviazione della sezione seguente
 Word. Non usare un report Word calcolato prima dell'archiviazione. L'aggiunta
 della tabella archivio è necessaria anche se si rinvia l'archiviazione dei dati.
 
-**Stato 08/10: implementata e collaudata in locale; NON installata/applicata su Alpha.**
-Questa sezione non autorizza deploy o recupero. Restano necessari commit/push
-richiesti dall'utente, pacchetto verificato e nuova preview/OK sui dati Alpha.
+**Stato attuale:** installata/applicata il 09/10, con 23 riusi verificati e worker
+attivo. Le evidenze del 08/10 sotto spiegano il problema precedente. Non ripetere
+il recupero a ogni deploy: per un nuovo recupero servono richiesta esplicita,
+pacchetto verificato e nuova preview/OK sui dati Alpha.
 Comando dedicato: `backend/scripts/recover_ddt_words_alpha.py`, report versione 1.
 Verificati `--help`, pianificazione/applicazione ripetibile e lock su PostgreSQL
 locale isolato. I comandi operativi sotto andranno eseguiti solo in manutenzione.
@@ -303,7 +320,7 @@ non ripetere l'importazione iniziale del 01/10 per correggere i Word.
   Non introdurre la diversa ereditarieta tra lavorazioni proposta (ma non
   approvata qui) in `docs/modules/quarta_taglio_word_inheritance_rules.md`.
 
-#### Evidenze e requisiti prima del deploy
+#### Evidenze storiche e requisiti da conservare (08/10, prima della correzione)
 
 Aggiornamento audit messaggi 08/10: OL2026000998 ha il PDF chiuso per il DDT
 2229 (380 pezzi), non per il successivo 2386 (1701 pezzi, quota 635 senza
@@ -379,7 +396,11 @@ Prerequisiti bloccanti da dimostrare in locale:
    dati nel Word, PDF ed export. PDF chiusi, nomi, token e versioni preesistenti
    devono restare invariati. Verificare anche la UI con il percorso browser locale.
 
-#### Sequenza del prossimo deploy con recupero Word
+#### Procedura condizionata per un nuovo recupero Word autorizzato
+
+Il recupero del 09/10 è concluso. Seguire questa procedura soltanto se un nuovo
+audit dimostra la necessità di un altro recupero e l'utente lo autorizza;
+non rieseguire i report del 09/10 e non disattivare il riuso ordinario già attivo.
 
 1. **Prima del fermo:** audit Alpha in sola lettura, stato spazio e stima di
    backup/build/nuovi Word; riferire all'utente. Inventariare tutte le quote
@@ -495,8 +516,8 @@ spiegati; i casi ambigui restano visibili senza associazioni forzate.
 
 ### Perimetro operativo e storico persistente (08/10/2026)
 
-**Solo sviluppo locale autorizzato. Nessun deploy/applicazione Alpha autorizzati
-da questa sezione.** Piano corrente: dal **01/10/2026 incluso**, mantenendo anche
+**Applicato su Alpha il 09/10 con approvazione specifica.** Questa sezione non
+autorizza nuove archiviazioni. Soglia applicata: **01/10/2026 incluso**, mantenendo anche
 il lavoro precedente avviato/parziale; Beta significa uso reale in produzione,
 con data ufficiale ancora da definire. Riferimento decisioni:
 `docs/tasks/beta_transition_plan.md`, ultima sottosezione del punto 7.
@@ -534,7 +555,11 @@ numeri o i report locali come input Alpha. Verbale e limiti:
   anche la tabella archivio nella stessa transazione. Non ripeterlo per questo
   aggiornamento: su Alpha il primo recupero è già stato eseguito il 01/10.
 
-#### Ordine obbligatorio nel futuro deploy
+#### Ordine obbligatorio per una nuova archiviazione autorizzata
+
+La tabella e l'archiviazione iniziale esistono già su Alpha. In un normale deploy
+preservarle; non ripetere la soglia del 01/10 sul lavoro arrivato successivamente.
+I comandi sotto documentano la procedura protetta, non un'attività ancora pendente.
 
 1. Audit in sola lettura, spazio disponibile riferito all'utente, run AI/Word/PDF
    conclusi e finestra concordata. Nessuna pulizia automatica dello spazio.
@@ -745,6 +770,9 @@ ssh -i C:\Users\sireb\.ssh\certi_nt_admcerti01_ed25519 admcerti01@certi-test.for
 
 ## Flusso corretto
 
+Prerequisito prima delle operazioni server: audit spazio e domanda esplicita
+sulla pulizia secondo il punto di ingresso. Il flusso non autorizza cancellazioni.
+
 1. Sviluppo e test in locale sul ramo corretto.
 2. Verifica che il deploy corrente provenga da `main` e non dal futuro branch Lab.
 3. Verifica che il commit `main` non contenga il modulo Lab non ancora autorizzato.
@@ -793,6 +821,43 @@ se fare una pulizia e quali elementi specifici includere. Una pulizia non e una
 conseguenza automatica del deploy. Se lo spazio non basta, fermarsi e concordare
 come procedere.
 
+**Domanda obbligatoria prima del deploy:** «Lo spazio libero è ..., backup e
+build richiedono circa ... più un margine operativo. Autorizzi la rimozione dei
+soli tre pacchetti duplicati verificati (circa 802 MB), oppure preferisci
+conservarli e concordare un'altra soluzione?» Adattare importi e lista al nuovo
+inventario: se i file sono già stati rimossi, non riproporli come recuperabili.
+Registrare risposta e perimetro; senza OK specifico nessuna pulizia. Se l'utente
+non vuole pulire e lo spazio non basta, non iniziare il deploy.
+
+#### Proposta corrente verificata 11/10 — NON eseguita, da approvare
+
+Audit dettagliato, percorsi e hash: [inventario spazio 11/10](alpha_space_audit_20261011.md).
+Disco 23 GiB, circa 807 MiB liberi (97%); non è una stima per il prossimo deploy.
+La pulizia proposta da sola non garantisce spazio sufficiente per backup e build.
+
+| Priorità | Elementi | Spazio indicativo | Condizione prima della rimozione |
+|---|---|---:|---|
+| Prima proposta | Tre `.tar` di installazione Alpha 9.4, 9.5, 9.5.1 nella cartella backup | 802 MB decimali | Nuovo confronto SHA-256 con copie sul PC, nessun uso in corso e OK esplicito sui tre percorsi |
+| Successiva, separata | `data/storage_before_hard_reset_20260715_080925` | 665 MB contenuti, circa 637 MiB su disco | 815 file identici all'archivio al controllo; prima copiare e verificare l'archivio anche fuori dal server, ricontrollare assenza di riferimenti/nuove differenze e chiedere OK |
+| Rinviata | Tre grandi `app_before_...` di luglio | 729 MB | Contengono `.env`: non sono semplici temporanei. Copia esterna privata verificata e decisione separata |
+| Seconda opzione, non prima scelta | Cache build Docker recente | fino a 1,6 GB nominali privati | Nuovo audit di ID/dipendenze/build/immagini, approvazione separata; guadagno fisico non garantito e successive build dipendono dai download |
+
+Conservare database/storage correnti, backup completi del 01/10 e 09/10,
+report/journal/hash delle operazioni dati, immagini correnti e di rollback,
+configurazioni e altro stack. «Reclaimable» o «zero container» NON significano
+che un elemento sia privo di valore per il ripristino.
+
+I tre `.tar` hanno copie identiche nel PC ma sono **non tracciati in Git**:
+non assumere che un push ne conservi i byte. Non pulire contemporaneamente le
+copie locali. Mostrare sempre percorsi esatti, contenuto, recupero previsto e
+possibilità di ripristino; niente cancellazioni per glob o pulizie generali.
+Subito prima di ogni rimozione rivalidare target, hash e autorizzazione; dopo,
+misurare `df`, verificare servizi/immagini/dati preservati e riferire cosa è
+stato rimosso e dove rimane la copia. Se l'esito differisce, fermarsi senza
+allargare automaticamente il perimetro.
+
+#### Comandi di inventario in sola lettura
+
 Controlli in sola lettura sul server:
 
 ```bash
@@ -818,7 +883,13 @@ Docker 3,0 GB, di cui circa 2,9 GB segnalati come recuperabili. Il server ospita
 anche un'altra applicazione Docker: non trattare tutte le sue immagini come
 materiale CERTI eliminabile.
 
-#### Proposta limitata del 09/10 — non eseguita
+#### Storico pulizie del 09/10 — concluse, NON ripetere gli ID
+
+La lista seguente conserva il perimetro iniziale e le motivazioni di sicurezza,
+non una proposta corrente. Il 09/10 sono stati autorizzati e rimossi prima
+21 record (17 iniziali più 4 dipendenze), poi altri 10: dettagli/esiti nel
+[verbale Alpha 10.1](alpha10_1_preflight_20261009.md). Non rilanciare vecchi
+script o filtri; gli ID sotto non rappresentano la cache attuale.
 
 Disco: circa 1,9 GiB liberi su 23 GiB (92%); storage 1,47 GB decimali,
 backup 4,16 GB; DB logico 100 MB (directory PostgreSQL circa 331 MB).
@@ -869,7 +940,8 @@ fallire se i repository non rispondono; le immagini conservate restano distinte.
 Riferimenti: [Docker du](https://docs.docker.com/reference/cli/docker/buildx/du/),
 [Docker prune](https://docs.docker.com/reference/cli/docker/buildx/prune/).
 
-Possibili altre pulizie da **valutare separatamente con l'utente**, dopo nuovo inventario:
+Valutazioni storiche 01–09/10, conservate per motivazioni e rischi; la lista
+corrente e le verifiche completate sono nella proposta 11/10 sopra:
 
 - Cache build Docker: materiale intermedio ricreabile (installazioni OCR,
   LibreOffice, librerie Python e JavaScript, compilazione frontend). La pulizia
@@ -882,9 +954,9 @@ Possibili altre pulizie da **valutare separatamente con l'utente**, dopo nuovo i
   esterna affidabile. Non sono necessari per il rollback immediato di Alpha.10.
 - Vecchia cartella `storage_before_hard_reset_20260715_080925`: 637 MB.
   Esiste anche un archivio storico `.tgz` di circa 620 MB, risultato leggibile;
-  non e ancora stata verificata la corrispondenza completa dei contenuti. Non
-  eliminare la cartella finche questo confronto e la necessita storica non sono
-  chiariti.
+  all'audit iniziale non era ancora verificata la corrispondenza completa.
+  Il confronto è stato completato l'11/10 (815 file identici): restano necessarie
+  copia esterna verificata, rivalidazione e autorizzazione secondo la proposta corrente.
 
 **ATTENZIONE:** prima di qualsiasi cancellazione ricontrollare attentamente i
 percorsi esatti, il contenuto, le dipendenze, i backup e la possibilita reale di
@@ -1262,7 +1334,7 @@ file dell'archivio/installato. Il confronto dell'archivio resta sullo SHA-256 co
 
 ## Backup prima dell'aggiornamento
 
-Per il pacchetto cumulativo del 09/10 sono OBBLIGATORI backup app/configurazione,
+Per il deploy soft sono OBBLIGATORI backup app/configurazione,
 database e documenti, nella stessa finestra con writer fermi. Prima servono
 spazio verificato e OK al fermo. Non eseguire durante il solo audit/preparazione.
 Impostare UN SOLO `TS` e conservarlo per backup, report e verifiche: se si cambia
@@ -1315,13 +1387,19 @@ codice né riaprire automaticamente: diagnosticare e concordare la ripresa.
 
 ## Aggiornamento soft
 
-**Ordine cumulativo per il pacchetto corrente (09/10):** dopo fermo writer,
+**Ordine storico del pacchetto 09/10, già eseguito:** dopo fermo writer,
 backup e build senza avvio, preparare colonne/baseline Word standard; verificare
 e creare i nuovi standard 7003 T6 come sotto, senza cambiare le selezioni OL; preparare
 schema archivio DDT; preview/OK/applicazione archivio se autorizzati; NUOVA
 preview/OK/recupero Word se autorizzati; verifiche; riapertura e soli job
 autorizzati. Le due approvazioni dati restano separate. Non ripetere il primo
 recupero snapshot del 01/10. I comandi dettagliati sono nelle sezioni dedicate.
+
+**Per il prossimo deploy:** seguire il punto di ingresso aggiornato. La semplice
+presenza di queste funzionalità nel pacchetto NON richiede di rieseguire migrazioni,
+creazioni standard, archiviazioni o recuperi già conclusi. Le varianti sotto
+valgono solo per un ambiente ancora privo delle preparazioni o per un nuovo
+intervento dati esplicitamente concordato. Verificare lo schema prima di decidere.
 
 **Se è incluso il perimetro operativo DDT**, applicare PRIMA del recupero Word
 la sezione «Perimetro operativo e storico persistente»: nuova tabella, preview,
@@ -1372,15 +1450,18 @@ docker compose --env-file .env -f docker-compose.alpha.yml build backend fronten
 ```
 
 **FERMARSI QUI:** questo blocco esegue solo installazione/build, non avvia l'app.
-Eseguire ora preparazioni, preview, approvazioni e verifiche del punto di ingresso.
+Eseguire ora le sole nuove preparazioni/preview autorizzate e le verifiche del
+punto di ingresso; non ripetere quelle già concluse.
 Nei comandi dedicati sostituire `TIMESTAMP` con il `TS` dei backup verificati.
 Non avviare bootstrap per aggirare un errore di migrazione o preview.
 
 ### Riapertura separata, solo dopo tutte le verifiche
 
 Controllare `.env` senza stamparne i segreti: mapping PostgreSQL preservato,
-raccolta DDT come già autorizzata, `DDT_WORD_REUSE_ENABLED=false` finché OL1232
-è irrisolto o manca l'OK al riuso. Pacchetto/preparazioni incompleti impediscono
+raccolta DDT come già autorizzata. Decisione successiva del 09/10: l'utente ha
+autorizzato `DDT_WORD_REUSE_ENABLED=true` anche con OL1232 ancora da correggere,
+senza blocchi speciali; non ripristinare false per quel caso nei deploy futuri.
+Pacchetto/preparazioni incompleti impediscono
 la riapertura. Solo al termine della manutenzione autorizzata:
 
 ```bash
@@ -1479,8 +1560,8 @@ test "$BACKEND_VERSION" = "$FRONTEND_VERSION"
 Entrambi devono riportare la versione appena installata, per esempio:
 
 ```text
-Backend: 0.1.0.alpha.9.5
-Frontend: 0.1.0.alpha.9.5
+Backend: 0.1.0.alpha.10
+Frontend: 0.1.0.alpha.10
 ```
 
 ### Controlli HTTP pubblici
@@ -1576,7 +1657,9 @@ Questo punto va fatto solo quando necessario e con backup verificato.
 
 ### Cambio standard e Word (09/10/2026)
 
-Sviluppo locale; nessun deploy autorizzato da questa annotazione. Aggiunge
+Installato e preparato su Alpha il 09/10. Non ripetere la preparazione in un
+normale deploy; procedura conservata per ambienti legacy o nuove necessità
+verificate/autorizzate. La modifica aggiunge
 `quarta_taglio_final_certificates.word_standard_snapshot` (JSON).
 Nel pacchetto cumulativo aggiunge prima anche
 `normative_standards.elongation_basis` nullable (vedere sezione 7003 sotto):
@@ -1599,13 +1682,20 @@ Audit 09/10: singolo disallineamento certo OL2026001232, Word 7033_01_00/26
 (ID 174 in quella fotografia): standard corrente 7075 T62, Word 7150 T76.
 L'utente ha scelto correzione esplicita da operatore: ricontrollare al deploy
 se già sistemato e segnalarlo se ancora aperto, NON considerarlo risolto dalla
-baseline. Non attivare riuso di quel documento finché non verificato/corretto;
-se irrisolto, rinviare l'attivazione del worker e il recupero che lo coinvolge.
-Non esiste una quarantena automatica del solo OL1232: la baseline non riconosce
-retroattivamente l'errore. Se il report include un riuso da questa fonte, non
-modificarlo a mano o applicarlo parzialmente: fermarsi, concordare la correzione
-e rifare la preview. Tenere `DDT_WORD_REUSE_ENABLED=false` finché irrisolto;
-la raccolta snapshot DDT è distinta e può restare attiva se già autorizzata.
+baseline. **La successiva decisione esplicita dell'utente il 09/10 revoca il
+fermo cautelativo generale:** attivare il worker anche per OL1232, senza
+esclusioni speciali; la correzione è affidata al cliente avvisato da Silvano.
+Non esiste una quarantena automatica del solo OL1232 e la baseline non riconosce
+retroattivamente l'errore. Finché non corretto, un futuro riuso sullo stesso OL
+può copiare l'incoerenza nota. Non rimuovere le normali verifiche applicative
+né modificare i report: le preview dati e le relative approvazioni restano
+obbligatorie. Preservare `DDT_WORD_REUSE_ENABLED=true` autorizzato e la raccolta
+snapshot DDT già attiva. PDF Metalba verificato: 7075 F, prove su T62.
+**Aggiornamento 11/10:** per ID174 è registrata una successiva rigenerazione
+riuscita il 09/10 alle 20:23 italiane, con nuova provenienza `generated`,
+standard 7075 T62. Il paragrafo precedente descrive il rischio storico, non
+un blocco ancora da introdurre né una correzione automatica da rieseguire.
+Non è stato ripetuto il controllo visivo del file in questo audit.
 OL0986/OL1012 non sono errori di cambio standard: materiali aggiunti dopo il
 Word, lasciarli invariati. Audit completo: `docs/tasks/word_standard_alignment_20261009.md`.
 
@@ -1640,7 +1730,11 @@ meccanici sullo stesso standard, più quote/F3 dello stesso OL con PDF chiusi e
 Word aperti, isolamento dagli altri OL, baseline senza selezione e rollback
 atomico ALTER/baseline. Esiti aggiornati nel documento di audit citato sopra.
 
-### 7003 T6: A e A50mm (09/10/2026, sviluppato in locale)
+### 7003 T6: A e A50mm — installato/preparato il 09/10/2026
+
+Standard creati su Alpha ID39/40 all'esecuzione, con ID19/selezioni preservati.
+La procedura sotto resta per ambienti non preparati: verificare i codici stabili,
+non imporre ID storici e non ricreare o sovrascrivere gli standard ai prossimi deploy.
 
 Configurazione approvata: SOLO 7003, due nuovi standard T6 BARRE/diametro,
 uno A minimo 10%, l'altro A50mm minimo 8%. Fasce <=50 e >50 fino a 150 mm;
@@ -1715,7 +1809,10 @@ Il vecchio codice non conosce A50mm e può stampare A: non riaprire generazione,
 riuso o chiusura PDF con codice precedente finché non concordata una gestione
 compatibile. Un rollback codice non è quindi un rollback operativo trasparente.
 
-### Gemba: riferimento caricamento (30/09/2026, sviluppato in locale)
+### Gemba: riferimento caricamento — distribuito con Alpha.10 il 01/10/2026
+
+Conservare dati e filtro esistenti; i passi seguenti descrivono la preparazione
+per un database legacy, non un nuovo riempimento da forzare a ogni deploy.
 
 Il bootstrap aggiunge `datimaterialeincoming.incoming_loaded_at` e il relativo
 indice. Valorizza soltanto i riferimenti mancanti: upload DDT, altrimenti upload
