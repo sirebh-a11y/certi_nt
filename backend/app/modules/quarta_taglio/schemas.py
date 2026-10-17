@@ -69,6 +69,12 @@ class QuartaTaglioWordPendingReason(BaseModel):
     message: str
 
 
+class QuartaTaglioRequirementArticleResponse(BaseModel):
+    cod_f3: str
+    cliente: str | None = None
+    needs_verification: bool = False
+
+
 class QuartaTaglioRowResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,6 +101,7 @@ class QuartaTaglioRowResponse(BaseModel):
     esolver_message: str | None = None
     esolver_cliente: str | None = None
     esolver_cod_f3: str | None = None
+    customer_requirement_articles: list[QuartaTaglioRequirementArticleResponse] = Field(default_factory=list)
     esolver_ordine_cliente: str | None = None
     esolver_conferma_ordine: str | None = None
     esolver_ddt: str | None = None

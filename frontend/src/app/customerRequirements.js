@@ -26,3 +26,22 @@ export function resolveCustomerRequirements(requirements, codF3) {
   const candidates = exact.length ? exact : active.filter(item => digits(item.cod_f3).slice(0, -2) === target.slice(0, -2));
   return { item: candidates.length === 1 ? candidates[0] : null, candidates, ambiguous: candidates.length > 1 };
 }
+
+// An OL can contain several F3. Never feed a joined display value to the
+// digit-based resolver: it would silently concatenate distinct article codes.
+export function resolveOlCustomerRequirements(requirements, articles = []) {
+  const unique = new Map();
+  for (const article of articles) {
+    const code = String(article.cod_f3 || "").trim();
+    if (!/^\d{3,}$/.test(code)) continue;
+    const previous = unique.get(code);
+    unique.set(code, previous ? {
+      ...previous,
+      cliente: previous.cliente || article.cliente,
+      needs_verification: Boolean(previous.needs_verification && article.needs_verification),
+    } : { ...article, cod_f3: code });
+  }
+  return [...unique.values()].map(article => ({
+    ...article, match: resolveCustomerRequirements(requirements, article.cod_f3),
+  })).filter(group => group.match.candidates.length);
+}

@@ -99,6 +99,50 @@ class QuartaTaglioEsolverTest(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertEqual(message, "Dati eSolver/DDT collegati")
 
+    def test_requirements_articles_exist_before_ddt_without_changing_status(self):
+        response = _serialize_ol_group([self._quarta_row(cod_art="096007800")])
+        self.assertEqual([a.cod_f3 for a in response.customer_requirement_articles], ["096007800"])
+        self.assertIsNone(response.esolver_cod_f3)
+        self.assertEqual(response.certification_progress_status, "todo")
+        self.assertEqual(response.status_color, "green")
+
+    def test_requirements_articles_deduplicate_ddt_and_preserve_multiple_f3(self):
+        link = self._esolver_link([
+            {"cod_f3": "096007800", "orp": "OL1", "rag_soc": "Cliente", "ddt": "1"},
+            {"cod_f3": "096007800", "orp": "OL1", "rag_soc": "Cliente", "ddt": "2"},
+            {"cod_f3": "096007801", "orp": "OL1", "rag_soc": "Cliente", "ddt": "3"},
+            {"cod_f3": "322000100", "orp": "OL_OTHER", "ddt": "4"},
+        ])
+        result = _serialize_ol_group([self._quarta_row(cod_art="096007800")], esolver_link=link)
+        self.assertEqual([a.cod_f3 for a in result.customer_requirement_articles], ["096007800", "096007801"])
+        self.assertEqual(result.customer_requirement_articles[0].cliente, "Cliente")
+        self.assertFalse(any(a.needs_verification for a in result.customer_requirement_articles))
+        self.assertEqual(len(link.rows), 4)  # Read-only, never repair source associations here.
+
+    def test_requirements_articles_candidates_do_not_promote_unresolved_review(self):
+        candidates = [QuartaTaglioCodF3CandidateResponse(cod_f3=code, confidence=confidence)
+                      for code, confidence in [("811000700", "medium"), ("811000701", "ready"),
+                                               ("322000100", "review"), ("096007800", "medium")]]
+        result = _serialize_ol_group([self._quarta_row(cod_art="096007800")], cod_f3_candidates=candidates)
+        articles = {a.cod_f3: a for a in result.customer_requirement_articles}
+        self.assertEqual(set(articles), {"096007800", "811000700", "811000701"})
+        self.assertTrue(articles["811000700"].needs_verification)
+        self.assertFalse(articles["096007800"].needs_verification)
+        self.assertEqual(candidates[0].confidence, "medium")
+
+    def test_requirements_articles_never_parse_joined_display_values_or_supplier_codes(self):
+        row = self._quarta_row(cod_art="096007800, 322000100")
+        row.cod_mp = "322000100"
+        link = self._esolver_link([])
+        link.cod_f3 = "096007800, 322000100"
+        link.cliente = "Cliente"
+        result = _serialize_ol_group([row], esolver_link=link)
+        self.assertEqual(result.customer_requirement_articles, [])
+
+    def test_requirements_articles_include_each_quarta_row(self):
+        result = _serialize_ol_group([self._quarta_row(cod_art="096007800"), self._quarta_row(cod_art="322000100")])
+        self.assertEqual([a.cod_f3 for a in result.customer_requirement_articles], ["096007800", "322000100"])
+
     def test_list_group_exposes_esolver_cod_f3_separately_from_quarta_article(self):
         now = datetime.now(timezone.utc)
         row = QuartaTaglioRow(

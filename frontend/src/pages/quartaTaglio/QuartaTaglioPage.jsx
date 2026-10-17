@@ -4,6 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { resolveOlCustomerRequirements } from "../../app/customerRequirements";
+import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
 
 const STATUS_CLASSES = {
   green: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -345,6 +347,10 @@ export default function QuartaTaglioPage() {
   const [syncRun, setSyncRun] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [requirements, setRequirements] = useState([]);
+  const [requirementsError, setRequirementsError] = useState(false);
+  const [requirementsRetry, setRequirementsRetry] = useState(0);
+  const [requirementsDialog, setRequirementsDialog] = useState(null);
   const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
   const [queryTwo, setQueryTwo] = useState(initialListStateRef.current.queryTwo);
   const [queryThree, setQueryThree] = useState(initialListStateRef.current.queryThree);
@@ -367,6 +373,18 @@ export default function QuartaTaglioPage() {
   const sectionRef = useRef(null);
   const initialSyncDoneRef = useRef(false);
   const latestRequestRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRequirements([]);
+    setRequirementsError(false);
+    apiRequest("/customer-requirements", {}, token).then(data => {
+      if (!cancelled) setRequirements(data.items || []);
+    }).catch(() => {
+      if (!cancelled) setRequirementsError(true);
+    });
+    return () => { cancelled = true; };
+  }, [token, requirementsRetry]);
 
   function updateQuickIncomingConfirm(value) {
     setQuickIncomingConfirm(value);
@@ -769,6 +787,10 @@ export default function QuartaTaglioPage() {
 
       {loading ? <p className="text-sm text-slate-500">Aggiornamento da Quarta in corso...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+      {requirementsError ? <p role="alert" className="text-sm text-amber-800">
+        Requisiti cliente non disponibili: i tag potrebbero mancare.{" "}
+        <button type="button" className="font-semibold underline" onClick={() => setRequirementsRetry(value => value + 1)}>Riprova</button>
+      </p> : null}
       {syncRun?.status === "error" ? <p className="text-sm text-rose-600">{syncRun.message}</p> : null}
 
       <div className="sticky top-0 z-20 rounded-xl border border-border bg-slate-50 px-3 py-2 shadow-sm">
@@ -809,7 +831,9 @@ export default function QuartaTaglioPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {displayedItems.map((item) => (
+              {displayedItems.map((item) => {
+                const requirementGroups = resolveOlCustomerRequirements(requirements, item.customer_requirement_articles);
+                return (
                 <tr
                   className="cursor-pointer align-top hover:bg-slate-50/70"
                   key={item.id}
@@ -873,6 +897,16 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
                   <td className="min-w-[220px] max-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_cliente || "-"}</div>
+                    {requirementGroups.length ? <button type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        setRequirementsDialog({ item: { cliente: item.esolver_cliente, cod_odp: item.cod_odp }, groups: requirementGroups });
+                      }}
+                      title="Consulta i requisiti previsti per gli articoli di questo OL"
+                      aria-label={`Requisiti cliente per ${item.cod_odp}`}
+                      className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100">
+                      Requisiti cliente
+                    </button> : null}
                   </td>
                   <td className="min-w-[110px] max-w-[150px] px-2 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_ddt || "-"}</div>
@@ -903,7 +937,7 @@ export default function QuartaTaglioPage() {
                     ) : null}
                   </td>
                 </tr>
-              ))}
+              ); })}
             </tbody>
           </table>
         </div>
@@ -921,6 +955,7 @@ export default function QuartaTaglioPage() {
           </button>
         </div>
       ) : null}
+      {requirementsDialog ? <CustomerRequirementsDialog {...requirementsDialog} onClose={() => setRequirementsDialog(null)} /> : null}
     </section>
   );
 }

@@ -52,6 +52,34 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
    messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
    Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
 
+### Modifica locale 17/10/2026 — tag Requisiti cliente in Certificazione (da pubblicare)
+
+Il tag è stato aggiunto sotto Cliente nella lista OL, riutilizzando i requisiti
+già consultabili nei DDT. Non indica che la seconda pagina sia già caricata.
+Audit e collaudo: [nota di intervento](../tasks/certification_customer_requirements_20261017.md).
+
+- Pubblicare **backend e frontend dello stesso commit**: la lista espone il nuovo
+  campo additivo `customer_requirement_articles`, con F3 separati per OL.
+  Non cambiano schema DB, permessi, standard, Word/PDF, riuso o raccolta DDT.
+  **Nessuna migrazione, backfill, pulizia o rigenerazione certificati per questo punto.**
+- Prima/dopo: confrontare un OL con requisiti (riferimento audit: OL2026000962,
+  F3 1142000100), uno senza, uno senza DDT e uno con più F3. Il tag apre solo
+  la finestra dei requisiti, non il dettaglio OL e non una generazione documenti.
+  Le schede alternative di famiglia devono restare esplicitamente ambigue;
+  eventuali F3 proposti devono riportare la verifica dell'associazione.
+- Verificare assenza di tag duplicati, 11 colonne nella lista OL, filtri e
+  ordinamento invariati; controllare anche il dialogo esistente in DDT da
+  certificare (13 colonne, azione PDF invariata). Se l'API requisiti non è
+  disponibile deve apparire l'avviso con Riprova, non un falso "nessun requisito".
+- Collaudare prima in locale/simulazione: le GET lista/dettaglio Alpha possono
+  avviare aggiornamenti o automatismi già esistenti, non usarle come semplice
+  audit read-only su dati reali. Non creare PDF reali per provare il tag.
+- Per rollback ripristinare il pacchetto precedente coerente backend/frontend;
+  non occorre modificare il DB. Restano obbligatorie tutte le cautele generali
+  sopra (spazio, autorizzazione, attività utenti, backup, esclusione Lab).
+
+Questa sezione prepara un futuro deploy: **Alpha non è stato modificato**.
+
 ### Stato verificato e attività già concluse
 
 - Primo recupero DDT e attivazione snapshot: 01/10, non da ripetere.

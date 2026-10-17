@@ -77,6 +77,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioPdfAttachmentResponse,
     QuartaTaglioConformityIssueResponse,
     QuartaTaglioRowResponse,
+    QuartaTaglioRequirementArticleResponse,
     QuartaTaglioStandardCandidateResponse,
     QuartaTaglioSyncRunResponse,
     QuartaTaglioWordDraftResponse,
@@ -5851,6 +5852,43 @@ def _quarta_group_sort_key(item: QuartaTaglioRowResponse, *, sort_field: str | N
     )
 
 
+def _customer_requirement_articles(
+    rows: list[QuartaTaglioRow],
+    esolver_link: QuartaTaglioEsolverLink | None,
+    candidates: list[QuartaTaglioCodF3CandidateResponse],
+) -> list[QuartaTaglioRequirementArticleResponse]:
+    # Presentation only: reuse already loaded sources, never fetch details or
+    # infer an association from a customer name / comma-joined summary string.
+    articles: dict[str, QuartaTaglioRequirementArticleResponse] = {}
+
+    def add(code: str | None, customer: str | None = None, *, review: bool = False) -> None:
+        code = _clean_text(code)
+        if not code or not code.isdigit() or len(code) <= 2:
+            return
+        existing = articles.get(code)
+        if existing:
+            existing.needs_verification = existing.needs_verification and review
+            if customer and not existing.cliente:
+                existing.cliente = customer
+        else:
+            articles[code] = QuartaTaglioRequirementArticleResponse(
+                cod_f3=code, cliente=customer, needs_verification=review,
+            )
+
+    for row in rows:
+        add(row.cod_art)
+    for row in _esolver_rows_from_link(esolver_link):
+        if row.orp and _norm(row.orp) != _norm(rows[0].cod_odp):
+            continue
+        add(row.cod_f3, row.rag_soc)
+    for candidate in candidates:
+        # Same visible candidates as the existing CodF3 summary. Unresolved
+        # "review" proposals must not advertise an unrelated customer's sheet.
+        if candidate.confidence in {"raw", "ddt", "ready", "medium"}:
+            add(candidate.cod_f3, candidate.rag_soc, review=candidate.confidence == "medium")
+    return list(articles.values())
+
+
 def _serialize_ol_group(
     rows: list[QuartaTaglioRow],
     *,
@@ -5887,6 +5925,7 @@ def _serialize_ol_group(
         esolver_message=esolver_link.message if esolver_link else None,
         esolver_cliente=esolver_link.cliente if esolver_link else None,
         esolver_cod_f3=esolver_link.cod_f3 if esolver_link else None,
+        customer_requirement_articles=_customer_requirement_articles(rows, esolver_link, cod_f3_candidates or []),
         esolver_ordine_cliente=esolver_link.ordine_cliente if esolver_link else None,
         esolver_conferma_ordine=esolver_link.conferma_ordine if esolver_link else None,
         esolver_ddt=esolver_link.ddt if esolver_link else None,
