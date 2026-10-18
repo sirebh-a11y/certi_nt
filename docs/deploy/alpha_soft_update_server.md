@@ -978,7 +978,70 @@ inventario: se i file sono già stati rimossi, non riproporli come recuperabili.
 Registrare risposta e perimetro; senza OK specifico nessuna pulizia. Se l'utente
 non vuole pulire e lo spazio non basta, non iniziare il deploy.
 
-#### Proposta corrente verificata 11/10 — NON eseguita, da approvare
+#### Aggiornamento spazio 18/10 — sola prima pulizia autorizzata completata
+
+Per la successiva richiesta di recupero storico e un deploy con backup fuori
+dal disco root vedere il [piano a basso consumo](alpha_low_space_plan_20261018.md).
+È una variante condizionata: non elimina backup, prove di ripristino, lock,
+preview C/D o mitigazioni del runbook. La soglia generale 4–5 GB è prudenziale
+per backup locali sul server, non un requisito assoluto se i backup completi
+vengono trasferiti e verificati esternamente prima delle scritture.
+
+Con OK esplicito dell'utente sono stati rimossi esclusivamente i tre pacchetti
+Alpha 9.4, 9.5 e 9.5.1 elencati nell'audit 11/10. Prima della rimozione:
+SHA-256 server/PC identici, file regolari senza symlink/hard link aggiuntivi,
+nessun mount container o uso rilevato da fuser. Le copie PC restano in
+`deploy_repo/certi_nt_deploy`, non tracciate in Git e recuperabili per ritrasferimento.
+Recupero fisico: 801.857.536 byte; liberi dopo: 1.332.776.960 byte.
+Non riproporre questi tre file server come ancora recuperabili.
+
+Cache Docker soltanto inventariata: 45 record, 1,730 GB nominali totali,
+1,617 GB privati; nessuna build attiva rilevata. Include strati intermedi
+apt LibreOffice/OCR, pip e Node/npm: non sono le immagini installate, ma
+la loro rimozione può richiedere download e ricostruzioni. Nessuna pulizia
+cache/immagini/storage/DB autorizzata o eseguita in questa fase. Con circa
+1,33 GB liberi il deploy resta fermo: il solo storage corrente contiene
+circa 1,77 GB, cui aggiungere backup DB/configurazione, build e margine.
+Servono nuovo budget e autorizzazione separata per ogni ulteriore pulizia.
+
+Successivo OK prudenziale 18/10: tentata la rimozione selettiva di 12 record
+di soli contesti sorgenti, copie codice e output intermedi frontend; nove
+rimossi, tre conservati da BuildKit per le dipendenze. Nessun prune generale.
+Recupero fisico 32.915.456 byte; liberi 1.365.667.840 byte (circa 1,37 GB).
+Inventario immagini identico prima/dopo; cache apt LibreOffice/OCR, pip,
+npm e basi Python/Node verificata ancora presente. I temporanei rimossi sono
+ricreabili dai sorgenti; nessun documento o backup rimosso in questa fase.
+Spazio ancora insufficiente: NON iniziare backup/build/deploy né estendere
+la pulizia a dipendenze, vecchio storage o immagini senza nuova decisione.
+
+Ulteriore richiesta esplicita 18/10: recupero storico e piano deploy con meno
+spazio. Copiati sul PC quattro archivi in `backups/alpha_space_20261018`, cartella
+esclusa da Git e ACL solo utente. SHA-256 uguali al server, gzip integro e lettura
+completa tar (815 file storage; 827/831/833 file per i tre backup app, `.env`
+conservati privatamente). Rimossi dal server SOLO i tre `app_before` luglio
+elencati nell'audit 11/10: recuperati 728.580.096 byte, liberi 2.094.161.920 byte.
+Ripristino: ritrasferire la copia PC verificata, non recuperare da Git.
+
+**Conservazione sul PC — decisione utente 18/10:** a deploy completato e
+verificato, pulire soltanto i temporanei di lavoro creati per questa attività,
+dopo inventario e verifica dei percorsi. Conservare i backup privati in
+`backups/alpha_space_20261018` e quelli di sicurezza del nuovo deploy.
+Ai deploy successivi, quando saranno disponibili altri backup completi e
+verificati, riesaminare queste copie per proporne la rimozione all'utente:
+non è una cancellazione automatica né autorizzata adesso. Un backup più nuovo
+non sostituisce necessariamente i contenuti storici di luglio o le vecchie
+configurazioni `.env`: verificare copertura, copie residue, utilità di ripristino
+e assenza di elementi unici prima di chiedere OK sui singoli file. Registrare
+nuovi backup sostitutivi, ubicazione/hash, decisione ed eventuali rimozioni.
+
+La rimozione della vecchia directory storage è stata negata dai permessi root:
+ricontrollati tutti gli 815 file ancora presenti, 664.986.000 byte di contenuto.
+Nessun tentativo di aggirare sudo, cambiare permessi o cancellare via Docker.
+L'archivio storico storage resta sul server e sul PC; NON contabilizzare i suoi
+665 MB come già liberati. Variante deploy e condizioni di arresto nel piano
+a basso consumo sopra; nessun deploy avviato con questa operazione.
+
+#### Proposta storica verificata 11/10 — prima voce eseguita il 18/10
 
 Audit dettagliato, percorsi e hash: [inventario spazio 11/10](alpha_space_audit_20261011.md).
 Disco 23 GiB, circa 807 MiB liberi (97%); non è una stima per il prossimo deploy.
