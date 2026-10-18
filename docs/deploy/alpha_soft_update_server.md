@@ -7,17 +7,19 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Punto di ingresso per i prossimi deploy — aggiornato 11/10/2026
+### Punto di ingresso per i prossimi deploy — aggiornato 18/10/2026
 
-**Il deploy del 09/10 è concluso e Alpha è online.** Questo documento non
+**Alpha 10.2 installata il 18/10; esiti e chiusura nel verbale collegato sotto.** Questo documento non
 autorizza nuove pulizie, commit/push, fermi, scritture dati o deploy. Ogni nuova
 operazione richiede l'indicazione dell'utente; l'OK al deploy non equivale
 all'OK a cancellazioni o recuperi massivi.
 
-Ultimo pacchetto installato: `v0.1.0-alpha.10.1-deploy`, commit deploy `b6b9e44`,
-`SOURCE_COMMIT=b91c0b0973bbae3d4095c947bb91b822dbc434e0`, versione app
+Ultimo pacchetto installato: `v0.1.0-alpha.10.2-deploy`, commit deploy `3168cef`,
+`SOURCE_COMMIT=ec5b949804070fd17219d5b5221e96ddce33eb16`, versione app
 `0.1.0.alpha.10`. Sono riferimenti storici da confrontare col server, NON tag
 da riutilizzare o spostare al prossimo aggiornamento.
+Esito corrente: [verbale Alpha 10.2](alpha10_2_preflight_20261018.md).
+Precedente pacchetto 10.1: `b6b9e44`, sorgente `b91c0b0973bbae3d4095c947bb91b822dbc434e0`.
 Esiti, backup, approvazioni e arresti intermedi sono conservati nel
 [verbale Alpha 10.1](alpha10_1_preflight_20261009.md): le sue prime sezioni
 descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
@@ -27,8 +29,9 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
 1. Audit read-only di versione, dati/schema, utenti/run, servizi e spazio.
    Presentare spazio disponibile, stima di backup/build e margine finale.
    **Prima di eseguire il deploy chiedere esplicitamente all'utente se autorizza
-   la pulizia proposta nella sezione spazio**: prima scelta i tre pacchetti
-   duplicati di luglio, circa 802 MB. Nessuna risposta o solo OK al deploy
+   la nuova pulizia proposta nella sezione spazio**: i tre pacchetti duplicati
+   di luglio (802 MB) sono già stati rimossi il 18/10, non contarli di nuovo.
+   Nessuna risposta o solo OK al deploy
    non autorizzano la pulizia. Se lo spazio non basta, fermarsi e concordare
    una soluzione; non usare backup di sicurezza come spazio sacrificabile.
 2. Scegliere il nuovo commit `main` pubblicato, rigenerare integralmente il
@@ -52,7 +55,7 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
    messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
    Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
 
-### Modifica locale 17/10/2026 — tag Requisiti cliente in Certificazione (da pubblicare)
+### Modifica 17/10/2026 — tag Requisiti cliente in Certificazione (installata 18/10)
 
 Il tag è stato aggiunto sotto Cliente nella lista OL, riutilizzando i requisiti
 già consultabili nei DDT. Non indica che la seconda pagina sia già caricata.
@@ -80,7 +83,7 @@ Audit e collaudo: [nota di intervento](../tasks/certification_customer_requireme
 
 Questa sezione prepara un futuro deploy: **Alpha non è stato modificato**.
 
-### Modifica locale 17/10/2026 — righe base nel Registro certificazione (da pubblicare)
+### Modifica 17/10/2026 — righe base nel Registro certificazione (installata 18/10)
 
 Correzione di sola presentazione: la base Word senza DDT resta conservata per
 riuso/ereditarietà, ma non appare come lavoro aperto aggiuntivo quando esiste
@@ -115,7 +118,7 @@ per i Word discordanti: [audit registro](../tasks/register_early_word_visibility
 - Rollback del pacchetto coerente, senza modificare DB/storage per questo
   punto. Restano tutte le mitigazioni generali e le altre modifiche pendenti.
 
-### Modifica locale 17/10/2026 — riuso Word A/B (da pubblicare)
+### Modifica 17/10/2026 — riuso Word A/B (installata 18/10)
 
 Approvati in sviluppo: nuovi lotti dello stesso singolo materiale e falso
 conflitto di riferimenti legacy operatore/Quality Manager. Evidenze e limiti
@@ -151,9 +154,11 @@ il vincolo «nessuna migrazione» di A/B riguarda soltanto A/B.
   frattempo né ripristinare indiscriminatamente il DB. Backup e cautele generali
   restano obbligatori. Questa nota NON autorizza il deploy Alpha.
 
-### Modifica locale 18/10/2026 — riferimento Word e variazione materiali C/D (da pubblicare)
+### Modifica 18/10/2026 — riferimento Word e variazione materiali C/D (installata 18/10)
 
-Sorgenti implementati e verificati localmente; **non ancora installati su Alpha**.
+Sorgenti implementati, verificati e installati su Alpha il 18/10; colonna
+`word_reference` già presente. Le istruzioni seguenti documentano il passaggio
+eseguito, NON autorizzano a ripeterlo o a sistemare i documenti storici.
 Dettagli e prove nel [piano aggiornato C/D](../tasks/word_reference_and_material_changes_resume_20261017.md).
 Regola confermata: Word completato per OL/F3 come riferimento, pagine/allegati
 ereditati dal Raw; ogni DDT considera tutti i materiali attuali dell'OL.
@@ -1545,6 +1550,13 @@ normalizzare soltanto questi fine-riga con `tr -d '\r\n'`, senza cambiare il
 file dell'archivio/installato. Il confronto dell'archivio resta sullo SHA-256 completo.
 
 ## Backup prima dell'aggiornamento
+
+**Variante backup esterni 18/10:** vedere il [piano a basso consumo](alpha_low_space_plan_20261018.md)
+e il [verbale operativo](alpha10_2_preflight_20261018.md). Se il tar binario è
+prodotto da un container temporaneo, impostare **`--log-driver none`**: altrimenti
+Docker può registrare anche il flusso e saturare il disco. Mount applicativo
+readonly, container senza rete, hash end-to-end e guardia sullo spazio.
+Non modificare il logging globale. Un backup esterno interrotto non è valido.
 
 Per il deploy soft sono OBBLIGATORI backup app/configurazione,
 database e documenti, nella stessa finestra con writer fermi. Prima servono

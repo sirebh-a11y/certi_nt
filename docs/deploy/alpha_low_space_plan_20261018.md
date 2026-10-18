@@ -5,6 +5,15 @@ revocare controlli, autorizzazioni, backup o protezioni del lavoro utenti.
 L'utente ha chiesto recupero dello spazio storico già proposto e poi un piano
 che minimizzi l'occupazione; non si esegue qui l'aggiornamento applicativo.
 
+**Ripresa operativa successiva:** l'utente ha poi autorizzato il deploy. Esiti
+e incidente del backup nel [verbale 18/10](alpha10_2_preflight_20261018.md).
+Deploy completato: primo ciclo automatico e confronto finale dati/file superati;
+spazio residuo circa 1,95 GB. Questo piano resta storico, non un'autorizzazione
+a ripetere pulizie o manutenzioni già effettuate.
+In particolare gli stream binari da container richiedono `--log-driver none`:
+il logging predefinito può consumare il disco anche con destinazione esterna.
+Non considerare questo piano iniziale prova di deploy completato.
+
 ## Perimetro del recupero autorizzato
 
 - Vecchia directory `/srv/certi_nt/data/storage_before_hard_reset_20260715_080925`:
