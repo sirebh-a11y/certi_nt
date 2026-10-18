@@ -5,6 +5,7 @@ Never use this to select a different OL, workmanship or certificate material.
 """
 from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import secrets
@@ -16,7 +17,7 @@ from sqlalchemy import select
 
 from app.core.database import SessionLocal
 from app.modules.quarta_taglio import service
-from app.modules.quarta_taglio import word_standard
+from app.modules.quarta_taglio import word_standard, word_reference
 from app.modules.quarta_taglio.certificate_docx import update_docx_content_controls
 from app.modules.quarta_taglio.ddt_context import exact_certificate, quantity_matches
 from app.modules.quarta_taglio.ddt_decisions import exclusion_valid, latest_decisions
@@ -99,6 +100,75 @@ def _materials(values):
                     clean(v.get('lotti'))) for v in values})
 
 
+def _compatible_materials(saved, current):
+    """Same supplier certificate/heat/article; only additional known lots allowed.
+
+    Quarta can record further withdrawals after the Word was prepared. This
+    does not create a different material for a single supplier certificate.
+    Multiple materials can change weighted chemistry as withdrawals increase:
+    do not relax their lot comparison. Missing evidence, removals and a new
+    certificate/heat/article must still stop reuse. Do not rewrite old snapshots.
+    """
+    def indexed(values):
+        if not isinstance(values, list) or not values:
+            return None
+        result = {}
+        for value in values:
+            if not isinstance(value, dict):
+                return None
+            key = tuple(clean(value.get(k)) for k in ('cdq', 'colata', 'cod_art'))
+            lots = value.get('lotti')
+            if (not all(key) or key in result or not isinstance(lots, list)
+                    or any(not isinstance(lot, str) or not clean(lot) for lot in lots)):
+                return None
+            result[key] = {clean(lot) for lot in lots}
+        return result
+
+    old, now = indexed(saved), indexed(current)
+    compatible = bool(old and now and old.keys() == now.keys() and all(
+        lots == now[key] or (len(old) == 1 and lots and lots <= now[key])
+        for key, lots in old.items()
+    ))
+    if not compatible or len(old) == 1:
+        return compatible
+    # A multi-material Word contains weighted chemistry. Same lots alone do
+    # not prove compatibility if the proportions of the materials changed.
+    def weights(values):
+        if all('qta_totale' not in v for v in values):
+            return None
+        try:
+            result = {tuple(clean(v.get(k)) for k in ('cdq', 'colata', 'cod_art')):
+                      Decimal(str(v.get('qta_totale'))) for v in values}
+            return result if all(x.is_finite() and x > 0 for x in result.values()) else {}
+        except InvalidOperation:
+            return {}
+    before, after = weights(saved), weights(current)
+    if before is None and after is None:
+        return True
+    if not before or not after:
+        return before == after
+    old_total, new_total = sum(before.values()), sum(after.values())
+    return all(before[key] * new_total == after[key] * old_total for key in before)
+
+
+def _equivalent_source(candidates):
+    """Already byte-equivalent templates, including footer/signature images.
+
+    A legacy NULL signer reference is missing metadata, not a different Word.
+    Never infer a signer from the PDF closer or silently reconcile two known
+    conflicting users. Choose a record with all the consistent known references.
+    """
+    fields = ('certified_by_user_id', 'quality_manager_user_id')
+    known = {field: {getattr(c[0], field) for c in candidates
+                     if getattr(c[0], field) is not None} for field in fields}
+    if any(len(values) > 1 for values in known.values()):
+        return None
+    complete = [c for c in candidates if all(
+        not known[field] or getattr(c[0], field) in known[field] for field in fields
+    )]
+    return min(complete, key=lambda c: c[0].id) if complete else None
+
+
 def plan_item(db, item):
     """No commit, flush, remote SQL or file writes. Also used by the live worker."""
     result = dict(item_id=item.id, ol=item.cod_odp, ddt=item.ddt_raw, cod_f3=item.cod_f3,
@@ -122,13 +192,27 @@ def plan_item(db, item):
     if len(exact) > 1:
         return stop('duplicate_exact_certificates')
     target = exact[0] if exact else None
+    refreshing = False
     result['target_id'] = target.id if target else None
     if target:
         if not quantity_matches(item, target):
             return stop('quantity_changed')
-        if target.status == 'pdf_final' or target.storage_key_pdf or target.storage_key_docx:
+        if target.status == 'pdf_final' or target.storage_key_pdf:
             return stop('existing_document_preserved')
-        if (target.pdf_attachments_initialized or service._pdf_attachments_for_certificate(db, certificate=target)
+        if target.storage_key_docx:
+            reference = word_reference.declared([c for c in certificates if c.cod_f3 == item.cod_f3])
+            if (reference is None or reference.id == target.id
+                    or word_reference.metadata(target).get('revision') == word_reference.metadata(reference).get('revision')):
+                return stop('existing_document_preserved')
+            try:
+                refreshing = (target.word_source == 'ddt_reused'
+                    and word_reference.metadata(target).get('kind') == 'copy'
+                    and word_reference.metadata(target).get('file_hash') == file_hash(target.storage_key_docx))
+            except OSError:
+                return stop('source_file_or_controls_invalid')
+            if not refreshing:
+                return stop('manual_copy_requires_review')
+        if ((not refreshing and (target.pdf_attachments_initialized or service._pdf_attachments_for_certificate(db, certificate=target)))
                 or db.scalar(select(QuartaTaglioCertificatePdfVersion.id).where(
                     QuartaTaglioCertificatePdfVersion.certificate_id == target.id).limit(1))):
             return stop('target_content_requires_review')
@@ -141,6 +225,12 @@ def plan_item(db, item):
                and c.storage_key_docx and c.certificate_number]
     if not sources:
         return stop('word_not_prepared')
+    reference = word_reference.declared(sources)
+    if reference is not None:
+        sources = [reference]
+        selected, reason = word_reference.choose(db, sources)
+        if selected is None:
+            return stop(reason)
     sources = [c for c in sources if not word_standard.is_stale(c, db, for_reuse=True)]
     if not sources:
         return stop('word_standard_outdated')
@@ -149,11 +239,12 @@ def plan_item(db, item):
     incoming = _incoming_status(db, rows)
     if not incoming['ready'] or incoming['ambiguous'] or incoming['rejected']:
         return stop('incoming_not_ready')
-    current = _materials([dict(cdq=r.cdq, colata=r.colata, cod_art=r.cod_art, lotti=r.cod_lotti) for r in rows])
+    current_values = [dict(cdq=r.cdq, colata=r.colata, cod_art=r.cod_art, lotti=r.cod_lotti, qta_totale=r.qta_totale) for r in rows]
+    current = _materials(current_values)
     if not current or any(not cdq or not colata for cdq, colata, _, _ in current):
         return stop('material_identity_incomplete')
-    sources = [c for c in sources if _materials(c.cdq_values or []) == current]
-    if target and target.cdq_values and _materials(target.cdq_values) != current:
+    sources = [c for c in sources if _compatible_materials(c.cdq_values, current_values)]
+    if target and not refreshing and target.cdq_values and not _compatible_materials(target.cdq_values, current_values):
         return stop('target_material_changed')
     if target and target.certificate_number:
         sources = [c for c in sources if c.certificate_number == target.certificate_number]
@@ -167,14 +258,18 @@ def plan_item(db, item):
             attachments = service._pdf_attachments_for_certificate(db, certificate=source)
             attachment_facts = [(a.storage_key_pdf, a.original_filename, file_hash(a.storage_key_pdf)) for a in attachments]
             fingerprints.add(digest([source.certificate_number, template, attachment_facts, source.conformity_status,
-                                     source.conformity_issues, source.certified_by_user_id, source.quality_manager_user_id]))
+                                     source.conformity_issues]))
             candidates.append((source, values, attachment_facts))
         except (OSError, ValueError, HTTPException, zipfile.BadZipFile, etree.XMLSyntaxError):
             return stop('source_file_or_controls_invalid')
     if len(fingerprints) != 1:
         return stop('different_word_sources')
-    source, values, attachments = min(candidates, key=lambda x: x[0].id)
+    chosen = _equivalent_source(candidates)
+    if chosen is None:
+        return stop('different_word_sources')
+    source, values, attachments = chosen
     result.update(action='reuse', source_id=source.id, number=source.certificate_number,
+                  refreshing=refreshing,
                   source_file_hash=file_hash(source.storage_key_docx), values=values,
                   attachments=attachments, quantity=str(item.quantita))
     result['fingerprint'] = digest([
@@ -212,6 +307,13 @@ def apply_item(db, item, plan, created_paths):
             conformity_issues=deepcopy(source.conformity_issues),
         )
         db.add(target)
+    if plan.get('refreshing'):
+        for attachment in service._pdf_attachments_for_certificate(db, certificate=target):
+            db.delete(attachment)
+        db.flush()
+    target.cdq_key = source.cdq_key
+    target.cdq_signature, target.cdq_values = deepcopy(source.cdq_signature), deepcopy(source.cdq_values)
+    target.conformity_status, target.conformity_issues = source.conformity_status, deepcopy(source.conformity_issues)
     target.certificate_number = target.certificate_number or source.certificate_number
     target.draft_number = target.certificate_number
     target.cert_date = datetime.combine(item.ddt_date, datetime.min.time(), tzinfo=timezone.utc)
@@ -220,6 +322,7 @@ def apply_item(db, item, plan, created_paths):
     word_standard.copy_provenance(source, target)
     target.certified_by_user_id, target.quality_manager_user_id = source.certified_by_user_id, source.quality_manager_user_id
     service._apply_word_file_state(target, path, source='ddt_reused')
+    word_reference.mark_copy(target, source)
     db.flush()
     # Embedded pages remain in the copied Word. Keep attachment records for UI/download.
     for a in service._pdf_attachments_for_certificate(db, certificate=source):
@@ -232,12 +335,17 @@ def apply_item(db, item, plan, created_paths):
     return target.id
 
 
-def sync_ddt_words(*, session_factory=SessionLocal):
+def sync_ddt_words(*, session_factory=SessionLocal, cod_odp=None, cod_f3=None):
     """Retry eligible local snapshots even if eSolver's rolling window has moved on."""
     counts = {'prepared': 0, 'review_or_waiting': 0, 'errors': 0}
     with session_factory() as db:
         from app.modules.quarta_taglio.ddt_archive import archived_ids
-        items = list(db.scalars(select(QuartaTaglioDdtWorkItem).order_by(QuartaTaglioDdtWorkItem.id)))
+        statement = select(QuartaTaglioDdtWorkItem).order_by(QuartaTaglioDdtWorkItem.id)
+        if cod_odp is not None:
+            statement = statement.where(QuartaTaglioDdtWorkItem.cod_odp == cod_odp)
+        if cod_f3 is not None:
+            statement = statement.where(QuartaTaglioDdtWorkItem.cod_f3 == cod_f3)
+        items = list(db.scalars(statement))
         archived = archived_ids(db, items)
         ids = [i.id for i in items if i.id not in archived]
     for item_id in ids:

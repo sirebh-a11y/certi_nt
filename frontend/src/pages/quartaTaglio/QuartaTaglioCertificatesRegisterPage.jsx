@@ -6,6 +6,7 @@ import { canGenerateFinalCertificatePdf, canReopenQualityFlow } from "../../app/
 import { useAuth } from "../../app/auth";
 
 import ConfirmPdfDialog from "./ConfirmPdfDialog";
+import { mergeRegisterRefresh, registerDdtNotice } from "./registerPresentation";
 
 const STATUS_LABELS = {
   draft: "Word aperto",
@@ -183,6 +184,7 @@ function registerStatusSortValue(item) {
   if (item.ddt && item.has_word && !item.has_pdf) {
     return 20;
   }
+  if (registerDdtNotice(item)) return 35;
   if (!item.ddt) {
     return 40;
   }
@@ -265,6 +267,7 @@ function registerStatusLabel(item) {
   if (!item.has_word) {
     return "Word non disponibile - verificare";
   }
+  if (registerDdtNotice(item)) return registerDdtNotice(item);
   if (item.ddt && hasInheritedWord(item) && !item.has_pdf) {
     return "PDF da generare - Word ereditato";
   }
@@ -284,7 +287,7 @@ function statusClass(item) {
   if (item.status === "pdf_final") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
-  if (hasInheritedWord(item)) {
+  if (registerDdtNotice(item) || hasInheritedWord(item)) {
     return "border-amber-200 bg-amber-50 text-amber-800";
   }
   if (item.ddt && item.has_word && !item.has_pdf) {
@@ -484,11 +487,8 @@ export default function QuartaTaglioCertificatesRegisterPage() {
             return;
           }
           const updatedItems = response.items || [];
-          if (updatedItems.length) {
-            setItems((currentItems) => {
-              const updatedById = new Map(updatedItems.map((item) => [item.id, item]));
-              return currentItems.map((item) => updatedById.get(item.id) || item);
-            });
+          if (updatedItems.length || response.hidden_certificate_ids?.length) {
+            setItems((currentItems) => mergeRegisterRefresh(currentItems, response));
           }
           done += chunk.length;
           setVisibleRefreshState({

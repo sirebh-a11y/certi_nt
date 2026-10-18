@@ -531,6 +531,8 @@ def ensure_quarta_taglio_columns() -> None:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_source VARCHAR(32)")
         if "word_standard_snapshot" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_standard_snapshot JSON")
+        if "word_reference" not in certificate_columns:
+            certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_reference JSON")
         if "word_original_filename" not in certificate_columns:
             certificate_statements.append("ALTER TABLE quarta_taglio_final_certificates ADD COLUMN word_original_filename VARCHAR(255)")
         if "word_content_controls" not in certificate_columns:

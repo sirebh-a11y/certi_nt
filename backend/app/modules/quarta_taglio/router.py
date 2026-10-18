@@ -15,6 +15,7 @@ from app.modules.quarta_taglio.schemas import (
     QuartaTaglioStandardSelectionRequest,
     QuartaTaglioWordDraftRequest,
     QuartaTaglioWordDraftResponse,
+    QuartaTaglioWordReferenceRequest,
 )
 from app.modules.quarta_taglio.service import (
     apply_quick_incoming_confirmation,
@@ -39,6 +40,53 @@ from app.modules.quarta_taglio.service import (
 
 router = APIRouter()
 router.include_router(ddt_queue_router)
+
+
+@router.post('/certificates/{certificate_id}/word-reference', response_model=QuartaTaglioWordDraftResponse)
+def adopt_word_reference(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
+                         current_user: CurrentUser, db: DbSession):
+    from fastapi import HTTPException
+    from app.modules.quarta_taglio import service, word_reference
+    from app.modules.quarta_taglio.models import QuartaTaglioFinalCertificate
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None or not certificate.storage_key_docx:
+        raise HTTPException(404, 'Word non trovato')
+    certificate = word_reference.adopt(db, certificate, current_user, payload.source_file_hash)
+    return _reference_response(certificate)
+
+
+@router.post('/certificates/{certificate_id}/update-material-word', response_model=QuartaTaglioWordDraftResponse)
+def update_material_word(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
+                         current_user: CurrentUser, db: DbSession):
+    from fastapi import HTTPException
+    from app.modules.quarta_taglio.models import QuartaTaglioFinalCertificate
+    from app.modules.quarta_taglio.word_material_update import update_material
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None or not certificate.storage_key_docx:
+        raise HTTPException(404, 'Word non trovato')
+    target = update_material(db, certificate, current_user, payload.source_file_hash,
+                             force_non_conforming=payload.force_non_conforming)
+    return _reference_response(target)
+
+
+def _reference_response(certificate):
+    from app.modules.quarta_taglio import service
+    return QuartaTaglioWordDraftResponse(id=certificate.id, cod_odp=certificate.cod_odp,
+        draft_number=certificate.draft_number, file_name=service._certificate_file_name(certificate),
+        download_url=f'/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}',
+        created_at=certificate.created_at)
+
+
+@router.post('/certificates/{certificate_id}/refresh-reference-copy', response_model=QuartaTaglioWordDraftResponse)
+def refresh_reference_copy(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
+                           current_user: CurrentUser, db: DbSession):
+    from fastapi import HTTPException
+    from app.modules.quarta_taglio import word_reference
+    from app.modules.quarta_taglio.models import QuartaTaglioFinalCertificate
+    certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
+    if certificate is None or not certificate.storage_key_docx:
+        raise HTTPException(404, 'Word non trovato')
+    return _reference_response(word_reference.replace_open_copy(db, certificate, current_user, payload.source_file_hash))
 
 
 @router.get("", response_model=QuartaTaglioListResponse)

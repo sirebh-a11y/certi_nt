@@ -132,6 +132,7 @@ class QuartaTaglioListResponse(BaseModel):
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
+    ddt_received: bool = False
     standard_outdated: bool = False
     id: int
     cod_odp: str
@@ -169,6 +170,7 @@ class QuartaTaglioFinalCertificateRegisterItem(BaseModel):
 class QuartaTaglioFinalCertificateRegisterResponse(BaseModel):
     items: list[QuartaTaglioFinalCertificateRegisterItem]
     total_items: int = 0
+    hidden_certificate_ids: list[int] = Field(default_factory=list)
 
 
 class QuartaTaglioMissingItemResponse(BaseModel):
@@ -302,6 +304,14 @@ class QuartaTaglioPdfAttachmentResponse(BaseModel):
 
 
 class QuartaTaglioWordInfoResponse(BaseModel):
+    reference_certificate_id: int | None = None
+    reference_file_hash: str | None = None
+    current_word_file_hash: str | None = None
+    reference_message: str | None = None
+    reference_conflict: bool = False
+    material_changed: bool = False
+    copy_update_required: bool = False
+    is_reference: bool = False
     standard_outdated: bool = False
     has_word: bool = False
     source: str | None = None
@@ -393,6 +403,11 @@ class QuartaTaglioWordDraftRequest(BaseModel):
     certificate_id: int | None = None
     candidate_cod_f3: str | None = None
     ddt_work_item_id: int | None = Field(default=None, ge=1)
+
+
+class QuartaTaglioWordReferenceRequest(BaseModel):
+    source_file_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    force_non_conforming: bool = False
 
 
 class QuartaTaglioPdfGenerateRequest(BaseModel):

@@ -1,5 +1,6 @@
 """Local-only regression coverage: Word once, one immutable PDF per received quota."""
 from datetime import datetime, timezone
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 import os
@@ -82,6 +83,30 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         self.assertIsNotNone(empty.storage_key_docx)
         self.assertEqual(self.db.query(Certificate).count(), 2)
 
+    def test_hidden_early_base_still_supports_a_later_ddt(self):
+        first, source = self.base_word(closed=False)
+        source.ddt = None
+        source.unit_key = 'early-base-without-ddt'
+        source.esolver_id_documento = None
+        source.esolver_id_riga_doc = None
+        source.esolver_rif_lotto_alfanum = None
+        self.db.delete(first)
+        self.db.commit()
+        source_hash = reuse.file_hash(source.storage_key_docx)
+        second = self.later()
+        self.assertEqual(self.run_worker()['prepared'], 1)
+        visible = service.list_quarta_taglio_final_certificates(self.db).items
+        self.assertEqual(len(visible), 1)
+        self.assertNotIn(source.id, [c.id for c in visible])
+        self.assertEqual(visible[0].ddt, second.ddt_raw)
+        third = self.later(IdDocumento='300', IdRigaDoc='1', DDT='2500-20/10/2026', QtaUmMag=42)
+        self.assertEqual(self.run_worker()['prepared'], 1)
+        visible = service.list_quarta_taglio_final_certificates(self.db).items
+        self.assertEqual({c.ddt for c in visible}, {second.ddt_raw, third.ddt_raw})
+        self.assertEqual(self.db.query(Certificate).count(), 3)
+        self.assertIsNone(source.ddt)
+        self.assertEqual(reuse.file_hash(source.storage_key_docx), source_hash)
+
     def test_no_temporal_cutoff_for_historical_quota(self):
         self.base_word()
         second = self.later(DDT='22-02/07/2026')
@@ -116,6 +141,45 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         self.db.commit()
         second = self.later()
         self.assertEqual(reuse.plan_item(self.db, second)['reason'], 'no_compatible_word')
+
+    def test_more_lots_reuse_the_same_material_without_rewriting_existing_documents(self):
+        _, source = self.base_word()
+        row = service._load_quarta_rows_for_detail(self.db, cod_odp=source.cod_odp)[0]
+        row.cod_lotti = ['L1', 'L2', 'L3']
+        source.cdq_values = [dict(v, lotti=['L1','L2']) for v in source.cdq_values]
+        self.db.commit()
+        original_material = deepcopy(source.cdq_values)
+        old_word,old_pdf = reuse.file_hash(source.storage_key_docx),reuse.file_hash(source.storage_key_pdf)
+        later = self.later()
+        self.assertEqual(self.run_worker()['prepared'], 1)
+        target = self.db.scalar(select(Certificate).where(Certificate.unit_key == later.certification_unit_key))
+        self.assertEqual(target.certificate_number, source.certificate_number)
+        self.assertEqual(target.cdq_values, original_material)
+        self.assertEqual(source.cdq_values, original_material)
+        self.assertEqual(reuse.file_hash(source.storage_key_docx), old_word)
+        self.assertEqual(reuse.file_hash(source.storage_key_pdf), old_pdf)
+        controls,_ = reuse.word_facts(target.storage_key_docx)
+        self.assertEqual(controls['DDT_RAW'], later.ddt_raw)
+
+    def test_identical_word_with_legacy_missing_signer_metadata_uses_complete_source(self):
+        _, legacy = self.base_word()
+        complete_item = self.later(IdDocumento='150', DDT='2390-03/10/2026')
+        complete = self.cert(complete_item, pdf=True, certificate_number=legacy.certificate_number,
+            cdq_key=legacy.cdq_key,cdq_signature=deepcopy(legacy.cdq_signature),cdq_values=deepcopy(legacy.cdq_values),
+            conformity_status=legacy.conformity_status,conformity_issues=deepcopy(legacy.conformity_issues),
+            certified_by_user_id=self.actor.id,quality_manager_user_id=self.actor.id)
+        service._certificate_storage_path(complete.storage_key_docx).write_bytes(
+            service._certificate_storage_path(legacy.storage_key_docx).read_bytes())
+        original_pdf=reuse.file_hash(legacy.storage_key_pdf)
+        later=self.later()
+        self.assertEqual(reuse.plan_item(self.db,later)['source_id'],complete.id)
+        self.assertEqual(self.run_worker()['prepared'],1)
+        target=self.db.scalar(select(Certificate).where(Certificate.unit_key==later.certification_unit_key))
+        self.assertEqual(target.certified_by_user_id,self.actor.id)
+        self.assertEqual(target.quality_manager_user_id,self.actor.id)
+        self.assertIsNone(legacy.certified_by_user_id)
+        self.assertIsNone(legacy.quality_manager_user_id)
+        self.assertEqual(reuse.file_hash(legacy.storage_key_pdf),original_pdf)
 
     def test_changed_closed_quantity_is_never_repaired(self):
         first, source = self.base_word()

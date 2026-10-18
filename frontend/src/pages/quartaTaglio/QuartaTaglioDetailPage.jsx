@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 
 import { apiRequest, fetchApiBlob, resolveApiAssetUrl } from "../../app/api";
 import { useAuth } from "../../app/auth";
+import { isQualityAreaUser } from "../../app/access";
 import { CUSTOMER_REQUIREMENT_FIELDS, resolveCustomerRequirements } from "../../app/customerRequirements";
 import { wordGenerationPayload } from "./wordGeneration";
 
@@ -286,7 +287,7 @@ export default function QuartaTaglioDetailPage() {
   const ddtWorkItemId = searchParams.get("ddtWorkItemId");
   const navigate = useNavigate();
   const location = useLocation();
-  const { clearAuth, token } = useAuth();
+  const { clearAuth, token, user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -312,6 +313,9 @@ export default function QuartaTaglioDetailPage() {
   const [pendingWordRegenerate, setPendingWordRegenerate] = useState(false);
   const [quickConfirmState, setQuickConfirmState] = useState({ status: "idle", message: "" });
   const [incomingRefreshNonce, setIncomingRefreshNonce] = useState("");
+  const [referenceAction, setReferenceAction] = useState(null);
+  const [referenceSaving, setReferenceSaving] = useState(false);
+  const [referenceFeedback, setReferenceFeedback] = useState("");
   const articleTimersRef = useRef({});
   const articleSavedTimersRef = useRef({});
   const articleVersionsRef = useRef({});
@@ -627,6 +631,30 @@ export default function QuartaTaglioDetailPage() {
         status: "error",
         message: handleRequestError(requestError, "Errore generazione bozza Word"),
       });
+    }
+  }
+
+  async function performReferenceAction() {
+    const operation = referenceAction;
+    setReferenceAction(null);
+    setReferenceSaving(true);
+    setReferenceFeedback("");
+    try {
+      const targetId = operation === "material" ? wordInfo.reference_certificate_id : activeCertificateId;
+      const fileHash = operation === "material" ? wordInfo.reference_file_hash : wordInfo.current_word_file_hash;
+      const endpoint = operation === "material" ? "update-material-word" : operation === "copy" ? "refresh-reference-copy" : "word-reference";
+      const response = await apiRequest(`/quarta-taglio/certificates/${targetId}/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify({ source_file_hash: fileHash, force_non_conforming: operation === "material" && hasConformityIssues }),
+      }, token);
+      const refreshed = await apiRequest(ddtWorkItemId ? detailPath() : quartaDetailApiPath(codOdp, { certificateId: response.id }), {}, token);
+      setData(refreshed);
+      if (!ddtWorkItemId) navigate(quartaDetailUiPath(codOdp, { certificateId: response.id }), { replace: true });
+      setReferenceFeedback(operation === "copy" ? "Copia aggiornata dal Word di riferimento." : operation === "material" ? "Word aggiornato con il materiale attuale dell’OL. Le copie automatiche aperte sono state ricontrollate." : "Word confermato come riferimento. Le copie automatiche aperte sono state ricontrollate.");
+    } catch (requestError) {
+      setReferenceFeedback(handleRequestError(requestError, "Aggiornamento Word non riuscito"));
+    } finally {
+      setReferenceSaving(false);
     }
   }
 
@@ -1246,13 +1274,47 @@ export default function QuartaTaglioDetailPage() {
       </div>
 
       <div className="rounded-xl border-2 border-slate-950 bg-white p-4">
+        {wordInfo.reference_message ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+            <p>{wordInfo.reference_message}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {wordInfo.material_changed ? (
+                <>
+                  <Link className="rounded-lg border border-sky-200 bg-white px-3 py-2 font-semibold text-sky-800" to={data.missing_items?.length ? "/acquisition" : linkedIncomingPath || "/acquisition"}>Apri Incoming</Link>
+                  <button type="button" className="rounded-lg bg-accent px-3 py-2 font-semibold text-white disabled:opacity-50"
+                    disabled={!isQualityAreaUser(user) || referenceSaving || !wordInfo.reference_file_hash || !data.selected_standard_confirmed || Boolean(data.missing_items?.length)}
+                    onClick={() => setReferenceAction("material")}>Aggiorna Word</button>
+                  {data.missing_items?.length ? <span className="self-center">Completa prima i certificati mancanti in Incoming.</span> : null}
+                </>
+              ) : null}
+              {!wordInfo.material_changed && wordInfo.reference_conflict && hasWord && activeCertificateId ? (
+                <button type="button" className="rounded-lg bg-accent px-3 py-2 font-semibold text-white disabled:opacity-50"
+                  disabled={!isQualityAreaUser(user) || referenceSaving || !wordInfo.current_word_file_hash || wordInfo.standard_outdated}
+                  onClick={() => setReferenceAction("adopt")}>Usa questo Word come riferimento</button>
+              ) : null}
+              {wordInfo.copy_update_required && hasWord && !isPdfFinal && activeCertificateId ? (
+                <button type="button" className="rounded-lg bg-accent px-3 py-2 font-semibold text-white disabled:opacity-50"
+                  disabled={!isQualityAreaUser(user) || referenceSaving || !wordInfo.current_word_file_hash}
+                  onClick={() => setReferenceAction("copy")}>Aggiorna questa copia dal riferimento</button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        {referenceFeedback ? <p role="status" className="mb-3 text-sm text-slate-800">{referenceFeedback}</p> : null}
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-xl font-semibold text-slate-900">Certificati Word per Lavorazione</h3>
           <p className="mt-1 text-sm font-semibold text-slate-900">Certificato attivo: {activeWordLabel}</p>
+          {wordInfo.is_reference ? <p className="mt-1 text-sm text-slate-600">Word di riferimento per questa lavorazione.</p> : null}
           <p className="mt-1 text-sm text-slate-600">
             {isPdfFinal
               ? "Certificato PDF chiuso. Il Word resta consultabile, ma non modificabile da questa pagina."
+              : wordInfo.material_changed
+              ? "Verifica Incoming e aggiorna il Word con il materiale attuale dell’OL prima del PDF."
+              : wordInfo.copy_update_required
+              ? "Il Word di riferimento è aggiornato: verifica questa copia prima di preparare il PDF."
+              : wordInfo.reference_conflict
+              ? "Conferma il Word completo da riutilizzare per i prossimi DDT della lavorazione."
               : wordInfo.standard_outdated
               ? "Il Word corrente non è aggiornato allo standard selezionato. Prima del PDF occorre rigenerarlo."
               : canCreateWord
@@ -1703,6 +1765,17 @@ export default function QuartaTaglioDetailPage() {
         </div>
       ) : null}
 
+      {referenceAction ? (
+        <ConfirmActionDialog
+          title={referenceAction === "copy" ? "Aggiornare questa copia?" : referenceAction === "material" ? "Aggiornare il Word per il materiale attuale?" : "Confermare il Word di riferimento?"}
+          confirmLabel={referenceAction === "copy" ? "Aggiorna questa copia" : referenceAction === "material" ? "Aggiorna Word" : "Conferma riferimento"}
+          message={referenceAction === "copy" ? "Questa copia sarà sostituita dal Word completo di riferimento, con i dati del suo DDT. Eventuali modifiche fatte soltanto su questa copia saranno sostituite. Il file precedente sarà conservato e i PDF già chiusi resteranno invariati." : referenceAction === "material"
+            ? `CERTI aggiornerà la pagina tecnica con tutti i materiali attuali dell’OL, conservando seconde pagine e allegati. Le modifiche manuali nella pagina tecnica saranno sostituite. I PDF già chiusi restano conservati.${hasConformityIssues ? " Confermando accetti di preparare il Word con i valori fuori standard indicati nella pagina; il PDF resta bloccato finché non conforme." : ""}`
+            : "Questo Word completo sarà usato per i prossimi DDT della stessa lavorazione e secondo le regole di ereditarietà dal Raw. Verranno ricontrollate anche le copie automatiche senza PDF; le copie modificate manualmente saranno segnalate."}
+          onCancel={() => setReferenceAction(null)}
+          onConfirm={performReferenceAction}
+        />
+      ) : null}
       {wordRegenerateDialogOpen ? (
         <ConfirmActionDialog
           confirmLabel="Rigenera da zero"

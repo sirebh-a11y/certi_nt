@@ -53,7 +53,7 @@ from app.modules.quarta_taglio.models import (
 from app.modules.quarta_taglio.file_names import (
     certificate_pdf_file_name, normalize_pdf_file_name, standard_certificate_file_name,
 )
-from app.modules.quarta_taglio import word_standard
+from app.modules.quarta_taglio import word_standard, word_reference
 from app.modules.quarta_taglio.ddt_context import (
     certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
@@ -486,6 +486,20 @@ def _load_quarta_rows_for_detail(db: Session, *, cod_odp: str) -> list[QuartaTag
     )
 
 
+def _register_superseded_bases(certificates):
+    from app.modules.quarta_taglio.register_presentation import superseded_bases
+
+    def file_available(key):
+        if not key:
+            return False
+        try:
+            return _certificate_storage_path(key).is_file()
+        except (HTTPException, OSError):
+            return False
+
+    return superseded_bases(certificates, file_available=file_available)
+
+
 def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCertificateRegisterResponse:
     certificates = (
         db.query(QuartaTaglioFinalCertificate)
@@ -495,15 +509,11 @@ def list_quarta_taglio_final_certificates(db: Session) -> QuartaTaglioFinalCerti
         .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
-    ol_with_unit_specific_certificates = {
-        certificate.cod_odp
-        for certificate in certificates
-        if _clean_text(certificate.unit_key)
-    }
+    hidden = _register_superseded_bases(certificates)
     visible_certificates = [
         certificate
         for certificate in certificates
-        if _clean_text(certificate.unit_key) or certificate.cod_odp not in ol_with_unit_specific_certificates
+        if certificate.id not in hidden
     ]
     return QuartaTaglioFinalCertificateRegisterResponse(
         items=_serialize_final_certificate_register_items(db, visible_certificates),
@@ -536,15 +546,26 @@ def refresh_quarta_taglio_visible_final_certificates(db: Session, *, certificate
 
     refreshed_certificates = (
         db.query(QuartaTaglioFinalCertificate)
-        .filter(QuartaTaglioFinalCertificate.id.in_(safe_ids))
+        .filter(
+            QuartaTaglioFinalCertificate.cod_odp.in_({c.cod_odp for c in certificates}),
+            QuartaTaglioFinalCertificate.certificate_number.isnot(None),
+        )
         .order_by(QuartaTaglioFinalCertificate.cert_date.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
     items_by_id = {item.id: item for item in refreshed_certificates}
-    ordered_items = [items_by_id[certificate_id] for certificate_id in safe_ids if certificate_id in items_by_id]
+    hidden = _register_superseded_bases(refreshed_certificates)
+    # A background reuse can complete between initial load and refresh. Replace
+    # a now-hidden base with its shipments without losing either other F3 or quotas.
+    visible_ids = list(dict.fromkeys(
+        visible_id for requested_id in safe_ids
+        for visible_id in hidden.get(requested_id, [requested_id])
+    ))
+    ordered_items = [items_by_id[cid] for cid in visible_ids if cid in items_by_id]
     return QuartaTaglioFinalCertificateRegisterResponse(
         items=_serialize_final_certificate_register_items(db, ordered_items),
         total_items=len(ordered_items),
+        hidden_certificate_ids=[cid for cid in safe_ids if cid in hidden],
     )
 
 
@@ -865,7 +886,7 @@ def get_quarta_taglio_detail(
         header={
             "numero_certificato": open_certificate_number,
             "certificate_id": str(open_certificate.id) if open_certificate else None,
-            "unit_key": _clean_text(open_certificate.unit_key) if open_certificate else primary_unit.unit_key if primary_unit else None,
+            "unit_key": _clean_text(open_certificate.unit_key) if open_certificate is not None else primary_unit.unit_key if primary_unit else None,
             "cliente": _clean_text(open_certificate.fornitore_cliente) if open_certificate else primary_unit.cliente if primary_unit else _join_unique(row.rag_soc for row in esolver_header_rows) or None,
             "ordine_cliente": _clean_text(open_certificate.ordine_cliente) if open_certificate else primary_unit.ordine_cliente if primary_unit else _join_unique(row.odv_cli for row in esolver_header_rows) or None,
             "conferma_ordine": _clean_text(open_certificate.cdo_lega) if open_certificate else primary_unit.conferma_ordine if primary_unit else _join_unique(row.odv_f3 for row in esolver_header_rows) or None,
@@ -944,6 +965,7 @@ def get_quarta_taglio_detail(
         db.commit()
     _set_detail_display_status(db, detail, open_certificate, saved_ddt=saved_ddt,
                                has_quality_reservations=has_quality_reservations)
+    word_reference.decorate_detail(db, detail, open_certificate)
     return detail
 
 
@@ -1247,6 +1269,8 @@ def create_quarta_taglio_word_draft(
     else:
         candidate_unit = _primary_certifiable_unit(detail.certifiable_units)
     certificate = (
+        _get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id)
+        if certificate_id is not None else
         _get_or_create_open_certificate_for_unit(db, detail=detail, unit=candidate_unit, actor=actor, saved_ddt=saved_ddt)
         if candidate_unit is not None
         else _get_or_create_open_certificate(db, detail=detail, actor=actor)
@@ -1287,29 +1311,42 @@ def create_quarta_taglio_word_draft(
         cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
         raw_cod_f3=(detail.header or {}).get("codice_f3_raw"),
     )
-    build_forgialluminio_draft_docx(
-        detail=detail,
-        output_path=output_path,
-        draft_number=certificate_number,
-        certified_by=actor,
-        quality_manager=quality_manager,
-        additional_pages_path=additional_pages_path,
-        pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
-    )
+    inheritance_source = None
+    if not force_regenerate and not certificate.storage_key_docx:
+        raw_f3 = (detail.header or {}).get('codice_f3_raw')
+        inheritance_source = _previous_word_certificate_for_inheritance(db, certificate=certificate, raw_cod_f3=raw_f3)
+        if (inheritance_source is None and raw_f3 and _norm(raw_f3) != _norm(certificate.cod_f3)
+                and _existing_word_for_workmanship(db, cod_odp=cod_odp, cod_f3=raw_f3) is not None):
+            raise HTTPException(409, 'Il Word Raw di riferimento richiede verifica: apri il Raw e controlla versione, materiale e standard prima di ereditare.')
+    if inheritance_source is not None:
+        # The DDT may be the first entry point for a new workmanship. Preserve
+        # embedded manual pages here too, not only during generic OL bootstrap.
+        update_docx_content_controls(_certificate_storage_path(inheritance_source.storage_key_docx),
+                                     output_path, _word_content_control_values(detail, certificate))
+    else:
+        build_forgialluminio_draft_docx(
+            detail=detail, output_path=output_path, draft_number=certificate_number,
+            certified_by=actor, quality_manager=quality_manager,
+            additional_pages_path=additional_pages_path,
+            pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
+        )
 
     _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
     word_standard.require_unchanged(db, cod_odp, generation_standard)
     certificate.word_standard_snapshot = word_standard.provenance(generation_standard, 'generated')
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
-    certificate.certified_by_user_id = actor.id
-    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
-    _apply_word_file_state(certificate, output_path, source="generated")
+    certificate.certified_by_user_id = inheritance_source.certified_by_user_id if inheritance_source else actor.id
+    certificate.quality_manager_user_id = inheritance_source.quality_manager_user_id if inheritance_source else quality_manager.id if quality_manager else None
+    _apply_word_file_state(certificate, output_path, source='inherited' if inheritance_source else 'generated')
+    word_reference.publish(db, certificate, actor_id=actor.id, origin='inherited_creation' if inheritance_source else 'generated')
     if saved_ddt is None:
         _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
+
+    word_reference.refresh_copies(db, certificate)
 
     return QuartaTaglioWordDraftResponse(
         id=certificate.id,
@@ -1397,11 +1434,14 @@ def upload_quarta_taglio_additional_pages(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source="generated")
+    word_reference.publish(db, certificate, actor_id=actor.id, origin='additional_pages')
     if detail.ddt_work_item_id is None:
         _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
+
+    word_reference.refresh_copies(db, certificate)
 
     return QuartaTaglioWordDraftResponse(
         id=certificate.id,
@@ -1457,8 +1497,10 @@ def upload_quarta_taglio_pdf_attachment(
     db.add(attachment)
     db.flush()
     _rebuild_certificate_word_after_pdf_attachment(db, detail=detail, certificate=certificate, actor=actor)
+    word_reference.publish(db, certificate, actor_id=actor.id, origin='pdf_attachment')
     db.add(certificate)
     db.commit()
+    word_reference.refresh_copies(db, certificate)
     return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
 
 
@@ -1491,8 +1533,10 @@ def delete_quarta_taglio_pdf_attachment(
     _compact_pdf_attachment_order(db, certificate_id=certificate.id)
     if certificate.storage_key_docx:
         _rebuild_certificate_word_after_pdf_attachment(db, detail=detail, certificate=certificate, actor=actor)
+        word_reference.publish(db, certificate, actor_id=actor.id, origin='pdf_attachment_removed')
     db.add(certificate)
     db.commit()
+    word_reference.refresh_copies(db, certificate)
     return get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate.id)
 
 
@@ -1755,12 +1799,7 @@ def upload_quarta_taglio_word_file(
     if certificate_id is not None:
         _ensure_certificate_word_is_editable(_get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id)
-    certificate = _find_open_certificate_for_detail(
-        db,
-        cod_odp=cod_odp,
-        unit_key=(detail.header or {}).get("unit_key"),
-        require_number=True,
-    )
+    certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
     _ensure_certificate_word_is_editable(certificate)
@@ -1783,11 +1822,14 @@ def upload_quarta_taglio_word_file(
     _apply_word_file_state(certificate, output_path, source="user_uploaded", original_filename=original_name)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
+    word_reference.publish(db, certificate, actor_id=actor.id, origin='user_uploaded')
     if detail.ddt_work_item_id is None:
         _propagate_shared_certificate_word(db, source_certificate=certificate)
     db.add(certificate)
     db.commit()
     db.refresh(certificate)
+
+    word_reference.refresh_copies(db, certificate)
 
     return QuartaTaglioWordDraftResponse(
         id=certificate.id,
@@ -2205,6 +2247,9 @@ def _apply_certificate_esolver_identity_fields(
 def _existing_word_for_workmanship(db: Session, *, cod_odp: str, cod_f3: str | None):
     if not _clean_text(cod_f3):
         return None
+    reference = word_reference.declared(word_reference.sources_for(db, cod_odp, cod_f3))
+    if reference is not None:
+        return reference
     return (db.query(QuartaTaglioFinalCertificate).filter(
         QuartaTaglioFinalCertificate.cod_odp == cod_odp,
         QuartaTaglioFinalCertificate.cod_f3 == cod_f3,
@@ -2626,6 +2671,7 @@ def generate_quarta_taglio_certificate_pdf(
         return _serialize_final_certificate_register_items(db, [certificate])[0]
     resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     word_standard.require_current(db, certificate)
+    word_reference.require_current_material(db, certificate)
     pdf_standard = word_standard.snapshot(db, certificate.cod_odp)
     if not certificate.storage_key_docx:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word non presente")
@@ -2643,6 +2689,7 @@ def generate_quarta_taglio_certificate_pdf(
     db.refresh(certificate)
     word_standard.require_current(db, certificate)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
+    word_reference.require_current_material(db, certificate)
     if not _clean_text(certificate.ddt):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT mancante dopo aggiornamento Word")
     if not certificate.cert_date:
@@ -2662,6 +2709,7 @@ def generate_quarta_taglio_certificate_pdf(
     _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
     word_standard.require_current(db, certificate)
+    word_reference.require_current_material(db, certificate)
     if ddt_work_item_id is not None:
         if final_item is None or final_item.id != ddt_work_item_id:
             raise HTTPException(409, "Quota DDT modificata durante la generazione: aggiorna la vista")
@@ -3134,6 +3182,9 @@ def _ensure_register_word_current(
             return False
         word_standard.copy_provenance(source_certificate, certificate)
 
+        certificate.certified_by_user_id = source_certificate.certified_by_user_id
+        certificate.quality_manager_user_id = source_certificate.quality_manager_user_id
+
     storage_key = _certificate_docx_storage_key(certificate.cod_odp)
     output_path = _certificate_storage_path(storage_key)
     update_docx_content_controls(source_path, output_path, values)
@@ -3195,13 +3246,22 @@ def _previous_word_certificate_for_inheritance(
         .order_by(QuartaTaglioFinalCertificate.created_at.desc(), QuartaTaglioFinalCertificate.id.desc())
         .all()
     )
-    return next(iter(_ordered_inheritance_source_certificates(
-        [c for c in candidates if not word_standard.is_stale(c, db, for_reuse=True)],
+    ordered = _ordered_inheritance_source_certificates(
+        candidates,
         cod_odp=certificate.cod_odp,
         current_cod_f3=certificate.cod_f3,
         raw_cod_f3=raw_cod_f3,
         visited_numbers={_clean_text(certificate.certificate_number) or ""},
-    )), None)
+    )
+    if not ordered:
+        return None
+    # Preserve Raw-first priority, but resolve the VERSION of that workmanship
+    # by the same rule used for subsequent DDTs. Never fall back around a conflict.
+    group = [c for c in ordered if c.cod_f3 == ordered[0].cod_f3]
+    chosen, _reason = word_reference.choose(db, group)
+    if chosen is None or word_standard.is_stale(chosen, db, for_reuse=True) or word_reference.material_changed(db, chosen):
+        return None
+    return chosen
 
 
 def _ordered_inheritance_source_certificates(
@@ -5046,16 +5106,29 @@ def _serialize_final_certificate_register_items(
         link.cod_odp: link
         for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(cod_odps)).all()
     } if cod_odps else {}
-    unit_keys = {certificate.unit_key for certificate in certificates if certificate.unit_key}
     saved_by_key = defaultdict(list)
-    if unit_keys:
-        for item in db.query(QuartaTaglioDdtWorkItem).filter(QuartaTaglioDdtWorkItem.certification_unit_key.in_(unit_keys)).all():
+    received_articles = set()
+    if cod_odps:
+        for ol, code, ddt in db.query(
+            QuartaTaglioFinalCertificate.cod_odp, QuartaTaglioFinalCertificate.cod_f3,
+            QuartaTaglioFinalCertificate.ddt,
+        ).filter(QuartaTaglioFinalCertificate.cod_odp.in_(cod_odps), QuartaTaglioFinalCertificate.ddt.isnot(None)).all():
+            if _clean_text(ddt) and _clean_text(code):
+                received_articles.add((_norm(ol), _norm(code)))
+        for item in db.query(QuartaTaglioDdtWorkItem).filter(QuartaTaglioDdtWorkItem.cod_odp.in_(cod_odps)).all():
             saved_by_key[item.certification_unit_key].append(item)
+            if _clean_text(item.ddt_raw) and _clean_text(item.cod_f3):
+                received_articles.add((_norm(item.cod_odp), _norm(item.cod_f3)))
+    for ol, link in links.items():
+        for row in _esolver_rows_from_link(link):
+            if _norm(row.orp) == _norm(ol) and _clean_text(row.ddt) and _clean_text(row.cod_f3):
+                received_articles.add((_norm(ol), _norm(row.cod_f3)))
     return [
         _serialize_final_certificate_register_item(
             certificate,
             esolver_rows=_register_ddt_rows(certificate, _esolver_rows_from_link(links.get(certificate.cod_odp)),
                                             saved_by_key.get(certificate.unit_key, [])),
+            ddt_received=(_norm(certificate.cod_odp), _norm(certificate.cod_f3)) in received_articles,
         )
         for certificate in certificates
     ]
@@ -5078,6 +5151,7 @@ def _serialize_final_certificate_register_item(
     *,
     db: Session | None = None,
     esolver_rows: list[QuartaTaglioEsolverDdtRowResponse] | None = None,
+    ddt_received: bool = False,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
     conformity_status = _certificate_conformity_status(certificate)
     conformity_issues = certificate.conformity_issues or []
@@ -5090,6 +5164,7 @@ def _serialize_final_certificate_register_item(
     if certificate.storage_key_pdf and certificate.download_token:
         pdf_download_url = f"/api/quarta-taglio/certificates/{certificate.id}/pdf-file?download_token={certificate.download_token}"
     return QuartaTaglioFinalCertificateRegisterItem(
+        ddt_received=bool(_clean_text(certificate.ddt)) or ddt_received,
         id=certificate.id,
         cod_odp=certificate.cod_odp,
         status=certificate.status,

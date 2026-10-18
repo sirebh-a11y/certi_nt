@@ -201,6 +201,9 @@ def _project(db, items):
                                   .where(QuartaTaglioFinalCertificate.cod_odp.in_(chunk))):
             versions_by_id[version.certificate_id].append(version)
     incoming_by_ol = {ol: _incoming_status(db, by_ol[ol]) for ol in cod_odps}
+    materials_by_ol = {ol: [dict(cdq=r.cdq, colata=r.colata, cod_art=r.cod_art,
+                                lotti=r.cod_lotti, qta_totale=r.qta_totale)
+        for r in ([r for r in by_ol[ol] if r.seen_in_last_sync] or by_ol[ol])] for ol in cod_odps}
     decisions = latest_decisions(db, [item.id for item in items])
     from app.modules.quarta_taglio.ddt_archive import archive_state, REVIEW_MESSAGE as ARCHIVE_REVIEW
     archived, archive_events = archive_state(db, items)
@@ -211,6 +214,22 @@ def _project(db, items):
     for item in items:
         row = _derive(item, certificates_by_ol[item.cod_odp], versions_by_id,
                       incoming_by_ol.get(item.cod_odp, missing), family_counts)
+        from app.modules.quarta_taglio import word_reference
+        exact_doc = next((c for c in certificates_by_ol[item.cod_odp] if c.id == row.certificate_id), None)
+        source = exact_doc or word_reference.declared(
+            [c for c in certificates_by_ol[item.cod_odp] if c.cod_f3 == item.cod_f3])
+        if source is None:
+            source = next((c for c in certificates_by_ol[item.cod_odp]
+                           if c.cod_f3 == item.cod_f3 and c.storage_key_docx), None)
+        if row.state != 'completed' and source and word_reference.material_changed(db, source, current=materials_by_ol[item.cod_odp]):
+            row.reasons.append(word_reference.material_message(db, source, current=materials_by_ol[item.cod_odp]))
+            if row.state in {'ready', 'word_ready'}:
+                row.state, row.label = 'review', 'Word da aggiornare'
+        pending = word_reference.pending_message(db, exact_doc,
+            sources=[c for c in certificates_by_ol[item.cod_odp] if c.cod_f3 == item.cod_f3])
+        if row.state != 'completed' and pending:
+            row.state, row.label = 'review', 'Word da aggiornare'
+            row.reasons.append(pending)
         # Reuse diagnostics are distinct from a missing OL in eSolver. Never guess
         # an OL from the numeric lot; no write/remote query in this projection.
         if (row.state == 'ready' or (row.state == 'review' and any('Word senza DDT associabile' in reason for reason in row.reasons))):
@@ -224,7 +243,7 @@ def _project(db, items):
                 row.reasons.append(service.word_standard.MESSAGE)
             elif reuse['reason'] in {'different_word_sources', 'source_file_or_controls_invalid',
                                       'no_compatible_word', 'target_material_changed', 'legacy_or_changed_identity',
-                                      'target_content_requires_review'}:
+                                      'target_content_requires_review', 'reference_file_changed', 'manual_copy_requires_review'}:
                 row.state, row.label = 'review', LABELS['review']
                 row.reasons.append('Word esistente non collegabile automaticamente: verificare compatibilità, file e campi DDT')
         decision = decisions.get(item.id)

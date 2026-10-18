@@ -80,6 +80,127 @@ Audit e collaudo: [nota di intervento](../tasks/certification_customer_requireme
 
 Questa sezione prepara un futuro deploy: **Alpha non è stato modificato**.
 
+### Modifica locale 17/10/2026 — righe base nel Registro certificazione (da pubblicare)
+
+Correzione di sola presentazione: la base Word senza DDT resta conservata per
+riuso/ereditarietà, ma non appare come lavoro aperto aggiuntivo quando esiste
+il corrispondente documento di quota. Il DDT già noto senza quota preparata
+non viene più descritto come "In attesa DDT". Dettagli, limiti e piano separato
+per i Word discordanti: [audit registro](../tasks/register_early_word_visibility_20261017.md).
+
+- Pubblicare backend/frontend coerenti: nuovi campi additivi di risposta
+  `ddt_received` e `hidden_certificate_ids` (quest'ultimo gestisce il refresh).
+  **Nessuna migrazione DB, cancellazione, fusione record, rigenerazione PDF o
+  recupero massivo.** Non modificare i flag di riuso/raccolta già attivi.
+- Preview Alpha in sola lettura del 17/10: 228 record numerati -> 211 visibili,
+  17 basi nascoste. Sono conteggi di verifica, NON una lista da cancellare;
+  ricalcolarli al deploy sui dati aggiornati. DB e storage conservano le basi.
+- Caso guida OL2026001091/F3 531000300: base ID99 non mostrata, quota ID189
+  DDT2418-08/10/2026 con Word/PDF chiuso ancora visibile e invariata. Confrontare
+  file, numerazione, versioni PDF ed export prima/dopo senza generare documenti.
+- Verificare OL1000: due quote dello stesso DDT2457 (ID201/202) restano due
+  righe. OL1019/1020: Raw e altre lavorazioni ereditate non vengono nascosti
+  per il solo OL coincidente. Nessuna deduplicazione per solo numero o DDT.
+- Verificare il messaggio "DDT presente — verifica richiesta" sui casi ancora
+  senza quota ma con DDT noto (riferimenti audit OL1012/977/1071/1128/1156).
+  Per i quattro casi diversi da OL1012 vedere la correzione A/B sotto: il
+  normale riuso potrà preparare la quota e il messaggio non sarà più applicabile.
+  Non forzare il riuso: controlli Incoming e identità materiale restano attivi.
+- Il conflitto Word OL1091 per un eventuale futuro DDT è distinto dalla
+  visibilità registro: per la gestione della fonte vedere ora C/D sotto.
+  La conferma di un Word storico non è automatica e non rimuove basi/file.
+- Collaudare refresh e cambi pagina in locale con fixture: il registro non
+  deve reinserire la base. Su Alpha i refresh possono attivare automatismi
+  preesistenti, quindi non usarli come audit puramente read-only.
+- Rollback del pacchetto coerente, senza modificare DB/storage per questo
+  punto. Restano tutte le mitigazioni generali e le altre modifiche pendenti.
+
+### Modifica locale 17/10/2026 — riuso Word A/B (da pubblicare)
+
+Approvati in sviluppo: nuovi lotti dello stesso singolo materiale e falso
+conflitto di riferimenti legacy operatore/Quality Manager. Evidenze e limiti
+nella sezione A/B dell'[audit registro](../tasks/register_early_word_visibility_20261017.md).
+La successiva implementazione locale C/D e le regole concordate sono nel
+[piano di ripresa C/D](../tasks/word_reference_and_material_changes_resume_20261017.md).
+Per pubblicarli serve anche la preparazione additiva della sezione C/D sotto:
+il vincolo «nessuna migrazione» di A/B riguarda soltanto A/B.
+
+- Nessuna migrazione, correzione firme, backfill dei riferimenti persone,
+  riscrittura di vecchi Word/PDF, cancellazione o rigenerazione massiva.
+  Operator resta chi ha preparato il Word, non chi genera il PDF.
+- Prima dell'aggiornamento ripetere la preview con `plan_item` in transazione
+  READ ONLY, sul DB Alpha reale e con codice candidato solo in memoria.
+  Riferimenti del 17/10: quote 684/711/767/800 (OL977/1128/1071/1156) ora
+  ammissibili; simulazione futuro DDT OL1139 ammissibile da ID95. Ricalcolare
+  tutti gli esiti e segnalare differenze inattese prima della riapertura.
+- Verificare che OL1012 rimanga fermo per nuovo CDQ non pronto e che le
+  simulazioni OL1091/1095/972 mantengano `different_word_sources`. Non eseguire
+  `apply_item`, sync o GET mutanti come semplice audit.
+- Lotti crescenti ammessi solo per un materiale completo, senza rimozioni o
+  sostituzioni. Non allargare ai materiali multipli: possibile chimica pesata.
+  Conflitti tra persone note, firme/testi/immagini/allegati diversi restano protetti.
+- Alla riapertura il normale worker già autorizzato potrà creare nuovi Word
+  di quota ammissibili. Questo è un effetto previsto del codice, non una
+  bonifica DB. Non richiede copia del DB locale né una nuova raccolta storica.
+  Non generare/chiudere PDF per collaudo. Preservare i flag già attivi.
+- Dopo: controllare esiti worker/errori, numero e campi spedizione delle sole
+  quote nuove, hash dei documenti sorgenti/PDF precedenti e coerenza export.
+  Un errore non autorizza a forzare la scelta di un Word o cambiare materiali.
+- Rollback: ripristinare pacchetto coerente; conservare nuove quote/documenti
+  e verificare attività utenti intervenute. Non cancellare dati creati nel
+  frattempo né ripristinare indiscriminatamente il DB. Backup e cautele generali
+  restano obbligatori. Questa nota NON autorizza il deploy Alpha.
+
+### Modifica locale 18/10/2026 — riferimento Word e variazione materiali C/D (da pubblicare)
+
+Sorgenti implementati e verificati localmente; **non ancora installati su Alpha**.
+Dettagli e prove nel [piano aggiornato C/D](../tasks/word_reference_and_material_changes_resume_20261017.md).
+Regola confermata: Word completato per OL/F3 come riferimento, pagine/allegati
+ereditati dal Raw; ogni DDT considera tutti i materiali attuali dell'OL.
+
+1. Prima: audit read-only e backup secondo il runbook; confrontare conteggi,
+   file e versioni PDF. Riferimenti audit 18/10: 228 Word / 182 gruppi OL/F3,
+   29 gruppi con più record; conflitti reali OL1091/1095/972. Materiale cambiato
+   su basi aperte OL986/1012/1251, con CDQ mancanti in Incoming. Ricalcolare:
+   non sono liste da correggere, cancellare o adottare automaticamente.
+2. Con app/job fermi e immagini candidate costruite, aggiungere SOLO la colonna
+   JSON nullable `word_reference` su `quarta_taglio_final_certificates` tramite
+   `app.modules.quarta_taglio.word_reference.ensure_schema(connection)`, usando
+   il motore/schema Alpha reale. Non istanziare query ORM sui certificati nuovi
+   prima della colonna. Helper idempotente; verificare tipo/nullable e prima/dopo
+   conteggi, identità, nomi/hash dei documenti e versioni PDF.
+   Il bootstrap contiene la stessa preparazione, ma NON usarlo come sostituto
+   dell'intervento controllato: avvia anche altri comportamenti applicativi.
+3. Nessun baseline o backfill del riferimento: i vecchi valori restano NULL.
+   Il codice mantiene il confronto prudente per lo storico equivalente. Dove
+   ci sono Word diversi, l'utente verifica il file completo e usa «Usa questo
+   Word come riferimento». Niente selezione tramite massimo ID/data e niente
+   riapertura di PDF per adottare una fonte valida. Su OL972 verificare norma
+   e limiti del file reale prima della scelta; un baseline legacy non è prova.
+4. Prima di riaprire: migrazione e test sulle immagini realmente installate,
+   backend/frontend coerenti; permessi delle nuove azioni limitati a Qualità/IT.
+   Preservare i flag raccolta/riuso già autorizzati. La vecchia API export PDF
+   e i relativi permessi devono rimanere invariati; la nuova colonna è interna.
+5. Dopo: il normale worker potrà preparare nuovi DDT e aggiornare le sole copie
+   automatiche aperte con revisione superata e impronta integra. Upload e altre
+   modifiche esplicite avviano un ricontrollo circoscritto allo stesso OL/F3.
+   Quote con PDF, modifiche manuali o versioni PDF pregresse non vengono
+   sovrascritte automaticamente. Verificare conteggi, revisioni, file sorgenti,
+   campi DDT/quantità e log/errori senza creare PDF aziendali per collaudo.
+6. Verificare con l'utente i tre conflitti storici e le tre variazioni materiale.
+   D: completamento Incoming poi «Aggiorna Word»; deve aggiornare contenuto e
+   materiale di riferimento, conservando pagine/immagini/allegati e PDF chiusi.
+   Se il formato tecnico è personalizzato e non riconosciuto, il codice conserva
+   il documento e richiede verifica: non forzare la rimozione della protezione.
+7. Rollback: ripristinare codice coerente backend/frontend, lasciando la colonna
+   additiva e i dati/documenti creati nel frattempo. Il codice precedente ignora
+   la colonna. Non azzerare revisioni né ripristinare indiscriminatamente il DB;
+   verificare l'eventuale lavoro utenti dopo la riapertura. Gli hash/backup
+   precedenti servono al confronto, non autorizzano cancellazioni automatiche.
+
+Questa sezione non autorizza deploy, adozioni storiche, pulizie o rigenerazioni
+massive. Restano obbligatori audit spazio, conferme e mitigazioni del runbook.
+
 ### Stato verificato e attività già concluse
 
 - Primo recupero DDT e attivazione snapshot: 01/10, non da ripetere.
