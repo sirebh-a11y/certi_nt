@@ -136,7 +136,7 @@ class DdtQueueTest(DdtQueueFixture):
 
     def test_deadline_does_not_change_pdf_completion_states_or_counts(self):
         ready = self.item(DDT="77-01/01/2020")
-        completed = self.item(IdRigaDoc="2", DDT="78-01/01/2020")
+        completed = self.item(IdDocumento="101", IdRigaDoc="2", DDT="78-01/01/2020")
         rejected = self.item(IdRigaDoc="3", ORP="OL2", DDT="79-01/01/2020")
         self.material()
         self.material(ol="OL2", cdq="CDQ2", evaluation="respinto")

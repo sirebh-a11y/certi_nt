@@ -18,6 +18,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio import word_standard, word_reference
+from app.modules.quarta_taglio import ddt_shipments as shipments
 from app.modules.quarta_taglio.certificate_docx import update_docx_content_controls
 from app.modules.quarta_taglio.ddt_context import exact_certificate, quantity_matches
 from app.modules.quarta_taglio.ddt_decisions import exclusion_valid, latest_decisions
@@ -45,7 +46,7 @@ def file_hash(key):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def word_facts(key):
+def word_facts(key, *, ignore_number=False):
     """Compare templates ignoring only shipment values, not manual/technical text."""
     controls = {}
     hashes = []
@@ -64,7 +65,7 @@ def word_facts(key):
                     if tag in controls and controls[tag] != value:
                         raise ValueError('duplicate_content_control')
                     controls[tag] = value
-                    if tag in SHIPMENT_TAGS:
+                    if tag in SHIPMENT_TAGS or (ignore_number and tag == 'CERT_NUMBER'):
                         for content in node.xpath('./w:sdtContent', namespaces=NS):
                             content.clear()
                 data = etree.tostring(root, method='c14n')
@@ -72,7 +73,7 @@ def word_facts(key):
     return controls, digest(hashes)
 
 
-def shipment_values(item, certificate, controls):
+def shipment_values(item, certificate, controls, *, db=None):
     code = clean(item.cod_f3)
     raw = clean(controls.get('COD_F3_RAW')) == code
     finished = clean(controls.get('COD_F3_FINISHED')) == code
@@ -85,13 +86,16 @@ def shipment_values(item, certificate, controls):
         raise ValueError('shipment_controls_missing')
     if clean(controls['CERT_NUMBER']) != clean(certificate.certificate_number):
         raise ValueError('word_number_mismatch')
-    return {
+    values = {
         'CERT_DATE': item.ddt_date.strftime('%d/%m/%Y'),
         'PURCHASER': clean(item.cliente), 'ORDER_CLIENT': clean(item.ordine_cliente),
         'CONFIRM_ORDER': clean(item.conferma_ordine),
         'DDT_' + branch: item.ddt_raw,
-        'QUANTITY_' + branch: service._format_quantity(float(item.quantita)) if item.quantita is not None else '',
+        'QUANTITY_' + branch: shipments.quantity_text(db, item) if db is not None else service._format_quantity(float(item.quantita)) if item.quantita is not None else '',
     }
+    if db is not None:
+        values['CERT_NUMBER'] = certificate.certificate_number
+    return values
 
 
 def _materials(values):
@@ -186,6 +190,10 @@ def plan_item(db, item):
     decision = latest_decisions(db, [item.id]).get(item.id)
     if decision and (exclusion_valid(item, decision) or decision.action in {'exclude', 'review'}):
         return stop('manual_decision_requires_review')
+    try:
+        group = shipments.facts(db, item)
+    except HTTPException:
+        return stop('shipment_group_requires_review')
     certificates = list(db.scalars(select(QuartaTaglioFinalCertificate).where(
         QuartaTaglioFinalCertificate.cod_odp == item.cod_odp)))
     exact = [c for c in certificates if exact_certificate(item, c)]
@@ -201,9 +209,12 @@ def plan_item(db, item):
             return stop('existing_document_preserved')
         if target.storage_key_docx:
             reference = word_reference.declared([c for c in certificates if c.cod_f3 == item.cod_f3])
+            total_changed = bool(target.shipment_context and target.shipment_context.get('revision') != group['revision'])
             if (reference is None or reference.id == target.id
-                    or word_reference.metadata(target).get('revision') == word_reference.metadata(reference).get('revision')):
+                    or word_reference.metadata(target).get('revision') == word_reference.metadata(reference).get('revision')) and not total_changed:
                 return stop('existing_document_preserved')
+            if total_changed and target.word_source != 'ddt_reused':
+                return stop('existing_document_preserved')  # Tracked fields refresh on explicit download/PDF.
             try:
                 refreshing = (target.word_source == 'ddt_reused'
                     and word_reference.metadata(target).get('kind') == 'copy'
@@ -247,17 +258,19 @@ def plan_item(db, item):
     if target and not refreshing and target.cdq_values and not _compatible_materials(target.cdq_values, current_values):
         return stop('target_material_changed')
     if target and target.certificate_number:
-        sources = [c for c in sources if c.certificate_number == target.certificate_number]
+        sources = [c for c in sources if shipments.base_number(c) == shipments.base_number(target)]
     if not sources:
         return stop('no_compatible_word')
     fingerprints, candidates = set(), []
     for source in sources:
         try:
-            controls, template = word_facts(source.storage_key_docx)
-            values = shipment_values(item, source, controls)
+            controls, template = word_facts(source.storage_key_docx, ignore_number=True)
+            allocation = shipments.number_plan(db, item, source, target)
+            values = shipment_values(item, source, controls, db=db)
+            values['CERT_NUMBER'] = allocation['number']
             attachments = service._pdf_attachments_for_certificate(db, certificate=source)
             attachment_facts = [(a.storage_key_pdf, a.original_filename, file_hash(a.storage_key_pdf)) for a in attachments]
-            fingerprints.add(digest([source.certificate_number, template, attachment_facts, source.conformity_status,
+            fingerprints.add(digest([shipments.base_number(source), template, attachment_facts, source.conformity_status,
                                      source.conformity_issues]))
             candidates.append((source, values, attachment_facts))
         except (OSError, ValueError, HTTPException, zipfile.BadZipFile, etree.XMLSyntaxError):
@@ -268,7 +281,7 @@ def plan_item(db, item):
     if chosen is None:
         return stop('different_word_sources')
     source, values, attachments = chosen
-    result.update(action='reuse', source_id=source.id, number=source.certificate_number,
+    result.update(action='reuse', source_id=source.id, number=allocation['number'], allocation=allocation, shipment_group=group,
                   refreshing=refreshing,
                   source_file_hash=file_hash(source.storage_key_docx), values=values,
                   attachments=attachments, quantity=str(item.quantita))
@@ -301,7 +314,7 @@ def apply_item(db, item, plan, created_paths):
             unit_key=item.certification_unit_key, esolver_id_documento=item.id_documento,
             esolver_id_riga_doc=item.id_riga_doc, esolver_rif_lotto_alfanum=item.rif_lotto_alfanum,
             ordine_cliente=item.ordine_cliente, quantita=float(item.quantita) if item.quantita is not None else None,
-            certificate_number=source.certificate_number, draft_number=source.certificate_number,
+            certificate_number=plan['number'], draft_number=plan['number'],
             status='draft', cdq_key=source.cdq_key, cdq_signature=deepcopy(source.cdq_signature),
             cdq_values=deepcopy(source.cdq_values), conformity_status=source.conformity_status,
             conformity_issues=deepcopy(source.conformity_issues),
@@ -314,11 +327,12 @@ def apply_item(db, item, plan, created_paths):
     target.cdq_key = source.cdq_key
     target.cdq_signature, target.cdq_values = deepcopy(source.cdq_signature), deepcopy(source.cdq_values)
     target.conformity_status, target.conformity_issues = source.conformity_status, deepcopy(source.conformity_issues)
-    target.certificate_number = target.certificate_number or source.certificate_number
+    target.certificate_number = target.certificate_number or plan['number']
     target.draft_number = target.certificate_number
     target.cert_date = datetime.combine(item.ddt_date, datetime.min.time(), tzinfo=timezone.utc)
     target.fornitore_cliente, target.cdo_lega, target.lega_cod_f3 = item.cliente, item.conferma_ordine, item.cod_f3
     target.storage_key_docx, target.download_token = key, secrets.token_urlsafe(32)
+    shipments.record(db, target, item, plan['allocation'])
     word_standard.copy_provenance(source, target)
     target.certified_by_user_id, target.quality_manager_user_id = source.certified_by_user_id, source.quality_manager_user_id
     service._apply_word_file_state(target, path, source='ddt_reused')

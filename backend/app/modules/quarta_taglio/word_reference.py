@@ -38,12 +38,16 @@ def choose(db, sources):
     candidates, fingerprints = [], set()
     for c in [chosen] if chosen is not None else sources:
         try:
-            _, template = reuse.word_facts(c.storage_key_docx)
+            controls, template = reuse.word_facts(c.storage_key_docx)
+            if 'CERT_NUMBER' in controls and controls['CERT_NUMBER'] != c.certificate_number:
+                return None, 'source_file_or_controls_invalid'
             if chosen is not None and template != metadata(c).get('template_hash'):
                 return None, 'reference_file_changed'
+            from app.modules.quarta_taglio.ddt_shipments import base_number
+            _, comparison = reuse.word_facts(c.storage_key_docx, ignore_number=True)
             attachments = [(a.storage_key_pdf, a.original_filename, reuse.file_hash(a.storage_key_pdf))
                            for a in reuse.service._pdf_attachments_for_certificate(db, certificate=c)]
-            fingerprints.add(reuse.digest([c.certificate_number, template, attachments,
+            fingerprints.add(reuse.digest([base_number(c), comparison, attachments,
                                           c.conformity_status, c.conformity_issues]))
             candidates.append((c, {}, attachments))
         except (OSError, ValueError, HTTPException, reuse.zipfile.BadZipFile, reuse.etree.XMLSyntaxError):

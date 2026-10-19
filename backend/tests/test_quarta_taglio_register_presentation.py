@@ -80,6 +80,12 @@ class RegisterPresentationTest(unittest.TestCase):
         child = self.cert(cod_f3='096013930', certificate_number='7009_00_30/26', word_source='inherited')
         self.assertEqual(len(self.visible().items), 2)
 
+    def test_new_shipment_suffix_does_not_reintroduce_the_early_base(self):
+        base=self.cert()
+        shipped=self.shipment(certificate_number='7009_00_00_01/26')
+        self.assertEqual([i.id for i in self.visible().items],[shipped.id])
+        self.assertIsNone(base.ddt)
+
     def test_hidden_raw_remains_an_inheritance_source_for_another_workmanship(self):
         base = self.cert()
         shipped = self.shipment()

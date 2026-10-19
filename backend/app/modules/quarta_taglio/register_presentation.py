@@ -1,6 +1,7 @@
 """Register projection only. Never delete/update sources or choose a reuse Word."""
 import json
 from collections import defaultdict
+from app.modules.quarta_taglio.ddt_shipments import base_number
 
 
 def clean(value):
@@ -25,7 +26,7 @@ def superseded_bases(certificates, *, file_available):
     """
     shipments = defaultdict(list)
     def key(c):
-        identity = tuple(clean(getattr(c, f)) for f in ('cod_odp', 'cod_f3', 'certificate_number'))
+        identity = (clean(c.cod_odp), clean(c.cod_f3), base_number(c))
         material = material_key(c)
         return (*identity, material) if all(identity) and material else None
 

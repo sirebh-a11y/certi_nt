@@ -55,6 +55,35 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
    messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
    Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
 
+### Modifica locale 19/10 — progressivo DDT e quantità parte del totale (NON installata)
+
+Piano e compatibilità: [nota numerazione/quantità](../tasks/ddt_shipment_number_quantity_20261019.md).
+Questa sezione non autorizza il deploy, backfill o rinumerazioni storiche.
+
+1. Prima: nuovo controllo spazio, attività utenti e snapshot; backup app/DB/storage
+   verificati secondo questo runbook. Ultima misura read-only 19/10 circa 1,91 GB
+   liberi: non usarla come garanzia futura. Stream di backup con logging `none`.
+2. Preview read-only `ddt_shipments.preview_legacy(db)` sul DB Alpha reale: funziona
+   senza la nuova colonna. Conservare conteggi/hash, elenco Word aperti, numeri
+   già condivisi tra più DDT, file/PDF e vista export. Nessuna copia dal DB locale.
+3. Con writer/job fermi, aggiungere SOLO `shipment_context JSON` nullable sulla
+   tabella certificati mediante `ddt_shipments.ensure_schema(connection)`, con
+   motore/schema Alpha reali. Verificare idempotenza e dati preesistenti invariati.
+   Non interrogare il nuovo ORM completo prima della colonna; non avviare bootstrap
+   per una semplice preparazione schema. Nessun backfill o rigenerazione massiva.
+4. Installare un pacchetto coerente. I nuovi DDT useranno la sequenza aggiuntiva;
+   numeri/PDF storici, Word aperti non migrati e nomi PDF personalizzati restano
+   invariati. OL1090/2375 e 2418 sono verifiche storiche, NON liste da correggere.
+5. Dopo: controllare numero dentro tutte le pagine Word/PDF, nome `.docx`, PDF
+   standard/personalizzato e `NomeFilePdf` export; due quote stesso DDT restano
+   distinte con stesso numero e quantità parte/totale. Non chiudere PDF aziendali
+   per collaudo. Verificare timer, flag riuso/snapshot e spazio finale.
+6. Rollback: non cancellare la colonna nullable, nuovi numeri/quote o documenti
+   comparsi dopo la riapertura, né ripristinare indiscriminatamente un DB vecchio.
+   Il vecchio codice non conosce il quarto segmento: prima di riaprire scritture
+   con un downgrade verificare i nuovi record e concordare il recupero; preferire
+   correzione in avanti. Backup e precedenti immagini restano conservati.
+
 ### Modifica 17/10/2026 — tag Requisiti cliente in Certificazione (installata 18/10)
 
 Il tag è stato aggiunto sotto Cliente nella lista OL, riutilizzando i requisiti

@@ -218,6 +218,8 @@ class QuartaTaglioFinalCertificate(Base):
     word_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Explicit edits publish a reference; automatic DDT copies retain its revision.
     word_reference: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # Shipment numbering/total are independent from the technical Word reference.
+    shipment_context: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     word_standard_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     word_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     word_content_controls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

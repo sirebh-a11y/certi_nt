@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.modules.quarta_taglio import service
+from app.modules.quarta_taglio import ddt_shipments
 from app.modules.quarta_taglio.ddt_context import exact_certificate as _exact_certificate, quantity_matches as _quantity_matches
 from app.modules.quarta_taglio.ddt_snapshot import last_snapshot_runs
 from app.modules.quarta_taglio.ddt_decisions import (
@@ -253,6 +254,12 @@ def _project(db, items):
             row.reasons = [service.word_standard.MESSAGE]
         row.operational_state = row.state
         row.source_revision = source_revision(item)
+        if row.state != 'completed' and item.cod_odp and item.cod_f3 and item.ddt_raw:
+            try:
+                row.source_revision = ddt_shipments.queue_revision(db, item)
+            except HTTPException as exc:
+                row.state, row.label = 'review', 'Totale DDT da verificare'
+                row.reasons.append(str(exc.detail))
         if decision:
             row.latest_decision = DdtDecisionResponse.model_validate(decision)
             row.exclusion_active = exclusion_valid(item, decision)
@@ -295,7 +302,7 @@ def _project(db, items):
 
 def require_queue_pdf_action(db, item, certificate_id, expected_revision):
     """Recheck the clicked share, including exclusions and live Incoming, before PDF."""
-    if not expected_revision or source_revision(item) != expected_revision:
+    if not expected_revision or ddt_shipments.queue_revision(db, item) != expected_revision:
         raise HTTPException(409, "La riga DDT è cambiata: aggiorna la vista prima di generare il PDF")
     with db.no_autoflush:
         row = _project(db, [item])[0]

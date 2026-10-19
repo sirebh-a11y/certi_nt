@@ -53,7 +53,7 @@ from app.modules.quarta_taglio.models import (
 from app.modules.quarta_taglio.file_names import (
     certificate_pdf_file_name, normalize_pdf_file_name, standard_certificate_file_name,
 )
-from app.modules.quarta_taglio import word_standard, word_reference
+from app.modules.quarta_taglio import word_standard, word_reference, ddt_shipments
 from app.modules.quarta_taglio.ddt_context import (
     certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
@@ -843,6 +843,16 @@ def get_quarta_taglio_detail(
         raw_cod_f3_override=next((_clean_text(candidate.cod_f3_odp) for candidate in cod_f3_candidates if _clean_text(candidate.cod_f3_odp)), None),
         finished_description_override=_clean_text(selected_candidate.des_f3) if selected_candidate is not None else None,
     )
+    shipment_problem = None
+    if saved_ddt is not None and (selected_certificate is None or
+            (selected_certificate.status != 'pdf_final' and
+             (selected_certificate.shipment_context or not selected_certificate.storage_key_docx))):
+        for branch in ('raw', 'finished'):
+            if header_flow[branch + '_cod_f3'] == saved_ddt.cod_f3 and header_flow[branch + '_ddt'] == saved_ddt.ddt_raw:
+                try:
+                    header_flow[branch + '_quantita'] = ddt_shipments.quantity_text(db, saved_ddt)
+                except HTTPException as exc:
+                    shipment_problem = str(exc.detail)
     detail_certificate_date = (
         _certificate_datetime_from_ddt(open_certificate.ddt if open_certificate else None)
         or _certificate_datetime_from_ddt(primary_unit.ddt if primary_unit else None)
@@ -859,6 +869,8 @@ def get_quarta_taglio_detail(
         app_rows=app_rows,
         selected_standard_confirmed=selected_standard_confirmed,
     )
+    if shipment_problem:
+        word_creation_blockers.append(shipment_problem)
     can_create_word = not word_creation_blockers
     if saved_ddt is not None and not (open_certificate and open_certificate.storage_key_docx):
         base_word = _existing_word_for_workmanship(db, cod_odp=group.cod_odp, cod_f3=saved_ddt.cod_f3)
@@ -1289,6 +1301,12 @@ def create_quarta_taglio_word_draft(
         cod_f3=certificate.cod_f3 or (detail.header or {}).get("codice_f3"),
         now=certificate_date,
     )
+    certificate_number = ddt_shipments.prepare(db, certificate,
+        saved_ddt or ddt_shipments.item_for_certificate(db, certificate), certificate_number, explicit=True)
+    if saved_ddt is not None:
+        for branch in ('raw','finished'):
+            if detail.header.get('codice_f3_' + branch) == saved_ddt.cod_f3 and detail.header.get('ddt_' + branch) == saved_ddt.ddt_raw:
+                detail.header['quantita_' + branch] = ddt_shipments.quantity_text(db, saved_ddt)
     certificate.certificate_number = certificate_number
     _ensure_certificate_number_unique(db, certificate)
     certificate.draft_number = certificate_number
@@ -1928,6 +1946,7 @@ def _word_content_control_values_for_unit(
     detail: QuartaTaglioDetailResponse,
     certificate: QuartaTaglioFinalCertificate,
     unit: QuartaTaglioCertifiableUnitResponse,
+    *, db: Session | None = None,
 ) -> dict[str, object]:
     header = dict(detail.header or {})
     raw_cod_f3 = _clean_text(header.get("codice_f3_raw")) or _join_unique(item.cod_art for item in detail.materials) or None
@@ -1953,6 +1972,12 @@ def _word_content_control_values_for_unit(
             "quantita_finished": _format_quantity(finished_unit.quantita) if finished_unit and finished_unit.ddt and finished_unit.quantita is not None else "",
         }
     )
+    if db is not None:
+        item = ddt_shipments.item_for_certificate(db, certificate)
+        if item is not None and (certificate.shipment_context or not certificate.storage_key_docx):
+            for branch in ('raw', 'finished'):
+                if header.get('codice_f3_' + branch) == item.cod_f3 and header.get('ddt_' + branch) == item.ddt_raw:
+                    header['quantita_' + branch] = ddt_shipments.quantity_text(db, item)
     return _word_content_control_values_from_header(header, certificate)
 
 
@@ -2346,13 +2371,15 @@ def _sync_certifiable_unit_register(
         elif not certificate.cert_date:
             certificate.cert_date = cert_date
         if not certificate.certificate_number:
-            certificate.certificate_number = _assign_certificate_number(
+            candidate_number = _assign_certificate_number(
                 db,
                 cdq_key=certificate.cdq_key,
                 cod_odp=certificate.cod_odp,
                 cod_f3=certificate.cod_f3,
                 now=certificate.cert_date,
             )
+            certificate.certificate_number = ddt_shipments.prepare(db, certificate,
+                ddt_shipments.item_for_certificate(db, certificate), candidate_number)
         _ensure_certificate_number_unique(db, certificate)
         certificate.draft_number = certificate.certificate_number or certificate.draft_number
         _apply_certificate_conformity(certificate, detail)
@@ -2507,6 +2534,10 @@ def _assign_certificate_number(
     cod_f3: str | None = None,
     now: datetime | None = None,
 ) -> str:
+    # Initial base numbers are shared across OLs/CDQ families; per-OL locks
+    # alone cannot serialize two simultaneous first-Word assignments.
+    if db.get_bind().dialect.name == 'postgresql':
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('quarta_taglio_certificate_numbering'))"))
     issued_at = now or datetime.now(timezone.utc)
     year_suffix = f"{issued_at.year % 100:02d}"
     key = _clean_text(cdq_key)
@@ -2564,14 +2595,14 @@ def _ensure_certificate_number_unique(db: Session, certificate: QuartaTaglioFina
 
 
 def _certificate_main_number(value: str | None) -> int | None:
-    match = re.match(r"^\s*(\d+)(?:_\d+)?(?:_\d+)?/\d{2}\s*$", value or "")
+    match = re.match(r"^\s*(\d+)(?:_\d+){0,3}/\d{2}\s*$", value or "")
     if not match:
         return None
     return int(match.group(1))
 
 
 def _certificate_suffix_parts(value: str | None) -> tuple[int, int | None, str] | None:
-    match = re.match(r"^\s*(\d+)(?:_(\d+))?(?:_\d+)?/(\d{2})\s*$", value or "")
+    match = re.match(r"^\s*(\d+)(?:_(\d+))?(?:_\d+){0,2}/(\d{2})\s*$", value or "")
     if not match:
         return None
     return int(match.group(1)), int(match.group(2)) if match.group(2) else None, match.group(3)
@@ -2686,6 +2717,7 @@ def generate_quarta_taglio_certificate_pdf(
     if not word_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
     word_path = _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
+    ddt_shipments.require_current(db, certificate)
     db.refresh(certificate)
     word_standard.require_current(db, certificate)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
@@ -2705,7 +2737,9 @@ def generate_quarta_taglio_certificate_pdf(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Generazione PDF fallita: {exc}") from exc
 
     # Word refresh may commit. Recheck the share after conversion before closure.
+    ddt_shipments.lock_snapshot_for_pdf(db, certificate)
     final_item = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    ddt_shipments.require_current(db, certificate)
     _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
     word_standard.require_current(db, certificate)
@@ -2807,11 +2841,25 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         from app.modules.quarta_taglio.ddt_word_reuse import shipment_values, word_facts
         try:
             controls, _ = word_facts(certificate.storage_key_docx)
-            values = shipment_values(saved_ddt, certificate, controls)
+            values = shipment_values(saved_ddt, certificate, controls,
+                db=db if certificate.shipment_context else None)
         except (OSError, ValueError, zipfile.BadZipFile):
             raise HTTPException(status_code=409, detail="Campi del Word riutilizzato non verificabili") from None
         if any(controls.get(key) != str(value) for key, value in values.items()):
-            raise HTTPException(status_code=409, detail="Dati DDT diversi dal Word predisposto: verifica richiesta")
+            # A changed sibling share changes only the total, not the technical
+            # Word. Refresh tracked automatic copies, never a manual edit.
+            from app.modules.quarta_taglio.ddt_word_reuse import file_hash
+            metadata = word_reference.metadata(certificate)
+            if (not certificate.shipment_context or metadata.get('kind') != 'copy'
+                    or metadata.get('file_hash') != file_hash(certificate.storage_key_docx)):
+                raise HTTPException(status_code=409, detail="Dati DDT diversi dal Word predisposto: verifica richiesta")
+            key = _certificate_docx_storage_key(certificate.cod_odp)
+            output = _certificate_storage_path(key)
+            update_docx_content_controls(path, output, values)
+            certificate.storage_key_docx = key
+            certificate.word_reference = {**metadata, 'storage_key': key, 'file_hash': file_hash(key)}
+            ddt_shipments.record(db, certificate, saved_ddt)
+            path = output
         # Preserve the existing live conformity check before download/PDF without
         # rebuilding technical or manually edited contents of the reused Word.
         detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
@@ -2843,6 +2891,8 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         return _certificate_storage_path(certificate.storage_key_docx)
 
     if not present:
+        if certificate.shipment_context:
+            raise HTTPException(409, 'Il Word non contiene i campi per numero e quantità DDT: ripristinarli nel Word e ricaricarlo.')
         if (certificate.word_content_controls or []) != present or (certificate.word_missing_content_controls or []) != missing:
             certificate.word_content_controls = present
             certificate.word_missing_content_controls = missing
@@ -2856,7 +2906,12 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         # Old registry entries may share a Word path. Never edit another quota's file.
         storage_key = _certificate_docx_storage_key(certificate.cod_odp)
         output_path = _certificate_storage_path(storage_key)
+    if certificate.shipment_context and saved_ddt is not None:
+        if not {'CERT_NUMBER', 'QUANTITY_RAW', 'QUANTITY_FINISHED'}.issubset(set(present)):
+            raise HTTPException(409, 'Campi numero/quantità DDT mancanti: ripristinarli nel Word e ricaricarlo.')
     update_docx_content_controls(path, output_path, _word_content_control_values(detail, certificate))
+    if certificate.shipment_context and saved_ddt is not None:
+        ddt_shipments.record(db, certificate, saved_ddt)
     if saved_ddt is not None:
         certificate.storage_key_docx = storage_key
     certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
@@ -3010,6 +3065,19 @@ def _resolve_additional_pages_for_certificate(
     exact_pages = _additional_pages_for_certificate(db, certificate_number=cleaned_number)
     if exact_pages is not None:
         return _AdditionalPagesResolution(extra_pages=exact_pages)
+
+    # A shipment suffix does not make the same workmanship lose its own pages
+    # or inherit Raw pages instead. Only after this lookup retain Raw-first
+    # inheritance between DIFFERENT workmanships.
+    if cod_odp and cod_f3:
+        same_sources = word_reference.sources_for(db, cod_odp, cod_f3)
+        same_source, _ = word_reference.choose(db, same_sources)
+        if same_source is not None and same_source.certificate_number != cleaned_number:
+            same_pages = _additional_pages_for_certificate(db, certificate_number=same_source.certificate_number)
+            if same_pages is not None:
+                return _AdditionalPagesResolution(extra_pages=same_pages, is_inherited=True,
+                    inherited_from_certificate_number=same_source.certificate_number,
+                    inherited_from_cod_f3=cod_f3)
 
     current_cod_f3 = _cod_f3_sort_value(cod_f3)
     current_ol = _norm(cod_odp)
@@ -3169,7 +3237,7 @@ def _ensure_register_word_current(
 ) -> bool:
     if certificate.status == "pdf_final" or not certificate.certificate_number or word_standard.is_stale(certificate, db):
         return False
-    values = _word_content_control_values_for_unit(detail, certificate, unit) if unit is not None else _word_content_control_values(detail, certificate)
+    values = _word_content_control_values_for_unit(detail, certificate, unit, db=db) if unit is not None else _word_content_control_values(detail, certificate)
     current_path = _certificate_storage_path(certificate.storage_key_docx) if certificate.storage_key_docx else None
     source_path = _certificate_word_source_path_for_auto_update(db, certificate=certificate, values=values)
     if source_path is None:

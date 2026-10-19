@@ -70,6 +70,14 @@ class DdtHistoryTest(DdtQueueFixture):
             path.parent.mkdir(parents=True, exist_ok=True)
             doc = WordDocument()
             doc.add_paragraph(kwargs["detail"].header["ddt"] or "no DDT")
+            # This historical flow fixture intentionally mocks the entire Word
+            # builder, not its new tracked shipment controls. Real generated
+            # Word/number/total integration is covered by test_ddt_shipments.
+            for cert in self.db.scalars(select(QuartaTaglioFinalCertificate).where(
+                    QuartaTaglioFinalCertificate.certificate_number == kwargs['draft_number'],
+                    QuartaTaglioFinalCertificate.unit_key == kwargs['detail'].header.get('unit_key'),
+                    QuartaTaglioFinalCertificate.status != 'pdf_final')):
+                cert.shipment_context = None
             doc.save(path)
         with ExitStack() as stack:
             stack.enter_context(patch.object(service, "_word_creation_blockers", return_value=[]))
