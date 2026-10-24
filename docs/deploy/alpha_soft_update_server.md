@@ -7,9 +7,10 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### In sviluppo locale — Arconic identità certificato/DDT (24/10/2026)
+### Arconic identità certificato/DDT — installata il 24/10/2026
 
-Non ancora pubblicato: richiede commit/push e deploy esplicitamente autorizzati.
+Pubblicata con autorizzazione esplicita, pacchetto Alpha10.4; postcheck dati/file/
+export e primo timer reale conclusi positivamente il 24/10.
 Modifica circoscritta ai prompt Arconic e a un recupero facoltativo prima della
 normalizzazione/cache. Nessuna migrazione database, bonifica storica, sostituzione
 di documenti, modifica dei matcher o delle soglie degli altri fornitori.
@@ -54,19 +55,21 @@ nessuna variazione dei valori normalizzati di chimica, proprietà e note.
 Preflight e successivo verbale del passaggio:
 [Alpha 10.4 — Arconic](alpha10_4_preflight_20261024.md).
 
-### Punto di ingresso per i prossimi deploy — aggiornato 19/10/2026
+### Punto di ingresso per i prossimi deploy — aggiornato 24/10/2026
 
-**Alpha 10.3 installata il 19/10; controlli conclusi, compreso il primo timer.**
+**Alpha 10.4 installata il 24/10; controlli conclusi, compreso il primo timer.**
 Rallentamento Quarta preesistente documentato nel verbale. Questo documento non
 autorizza nuove pulizie, commit/push, fermi, scritture dati o deploy. Ogni nuova
 operazione richiede l'indicazione dell'utente; l'OK al deploy non equivale
 all'OK a cancellazioni o recuperi massivi.
 
-Ultimo pacchetto installato: `v0.1.0-alpha.10.3-deploy`, commit deploy `2a31915`,
-`SOURCE_COMMIT=62767a6e8009130c93c13b6d639d81161dfba402`, versione app
+Ultimo pacchetto installato: `v0.1.0-alpha.10.4-deploy`, commit deploy `5d2fdcd`,
+`SOURCE_COMMIT=89c5fe40578edf025ed8a4460625a5177de2e964`, versione app
 `0.1.0.alpha.10`. Sono riferimenti storici da confrontare col server, NON tag
 da riutilizzare o spostare al prossimo aggiornamento.
-Esito corrente: [verbale Alpha 10.3](alpha10_3_preflight_20261019.md).
+Esito corrente: [verbale Alpha 10.4](alpha10_4_preflight_20261024.md).
+Precedente pacchetto 10.3: `2a31915`, sorgente `62767a6e8009130c93c13b6d639d81161dfba402`;
+[verbale Alpha 10.3](alpha10_3_preflight_20261019.md).
 Precedente pacchetto 10.2: `3168cef`, sorgente `ec5b949804070fd17219d5b5221e96ddce33eb16`;
 esiti e incidente del backup: [verbale Alpha 10.2](alpha10_2_preflight_20261018.md).
 Precedente pacchetto 10.1: `b6b9e44`, sorgente `b91c0b0973bbae3d4095c947bb91b822dbc434e0`.
@@ -104,6 +107,32 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
 7. Verificare health pubblico, mapping/permessi DB, UI e bundle, job automatici,
    messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
    Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
+
+#### Tag base mutabili e dipendenze — lezione del 24/10
+
+`--pull=false` non prova che BuildKit riusi il vecchio digest di un tag base.
+Confrontare gli strati effettivi prima di autorizzare una ricostruzione: il
+24/10 python:3.11-slim risolveva una base più recente; la sola build candidata
+è stata fermata senza toccare l'app. Non considerare un aggiornamento di
+dipendenze un effetto implicito accettabile di una correzione applicativa.
+
+Per una modifica di SOLO codice, con Dockerfile/requirements/configurazione
+semanticamente invariati, è stato collaudato il riuso dell'esatto runtime
+operativo: wrapper di build privato, base verificata per ID immutabile, rete
+disabilitata, sostituzione COMPLETA delle directory app/scripts nella sola
+immagine candidata (mai sui volumi o nel container operativo), nessun apt/pip.
+Verificare prefisso identico di tutti i layer precedenti, Config invariata e
+ogni file app/scripts identico al pacchetto. Conservare wrapper, ID e prove nel
+verbale/backup. Non usare questa variante se cambiano dipendenze o istruzioni
+runtime. Il Dockerfile sorgente del pacchetto non va modificato di nascosto.
+Frontend riutilizzabile soltanto se tutti i sorgenti/configurazioni coincidono,
+non per la sola versione stampata. Resta obbligatorio collaudare la candidata
+effettiva, preservare le immagini di rollback e avviare senza build/pull impliciti.
+
+Il parent `/srv/certi_nt` è root-owned: non aggirare i permessi per rinominare
+l'intera app o cambiare mount. Usare il percorso soft già documentato sui soli
+contenuti della directory app validata, con writer fermi, backup verificati e
+.env preservato; dati/storage e altri stack restano esclusi.
 
 ### Modifica 19/10 — progressivo DDT e quantità parte del totale (installata 19/10)
 
