@@ -1,5 +1,20 @@
 # Progressivo certificato per DDT e quantità parte del totale
 
+## Pubblicazione Alpha 19/10/2026
+
+Successivamente al piano locale sotto, l'utente ha autorizzato il deploy.
+Installato pacchetto `v0.1.0-alpha.10.3-deploy`, sorgente `62767a6e8009`.
+486 test passati senza salti anche sull'immagine candidata server; restore
+isolato del backup Alpha con 44 tabelle identiche e tutti i file verificati.
+Colonna aggiunta senza backfill, 246 certificati e 72 PDF/export preservati.
+Simulazione read-only sui dati reali OL1090: futuro DDT
+`7051_00_00_01/26`, file `7051_00_00_01_26.docx`/`.pdf`;
+DDT2375 propone `29 of 120` e `91 of 120`, senza riscrivere i documenti storici.
+Esiti e controllo conclusivo timer nel
+[verbale deploy](../deploy/alpha10_3_preflight_20261019.md).
+Le limitazioni/autorizzazioni del piano originario sotto descrivono la fase
+precedente, non un mancato permesso per il deploy già eseguito.
+
 ## Perimetro approvato
 
 Implementazione locale, nessuna pubblicazione o scrittura Alpha autorizzata.

@@ -6,6 +6,12 @@ comandi. Non autorizza recuperi, cancellazioni, modifiche dati o deploy futuri.
 **ESITO FINALE: deploy completato, Alpha online; controlli conclusi il 18/10
 alle 17:21 UTC circa.** Le fasi di fermo/incidente sotto sono storiche.
 
+**Conservazione aggiornata 19/10:** gli archivi app/DB/storage di questo backup
+PC sono stati restituiti al nuovo disco server e le copie PC rimosse solo dopo
+verifica e nuovo backup completo esterno. Manifest/log restano sul PC; percorsi
+attuali e hash nel [verbale 19/10](alpha10_3_preflight_20261019.md).
+I percorsi PC citati sotto descrivono lo stato al 18/10, non la disponibilità attuale.
+
 ## Pacchetto e collaudi
 
 - Sorgente main pubblicato `ec5b949804070fd17219d5b5221e96ddce33eb16`.

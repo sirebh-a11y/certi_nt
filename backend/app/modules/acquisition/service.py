@@ -27,6 +27,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
+from app.modules.acquisition.arconic_identity import (
+    CERTIFICATE_IDENTITY_INSTRUCTION,
+    DDT_IDENTITY_INSTRUCTION,
+    recover_identity as _recover_arconic_identity,
+)
 from app.core.database import SessionLocal
 from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
@@ -15669,6 +15674,20 @@ def _extract_arconic_hannover_ddt_row_groups_with_vision(
         crop_definitions,
         openai_api_key=openai_api_key,
     )
+    # Optional identity-only retry. Never reruns row splitting or replaces material data.
+    first_identity = {"ddt_number_raw": ddt_number_raw or fallback_ddt, "rows": raw_rows}
+
+    def reread_ddt_identity() -> dict:
+        number, rows, _ = _extract_arconic_hannover_ddt_row_groups_from_openai(
+            crop_definitions, openai_api_key=openai_api_key, identity_only=True,
+        )
+        return {"ddt_number_raw": number, "rows": rows}
+
+    recovered = _recover_arconic_identity(first_identity, kind="ddt", reread=reread_ddt_identity)
+    if recovered is not first_identity:
+        raw_rows = recovered["rows"]
+        recovered["_identity_recovery"]["first_response_raw"] = ai_document_payload_raw
+        ai_document_payload_raw = json.dumps(recovered, ensure_ascii=False)
     return _sanitize_arconic_hannover_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         raw_rows=raw_rows,
@@ -15712,6 +15731,7 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
     crops: dict[str, dict[str, str | int]],
     *,
     openai_api_key: str,
+    identity_only: bool = False,
 ) -> tuple[str | None, list[dict[str, object]], str]:
     client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
@@ -15724,7 +15744,8 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
                 "Per distinguere le righe usa insieme: line_no, Customer Item number, Customer Item Description, "
                 "Arconic Item number, Die / Dimension, CAST Number, package IDs, peso di riga. "
                 "La colata e il CAST Number tecnico, di solito un token che inizia con C; i package IDs sono supporto e non sostituiscono la colata. "
-                "Se la descrizione contiene ROUND BAR, ROD, RD087,00, DIA 87 o simili, estraila in customer_item_description_raw e die_dimension_raw. "
+                + DDT_IDENTITY_INSTRUCTION
+                + "Se la descrizione contiene ROUND BAR, ROD, RD087,00, DIA 87 o simili, estraila in customer_item_description_raw e die_dimension_raw. "
                 "alloy_raw deve venire dalla descrizione materiale o customer item description se visibile, ad esempio 6082 F. "
                 "diameter_raw deve venire da Die / Dimension o descrizione, ad esempio RD087,00 significa diametro 87. "
                 "ddt_number_raw e' il Delivery Note. sales_order_raw e' Sales Order Number. customer_po_raw e' Customer Purchase Order. "
@@ -15741,6 +15762,14 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
         }
     ]
 
+    if identity_only:
+        client = client.with_options(timeout=45.0, max_retries=0)
+        content[0]["text"] = (
+            "Rileggi solo l'identita delle righe di questo DDT. " + DDT_IDENTITY_INSTRUCTION
+            + 'Restituisci JSON {"ddt_number_raw":null,"rows":[{"line_no_raw":null,'
+            '"arconic_item_number_raw":null,"cast_number_raw":null,"package_ids_raw":null}]}. '
+            "Non leggere chimica, meccanica o note e non inventare righe."
+        )
     for crop_label, crop in crops.items():
         crop_path = _resolve_storage_path(str(crop["storage_key"]))
         encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
@@ -15760,6 +15789,7 @@ def _extract_arconic_hannover_ddt_row_groups_from_openai(
         response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
+            **({"max_output_tokens": 2048, "reasoning": {"effort": "low"}} if identity_only else {}),
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Arconic DDT row-group AI request failed") from exc
@@ -15930,6 +15960,12 @@ def _get_arconic_hannover_certificate_ai_payload(
         page_images,
         openai_api_key=openai_api_key,
     )
+    raw_payload = _recover_arconic_identity(
+        raw_payload, kind="certificate",
+        reread=lambda: _extract_arconic_hannover_certificate_payload_from_openai(
+            page_images, openai_api_key=openai_api_key, identity_only=True,
+        ),
+    )
     payload = _normalize_arconic_hannover_certificate_ai_payload(page_images, raw_payload)
     if certificate_ai_cache is not None:
         certificate_ai_cache[certificate_document.id] = payload
@@ -15940,6 +15976,7 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
     page_images: dict[str, dict[str, str | int]],
     *,
     openai_api_key: str,
+    identity_only: bool = False,
 ) -> dict[str, object]:
     client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
@@ -15950,7 +15987,8 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
                 "Campi core: cert_number e' Cert Number EEP..., sales_order_number, customer_po, delivery_note_no, line_no, "
                 "customer_item_number, arconic_item_number, item_description_raw, alloy_raw, diameter_raw, cast_job_number, net_weight_raw. "
                 "La colata e' il CAST/Heat che inizia con C; il job/package dopo slash e' supporto. "
-                "Chimica: leggi solo la riga Composition Results in %, escludendo limiti. "
+                + CERTIFICATE_IDENTITY_INSTRUCTION
+                + "Chimica: leggi solo la riga Composition Results in %, escludendo limiti. "
                 "Proprieta: se ci sono piu righe misurate, restituiscile in measured_rows; il sistema usera il minimo per campo. "
                 "Non inserire valori SPECLIMITS/limiti come misurati. "
                 "Note: verifica nota_us_control_class_a, nota_us_control_class_a_type1_bsh, nota_us_control_class_b, nota_rohs, nota_radioactive_free; "
@@ -15979,6 +16017,12 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
         }
     ]
 
+    if identity_only:
+        client = client.with_options(timeout=45.0, max_retries=0)
+        content[0]["text"] = (
+            "Rileggi solo l'identita del certificato. " + CERTIFICATE_IDENTITY_INSTRUCTION
+            + 'Restituisci solo JSON {"core":{"cert_number":null,"cast_job_number":null}}.'
+        )
     for image_label, crop in page_images.items():
         crop_path = _resolve_storage_path(str(crop["storage_key"]))
         encoded = base64.b64encode(crop_path.read_bytes()).decode("utf-8")
@@ -15989,6 +16033,7 @@ def _extract_arconic_hannover_certificate_payload_from_openai(
         response = _create_openai_response(client,
             model=settings.document_vision_model,
             input=[{"role": "user", "content": content}],
+            **({"max_output_tokens": 2048, "reasoning": {"effort": "low"}} if identity_only else {}),
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Arconic certificate AI extraction request failed") from exc

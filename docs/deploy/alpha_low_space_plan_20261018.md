@@ -1,5 +1,14 @@
 # Alpha — piano di deploy con backup esterni, 18/10/2026
 
+**Aggiornamento 19/10:** IT ha spostato data/backup sul nuovo disco capiente;
+il piano a basso spazio resta storico. I backup PC storici sono tornati sul
+server dopo verifica e le sole copie autorizzate sono state rimosse dal PC.
+Riferimenti attuali, conservazione esterna e divisione root/dati nel
+[runbook corrente](alpha_soft_update_server.md) e nel
+[verbale 19/10](alpha10_3_preflight_20261019.md). Non ripetere queste pulizie
+né presumere che i vecchi archivi PC siano ancora presenti. Le mitigazioni
+su stream binari, logging Docker, restore e protezione dei dati restano valide.
+
 Stato: piano, NON esecuzione del deploy. Integra il runbook soft update senza
 revocare controlli, autorizzazioni, backup o protezioni del lavoro utenti.
 L'utente ha chiesto recupero dello spazio storico già proposto e poi un piano

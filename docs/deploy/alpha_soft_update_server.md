@@ -7,18 +7,68 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Punto di ingresso per i prossimi deploy — aggiornato 18/10/2026
+### In sviluppo locale — Arconic identità certificato/DDT (24/10/2026)
 
-**Alpha 10.2 installata il 18/10; esiti e chiusura nel verbale collegato sotto.** Questo documento non
+Non ancora pubblicato: richiede commit/push e deploy esplicitamente autorizzati.
+Modifica circoscritta ai prompt Arconic e a un recupero facoltativo prima della
+normalizzazione/cache. Nessuna migrazione database, bonifica storica, sostituzione
+di documenti, modifica dei matcher o delle soglie degli altri fornitori.
+
+- Certificato: leggere Cert Number EEP e CAST/JOB completo, inclusi i job dopo
+  slash. DDT: distinguere job numerici da codici imballo BG5-PKG, mantenendo i
+  package separati per riga materiale. Conservare l'ordine stampato.
+- Una sola rilettura supplementare per documento nell'invocazione; per i
+  certificati il risultato è poi riutilizzato dalla cache del run. Recupero solo
+  su identità mancante/malformata o incongruenza riconoscibile (es. numero DDT
+  letto come package). Non è una certificazione della correttezza di ogni numero
+  formalmente valido, né un nuovo controllo incrociato con altri documenti.
+- Rilettura con timeout 45 secondi, max 2048 token output e retry SDK disattivati.
+  Un timeout/errore/JSON non valido nella sola rilettura **non deve trasformare il
+  documento in un file fallito o interrompere il lotto**: mantenere la prima
+  lettura e proseguire. Su molti documenti incompleti il tempo può aumentare;
+  non affermare che il recupero non abbia latenza. Invariata la gestione degli
+  errori della prima chiamata AI, preesistente.
+- Non cambiare chimica, meccanica, note, peso o righe dal recupero. Per il DDT
+  aggiornare solo package della riga identificata univocamente da riga/articolo/
+  CAST concordanti; nessuna associazione in base alla posizione. Conservare
+  prima risposta e rilettura nelle evidenze, senza sovrascrivere dati manuali:
+  le protezioni applicative esistenti restano al salvataggio.
+- Verifica pre/post pubblicazione: documento completo senza seconda chiamata;
+  recupero del suffisso mancante; DDT con più righe e package; rilettura fallita
+  senza blocco dei documenti successivi; certificati omonimi o non pertinenti non
+  collegati con regole più permissive. Non importare database o file di collaudo.
+
+Evidenze locali del collaudo API: `.tmp_server_audit/arconic_20261024/app_trial/`.
+Sei chiamate sulle funzioni applicative, costo prudenziale totale $0.261255;
+due coppie corrette e quattro errate nella matrice 2 righe DDT × 3 certificati,
+recuperi mirati certificato/DDT riusciti. L'omissione iniziale nei due test di
+recupero è simulata; la rilettura è una vera chiamata OpenAI. I file di collaudo
+sono privati/locali e non devono entrare nell'immagine distribuita.
+Controlli locali ripetuti: suite backend 766 test senza errori; i 98 test
+PostgreSQL inizialmente saltati sono stati poi eseguiti e superati su un
+database temporaneo isolato. Suite Arconic aggiornata: 29 test superati.
+Simulazione aggiuntiva: 1.000 documenti nel recupero/normalizzazione con errori
+API, timeout e risposte malformate; nessun blocco o modifica ai campi estranei.
+Confronto delle tre estrazioni AI certificate con il collaudo precedente:
+nessuna variazione dei valori normalizzati di chimica, proprietà e note.
+Preflight e successivo verbale del passaggio:
+[Alpha 10.4 — Arconic](alpha10_4_preflight_20261024.md).
+
+### Punto di ingresso per i prossimi deploy — aggiornato 19/10/2026
+
+**Alpha 10.3 installata il 19/10; controlli conclusi, compreso il primo timer.**
+Rallentamento Quarta preesistente documentato nel verbale. Questo documento non
 autorizza nuove pulizie, commit/push, fermi, scritture dati o deploy. Ogni nuova
 operazione richiede l'indicazione dell'utente; l'OK al deploy non equivale
 all'OK a cancellazioni o recuperi massivi.
 
-Ultimo pacchetto installato: `v0.1.0-alpha.10.2-deploy`, commit deploy `3168cef`,
-`SOURCE_COMMIT=ec5b949804070fd17219d5b5221e96ddce33eb16`, versione app
+Ultimo pacchetto installato: `v0.1.0-alpha.10.3-deploy`, commit deploy `2a31915`,
+`SOURCE_COMMIT=62767a6e8009130c93c13b6d639d81161dfba402`, versione app
 `0.1.0.alpha.10`. Sono riferimenti storici da confrontare col server, NON tag
 da riutilizzare o spostare al prossimo aggiornamento.
-Esito corrente: [verbale Alpha 10.2](alpha10_2_preflight_20261018.md).
+Esito corrente: [verbale Alpha 10.3](alpha10_3_preflight_20261019.md).
+Precedente pacchetto 10.2: `3168cef`, sorgente `ec5b949804070fd17219d5b5221e96ddce33eb16`;
+esiti e incidente del backup: [verbale Alpha 10.2](alpha10_2_preflight_20261018.md).
 Precedente pacchetto 10.1: `b6b9e44`, sorgente `b91c0b0973bbae3d4095c947bb91b822dbc434e0`.
 Esiti, backup, approvazioni e arresti intermedi sono conservati nel
 [verbale Alpha 10.1](alpha10_1_preflight_20261009.md): le sue prime sezioni
@@ -28,8 +78,8 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
 
 1. Audit read-only di versione, dati/schema, utenti/run, servizi e spazio.
    Presentare spazio disponibile, stima di backup/build e margine finale.
-   **Prima di eseguire il deploy chiedere esplicitamente all'utente se autorizza
-   la nuova pulizia proposta nella sezione spazio**: i tre pacchetti duplicati
+   **Se viene proposta una pulizia, prima di eseguirla chiedere esplicitamente
+   all'utente se autorizza i target aggiornati nella sezione spazio**: i tre pacchetti duplicati
    di luglio (802 MB) sono già stati rimossi il 18/10, non contarli di nuovo.
    Nessuna risposta o solo OK al deploy
    non autorizzano la pulizia. Se lo spazio non basta, fermarsi e concordare
@@ -55,14 +105,15 @@ descrivono fasi superate, prevale l'esito finale e il ricontrollo sotto.
    messaggi, file e spazio finale. Un ciclo chiamato manualmente non prova il timer.
    Non generare/chiudere PDF reali per collaudo e non usare GET mutanti come audit.
 
-### Modifica locale 19/10 — progressivo DDT e quantità parte del totale (NON installata)
+### Modifica 19/10 — progressivo DDT e quantità parte del totale (installata 19/10)
 
 Piano e compatibilità: [nota numerazione/quantità](../tasks/ddt_shipment_number_quantity_20261019.md).
 Questa sezione non autorizza il deploy, backfill o rinumerazioni storiche.
 
 1. Prima: nuovo controllo spazio, attività utenti e snapshot; backup app/DB/storage
-   verificati secondo questo runbook. Ultima misura read-only 19/10 circa 1,91 GB
-   liberi: non usarla come garanzia futura. Stream di backup con logging `none`.
+   verificati secondo questo runbook. Misure aggiornate e nuovo disco IT nella
+   sezione spazio sotto: root e disco dati vanno misurati separatamente.
+   Stream di backup con logging `none`.
 2. Preview read-only `ddt_shipments.preview_legacy(db)` sul DB Alpha reale: funziona
    senza la nuova colonna. Conservare conteggi/hash, elenco Word aperti, numeri
    già condivisi tra più DDT, file/PDF e vista export. Nessuna copia dal DB locale.
@@ -1004,15 +1055,55 @@ se fare una pulizia e quali elementi specifici includere. Una pulizia non e una
 conseguenza automatica del deploy. Se lo spazio non basta, fermarsi e concordare
 come procedere.
 
-**Domanda obbligatoria prima del deploy:** «Lo spazio libero è ..., backup e
-build richiedono circa ... più un margine operativo. Autorizzi la rimozione dei
-soli tre pacchetti duplicati verificati (circa 802 MB), oppure preferisci
-conservarli e concordare un'altra soluzione?» Adattare importi e lista al nuovo
-inventario: se i file sono già stati rimossi, non riproporli come recuperabili.
+**Confronto obbligatorio prima del deploy:** «Lo spazio libero è ... sulla root
+e ... sul disco dati; backup e build richiedono circa ... più un margine
+operativo. Propongo [nessuna pulizia / elenco preciso dei target e copie
+verificate].» Se viene proposta una rimozione, chiedere «Autorizzi questi
+target, oppure li conserviamo e concordiamo un'altra soluzione?» Adattare
+importi e lista al nuovo inventario: non riproporre file già rimossi come recuperabili.
 Registrare risposta e perimetro; senza OK specifico nessuna pulizia. Se l'utente
 non vuole pulire e lo spazio non basta, non iniziare il deploy.
 
-#### Aggiornamento spazio 18/10 — sola prima pulizia autorizzata completata
+#### Aggiornamento spazio e ritorno backup 19/10 — assetto corrente
+
+IT ha reso disponibili circa 105,09 GB di filesystem dati, distinto dalla root
+da 24,63 GB. Sono sul nuovo disco `/srv/certi_nt/data` e `/srv/certi_nt/backup`
+(bind da `/srv/certi/certi_nt/data` e `/srv/certi/certi_nt/backup`, persistenti
+in fstab al controllo). `/srv/certi_nt/app`, immagini e cache Docker restano
+sulla root. Prima del deploy: **8,72 GB disponibili root e 92,83 GB dati/backup**.
+Non sommare le stime Docker a `df`; distinguere byte/GB/GiB e riserva ext4.
+Ricontrollare i mount reali, anche dei container: non dare per scontato che un
+disco aggiunto sia utilizzato dall'app o dalle build.
+
+Per il deploy 19/10 non è servita pulizia server. L'utente ha autorizzato il
+ritorno dei backup privati dal PC e la liberazione delle copie locali dopo
+verifica. Destinazione privata **`/srv/certi_nt/backup/returned_pc_20261019`**:
+tre `app_before` di luglio e app/SQL/storage/manifest del backup 18/10.
+Lo storage storico `storage_before_hard_reset_20260715_080925.tgz` era già
+presente sul nuovo disco: hash e contenuto riconfermati, non duplicato.
+Directory private 700, archivi restituiti 600, mai serviti via web o Git.
+
+Con SHA-256 identici, gzip/tar interamente leggibili e nuovo backup completo
+19/10 verificato anche sul PC, rimosse **solo sette copie locali**,
+2.966.364.544 byte (circa 2,97 GB). Nessun archivio storico unico scartato:
+le copie server sono conservate; manifest/log locali restano disponibili.
+Il nuovo backup esterno `backups/alpha_deploy_20261019_184500` resta sul PC
+oltre che in `/srv/certi_nt/backup/alpha_deploy_20261019_184500` sul server.
+App/DB/storage del nuovo backup occupano 1.643.419.167 byte: il guadagno netto
+dei soli archivi sul PC è quindi circa **1,32 GB**, non 2,97 GB.
+Dettagli e prove nel [verbale 19/10](alpha10_3_preflight_20261019.md).
+
+Questa decisione aggiorna la conservazione PC del 18/10 sotto: i vecchi percorsi
+PC non contengono più gli archivi rimossi e non vanno citati come copie ancora
+esistenti. Per un ripristino storico usare i percorsi server verificati e il
+manifest di ritorno. I backup sullo stesso server NON sostituiscono la copia
+esterna recente. Non cancellare automaticamente quest'ultima ai prossimi deploy:
+nuova verifica di copertura, restore, copie residue e OK sui file precisi.
+Nessuna autorizzazione qui a eliminare altri backup, vecchie directory storage,
+swap, immagini, dipendenze o cache. Resta obbligatorio l'audit spazio e la
+decisione dell'utente sulle eventuali pulizie a ogni deploy.
+
+#### Aggiornamento spazio 18/10 — storico, superato dall'assetto 19/10
 
 Per la successiva richiesta di recupero storico e un deploy con backup fuori
 dal disco root vedere il [piano a basso consumo](alpha_low_space_plan_20261018.md).
