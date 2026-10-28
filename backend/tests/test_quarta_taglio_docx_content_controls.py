@@ -4,15 +4,95 @@ import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import fitz
+from docx import Document
+from docx.enum.section import WD_SECTION
+from docx.shared import Inches
+from PIL import Image
+
 from app.core.departments.models import Department  # noqa: F401 - ensures SQLAlchemy relationship resolution
 from app.core.users.models import User
-from app.modules.quarta_taglio.certificate_docx import build_forgialluminio_draft_docx, update_docx_content_controls
+from app.modules.quarta_taglio.certificate_docx import (
+    build_forgialluminio_draft_docx, update_docx_content_controls,
+    _append_pdf_attachments, _strip_app_pdf_attachment_pages, PDF_ATTACHMENT_PAGE_MARKER,
+)
 from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse, QuartaTaglioStandardCandidateResponse
 from app.modules.quarta_taglio.service import _standard_certificate_material_label
 from app.modules.standards.models import NormativeStandard  # noqa: F401 - ensures SQLAlchemy relationship resolution
 
 
 class QuartaTaglioDocxContentControlTests(unittest.TestCase):
+    def test_attachment_removal_restores_original_sections_and_is_idempotent(self):
+        def settings(section):
+            root = ET.fromstring(section._sectPr.xml)
+            # python-docx's section clone intentionally discards Word editing
+            # session IDs. Geometry, header/footer relationships and page setup
+            # must be identical; rsid attributes are not layout/content.
+            for key in list(root.attrib):
+                if key.rsplit('}', 1)[-1].startswith('rsid'):
+                    del root.attrib[key]
+            return ET.tostring(root)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as folder:
+                path, pdf = Path(folder) / 'word.docx', Path(folder) / 'annex.pdf'
+                document = Document()
+                document.add_paragraph('Original laboratory page')
+                section = document.add_section(WD_SECTION.NEW_PAGE)
+                section.left_margin = Inches(1.2)
+                section.footer.paragraphs[0].text = 'Original signature'
+                document.add_paragraph('Second original section')
+                document.save(path)
+                original_sections = [settings(s) for s in document.sections]
+                with fitz.open() as attachment:
+                    attachment.new_page().insert_text((70, 100), 'Attachment one')
+                    attachment.new_page().insert_text((70, 100), 'Attachment two')
+                    attachment.save(pdf)
+                user = User(name='Prepared by', email='qa@example.invalid', role='admin')
+                _append_pdf_attachments(path, [(pdf, 'annex.pdf')], certified_by=user, quality_manager=user)
+                if legacy:
+                    document = Document(path)
+                    for paragraph in document.paragraphs:
+                        if paragraph.text == PDF_ATTACHMENT_PAGE_MARKER:
+                            paragraph.text = 'Attachment: legacy.pdf'
+                    document.save(path)
+                self.assertEqual(len(Document(path).sections), 3)
+                _strip_app_pdf_attachment_pages(path)
+                clean = Document(path)
+                self.assertEqual([settings(s) for s in clean.sections], original_sections)
+                self.assertIn('Second original section', [p.text for p in clean.paragraphs])
+                self.assertEqual(len(clean.inline_shapes), 0)
+                unchanged = path.read_bytes()
+                _strip_app_pdf_attachment_pages(path)
+                self.assertEqual(path.read_bytes(), unchanged)
+
+    def test_attachment_removal_does_not_cut_later_manual_content(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path, pdf, image = (Path(folder) / name for name in ('word.docx', 'annex.pdf', 'lab.png'))
+            document = Document()
+            document.add_paragraph('Original page')
+            document.save(path)
+            with fitz.open() as attachment:
+                attachment.new_page()
+                attachment.save(pdf)
+            user = User(name='Prepared by', email='qa@example.invalid', role='admin')
+            _append_pdf_attachments(path, [(pdf, 'annex.pdf')], certified_by=user, quality_manager=user)
+            document = Document(path)
+            document.add_page_break()
+            document.add_paragraph('Manual page AFTER the app attachment')
+            document.add_paragraph('Attachment: this is an ordinary user note')
+            document.add_table(rows=1, cols=1).cell(0, 0).text = 'Manual lab results'
+            Image.new('RGB', (20, 20), 'green').save(image)
+            document.add_picture(str(image), width=Inches(1))
+            document.save(path)
+            _strip_app_pdf_attachment_pages(path)
+            clean = Document(path)
+            self.assertIn('Manual page AFTER the app attachment', [p.text for p in clean.paragraphs])
+            self.assertIn('Attachment: this is an ordinary user note', [p.text for p in clean.paragraphs])
+            self.assertEqual(clean.tables[0].cell(0, 0).text, 'Manual lab results')
+            self.assertEqual(len(clean.inline_shapes), 1)
+            self.assertNotIn(PDF_ATTACHMENT_PAGE_MARKER, [p.text for p in clean.paragraphs])
+            self.assertFalse(clean._body._element.xpath('.//w:br[@w:type="page"]'))
+
     @staticmethod
     def _minimal_detail() -> QuartaTaglioDetailResponse:
         return QuartaTaglioDetailResponse(

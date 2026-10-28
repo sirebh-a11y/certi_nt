@@ -152,7 +152,7 @@ def _derive(item, certificates, versions_by_id, incoming, family_counts):
                      and not cert.esolver_rif_lotto_alfanum and cert.status != "pdf_final"
                      and cert.storage_key_docx]
             if early:
-                if len(early) == 1 and family_counts[(item.cod_odp, item.cod_f3)] == 1:
+                if len(early) == 1:
                     # A source Word is not yet the Word of this shipment.
                     # Only an exact certificate above can expose word_ready.
                     if not _file_available(early[0].storage_key_docx):
@@ -160,7 +160,7 @@ def _derive(item, certificates, versions_by_id, incoming, family_counts):
                         reasons.append("Word preparato prima del DDT ma file non disponibile")
                 else:
                     state = "review"
-                    reasons.append("Word senza DDT associabile a più quote: verificare senza creare duplicati")
+                    reasons.append("Più Word di riferimento presenti: verificare la versione, senza creare duplicati")
     if not state:
         if incoming["ambiguous"]:
             state = "review"
@@ -233,12 +233,12 @@ def _project(db, items):
             row.reasons.append(pending)
         # Reuse diagnostics are distinct from a missing OL in eSolver. Never guess
         # an OL from the numeric lot; no write/remote query in this projection.
-        if (row.state == 'ready' or (row.state == 'review' and any('Word senza DDT associabile' in reason for reason in row.reasons))):
+        if (row.state == 'ready' or (row.state == 'review' and any('Più Word di riferimento' in reason for reason in row.reasons))):
             from app.modules.quarta_taglio.ddt_word_reuse import plan_item
             reuse = plan_item(db, item)
             if reuse['action'] == 'reuse':
                 row.state, row.label = 'ready', LABELS['ready']
-                row.reasons = [r for r in row.reasons if 'Word senza DDT associabile' not in r]
+                row.reasons = [r for r in row.reasons if 'Più Word di riferimento' not in r]
             elif reuse['reason'] == 'word_standard_outdated':
                 row.state, row.label = 'review', 'Word da aggiornare'
                 row.reasons.append(service.word_standard.MESSAGE)
@@ -246,12 +246,17 @@ def _project(db, items):
                                       'no_compatible_word', 'target_material_changed', 'legacy_or_changed_identity',
                                       'target_content_requires_review', 'reference_file_changed', 'manual_copy_requires_review'}:
                 row.state, row.label = 'review', LABELS['review']
-                row.reasons.append('Word esistente non collegabile automaticamente: verificare compatibilità, file e campi DDT')
+                row.reasons.append(word_reference.MESSAGES[reuse['reason']])
         decision = decisions.get(item.id)
         certificate = next((c for c in certificates_by_ol[item.cod_odp] if c.id == row.certificate_id), None)
         if row.state != 'completed' and certificate and service.word_standard.is_stale(certificate, db):
             row.state, row.label = 'review', 'Word da aggiornare'
             row.reasons = [service.word_standard.MESSAGE]
+        if row.state != 'completed' and certificate and certificate.storage_key_docx:
+            reason = word_reference.integrity_reason(certificate)
+            if reason:
+                row.state, row.label = 'review', 'Word da verificare'
+                row.reasons.append(word_reference.MESSAGES[reason])
         row.operational_state = row.state
         row.source_revision = source_revision(item)
         if row.state != 'completed' and item.cod_odp and item.cod_f3 and item.ddt_raw:

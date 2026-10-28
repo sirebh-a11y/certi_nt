@@ -5,6 +5,7 @@ import zlib
 import re
 import shutil
 import tempfile
+from copy import deepcopy
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -640,21 +641,59 @@ def _strip_app_pdf_attachment_pages(path: Path) -> None:
         return
 
     body = document._body._element
-    remove_after_attachment_title = False
-    changed = False
-    for child in list(body):
-        if child.tag.endswith("sectPr"):
-            continue
-        if not remove_after_attachment_title and child.tag.endswith("p"):
-            texts = [node.text or "" for node in child.iter(qn("w:t"))]
-            paragraph_text = "".join(texts).strip()
-            if paragraph_text.startswith(LEGACY_PDF_ATTACHMENT_PREFIX) or PDF_ATTACHMENT_PAGE_MARKER in paragraph_text:
-                remove_after_attachment_title = True
-        if remove_after_attachment_title:
-            body.remove(child)
-            changed = True
+    children = list(body)
+    remove = set()
 
-    if changed:
+    def text(element):
+        return "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+
+    def page_break_only(element):
+        breaks = list(element.iter(qn("w:br")))
+        return (element.tag == qn("w:p") and not text(element)
+                and not list(element.iter(qn("w:drawing")))
+                and element.find("./w:pPr/w:sectPr", element.nsmap) is None
+                and breaks and all(b.get(qn("w:type")) == "page" for b in breaks))
+
+    for index, child in enumerate(children[:-1]):
+        if child.tag != qn("w:p"):
+            continue
+        paragraph_text = text(child)
+        if not (paragraph_text == PDF_ATTACHMENT_PAGE_MARKER
+                or paragraph_text.startswith(LEGACY_PDF_ATTACHMENT_PREFIX)):
+            continue
+        # Remove only the app's marker + rendered image, never everything after
+        # a marker: a user may have appended a real laboratory page afterwards.
+        picture = children[index + 1]
+        if (picture.tag != qn("w:p") or text(picture)
+                or not list(picture.iter(qn("w:drawing")))):
+            continue
+        remove.update((child, picture))
+        if index and page_break_only(children[index - 1]):
+            remove.add(children[index - 1])
+
+    # add_section() placed the old section settings in the paragraph BEFORE
+    # the first attachment. Restore them when removing the whole attachment
+    # tail, otherwise Word/LibreOffice keeps a blank final page and its footer.
+    for index, child in enumerate(children):
+        section = child.find("./w:pPr/w:sectPr", child.nsmap) if child.tag == qn("w:p") else None
+        if (section is not None and not text(child) and not list(child.iter(qn("w:drawing")))
+                and index + 1 < len(children) and children[index + 1] in remove):
+            remaining = [c for c in children[index + 1:] if c not in remove and c.tag != qn("w:sectPr")]
+            if remaining:
+                # Keep a user's later page and its section formatting. Its
+                # leading separator is redundant now the PDF page is gone.
+                if page_break_only(remaining[0]):
+                    remove.add(remaining[0])
+                continue
+            final_section = body.find(qn("w:sectPr"))
+            if final_section is not None:
+                body.replace(final_section, deepcopy(section))
+                remove.add(child)
+            break
+
+    if remove:
+        for child in remove:
+            body.remove(child)
         document.save(str(path))
 
 

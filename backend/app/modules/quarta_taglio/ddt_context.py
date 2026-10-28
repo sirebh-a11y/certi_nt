@@ -39,6 +39,11 @@ def resolve_saved_ddt(db, *, cod_odp, work_item_id=None, certificate=None, lock=
     Existing certificates without any corresponding snapshot keep their old flow.
     A changed snapshot identity is a conflict, not a fallback to another DDT.
     """
+    if lock:
+        # All writers take OL -> quota, like the reuse worker. The opposite
+        # order can deadlock a PDF/download with an automatic Word preparation.
+        from app.modules.quarta_taglio.service import _lock_certificate_register_for_ol
+        _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
     statement = select(QuartaTaglioDdtWorkItem).where(QuartaTaglioDdtWorkItem.cod_odp == cod_odp)
     if work_item_id is not None:
         statement = statement.where(QuartaTaglioDdtWorkItem.id == work_item_id)
@@ -83,7 +88,11 @@ def saved_ddt_row(item):
 
 
 def certificate_for_saved_ddt(db, item):
-    """Return exact certificate or a unique early Word; never a legacy DDT guess."""
+    """Return ONLY the document owned by this share, never its reusable source.
+
+    This function also feeds writers. Returning a source here would reassign the
+    base to the chosen DDT. Source selection belongs to word_reference instead.
+    """
     certificates = list(db.scalars(select(QuartaTaglioFinalCertificate)
                         .where(QuartaTaglioFinalCertificate.cod_odp == item.cod_odp)))
     exact = [cert for cert in certificates if exact_certificate(item, cert)]
@@ -103,13 +112,4 @@ def certificate_for_saved_ddt(db, item):
     )]
     if conflicting:
         raise HTTPException(status_code=409, detail="Certificato con identità precedente o incompleta: verifica richiesta")
-    early = [cert for cert in certificates if _clean(cert.cod_f3) == item.cod_f3
-             and not _clean(cert.ddt) and not cert.esolver_id_documento and not cert.esolver_id_riga_doc
-             and not cert.esolver_rif_lotto_alfanum and cert.status != "pdf_final" and cert.storage_key_docx]
-    if not early:
-        return None
-    peers = list(db.scalars(select(QuartaTaglioDdtWorkItem.id).where(
-        QuartaTaglioDdtWorkItem.cod_odp == item.cod_odp, QuartaTaglioDdtWorkItem.cod_f3 == item.cod_f3)))
-    if len(early) != 1 or len(peers) != 1:
-        raise HTTPException(status_code=409, detail="Word anticipato associabile a più quote: verifica richiesta")
-    return early[0]
+    return None

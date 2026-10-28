@@ -7,6 +7,117 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Modifica 28/10 — ciclo Word/DDT/PDF (sviluppo locale, NON installata)
+
+Piano, cause, perimetro dati e verifiche:
+[integrità Word e recupero](../tasks/word_ddt_lifecycle_repair_plan_20261028.md).
+Preparazione successiva richiesta dall'utente:
+[preflight Word 28/10](alpha_word_preflight_20261028.md), con inventario Alpha
+aggiornato, spazio, quattro recuperi proposti e comandi condizionati.
+La revisione Astra ha rilevato R1–R3, corretti in locale dopo approvazione:
+input PDF accoppiato al record corretto anche con upload concorrente; allegati
+su Word ereditato senza perdita delle pagine incorporate; totale DDT aggiornabile
+quando una copia completata è diventata riferimento. Corretto anche il residuo
+di pagina vuota dopo rimozione degli allegati. Cause e prove restano nel piano.
+Prima del deploy serve autorizzazione esplicita e nuova preview sui dati reali.
+**La correzione locale NON sana automaticamente lo storico di Alpha.**
+Estendere la preview storico a contenuti/pagine e ruoli delle fonti: la verifica
+dei soli identificativi nei PDF non prova l'integrità delle seconde pagine.
+
+- Distribuire backend/frontend coerenti. Nessuna nuova colonna prevista:
+  metadati additivi nel JSON `word_reference` già esistente e campi API additivi.
+  Non cambiano ID primari, numerazione, schemi eSolver/Quarta o regole normative.
+- I nuovi upload sono normalizzati prima della pubblicazione. Gli aggiornamenti
+  automatici mantengono percorso/impronte senza creare revisioni utente fittizie.
+  File precedenti conservati; un download senza cambiamenti non crea nuove copie.
+  Non ricostruire corpo tecnico, firme o pagine aggiuntive al semplice download.
+- Le basi manuali sono per documento/versione, non per solo numero certificato.
+  Il vecchio file condiviso non va cancellato né copiato su tutte le quote:
+  quando necessario la base viene ricavata dal proprio Word verificato,
+  rimuovendo solo gli allegati PDF gestiti dall'app. Nessuna bonifica al bootstrap.
+- La pagina della quota distingue fonte OL/F3 e documento esatto della
+  spedizione. Più righe DDT non sono un'ambiguità in sé; non riassegnare il
+  Word anticipato al DDT e non introdurre una scelta manuale ordinaria per i riusi.
+- PDF: input privato stabile, verifica finale di record/file/revisione sotto
+  lock, ordine OL → quota coerente con il worker. Se il Word cambia, nessun
+  nuovo PDF pubblicato. Le versioni/file precedenti e i PDF chiusi restano intatti.
+- Allegati di Word ereditati: mantenere corpo completo e firmatari; non ricostruire
+  dal solo template o dalle sole pagine registrate separatamente. Collaudo locale
+  2 → 3 → 2 pagine, conservando immagini e seconde pagine, anche sul DDT successivo.
+  Nessuna rimozione retroattiva automatica di pagine sui documenti storici.
+- Una fonte pubblicata ancora etichettata `ddt_reused` non va sovrascritta dal
+  worker come una copia. Il download/PDF aggiorna solo i campi spedizione
+  verificati; ruolo, allegati, numero e revisione tecnica rimangono protetti.
+
+**Preview storico, prima di qualunque recupero:** nuova esecuzione read-only con
+il codice candidato, contro il DB/storage Alpha reali, non copie del DB locale.
+Non usare GET che avviano refresh o le chiamate di generazione come test.
+È disponibile `python -m scripts.audit_word_lifecycle --report PERCORSO_NUOVO.json`:
+non ha modalità apply, usa una transazione READ ONLY su PostgreSQL, non avvia
+bootstrap/job e non contiene token/URL privati nel report. Eseguirlo solo nel
+contesto di audit/deploy autorizzato, con volume storage montato in sola lettura.
+Il report è classificazione/preparazione, NON autorizzazione a correggere ogni caso.
+
+Ricontrollare tutta la catena: fonte/copie e relativi ID/versioni, identità
+quote, numeri dentro i file e nomi download, basi manuali, seconde pagine,
+allegati, versioni PDF, link/export. Non confondere revisione storica conservata
+da un PDF chiuso con un riferimento errato da aggiornare alla versione più recente.
+
+Fotografia iniziale del 28/10, **da ricalcolare**:
+
+- OL1087 fonte ID62/quota894: impronta discordante. Dopo confronto e approvazione
+  del documento esatto conservare fonte ID62, riallineare solo i metadati
+  autorizzati e far predisporre la copia della quota con il proprio ID ordinario.
+  Non ricaricare/riadottare il Word attraverso l'utente per aggirare il bug.
+- ID268/OL1058 e ID285/OL1025: percorso nei metadati precedente al file attuale,
+  impronta tecnica equivalente. Valutare il solo allineamento del collegamento;
+  non modificare PDF, numero, ID, versioni, URL/export né farli apparire riemessi.
+- Basi condivise nei gruppi ID137/177/71, ID189/99, ID194/74, ID208/88/225:
+  verifica per documento; nessuna prova automatica che i PDF siano errati.
+- OL986 quote898/899: apertura/diagnosi correggibili, ma CDQ24-0985 mancante e
+  materiale cambiato sono impedimenti reali: non forzare Word/PDF.
+- OL1148 quote895/896 e PDF296/297: conservarli. Il confronto testuale dei 93 PDF
+  chiusi della fotografia trova numero/OL/F3/DDT coerenti, non certifica ogni
+  valore tecnico o ogni pagina storica. Nessuna rigenerazione massiva.
+
+La preparazione successiva ha confermato anche ID308/OL1137 come terzo percorso
+precedente equivalente: inventario aggiornato di 312 certificati/98 PDF, non
+304/93. Questi conteggi e gli ID vanno riconfermati prima del fermo.
+
+Per il recupero presentare elenco chiuso delle scritture e hash prima/dopo,
+ottenere OK specifico, fermare writer/job in finestra concordata e verificare
+backup DB/storage/app. Ora è disponibile in locale la CLI separata
+`recover_word_lifecycle_alpha`, collaudata per soli metadati allowlist: piano
+approvato esatto, backup, lock NOWAIT, confronto globale protetto e journal
+prima/dopo. Il comando `audit_word_lifecycle` resta invece SOLO preview.
+La nuova CLI non corregge file Word/PDF, non genera copie e non è stata eseguita
+in scrittura su Alpha. Dopo il recupero metadati serve una NUOVA preview della
+procedura Word esistente; quota attesa 894, nessun riuso dei report storici.
+Riaprire solo dopo confronto dei dati/file protetti e degli esiti autorizzati.
+I normali flag snapshot/riuso già approvati restano da preservare.
+
+Rollback prudenziale: non cancellare basi nuove/vecchie, file o quote comparse
+dopo la riapertura. Un downgrade ripristina la vecchia logica delle basi condivise:
+non riaprire scritture con codice precedente senza verificarne la compatibilità.
+Nessun ripristino indiscriminato del vecchio DB e nessuna pulizia implicita.
+
+Collaudo della prima consegna locale: 720 test backend Linux e 111 test PostgreSQL dedicati
+superati, 34 frontend e build riusciti, UI React con API simulate e rendering
+Word/PDF sintetico verificati. Dettaglio, limiti della fixture e successiva
+revisione Astra nel piano collegato. Queste prime suite non coprivano R1–R3;
+i nuovi test e il collaudo conclusivo sono descritti nella sezione «Chiusura
+locale R1–R3» del piano. Non equivale a un controllo post-deploy o al recupero dati.
+Ripetizione conclusiva: **725 backend Linux + 116 PostgreSQL isolati + 34 frontend
+superati**, build riuscita e controllo visivo dei PDF sintetici. Nessuna nuova
+migrazione; i 116 casi PostgreSQL saltati nel runtime senza DB sono stati tutti
+eseguiti separatamente, non sono rimasti controlli richiesti saltati.
+
+Preparazione successiva: **732 backend generali + 126 PostgreSQL dedicati + 34
+frontend superati**, build riuscita; include la nuova procedura puntuale per i
+metadati, ancora NON applicata su Alpha. Inventario aggiornato, allowlist e
+risultati nel preflight collegato sopra. Le prove locali non sostituiscono il
+collaudo delle candidate effettive e la nuova baseline in manutenzione.
+
 ### Arconic identità certificato/DDT — installata il 24/10/2026
 
 Pubblicata con autorizzazione esplicita, pacchetto Alpha10.4; postcheck dati/file/

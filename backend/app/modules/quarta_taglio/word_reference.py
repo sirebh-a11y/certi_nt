@@ -31,6 +31,117 @@ def sources_for(db, ol, f3):
         Certificate.storage_key_docx.is_not(None), Certificate.certificate_number.is_not(None))))
 
 
+MESSAGES = {
+    'reference_file_changed': 'Il Word di riferimento non coincide con la versione registrata: verifica tecnica necessaria. Il documento viene conservato.',
+    'source_file_or_controls_invalid': 'Il Word di riferimento o i suoi campi automatici non sono verificabili. Il documento viene conservato.',
+    'different_word_sources': 'Sono presenti versioni Word diverse: occorre verificare quale documento completo usare come riferimento.',
+    'no_compatible_word': 'Il Word esistente non copre il materiale attuale dell’OL. Verifica Incoming e aggiorna il Word.',
+    'target_material_changed': 'Il materiale della riga è cambiato rispetto al Word: verifica Incoming e aggiorna il Word.',
+    'legacy_or_changed_identity': 'I riferimenti della riga DDT sono cambiati: nessuna riassegnazione automatica del certificato.',
+    'manual_copy_requires_review': 'Questa copia Word è stata lavorata separatamente: non viene sostituita automaticamente.',
+    'target_content_requires_review': 'Questa riga ha documenti o versioni precedenti da conservare: aggiornamento automatico non applicabile.',
+}
+
+
+def integrity_reason(certificate):
+    """Validate a tracked file without accepting unpublished changes or writing it."""
+    from app.modules.quarta_taglio import ddt_word_reuse as reuse
+    meta = metadata(certificate)
+    if meta.get('kind') not in {'reference', 'copy'}:
+        return None  # Legacy provenance is not retroactively invented.
+    try:
+        controls, template = reuse.word_facts(certificate.storage_key_docx)
+        if controls.get('CERT_NUMBER') and controls['CERT_NUMBER'] != certificate.certificate_number:
+            return 'source_file_or_controls_invalid'
+        if meta['kind'] == 'reference' and template != meta.get('template_hash'):
+            return 'reference_file_changed'
+        if meta['kind'] == 'copy' and reuse.file_hash(certificate.storage_key_docx) != meta.get('file_hash'):
+            return 'manual_copy_requires_review'
+    except (OSError, ValueError, HTTPException, reuse.zipfile.BadZipFile, reuse.etree.XMLSyntaxError, TypeError):
+        return 'source_file_or_controls_invalid'
+    return None
+
+
+def require_integrity(certificate):
+    reason = integrity_reason(certificate)
+    if reason:
+        raise HTTPException(409, MESSAGES[reason])
+
+
+def before_automatic(certificate):
+    """Pin a valid source BEFORE an app-owned rewrite; never heal an old mismatch."""
+    from app.modules.quarta_taglio import ddt_word_reuse as reuse
+    require_integrity(certificate)
+    try:
+        file_hash = reuse.file_hash(certificate.storage_key_docx)
+    except (OSError, ValueError, TypeError):
+        raise HTTPException(409, MESSAGES['source_file_or_controls_invalid']) from None
+    return dict(metadata=deepcopy(metadata(certificate)), storage_key=certificate.storage_key_docx,
+                file_hash=file_hash)
+
+
+def check_source_unchanged(certificate, before):
+    """Recheck trusted input; explicit edits publish separately from this guard."""
+    from app.modules.quarta_taglio import ddt_word_reuse as reuse
+    try:
+        current_hash = reuse.file_hash(before['storage_key'])
+    except (OSError, ValueError, TypeError):
+        raise HTTPException(409, MESSAGES['source_file_or_controls_invalid']) from None
+    if current_hash != before['file_hash']:
+        raise HTTPException(409, 'Il Word sorgente è cambiato durante l’aggiornamento: nessuna sostituzione automatica.')
+    if metadata(certificate) != before['metadata']:
+        raise HTTPException(409, 'Il riferimento Word è cambiato durante l’aggiornamento: riprova.')
+
+
+def after_automatic(certificate, before, *, origin):
+    """Maintain provenance for a trusted rewrite, not a new user publication.
+
+    Callers validate/pin the old file, write to a fresh path and own the transaction.
+    Revision/source_id remain unchanged: automatic copies can never elect themselves.
+    """
+    from app.modules.quarta_taglio import ddt_word_reuse as reuse
+    previous = before['metadata']
+    check_source_unchanged(certificate, before)
+    if not previous:
+        return
+    current = deepcopy(previous)
+    if before['storage_key'] != certificate.storage_key_docx:
+        history = current.setdefault('automatic_history', [])
+        history.append(dict(storage_key=before['storage_key'], file_hash=before['file_hash'], origin=origin))
+    current['storage_key'] = certificate.storage_key_docx
+    if current.get('kind') == 'reference':
+        _, current['template_hash'] = reuse.word_facts(certificate.storage_key_docx)
+    elif current.get('kind') == 'copy':
+        current['file_hash'] = reuse.file_hash(certificate.storage_key_docx)
+    certificate.word_reference = current
+
+
+def conversion_state(db, certificate, *, refresh=False):
+    """Identity of the Word actually converted, including the reusable source."""
+    from app.modules.quarta_taglio import ddt_word_reuse as reuse
+    if refresh:
+        db.refresh(certificate)
+    reference = declared(sources_for(db, certificate.cod_odp, certificate.cod_f3))
+    if reference is not None and refresh:
+        db.refresh(reference)
+    # The converted document is byte-pinned below. Its separate source is pinned
+    # by technical content/revision: source-only shipment headers or a maintained
+    # storage path must not cancel this PDF when its own Word did not change.
+    try:
+        source = None if reference is None else dict(id=reference.id,
+            revision=metadata(reference).get('revision'),
+            template=reuse.word_facts(reference.storage_key_docx)[1])
+        word_hash = reuse.file_hash(certificate.storage_key_docx)
+    except (OSError, ValueError, HTTPException, reuse.zipfile.BadZipFile, reuse.etree.XMLSyntaxError):
+        raise HTTPException(409, MESSAGES['source_file_or_controls_invalid']) from None
+    # Expose the SAME hash to the frozen-input check. Independently hashing an
+    # older path would let a new record snapshot authorize an old document.
+    return dict(word_hash=word_hash, state_hash=reuse.digest(dict(
+        record={col.key:getattr(certificate, col.key) for col in certificate.__table__.columns
+                if col.key not in {'created_at', 'updated_at'}},
+        word_hash=word_hash, reference=source)))
+
+
 def choose(db, sources):
     """Validate explicit publication, or conservatively compare unmarked legacy files."""
     from app.modules.quarta_taglio import ddt_word_reuse as reuse
@@ -137,8 +248,9 @@ def decorate_detail(db, detail, certificate):
     f3 = detail.header.get('codice_f3')
     sources = sources_for(db, detail.cod_odp, f3) if f3 else []
     reference, reason = choose(db, sources)
-    source = reference or certificate or (sources[0] if len(sources) == 1 else None)
+    source = reference or declared(sources) or certificate or (sources[0] if len(sources) == 1 else None)
     info = detail.word_info
+    info.reference_reason = reason
     if certificate and certificate.storage_key_docx:
         try:
             info.current_word_file_hash = reuse.file_hash(certificate.storage_key_docx)
@@ -146,6 +258,10 @@ def decorate_detail(db, detail, certificate):
             pass
     info.reference_conflict = reason == 'different_word_sources'
     info.reference_certificate_id = source.id if source else None
+    if source:
+        info.reference_number = source.certificate_number
+        info.reference_download_url = reuse.service._serialize_word_info(source).download_url
+        info.reference_detail_url = f'/quarta-taglio/{source.cod_odp}?certificateId={source.id}'
     info.is_reference = bool(certificate and reference and certificate.id == reference.id
                              and metadata(reference).get('kind') == 'reference')
     if source and source.storage_key_docx:
@@ -163,6 +279,10 @@ def decorate_detail(db, detail, certificate):
     if info.reference_conflict and not info.reference_message:
         info.reference_message = ('Sono presenti Word storici diversi. Apri il Word completo e confermalo '
                                   'come riferimento per i prossimi DDT e per l’ereditarietà.')
+    if reason in MESSAGES and not info.reference_message:
+        info.reference_message = MESSAGES[reason]
+    if info.reference_message and reason:
+        detail.display_status_label, detail.display_status_color = 'Word da verificare', 'yellow'
     if info.material_changed or pending:
         if certificate is None or certificate.status != 'pdf_final':
             detail.display_status_label, detail.display_status_color = 'Word da aggiornare', 'yellow'

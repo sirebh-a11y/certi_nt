@@ -213,7 +213,8 @@ def plan_item(db, item):
             if (reference is None or reference.id == target.id
                     or word_reference.metadata(target).get('revision') == word_reference.metadata(reference).get('revision')) and not total_changed:
                 return stop('existing_document_preserved')
-            if total_changed and target.word_source != 'ddt_reused':
+            if total_changed and (target.word_source != 'ddt_reused'
+                                  or word_reference.metadata(target).get('kind') == 'reference'):
                 return stop('existing_document_preserved')  # Tracked fields refresh on explicit download/PDF.
             try:
                 refreshing = (target.word_source == 'ddt_reused'

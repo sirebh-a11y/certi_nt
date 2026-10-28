@@ -178,7 +178,7 @@ class DdtHistoryTest(DdtQueueFixture):
         item = self.item()
         self.material()
         cert = self.cert(item, ddt=None, unit_key="early", esolver_id_documento=None,
-                         esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None)
+                         esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None, certificate_number='7013_00_00/26')
         detail = self.detail(item)
         self.assertEqual(detail.ddt_early_word_id, cert.id)
         self.assertEqual(detail.header["ddt"], item.ddt_raw)
@@ -186,15 +186,15 @@ class DdtHistoryTest(DdtQueueFixture):
         self.assertEqual(cert.unit_key, "early")
         self.assertFalse(self.db.dirty)
 
-    def test_early_word_multiple_quotas_is_a_conflict(self):
+    def test_early_word_multiple_quotas_does_not_block_readonly_preview(self):
         item = self.item()
         self.material()
         self.cert(item, ddt=None, unit_key="early", esolver_id_documento=None,
                   esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None)
         self.item(IdDocumento="101")
-        with self.assertRaises(HTTPException) as exc:
-            self.detail(item)
-        self.assertEqual(exc.exception.status_code, 409)
+        detail = self.detail(item)
+        self.assertIsNone(detail.header['certificate_id'])
+        self.assertFalse(self.db.new or self.db.dirty or self.db.deleted)
 
     def test_real_standard_gate_still_blocks_word_creation(self):
         item = self.item()
@@ -259,17 +259,28 @@ class DdtHistoryTest(DdtQueueFixture):
         self.assertEqual(detail.ddt_work_item_id, item.id)
         self.assertEqual(detail.header["ddt"], item.ddt_raw)
 
-    def test_repeated_generation_reuses_record_and_unique_early_word(self):
+    def test_repeated_generation_reuses_exact_copy_and_preserves_early_source(self):
         item = self.item()
         self.material()
         early = self.cert(item, ddt=None, unit_key="early", esolver_id_documento=None,
-                          esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None)
+                          esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None,
+                          certificate_number='7013_00_00/26')
+        detail = self.detail(item)
+        early.cdq_key = service._cdq_key_from_detail(detail)
+        early.cdq_signature = service._cdq_signature_from_detail(detail)
+        early.cdq_values = service._cdq_values_from_detail(detail)
+        service.build_forgialluminio_draft_docx(detail=detail,
+            output_path=service._certificate_storage_path(early.storage_key_docx),
+            draft_number=early.certificate_number, certified_by=self.actor, quality_manager=self.actor)
+        self.db.commit()
         with self.allow_word():
             first = self.create(item)
             second = self.create(item)
-        self.assertEqual((first.id, second.id), (early.id, early.id))
-        self.assertEqual(early.unit_key, item.certification_unit_key)
-        self.assertEqual(len(list(self.db.scalars(select(QuartaTaglioFinalCertificate)))), 1)
+        self.assertEqual(first.id, second.id)
+        self.assertNotEqual(first.id, early.id)
+        self.assertEqual(early.unit_key, 'early')
+        self.assertIsNone(early.ddt)
+        self.assertEqual(len(list(self.db.scalars(select(QuartaTaglioFinalCertificate)))), 2)
 
     def test_closed_pdf_cannot_be_regenerated_and_is_not_modified_on_view(self):
         item = self.item()
@@ -286,7 +297,8 @@ class DdtHistoryTest(DdtQueueFixture):
         item = self.item()
         self.material()
         cert = self.cert(item, ddt=None, unit_key="early", esolver_id_documento=None,
-                         esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None, word_source="user_uploaded")
+                         esolver_id_riga_doc=None, esolver_rif_lotto_alfanum=None, word_source="user_uploaded",
+                         certificate_number='7013_00_00/26')
         with self.allow_word(), self.assertRaises(HTTPException) as exc:
             self.create(item)
         self.assertEqual(exc.exception.status_code, 409)
@@ -329,6 +341,7 @@ class DdtHistoryTest(DdtQueueFixture):
             target.write_bytes(b"updated quota Word")
             self.assertEqual(values["DDT_RAW"], item.ddt_raw)
         with patch.object(service, "inspect_docx_content_controls", return_value=(["DDT_RAW"], [])), \
+             patch.object(service, "_docx_needs_content_control_update", return_value=True), \
              patch.object(service, "update_docx_content_controls", side_effect=update):
             updated = service._sync_word_fields_for_download(self.db, certificate=cert, path=original)
         self.assertNotEqual(updated, original)

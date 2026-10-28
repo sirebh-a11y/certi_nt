@@ -1,6 +1,9 @@
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +12,18 @@ from app.core.pdf.converter import PDFConversionError, convert_docx_to_pdf
 
 
 class PDFConverterTest(unittest.TestCase):
+    @contextmanager
+    def _portable_fake_launcher(self):
+        # Windows cannot execute a Python shebang directly. Keep a real child
+        # process and the exact converter arguments on both supported test hosts.
+        run = subprocess.run
+        def launch(command, **kwargs):
+            if os.name == 'nt' and Path(command[0]).name == 'fake_soffice.py':
+                command = [sys.executable, *command]
+            return run(command, **kwargs)
+        with patch('app.core.pdf.converter.subprocess.run', side_effect=launch):
+            yield
+
     def _fake_soffice(self, root: Path, *, create_pdf: bool = True) -> Path:
         script = root / "fake_soffice.py"
         script.write_text(
@@ -40,6 +55,7 @@ class PDFConverterTest(unittest.TestCase):
             fake_soffice = self._fake_soffice(root)
 
             with (
+                self._portable_fake_launcher(),
                 patch.object(settings, "pdf_conversion_enabled", True),
                 patch.object(settings, "pdf_converter", "libreoffice"),
                 patch.object(settings, "libreoffice_bin", str(fake_soffice)),
@@ -60,6 +76,7 @@ class PDFConverterTest(unittest.TestCase):
             fake_soffice = self._fake_soffice(root, create_pdf=False)
 
             with (
+                self._portable_fake_launcher(),
                 patch.object(settings, "pdf_conversion_enabled", True),
                 patch.object(settings, "pdf_converter", "libreoffice"),
                 patch.object(settings, "libreoffice_bin", str(fake_soffice)),

@@ -1003,6 +1003,7 @@ export default function QuartaTaglioDetailPage() {
   const pdfAttachments = data?.pdf_attachments || [];
   const isPdfFinal = Boolean(wordInfo.is_pdf_final || wordInfo.certificate_status === "pdf_final");
   const hasWord = Boolean(wordInfo.has_word && wordInfo.download_url);
+  const hasReferenceSource = Boolean(!hasWord && wordInfo.reference_number);
   const activeCertificateId = certificateId || data?.header?.certificate_id || "";
   const isManualWord = ["user_uploaded", "fields_updated", "ddt_reused"].includes(wordInfo.source);
   const activeWordLabel = certificateId
@@ -1317,6 +1318,8 @@ export default function QuartaTaglioDetailPage() {
               ? "Conferma il Word completo da riutilizzare per i prossimi DDT della lavorazione."
               : wordInfo.standard_outdated
               ? "Il Word corrente non è aggiornato allo standard selezionato. Prima del PDF occorre rigenerarlo."
+              : hasReferenceSource && !wordInfo.reference_reason
+              ? "Il Word di riferimento è già disponibile: non occorre generarne un altro. CERTI gestisce automaticamente la copia per il DDT."
               : canCreateWord
               ? "Certificato creabile: standard e righe Incoming sono pronti. Se manca la data DDT, resterà come campo mancante."
               : "Serve standard confermato e righe Incoming accettate o accettate con riserva."}
@@ -1363,7 +1366,7 @@ export default function QuartaTaglioDetailPage() {
             Conformità standard: {conformityLabel(data.conformity_status)}
           </span>
           <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${wordInfoPanelClass(wordInfo)}`}>
-            <div className="font-semibold uppercase tracking-[0.16em] text-current opacity-70">Word corrente</div>
+            <div className="font-semibold uppercase tracking-[0.16em] text-current opacity-70">{!hasWord && wordInfo.reference_number ? "Word di riferimento" : "Word corrente"}</div>
             {wordInfo.standard_outdated ? (
               <p role="alert" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
                 Word da aggiornare. Lo standard è cambiato: usa «Rigenera da zero» prima di creare il PDF.
@@ -1371,9 +1374,17 @@ export default function QuartaTaglioDetailPage() {
               </p>
             ) : null}
             <p className="mt-1">
-              {wordInfo.source_label || "Nessun Word"}
+              {!hasWord && wordInfo.reference_number
+                ? `Certificato ${wordInfo.reference_number}: disponibile come fonte per questa lavorazione.`
+                : wordInfo.source_label || "Nessun Word"}
               {wordInfo.original_filename ? `: ${wordInfo.original_filename}` : ""}
             </p>
+            {!hasWord && wordInfo.reference_detail_url ? (
+              <p className="mt-2 flex flex-wrap gap-3 text-sm">
+                <Link className="font-semibold text-accent underline" to={wordInfo.reference_detail_url}>Apri Word di riferimento</Link>
+                {wordInfo.reference_download_url ? <a className="font-semibold text-accent underline" href={resolveApiAssetUrl(wordInfo.reference_download_url)}>Scarica riferimento</a> : null}
+              </p>
+            ) : null}
             {hasWord ? (
               <p className={`mt-1 font-semibold ${wordInfo.content_controls_ok ? "text-emerald-700" : "text-amber-700"}`}>
                 Content controls: {wordInfo.content_controls_ok ? "OK" : `mancano ${(wordInfo.content_controls_missing || []).join(", ")}`}
@@ -1417,6 +1428,7 @@ export default function QuartaTaglioDetailPage() {
             >
               {wordDraftState.status === "saving"
                 ? "Creazione..."
+                : hasReferenceSource ? "Word di riferimento disponibile"
                 : activeCodF3Candidate
                   ? `Genera Word ${activeCodF3Candidate.relation === "raw" ? "Raw" : activeCodF3Candidate.cod_f3}`
                   : "Genera Word"}
@@ -1500,7 +1512,7 @@ export default function QuartaTaglioDetailPage() {
               </button>
             </div>
             {isPdfFinal ? <p className="text-xs text-sky-700">PDF chiuso: le modifiche Word sono bloccate.</p> : null}
-            {!hasCertificateNumber ? <p className="text-xs text-amber-700">Genera prima il Word numerato.</p> : null}
+            {!hasCertificateNumber ? <p className="text-xs text-slate-600">{hasReferenceSource ? "Queste azioni saranno disponibili sulla copia di questo DDT." : "Genera prima il Word numerato."}</p> : null}
             {isManualWord ? <p className="text-xs text-amber-700">Word manuale corrente: gestisci le pagine in Word e ricarica il file.</p> : null}
           </div>
           <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2">

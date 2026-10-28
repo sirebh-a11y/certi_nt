@@ -3,6 +3,9 @@ from __future__ import annotations
 import math
 import re
 import secrets
+import hashlib
+import shutil
+import tempfile
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
@@ -10,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from xml.sax.saxutils import escape
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
@@ -35,6 +37,7 @@ from app.modules.quarta_taglio.certificate_docx import (
     build_forgialluminio_draft_docx,
     inspect_docx_content_controls,
     prepare_manual_docx_base,
+    normalize_certificate_docx_layout,
     update_docx_content_controls,
 )
 from app.modules.quarta_taglio.models import (
@@ -632,7 +635,9 @@ def get_quarta_taglio_detail(
         if candidate_certificate is not None and exact_certificate(saved_ddt, candidate_certificate):
             selected_certificate = candidate_certificate
         else:
-            early_word = candidate_certificate
+            sources = word_reference.sources_for(db, cod_odp, saved_ddt.cod_f3)
+            early_word, _ = word_reference.choose(db, sources)
+            early_word = early_word or word_reference.declared(sources) or (sources[0] if len(sources) == 1 else None)
     rows = _load_quarta_rows_for_detail(db, cod_odp=cod_odp)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OL non trovato in Certificazione")
@@ -875,7 +880,8 @@ def get_quarta_taglio_detail(
     if saved_ddt is not None and not (open_certificate and open_certificate.storage_key_docx):
         base_word = _existing_word_for_workmanship(db, cod_odp=group.cod_odp, cod_f3=saved_ddt.cod_f3)
         if base_word is not None:
-            word_creation_blockers.append("Word già esistente per questa lavorazione: non occorre generarne uno nuovo")
+            # Source presence is normal, not an error. Its separate UI/context
+            # explains automatic reuse; real blockers remain in this list.
             can_create_word = False
 
     detail = QuartaTaglioDetailResponse(
@@ -1239,8 +1245,10 @@ def create_quarta_taglio_word_draft(
     generation_standard = word_standard.snapshot(db, cod_odp)
     detail = get_quarta_taglio_detail(db, cod_odp=cod_odp, certificate_id=certificate_id,
                                     ddt_work_item_id=saved_ddt.id if saved_ddt is not None else None)
+    # Generic detail may commit its register refresh and release the OL lock.
+    _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
     if certificate_id is not None:
-        _ensure_certificate_word_is_editable(_get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
+        _lock_editable_word(db, _get_certificate_context(db, cod_odp=cod_odp, certificate_id=certificate_id))
     candidate = _candidate_by_cod_f3(detail.cod_f3_candidates, candidate_cod_f3)
     candidate_unit: QuartaTaglioCertifiableUnitResponse | None = None
     if candidate_cod_f3 and candidate is None:
@@ -1255,6 +1263,31 @@ def create_quarta_taglio_word_draft(
     existing_word = _existing_word_for_workmanship(db, cod_odp=cod_odp,
         cod_f3=candidate_cod_f3 or (detail.header or {}).get('codice_f3'))
     if existing_word is not None and certificate_id is None:
+        if saved_ddt is not None and not exact_certificate(saved_ddt, existing_word):
+            # Retry the SAME reviewed worker algorithm; never bind the source to
+            # this DDT or generate a replacement technical Word.
+            from app.modules.quarta_taglio.ddt_word_reuse import plan_item, apply_item
+            plan = plan_item(db, saved_ddt)
+            if plan['action'] == 'reuse':
+                created = []
+                commit_started = False
+                try:
+                    target_id = apply_item(db, saved_ddt, plan, created)
+                    commit_started = True
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    if not commit_started:
+                        for path in created:
+                            path.unlink(missing_ok=True)
+                    raise
+                target = db.get(QuartaTaglioFinalCertificate, target_id)
+                return QuartaTaglioWordDraftResponse(id=target.id, cod_odp=target.cod_odp,
+                    draft_number=target.draft_number, file_name=_certificate_file_name(target),
+                    created_at=target.created_at,
+                    download_url=f"/api/quarta-taglio/word-drafts/{target.id}/file?download_token={target.download_token}")
+            raise HTTPException(409, word_reference.MESSAGES.get(plan['reason'],
+                'La copia DDT non è ancora disponibile: verificare Incoming e i requisiti della riga.'))
         if (not force_regenerate and existing_word.status != 'pdf_final'
                 and (saved_ddt is None or exact_certificate(saved_ddt, existing_word))):
             # A retry of creation downloads the same Word; it never regenerates it.
@@ -1400,7 +1433,7 @@ def upload_quarta_taglio_additional_pages(
     certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None or not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
-    _ensure_certificate_word_is_editable(certificate)
+    _lock_editable_word(db, certificate)
     word_standard.require_current(db, certificate)
     word_standard.require_unchanged(db, cod_odp, generation_standard)
     if _is_manual_word(certificate):
@@ -1494,7 +1527,7 @@ def upload_quarta_taglio_pdf_attachment(
     certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None or not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
-    _ensure_certificate_word_is_editable(certificate)
+    _lock_editable_word(db, certificate)
 
     _ensure_pdf_attachments_initialized(db, certificate=certificate, raw_cod_f3=(detail.header or {}).get("codice_f3_raw"))
     attachment_storage_key = _certificate_pdf_attachment_storage_key(certificate, original_name=original_name)
@@ -1534,7 +1567,7 @@ def delete_quarta_taglio_pdf_attachment(
     certificate = _certificate_for_current_detail(db, detail=detail, certificate_id=certificate_id, require_number=True)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Certificato non trovato")
-    _ensure_certificate_word_is_editable(certificate)
+    _lock_editable_word(db, certificate)
     attachment = (
         db.query(QuartaTaglioCertificatePdfAttachment)
         .filter(
@@ -1605,8 +1638,11 @@ def _rebuild_certificate_word_after_pdf_attachment(
     actor: User,
 ) -> None:
     word_standard.require_current(db, certificate)
-    if _is_manual_word(certificate):
-        _rebuild_manual_certificate_word_with_pdf_attachments(db, detail=detail, certificate=certificate, actor=actor)
+    if _is_manual_word(certificate) or certificate.word_source == 'inherited':
+        # Inheritance copies the COMPLETE Word, including embedded manual pages
+        # that have no separate ExtraPages record. Never reconstruct that body.
+        _rebuild_manual_certificate_word_with_pdf_attachments(db, detail=detail, certificate=certificate,
+            actor=actor, preserve_signers=certificate.word_source == 'inherited')
         return
     _rebuild_generated_certificate_word(db, detail=detail, certificate=certificate, actor=actor)
 
@@ -1617,10 +1653,12 @@ def _rebuild_manual_certificate_word_with_pdf_attachments(
     detail: QuartaTaglioDetailResponse,
     certificate: QuartaTaglioFinalCertificate,
     actor: User,
+    preserve_signers: bool = False,
 ) -> None:
     word_standard.require_current(db, certificate)
     if not certificate.certificate_number:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generare prima il Word numerato del certificato")
+    automatic = word_reference.before_automatic(certificate)
     source_path = _manual_word_base_path(certificate)
     if source_path is None:
         if not certificate.storage_key_docx:
@@ -1633,24 +1671,29 @@ def _rebuild_manual_certificate_word_with_pdf_attachments(
 
     storage_key = _certificate_docx_storage_key(certificate.cod_odp)
     output_path = _certificate_storage_path(storage_key)
-    quality_manager = _select_quality_manager(db)
+    quality_manager = (db.get(User, certificate.quality_manager_user_id) if certificate.quality_manager_user_id else None) if preserve_signers else _select_quality_manager(db)
+    word_actor = _certificate_word_actor(db, certificate) if preserve_signers else actor
     append_pdf_attachments_to_docx(
         base_docx_path=source_path,
         output_path=output_path,
         pdf_attachments=_pdf_attachment_sources_for_certificate(db, certificate=certificate),
-        certified_by=actor,
+        certified_by=word_actor,
         quality_manager=quality_manager,
     )
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
-    certificate.certified_by_user_id = actor.id
-    certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
+    if not preserve_signers:
+        certificate.certified_by_user_id = actor.id
+        certificate.quality_manager_user_id = quality_manager.id if quality_manager else None
     certificate.status = certificate.status or "draft"
     original_filename = certificate.word_original_filename
     source = certificate.word_source or "user_uploaded"
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source=source, original_filename=original_filename)
+    # The caller publishes this explicit content edit as a NEW revision. Do not
+    # rewrite old revision metadata before publish() records its true history.
+    word_reference.check_source_unchanged(certificate, automatic)
     if detail.ddt_work_item_id is None:
         _propagate_shared_certificate_word(db, source_certificate=certificate)
 
@@ -1673,6 +1716,8 @@ def _rebuild_generated_certificate_word(
             status_code=status.HTTP_409_CONFLICT,
             detail="Word corrente caricato dall'utente: gestisci gli allegati in Word e ricarica il file modificato.",
         )
+
+    automatic = word_reference.before_automatic(certificate) if certificate.storage_key_docx else None
 
     storage_key = _certificate_docx_storage_key(certificate.cod_odp)
     output_path = _certificate_storage_path(storage_key)
@@ -1704,6 +1749,8 @@ def _rebuild_generated_certificate_word(
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
     _apply_word_file_state(certificate, output_path, source="generated")
+    if automatic:
+        word_reference.check_source_unchanged(certificate, automatic)
     if detail.ddt_work_item_id is None:
         _propagate_shared_certificate_word(db, source_certificate=certificate)
 
@@ -1826,12 +1873,17 @@ def upload_quarta_taglio_word_file(
     word_standard.require_current(db, certificate)
 
     _lock_certificate_register_for_ol(db, cod_odp=cod_odp)
+    db.refresh(certificate)
+    _ensure_certificate_word_is_editable(certificate)
     word_standard.require_current(db, certificate)
     storage_key = _certificate_uploaded_docx_storage_key(cod_odp, original_name=original_name)
     output_path = _certificate_storage_path(storage_key)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(file_bytes)
-    prepare_manual_docx_base(output_path, _certificate_storage_path(_certificate_manual_base_docx_storage_key(certificate)))
+    # Publish the final normalized file, not the pre-normalization upload.
+    normalize_certificate_docx_layout(output_path)
+    prepare_manual_docx_base(output_path, _certificate_storage_path(
+        _certificate_manual_base_docx_storage_key(certificate, storage_key=storage_key)))
 
     certificate.storage_key_docx = storage_key
     certificate.download_token = secrets.token_urlsafe(32)
@@ -1883,6 +1935,13 @@ def _ensure_certificate_word_is_editable(certificate: QuartaTaglioFinalCertifica
             status_code=status.HTTP_409_CONFLICT,
             detail="Certificato PDF chiuso: riaprire dal Registro certificazione prima di modificare il Word.",
         )
+
+
+def _lock_editable_word(db, certificate):
+    """Refresh after detail's possible commit before editing files/attachments."""
+    _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
+    db.refresh(certificate)
+    _ensure_certificate_word_is_editable(certificate)
 
 
 def _propagate_shared_certificate_word(
@@ -2312,6 +2371,7 @@ def _sync_certifiable_unit_register(
         db.query(QuartaTaglioFinalCertificate)
         .filter(QuartaTaglioFinalCertificate.cod_odp == detail.cod_odp)
         .order_by(QuartaTaglioFinalCertificate.created_at.asc(), QuartaTaglioFinalCertificate.id.asc())
+        .populate_existing()
         .all()
     )
     existing_by_unit_key = {
@@ -2701,6 +2761,7 @@ def generate_quarta_taglio_certificate_pdf(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PDF già chiuso: il nome può essere scelto solo durante la generazione.")
         return _serialize_final_certificate_register_items(db, [certificate])[0]
     resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    word_reference.require_integrity(certificate)
     word_standard.require_current(db, certificate)
     word_reference.require_current_material(db, certificate)
     pdf_standard = word_standard.snapshot(db, certificate.cod_odp)
@@ -2717,8 +2778,18 @@ def generate_quarta_taglio_certificate_pdf(
     if not word_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
     word_path = _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
-    ddt_shipments.require_current(db, certificate)
+    # Sync can commit. Pin the record AND its exact input together under the OL
+    # lock; an intervening upload must not pair a new state with the old path.
+    _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
     db.refresh(certificate)
+    if certificate.status == 'pdf_final' and certificate.storage_key_pdf:
+        if download_name != _certificate_pdf_file_name(certificate):
+            raise HTTPException(409, 'Il PDF è già stato chiuso da un’altra operazione con un nome diverso: aggiorna la pagina.')
+        return _serialize_final_certificate_register_items(db, [certificate])[0]
+    if not certificate.storage_key_docx or _certificate_storage_path(certificate.storage_key_docx) != word_path:
+        raise HTTPException(409, 'Il Word è cambiato prima della conversione: riprova la generazione PDF.')
+    resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+    ddt_shipments.require_current(db, certificate)
     word_standard.require_current(db, certificate)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
     word_reference.require_current_material(db, certificate)
@@ -2731,44 +2802,71 @@ def generate_quarta_taglio_certificate_pdf(
 
     storage_key = _certificate_pdf_storage_key(certificate)
     pdf_path = _certificate_storage_path(storage_key)
+    word_reference.require_integrity(certificate)
+    conversion_state = word_reference.conversion_state(db, certificate, refresh=True)
+    commit_started = False
     try:
-        convert_docx_to_pdf(word_path, pdf_path)
+        # LibreOffice receives a stable private input, never a live mutable file.
+        with tempfile.TemporaryDirectory(prefix='certi-pdf-') as folder:
+            frozen = Path(folder) / 'certificate.docx'
+            shutil.copy2(word_path, frozen)
+            if hashlib.sha256(frozen.read_bytes()).hexdigest() != conversion_state['word_hash']:
+                raise HTTPException(409, 'Il Word è cambiato prima della conversione: riprova la generazione PDF.')
+            # All Word changes were committed by sync. This read-only pinning
+            # transaction ends here: no OL/quota/standard lock held during LO.
+            db.rollback()
+            convert_docx_to_pdf(frozen, pdf_path)
+
+        # Short final checks; an upload can run while LO is converting. Validate
+        # the actual selected file AND record, even when it is itself the source.
+        ddt_shipments.lock_snapshot_for_pdf(db, certificate)
+        _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
+        db.refresh(certificate)
+        if certificate.status == 'pdf_final' and certificate.storage_key_pdf:
+            # Another request already closed it. Do not publish a second version.
+            if download_name != _certificate_pdf_file_name(certificate):
+                raise HTTPException(409, 'Il PDF è già stato chiuso da un’altra operazione con un nome diverso: aggiorna la pagina.')
+            return _serialize_final_certificate_register_items(db, [certificate])[0]
+        if word_reference.conversion_state(db, certificate, refresh=True) != conversion_state:
+            raise HTTPException(409, 'Il Word è cambiato durante la conversione: nessun nuovo PDF pubblicato. Ripeti la generazione.')
+        final_item = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
+        ddt_shipments.require_current(db, certificate)
+        word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
+        word_standard.require_current(db, certificate)
+        word_reference.require_integrity(certificate)
+        word_reference.require_current_material(db, certificate)
+        if ddt_work_item_id is not None:
+            if final_item is None or final_item.id != ddt_work_item_id:
+                raise HTTPException(409, "Quota DDT modificata durante la generazione: aggiorna la vista")
+            require_queue_pdf_action(db, final_item, certificate.id, ddt_source_revision)
+        now = datetime.now(timezone.utc)
+        version = _next_pdf_version(db, certificate_id=certificate.id)
+        db.add(
+            QuartaTaglioCertificatePdfVersion(
+                certificate_id=certificate.id,
+                version=version,
+                status="active",
+                storage_key_pdf=storage_key,
+                pdf_file_name=download_name,
+                generated_by_user_id=actor.id,
+                generated_at=now,
+            )
+        )
+        certificate.storage_key_pdf = storage_key
+        certificate.pdf_file_name = download_name
+        certificate.status = "pdf_final"
+        certificate.closed_at = now
+        db.add(certificate)
+        commit_started = True
+        db.commit()
+        db.refresh(certificate)
+        return _serialize_final_certificate_register_items(db, [certificate])[0]
     except PDFConversionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Generazione PDF fallita: {exc}") from exc
-
-    # Word refresh may commit. Recheck the share after conversion before closure.
-    ddt_shipments.lock_snapshot_for_pdf(db, certificate)
-    final_item = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
-    ddt_shipments.require_current(db, certificate)
-    _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
-    word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
-    word_standard.require_current(db, certificate)
-    word_reference.require_current_material(db, certificate)
-    if ddt_work_item_id is not None:
-        if final_item is None or final_item.id != ddt_work_item_id:
-            raise HTTPException(409, "Quota DDT modificata durante la generazione: aggiorna la vista")
-        require_queue_pdf_action(db, final_item, certificate.id, ddt_source_revision)
-    now = datetime.now(timezone.utc)
-    version = _next_pdf_version(db, certificate_id=certificate.id)
-    db.add(
-        QuartaTaglioCertificatePdfVersion(
-            certificate_id=certificate.id,
-            version=version,
-            status="active",
-            storage_key_pdf=storage_key,
-            pdf_file_name=download_name,
-            generated_by_user_id=actor.id,
-            generated_at=now,
-        )
-    )
-    certificate.storage_key_pdf = storage_key
-    certificate.pdf_file_name = download_name
-    certificate.status = "pdf_final"
-    certificate.closed_at = now
-    db.add(certificate)
-    db.commit()
-    db.refresh(certificate)
-    return _serialize_final_certificate_register_items(db, [certificate])[0]
+    finally:
+        if not commit_started:
+            # This UUID path belongs only to this attempt, never an old PDF.
+            pdf_path.unlink(missing_ok=True)
 
 
 def reopen_quarta_taglio_certificate_pdf(
@@ -2830,10 +2928,21 @@ def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, 
 def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> Path:
     if certificate.status == "pdf_final":
         return path
+    _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
+    db.refresh(certificate)
+    path = _certificate_storage_path(certificate.storage_key_docx)
+    if certificate.status == 'pdf_final':
+        return path
     # Validate even manual files without content controls before download/PDF.
     saved_ddt = resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     if word_standard.is_stale(certificate, db):
         # Keep quota-identity checks, but never rebuild stale technical contents.
+        return path
+    if (word_reference.integrity_reason(certificate)
+            or word_reference.material_changed(db, certificate)
+            or word_reference.pending_message(db, certificate)):
+        # A download can inspect the preserved document, but cannot silently heal
+        # or rebuild an unverified/stale source. PDF publication checks separately.
         return path
     if certificate.word_source == 'ddt_reused':
         if saved_ddt is None:
@@ -2850,14 +2959,19 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
             # Word. Refresh tracked automatic copies, never a manual edit.
             from app.modules.quarta_taglio.ddt_word_reuse import file_hash
             metadata = word_reference.metadata(certificate)
-            if (not certificate.shipment_context or metadata.get('kind') != 'copy'
-                    or metadata.get('file_hash') != file_hash(certificate.storage_key_docx)):
+            # An explicit attachment edit promotes this document to a reference
+            # without erasing its ddt_reused origin. Both roles may refresh ONLY
+            # verified shipment controls; reference integrity was checked above.
+            if (not certificate.shipment_context or metadata.get('kind') not in {'copy', 'reference'}
+                    or (metadata.get('kind') == 'copy'
+                        and metadata.get('file_hash') != file_hash(certificate.storage_key_docx))):
                 raise HTTPException(status_code=409, detail="Dati DDT diversi dal Word predisposto: verifica richiesta")
             key = _certificate_docx_storage_key(certificate.cod_odp)
             output = _certificate_storage_path(key)
+            automatic = word_reference.before_automatic(certificate)
             update_docx_content_controls(path, output, values)
             certificate.storage_key_docx = key
-            certificate.word_reference = {**metadata, 'storage_key': key, 'file_hash': file_hash(key)}
+            word_reference.after_automatic(certificate, automatic, origin='shipment_fields')
             ddt_shipments.record(db, certificate, saved_ddt)
             path = output
         # Preserve the existing live conformity check before download/PDF without
@@ -2872,23 +2986,9 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
     except (OSError, zipfile.BadZipFile):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File Word corrente non valido")
 
-    if (
-        certificate.pdf_attachments_initialized
-        and not _is_manual_word(certificate)
-        and (_pdf_attachments_for_certificate(db, certificate=certificate) or _docx_contains_pdf_attachment_pages(path))
-    ):
-        detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
-        current_download_token = certificate.download_token
-        _rebuild_generated_certificate_word(
-            db,
-            detail=detail,
-            certificate=certificate,
-            actor=_certificate_word_actor(db, certificate),
-        )
-        certificate.download_token = current_download_token
-        db.add(certificate)
-        db.commit()
-        return _certificate_storage_path(certificate.storage_key_docx)
+    # Attached PDF pages are already embedded by the explicit attachment action.
+    # A download updates header controls in that complete file; it must not rebuild
+    # technical/extra pages or replace signatures from today's user configuration.
 
     if not present:
         if certificate.shipment_context:
@@ -2901,19 +3001,28 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
         return path
 
     detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
-    output_path = path
-    if saved_ddt is not None:
-        # Old registry entries may share a Word path. Never edit another quota's file.
-        storage_key = _certificate_docx_storage_key(certificate.cod_odp)
-        output_path = _certificate_storage_path(storage_key)
+    _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
+    db.refresh(certificate)
+    if certificate.status == 'pdf_final':
+        return _certificate_storage_path(certificate.storage_key_docx)
+    # Detail/register refresh can already have updated the record.
+    path = _certificate_storage_path(certificate.storage_key_docx)
+    automatic = word_reference.before_automatic(certificate)
     if certificate.shipment_context and saved_ddt is not None:
         if not {'CERT_NUMBER', 'QUANTITY_RAW', 'QUANTITY_FINISHED'}.issubset(set(present)):
             raise HTTPException(409, 'Campi numero/quantità DDT mancanti: ripristinarli nel Word e ricaricarlo.')
-    update_docx_content_controls(path, output_path, _word_content_control_values(detail, certificate))
+    values = _word_content_control_values(detail, certificate)
+    output_path = path
+    if _docx_needs_content_control_update(path, values):
+        # Copy-on-write only when a field really changed. Repeated downloads
+        # must not grow storage or cancel a simultaneous PDF for a no-op.
+        storage_key = _certificate_docx_storage_key(certificate.cod_odp)
+        output_path = _certificate_storage_path(storage_key)
+        update_docx_content_controls(path, output_path, values)
+        certificate.storage_key_docx = storage_key
     if certificate.shipment_context and saved_ddt is not None:
         ddt_shipments.record(db, certificate, saved_ddt)
-    if saved_ddt is not None:
-        certificate.storage_key_docx = storage_key
+    word_reference.after_automatic(certificate, automatic, origin='download_fields')
     certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
     _apply_certificate_register_fields(certificate, detail)
     _apply_certificate_conformity(certificate, detail)
@@ -2974,9 +3083,12 @@ def _certificate_uploaded_docx_storage_key(cod_odp: str, *, original_name: str) 
     return f"certificati_finali/{now:%Y/%m}/{filename}"
 
 
-def _certificate_manual_base_docx_storage_key(certificate: QuartaTaglioFinalCertificate) -> str:
+def _certificate_manual_base_docx_storage_key(certificate: QuartaTaglioFinalCertificate, *, storage_key=None) -> str:
     token = certificate.certificate_number or certificate.draft_number or f"id_{certificate.id}"
-    filename = f"{_safe_file_part(token)}_manual_base.docx"
+    # Same certificate number can legitimately identify several physical shares.
+    # A manual base belongs to ONE record/file version, never to that number alone.
+    version = hashlib.sha256(str(storage_key or certificate.storage_key_docx or '').encode()).hexdigest()[:20]
+    filename = f"{_safe_file_part(token)}_id{certificate.id}_{version}_manual_base.docx"
     return f"certificati_finali/manual_bases/{filename}"
 
 
@@ -3242,6 +3354,11 @@ def _ensure_register_word_current(
     source_path = _certificate_word_source_path_for_auto_update(db, certificate=certificate, values=values)
     if source_path is None:
         return False
+    automatic = None
+    if current_path is not None and source_path == current_path:
+        if word_reference.integrity_reason(certificate) or word_reference.material_changed(db, certificate):
+            return False
+        automatic = word_reference.before_automatic(certificate)
     source_label = certificate.word_source or "generated"
     if current_path is None or source_path != current_path:
         source_label = "inherited"
@@ -3261,6 +3378,8 @@ def _ensure_register_word_current(
     certificate.word_source = source_label
     certificate.word_original_filename = None
     certificate.word_content_controls, certificate.word_missing_content_controls = inspect_docx_content_controls(output_path)
+    if automatic:
+        word_reference.after_automatic(certificate, automatic, origin='register_fields')
     return True
 
 
@@ -3420,19 +3539,17 @@ def _cod_f3_is_raw_variant(raw_cod_f3: str | None, cod_f3: str | None) -> bool:
 
 
 def _docx_needs_content_control_update(path: Path, values: dict[str, object]) -> bool:
-    expected_values = [str(value) for value in values.values() if value not in (None, "")]
-    if not expected_values:
-        return False
+    # Match each value to its own tag, not an arbitrary occurrence elsewhere in
+    # the XML. Empty values matter too (e.g. an obsolete DDT must be cleared).
+    from app.modules.quarta_taglio.ddt_word_reuse import word_facts
     try:
-        with zipfile.ZipFile(path) as archive:
-            xml = "".join(
-                archive.read(name).decode("utf-8", errors="ignore")
-                for name in archive.namelist()
-                if name.startswith("word/") and name.endswith(".xml")
-            )
-    except (OSError, zipfile.BadZipFile):
+        root = Path(settings.document_storage_root).resolve()
+        key = path.resolve().relative_to(root).as_posix()
+        controls, _ = word_facts(key)
+    except (OSError, ValueError, zipfile.BadZipFile):
         return False
-    return any(value not in xml and escape(value) not in xml for value in expected_values)
+    return any(controls[tag] != ('' if value is None else str(value))
+               for tag, value in values.items() if tag in controls)
 
 
 def _cdq_signature_from_detail(detail: QuartaTaglioDetailResponse) -> list[str]:

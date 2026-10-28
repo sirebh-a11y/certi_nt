@@ -483,14 +483,14 @@ class DdtQueueTest(DdtQueueFixture):
         self.assertEqual(detail.display_status_label, "Word da verificare")
         self.assertEqual(detail.status_message, "File Word non disponibile")
 
-    def test_early_word_ambiguity_unchanged_by_filter_or_page_size(self):
+    def test_more_ddt_rows_do_not_invent_source_ambiguity_on_filter_or_page(self):
         item = self.item()
         self.material()
         self.cert(item, ddt=None, esolver_id_documento=None, esolver_id_riga_doc=None,
                   esolver_rif_lotto_alfanum=None, unit_key="early")
         self.item(IdDocumento="200", DDT="88-02/09/2026")
-        self.assertEqual({item.state for item in self.read().items}, {"review"})
-        self.assertEqual(self.read(ddt="77", limit=1).items[0].state, "review")
+        self.assertEqual({item.state for item in self.read().items}, {"ready"})
+        self.assertEqual(self.read(ddt="77", limit=1).items[0].state, "ready")
 
     def test_multiple_early_words_never_choose_first(self):
         item = self.item()

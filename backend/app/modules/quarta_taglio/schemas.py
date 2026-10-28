@@ -305,6 +305,10 @@ class QuartaTaglioPdfAttachmentResponse(BaseModel):
 
 class QuartaTaglioWordInfoResponse(BaseModel):
     reference_certificate_id: int | None = None
+    reference_number: str | None = None
+    reference_download_url: str | None = None
+    reference_detail_url: str | None = None
+    reference_reason: str | None = None
     reference_file_hash: str | None = None
     current_word_file_hash: str | None = None
     reference_message: str | None = None
