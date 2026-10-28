@@ -964,6 +964,15 @@ def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, 
             continue
         text_start = _find_word_text_start(block, content_start)
         if text_start < 0:
+            # A Word saved before shipment may contain a valid, completely
+            # empty plain-text SDT (no run/text node at all). Populate only
+            # that control, never neighbouring labels or a rich/nested SDT.
+            populated = _populate_empty_text_control(block, tag, value)
+            if populated != block:
+                xml = xml[:sdt_start] + populated + xml[sdt_end:]
+                changed = True
+                start = sdt_start + len(populated)
+                continue
             start = sdt_end
             continue
         text_open_end = block.find(">", text_start)
@@ -972,18 +981,64 @@ def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, 
             start = sdt_end
             continue
         escaped = _escape_xml_text(value)
-        if text_close < 0:
-            if text_open_end > 0 and block[text_open_end - 1] == "/":
-                block = block[: text_open_end - 1] + ">" + escaped + "</w:t>" + block[text_open_end + 1 :]
-            else:
-                start = sdt_end
-                continue
+        if text_open_end > 0 and block[text_open_end - 1] == "/":
+            block = block[: text_open_end - 1] + ">" + escaped + "</w:t>" + block[text_open_end + 1 :]
+        elif text_close < 0:
+            start = sdt_end
+            continue
         else:
             block = block[: text_open_end + 1] + escaped + block[text_close:]
         xml = xml[:sdt_start] + block + xml[sdt_end:]
         changed = True
         start = sdt_start + len(block)
     return xml, changed
+
+
+def _populate_empty_text_control(block: str, tag: str, value: str) -> str:
+    """Fill only an empty inline plain-text control; preserve all existing XML.
+
+    Do not invent a replacement for missing controls or consume rich content,
+    drawings, fields, paragraphs, tracked changes or nested controls. The
+    caller's shipment-value verification remains the publication guard.
+    """
+    properties = re.search(r"<w:sdtPr\b[^>]*>(.*?)</w:sdtPr>", block, re.DOTALL)
+    if properties is None or not re.search(r"<w:text(?:\s[^>]*)?/>", properties[1]):
+        return block
+    content = re.search(r"<w:sdtContent\b[^>]*(?:/>|>.*?</w:sdtContent>)", block, re.DOTALL)
+    if content is None:
+        return block
+    text = '<w:t xml:space="preserve">' + _escape_xml_text(value) + '</w:t>'
+    default_style = re.search(r"<w:rPr\b[^>]*(?:/>|>.*?</w:rPr>)", properties[1], re.DOTALL)
+    # Empty saved controls may have lost even their run formatting. Restore
+    # the same style as CERTI's generator, not the surrounding black label.
+    if tag in CONTENT_CONTROL_TAGS and tag not in {'CERT_NUMBER', 'CERT_DATE', 'SUPPLIER_REF'}:
+        fallback_style = ('<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+                          '<w:color w:val="0070C0"/><w:sz w:val="'
+                          + ('18' if len(value) > 42 else '20') + '"/></w:rPr>')
+    elif tag in {'CERT_NUMBER', 'CERT_DATE'}:
+        fallback_style = '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/></w:rPr>'
+    else:
+        fallback_style = ''
+    style = default_style[0] if default_style else fallback_style
+    run = '<w:r>' + style + text + '</w:r>'
+    fragment = content[0]
+    if re.fullmatch(r"<w:sdtContent\b[^>]*/>", fragment):
+        replacement = fragment[:-2] + '>' + run + '</w:sdtContent>'
+    else:
+        opening_end = fragment.index('>') + 1
+        inner = fragment[opening_end:-len('</w:sdtContent>')]
+        if not inner.strip():
+            replacement = fragment[:opening_end] + run + '</w:sdtContent>'
+        elif re.fullmatch(r"\s*<w:r\b[^>]*(?:/>|>\s*(?:<w:rPr\b[^>]*(?:/>|>.*?</w:rPr>)\s*)?</w:r>)\s*", inner, re.DOTALL):
+            # Keep the run's own formatting when Word retained an empty run.
+            if re.search(r"</w:r>\s*$", inner):
+                inner = inner.replace('</w:r>', ('' if '<w:rPr' in inner else style) + text + '</w:r>', 1)
+            else:
+                inner = re.sub(r"(<w:r\b[^>]*?)/>", lambda m: m[1] + '>' + style + text + '</w:r>', inner, count=1)
+            replacement = fragment[:opening_end] + inner + '</w:sdtContent>'
+        else:
+            return block
+    return block[:content.start()] + replacement + block[content.end():]
 
 
 def _find_content_control_start(xml: str, before_index: int) -> int:
@@ -995,7 +1050,8 @@ def _find_content_control_start(xml: str, before_index: int) -> int:
 def _find_word_text_start(xml: str, from_index: int) -> int:
     exact = xml.find("<w:t>", from_index)
     with_attrs = xml.find("<w:t ", from_index)
-    candidates = [index for index in (exact, with_attrs) if index >= 0]
+    empty = xml.find("<w:t/>", from_index)
+    candidates = [index for index in (exact, with_attrs, empty) if index >= 0]
     return min(candidates) if candidates else -1
 
 

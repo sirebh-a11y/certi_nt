@@ -7,7 +7,29 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Modifica 28/10 — ciclo Word/DDT/PDF (sviluppo locale, NON installata)
+### Manutenzione 28/10 in corso — non dichiarare Alpha riaperta
+
+Alpha10.5 (`dd6ce47a`) installata con backend/frontend ancora fermi. Backup
+coerenti app/DB/storage verificati anche mediante ripristino locale isolato;
+timestamp unico `20261028_120400`. Applicati, dopo OK specifico, soltanto i
+quattro metadati ID62/268/285/308. Word/PDF originali invariati.
+La copia autorizzata quota894/OL1087 NON è stata pubblicata: il controllo dei
+valori ha rilevato cinque SDT vuoti (`<w:sdtContent/>`) non riempiti dal vecchio
+updater. I tentativi sono falliti prima del commit, con rimozione della sola
+copia non pubblicata. Non aggirare `shipment_fields_not_updated`.
+
+L'utente ha autorizzato riesame/correzione locale, test, commit/push e nuovo
+pacchetto, poi recupero e riapertura. Il nuovo pacchetto deve avere tag distinto,
+senza modificare Alpha10.5. Nessuna patch al codice direttamente sul server.
+Campi tabella ricreati con stile CERTI blu `0070C0`, font/size del generatore;
+numero/data conservano lo stile della testata. Nessuna riscrittura dei PDF chiusi.
+Prima del nuovo tentativo: confronto completo con baseline + quattro metadati,
+nuova preview legata al codice effettivo e OK sul piano esatto; i vecchi report
+non sono riutilizzabili. Riapertura soltanto dopo una copia corretta, export e
+documenti protetti invariati. Dettaglio nel
+[verbale della manutenzione](alpha10_6_recovery_20261028.md).
+
+### Modifica 28/10 — ciclo Word/DDT/PDF (installata, manutenzione non conclusa)
 
 Piano, cause, perimetro dati e verifiche:
 [integrità Word e recupero](../tasks/word_ddt_lifecycle_repair_plan_20261028.md).

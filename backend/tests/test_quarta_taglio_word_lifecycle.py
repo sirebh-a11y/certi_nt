@@ -20,6 +20,51 @@ import test_quarta_taglio_word_reference as reference_tests
 
 
 class WordLifecycleTest(reference_tests.WordReferenceTest):
+    def test_anticipated_empty_controls_fill_on_each_ddt_without_changing_source(self):
+        from lxml import etree
+        _, source = self.base_word(closed=False)
+        source.ddt = source.esolver_id_documento = source.esolver_id_riga_doc = source.esolver_rif_lotto_alfanum = None
+        source.unit_key = 'early-empty-source'
+        path = service._certificate_storage_path(source.storage_key_docx)
+        with zipfile.ZipFile(path) as archive:
+            parts = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+        tags = {'CERT_DATE', 'ORDER_CLIENT', 'CONFIRM_ORDER', 'DDT_RAW', 'QUANTITY_RAW'}
+        emptied = set()
+        for name, data in parts.items():
+            if not (name.startswith('word/') and name.endswith('.xml')):
+                continue
+            tree = etree.fromstring(data)
+            for node in tree.xpath('//w:sdt', namespaces=reuse.NS):
+                names = node.xpath('./w:sdtPr/w:tag/@w:val', namespaces=reuse.NS)
+                if names and names[0] in tags:
+                    for content in node.xpath('./w:sdtContent', namespaces=reuse.NS):
+                        content.clear()
+                    emptied.add(names[0])
+            parts[name] = etree.tostring(tree)
+        self.assertEqual(emptied, tags)
+        with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, data in parts.items():
+                archive.writestr(name, data)
+        self.publish(source)
+        source_hash = reuse.file_hash(source.storage_key_docx)
+        technical = reuse.word_facts(source.storage_key_docx, ignore_number=True)[1]
+        # The fixture already contains its first delivery. Let the worker
+        # assign that delivery before previewing the later delivery numbers.
+        self.run_worker()
+        for document, quantity in [('901', 91), ('902', 2330)]:
+            item = self.later(IdDocumento=document, DDT=document + '-27/10/2026', QtaUmMag=quantity)
+            plan = reuse.plan_item(self.db, item)
+            self.assertEqual(plan['action'], 'reuse', plan)
+            self.run_worker()
+            target = self.target(item)
+            self.assertIsNotNone(target)
+            values, target_technical = reuse.word_facts(target.storage_key_docx, ignore_number=True)
+            self.assertEqual({k: values[k] for k in plan['values']}, plan['values'])
+            self.assertEqual(technical, target_technical)
+            self.assertEqual(reuse.file_hash(source.storage_key_docx), source_hash)
+            self.assertIsNone(target.storage_key_pdf)
+            self.assertEqual(refs.metadata(target)['source_id'], source.id)
+
     def attach_pdf(self, certificate, *, actor=None):
         from pypdf import PdfWriter
         pdf = PdfWriter()
