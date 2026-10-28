@@ -7,29 +7,33 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Manutenzione 28/10 in corso — non dichiarare Alpha riaperta
+### Esito 28/10 — Alpha 10.6 installata, riaperta e timer verificato
 
-Alpha10.5 (`dd6ce47a`) installata con backend/frontend ancora fermi. Backup
-coerenti app/DB/storage verificati anche mediante ripristino locale isolato;
-timestamp unico `20261028_120400`. Applicati, dopo OK specifico, soltanto i
-quattro metadati ID62/268/285/308. Word/PDF originali invariati.
-La copia autorizzata quota894/OL1087 NON è stata pubblicata: il controllo dei
-valori ha rilevato cinque SDT vuoti (`<w:sdtContent/>`) non riempiti dal vecchio
-updater. I tentativi sono falliti prima del commit, con rimozione della sola
-copia non pubblicata. Non aggirare `shipment_fields_not_updated`.
+Installato il sorgente `9a2a98e53aed53db6a61224aebf6f6fb444056b0`, pacchetto
+`v0.1.0-alpha.10.6-deploy` (`322a9f0`). Riapertura alle 14:24 italiane;
+health pubblico/backend 200, controlli dati/file/export e UI riusciti.
+Primo timer naturale verificato alle 14:39 italiane: DDT run 2491 riuscito,
+Quarta run 10028 riuscito, nessuna sincronizzazione manuale. Health finale 200.
+Durante Quarta osservato un timeout di una prova health a 15 secondi, rientrato
+alla fine del ciclo; dettaglio e limite preesistente nel verbale. Non equiparare
+il solo controllo all'avvio alla prova della cadenza 15 minuti.
 
-L'utente ha autorizzato riesame/correzione locale, test, commit/push e nuovo
-pacchetto, poi recupero e riapertura. Il nuovo pacchetto deve avere tag distinto,
-senza modificare Alpha10.5. Nessuna patch al codice direttamente sul server.
-Campi tabella ricreati con stile CERTI blu `0070C0`, font/size del generatore;
-numero/data conservano lo stile della testata. Nessuna riscrittura dei PDF chiusi.
-Prima del nuovo tentativo: confronto completo con baseline + quattro metadati,
-nuova preview legata al codice effettivo e OK sul piano esatto; i vecchi report
-non sono riutilizzabili. Riapertura soltanto dopo una copia corretta, export e
-documenti protetti invariati. Dettaglio nel
+Backup coerenti app/DB/storage verificati mediante restore isolato, timestamp
+unico `20261028_120400`. Applicati con OK separati i soli metadati
+ID62/268/285/308 e una copia Word ID313 per quota 894/OL1087, DDT 2626 del 27/10,
+2330 pezzi. Fonte62 originale, tutti i 3983 file precedenti, 102 versioni PDF e
+98 righe export invariati. Nessun PDF generato né migrazione o pulizia.
+Seconda preview con zero riusi. Non rieseguire questi recuperi.
+
+Nel tentativo 10.5 cinque SDT vuoti (`<w:sdtContent/>`) non venivano riempiti:
+protezione correttamente intervenuta prima del commit. Correzione fatta solo
+in locale, testata anche sul Word reale e su un clone isolato del DB; nuovo
+tag 10.6 senza spostare 10.5. Campi tabella blu `0070C0`, numero/data nello stile
+preesistente. Non aggirare `shipment_fields_not_updated` in casi futuri.
+Dettaglio, perimetro, evidenze e limiti nel
 [verbale della manutenzione](alpha10_6_recovery_20261028.md).
 
-### Modifica 28/10 — ciclo Word/DDT/PDF (installata, manutenzione non conclusa)
+### Modifica 28/10 — ciclo Word/DDT/PDF (installata con Alpha 10.6)
 
 Piano, cause, perimetro dati e verifiche:
 [integrità Word e recupero](../tasks/word_ddt_lifecycle_repair_plan_20261028.md).
@@ -87,7 +91,7 @@ da un PDF chiuso con un riferimento errato da aggiornare alla versione più rece
 
 Fotografia iniziale del 28/10, **da ricalcolare**:
 
-- OL1087 fonte ID62/quota894: impronta discordante. Dopo confronto e approvazione
+- OL1087 fonte ID62/quota 894: impronta discordante. Dopo confronto e approvazione
   del documento esatto conservare fonte ID62, riallineare solo i metadati
   autorizzati e far predisporre la copia della quota con il proprio ID ordinario.
   Non ricaricare/riadottare il Word attraverso l'utente per aggirare il bug.
@@ -96,9 +100,9 @@ Fotografia iniziale del 28/10, **da ricalcolare**:
   non modificare PDF, numero, ID, versioni, URL/export né farli apparire riemessi.
 - Basi condivise nei gruppi ID137/177/71, ID189/99, ID194/74, ID208/88/225:
   verifica per documento; nessuna prova automatica che i PDF siano errati.
-- OL986 quote898/899: apertura/diagnosi correggibili, ma CDQ24-0985 mancante e
+- OL986 quote898/899: apertura/diagnosi correggibili, ma CDQ 24-0985 mancante e
   materiale cambiato sono impedimenti reali: non forzare Word/PDF.
-- OL1148 quote895/896 e PDF296/297: conservarli. Il confronto testuale dei 93 PDF
+- OL1148 quote895/896 e PDF 296/297: conservarli. Il confronto testuale dei 93 PDF
   chiusi della fotografia trova numero/OL/F3/DDT coerenti, non certifica ogni
   valore tecnico o ogni pagina storica. Nessuna rigenerazione massiva.
 
@@ -112,9 +116,11 @@ backup DB/storage/app. Ora è disponibile in locale la CLI separata
 `recover_word_lifecycle_alpha`, collaudata per soli metadati allowlist: piano
 approvato esatto, backup, lock NOWAIT, confronto globale protetto e journal
 prima/dopo. Il comando `audit_word_lifecycle` resta invece SOLO preview.
-La nuova CLI non corregge file Word/PDF, non genera copie e non è stata eseguita
-in scrittura su Alpha. Dopo il recupero metadati serve una NUOVA preview della
-procedura Word esistente; quota attesa 894, nessun riuso dei report storici.
+La nuova CLI non corregge file Word/PDF e non genera copie. Il 28/10 è stata
+eseguita solo per i quattro metadati approvati; la separata CLI Word ha poi
+creato la sola quota 894, come nel verbale. Questa quota è già recuperata:
+non è un'azione pendente. Per un futuro recupero serve una NUOVA preview della
+procedura Word esistente e un nuovo perimetro approvato, senza riuso dei report storici.
 Riaprire solo dopo confronto dei dati/file protetti e degli esiti autorizzati.
 I normali flag snapshot/riuso già approvati restano da preservare.
 
@@ -134,9 +140,10 @@ superati**, build riuscita e controllo visivo dei PDF sintetici. Nessuna nuova
 migrazione; i 116 casi PostgreSQL saltati nel runtime senza DB sono stati tutti
 eseguiti separatamente, non sono rimasti controlli richiesti saltati.
 
-Preparazione successiva: **732 backend generali + 126 PostgreSQL dedicati + 34
-frontend superati**, build riuscita; include la nuova procedura puntuale per i
-metadati, ancora NON applicata su Alpha. Inventario aggiornato, allowlist e
+Preparazione successiva, prima del deploy: **732 backend generali + 126 PostgreSQL
+dedicati + 34 frontend superati**, build riuscita; includeva la nuova procedura
+puntuale per i metadati, a quella data non ancora applicata su Alpha (esito
+effettivo del 28/10 nel verbale). Inventario aggiornato, allowlist e
 risultati nel preflight collegato sopra. Le prove locali non sostituiscono il
 collaudo delle candidate effettive e la nuova baseline in manutenzione.
 
@@ -188,19 +195,25 @@ nessuna variazione dei valori normalizzati di chimica, proprietà e note.
 Preflight e successivo verbale del passaggio:
 [Alpha 10.4 — Arconic](alpha10_4_preflight_20261024.md).
 
-### Punto di ingresso per i prossimi deploy — aggiornato 24/10/2026
+### Punto di ingresso per i prossimi deploy — aggiornato 28/10/2026
 
-**Alpha 10.4 installata il 24/10; controlli conclusi, compreso il primo timer.**
+**Alpha 10.6 installata il 28/10; riapertura e primo timer verificati nel verbale.**
+Ultimo pacchetto `v0.1.0-alpha.10.6-deploy`, deploy `322a9f0`,
+`SOURCE_COMMIT=9a2a98e53aed53db6a61224aebf6f6fb444056b0`, app sempre
+`0.1.0.alpha.10`. [Esito e recuperi 28/10](alpha10_6_recovery_20261028.md).
+Non ripetere i quattro metadati né la copia quota 894. Nessuna nuova migrazione.
+
+**Storico: Alpha10.4 installata il 24/10, con primo timer verificato.**
 Rallentamento Quarta preesistente documentato nel verbale. Questo documento non
 autorizza nuove pulizie, commit/push, fermi, scritture dati o deploy. Ogni nuova
 operazione richiede l'indicazione dell'utente; l'OK al deploy non equivale
 all'OK a cancellazioni o recuperi massivi.
 
-Ultimo pacchetto installato: `v0.1.0-alpha.10.4-deploy`, commit deploy `5d2fdcd`,
+Precedente pacchetto installato: `v0.1.0-alpha.10.4-deploy`, commit deploy `5d2fdcd`,
 `SOURCE_COMMIT=89c5fe40578edf025ed8a4460625a5177de2e964`, versione app
 `0.1.0.alpha.10`. Sono riferimenti storici da confrontare col server, NON tag
 da riutilizzare o spostare al prossimo aggiornamento.
-Esito corrente: [verbale Alpha 10.4](alpha10_4_preflight_20261024.md).
+Esito storico: [verbale Alpha 10.4](alpha10_4_preflight_20261024.md).
 Precedente pacchetto 10.3: `2a31915`, sorgente `62767a6e8009130c93c13b6d639d81161dfba402`;
 [verbale Alpha 10.3](alpha10_3_preflight_20261019.md).
 Precedente pacchetto 10.2: `3168cef`, sorgente `ec5b949804070fd17219d5b5221e96ddce33eb16`;
