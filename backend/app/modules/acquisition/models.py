@@ -50,6 +50,9 @@ class Document(Base):
         order_by="DocumentPage.numero_pagina",
     )
     evidences: Mapped[list["DocumentEvidence"]] = relationship("DocumentEvidence", back_populates="document")
+    ai_extractions: Mapped[list["DocumentAiExtraction"]] = relationship(
+        "DocumentAiExtraction", cascade="all, delete-orphan", back_populates="document",
+    )
     rows_as_ddt: Mapped[list["AcquisitionRow"]] = relationship(
         "AcquisitionRow",
         back_populates="ddt_document",
@@ -88,6 +91,49 @@ class AcquisitionUploadBatch(Base):
     )
 
     actor = relationship("User", foreign_keys=[actor_id])
+
+
+class DocumentAiExtraction(Base):
+    """Document-level reading, never a merged Incoming row or a match decision."""
+
+    __tablename__ = "documenti_ai_estrazioni"
+    __table_args__ = (UniqueConstraint("document_id", "fingerprint", name="uq_document_ai_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documenti_fornitore.id", ondelete="CASCADE"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    reader_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    supplier_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_evidence_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    document = relationship("Document", back_populates="ai_extractions")
+
+
+class DocumentAiUsage(Base):
+    """Actual API attempts. Unknown usage (e.g. timeout) is NULL, never zero."""
+
+    __tablename__ = "documenti_ai_consumi"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documenti_fornitore.id", ondelete="SET NULL"), index=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    response_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    response_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class DocumentPage(Base):

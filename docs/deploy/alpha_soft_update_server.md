@@ -7,6 +7,120 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Preparazione 29/10 — riuso letture AI certificati (solo locale, NON distribuito)
+
+Piano, motivazioni, multiriga, rischi e collaudi:
+[riuso letture AI](../tasks/ai_certificate_reuse_20261029.md).
+La protezione dei manuali e implementata e collaudata in locale: niente AI
+automatica per certificati/DDT manuali, con valori e campi interni conservati e
+match/rematch rivalutabili secondo le regole esistenti. Il solo riuso dei JSON
+non basta: distribuire anche guard, provenienza manuale e instradamento del batch.
+Nessuna distribuzione o preparazione DB Alpha eseguita; serve OK separato.
+Prima chiusura locale: 794 test superati, 127 altri opt-in saltati; sette PostgreSQL
+dedicati eseguiti. La seconda revisione ha trovato tre difetti del rematch, poi
+corretti in locale: il dettaglio e i nuovi collaudi sono nel piano collegato.
+Chiusura successiva: **811 test superati, 127 altri opt-in saltati**, inclusi tutti
+i nove PostgreSQL dedicati e le prove di merge concorrente. Nessun nuovo costo AI.
+Replay 31.164 coppie JSON/cache: stessi punteggi, valori originari intatti.
+Prove manuali e sgancio senza AI aggiuntiva. Dettaglio e limiti nel piano collegato.
+Ricontrollo Alpha read-only del 29/10 ore 20:30: 219 letture riutilizzabili,
+quattro certificati manuali e un Bozen senza riga Incoming (non candidato nello
+storico automatico). Rilevati due DDT da proteggere (#43, inserimento misto con
+evento manuale, e #205): la preview futura puo quindi indicare 4+2 marcatori,
+non soltanto i precedenti 4+1. Dettaglio nel piano; **ricalcolare sempre al deploy**.
+Non confondere con il riuso dei Word: questa modifica riguarda solo la lettura
+dei PDF fornitori. Storico e regole di match restano; non si eliminano documenti,
+DDT, righe Incoming, Word/PDF, numeri o dati Quarta/eSolver.
+
+**Integrazione DB additiva obbligatoria:** nuove tabelle
+`documenti_ai_estrazioni` (letture per documento/hash, NON una riga materiale
+globale) e `documenti_ai_consumi` (tentativi/token effettivi, costo sconosciuto
+non equiparato a zero). Il bootstrap le crea al normale avvio; per Alpha usare
+prima la preparazione controllata qui sotto. Nessuna rilettura AI al bootstrap.
+
+Prima di installare: rifare audit spazio e writer, attendere la conclusione dei
+run AI; backup/restore verificati e manutenzione concordata restano obbligatori.
+Non fermare un run lungo per questa correzione. Non copiare il DB di sviluppo.
+
+Con codice candidato, senza avviare bootstrap/job, effettuare preview read-only:
+
+```bash
+python -m scripts.prepare_certificate_ai_reuse
+```
+
+Usare il contesto di audit/deploy previsto dal runbook, con configurazione DB
+Alpha corretta. Non eseguirla accidentalmente sul DB locale o sull'altro stack.
+La preview funziona anche prima della creazione delle due tabelle, non fa AI,
+non riscrive valori ed espone digest/conteggi/eccezioni da riconfermare all'utente.
+Nella prima fotografia del 29/10: 212 JSON normalizzabili; cio NON garantisce
+identita completa o equivalenza di ogni campo. Quattro certificati senza JSON
+(9/60/206/277) hanno dati inseriti manualmente: **NON rileggerli neppure una
+tantum**. Confermato anche il DDT manuale 205. Non usare lo stato AI della riga
+accoppiata per classificare il documento: puo riferirsi al lato complementare.
+Anche il controllo tipo Leichtmetall deve rispettare l'esclusione dei manuali.
+Non trasformare i valori manuali in un unico JSON del PDF: possono contenere
+interpretazioni LST03, correzioni o quantita per riga. Arconic 357 conserva un
+vecchio JSON parziale ma il numero e gia stato completato dall'utente: proteggere
+questa correzione, senza imporre una rilettura automatica. Sette certificati nuovi
+e un Bozen senza riga non vanno scambiati per cache perse. **Ricalcolare al deploy.**
+Preview/apply distinguono `manual_no_automatic_ai` e i DDT manuali. Controllare
+la nuova preview su Alpha prima dell'apply, senza riusare gli ID della fotografia.
+Nessuna bonifica o migrazione su Alpha autorizzata ora.
+
+Solo con approvazione, nuovo backup verificato e assenza writer, sostituire i
+segnaposto con il digest della preview corrente e il dump realmente verificato:
+
+```bash
+python -m scripts.prepare_certificate_ai_reuse --apply \
+  --expected-digest DIGEST_PREVIEW_CORRENTE \
+  --maintenance-confirmed --backup /audit/DUMP_VERIFICATO.sql
+```
+
+La preparazione rifiuta run attivi, writer concorrenti (NOWAIT), digest cambiato
+o backup mancante/non riconoscibile. In un'unica transazione crea/backfilla le due
+nuove tabelle e aggiunge SOLTANTO la provenienza `manual_document_entry` per i
+documenti classificati dalla preview approvata (fotografia: 4 certificati + 1 DDT).
+La provenienza e un'evidenza a livello documento, non una nuova riga Incoming;
+rimane anche dopo merge, sgancio o svuotamento di valori e impedisce future
+riletture automatiche. Il confronto del digest esclude esclusivamente gli ID
+dei marcatori appena aggiunti: tutti i record originari devono restare identici.
+Il report espone ID documenti/evidenze aggiunti. Nessun valore manuale, campo
+interno, match, ID esistente, Word/PDF o export viene riscritto dal preparatore.
+Non genera file e non chiama AI. Il controllo formato/hash del dump NON sostituisce il restore isolato.
+La seconda preview deve essere idempotente; niente nuove letture a pagamento.
+
+Dopo avvio controllato: verificare campioni di stesso PDF su piu righe, arrivo
+DDT successivo, LST03, Leichtmetall e riuso senza nuovi consumi, preservando dati,
+file e export. Verificare separatamente manuali senza AI, identita corrette
+dall'utente, concorrenza con altri candidati e blocchi dopo disaccoppio.
+La modifica di un dato puo indebolire/escludere il match: non congelarlo per il
+riuso del JSON. `Disaccoppia documenti` mantiene il blocco anche nella prima
+proposta automatica del batch, non solo nel rematch. Test che generano dati,
+documenti o sganci solo su clone isolato.
+
+**Comprendere anche le tre correzioni della seconda revisione:** contraddizioni
+dei dati fornitore non aggirabili dal rematch; esclusione fonti prima di ranking
+e ambiguita (nessuna promozione automatica del secondo candidato debole);
+rivalutazione dopo merge, anche concorrenti, per piu righe dello stesso PDF.
+Le righe gia elaborate possono restare fonti di sola lettura, quelle rifiutate
+dal controllo tipo no. LST03 conserva la lega raw per il match e 6082H per la
+vista Incoming; gli ordini Metalba storici abbreviati non vengono riscritti.
+Nessuna ulteriore migrazione DB o bonifica massiva per questi tre punti.
+
+Prima del futuro deploy ricontrollare la sola eccezione rilevata nella copia
+offline del 29/10: Incoming #91, documento certificato #90, CDQ 26141,
+DDT 75732547, articolo `A62082BIU` sul DDT e `A62082BTU` sul certificato.
+Non modificare/scollegare dati esistenti, non trasformare automaticamente I in T
+e non inviarli nuovamente all'AI. Segnalare il confronto all'utente: non basta
+a dimostrare quale campo sia corretto e gli ID vanno riconfermati su Alpha.
+Nella fotografia il match e confermato dall'utente e la riga e validata: non
+viene cambiata dal rematch, ne va riaperta automaticamente per il deploy.
+
+Rollback solo codice: conservare le tabelle/dati; il vecchio codice tornerebbe
+a rileggere gli storici, perderebbe la protezione dei manuali e ripristinerebbe
+i limiti del vecchio rematch. Non presentarlo come rollback operativo equivalente;
+concordare prima la riattivazione dei batch. Non cancellare cache o documenti.
+
 ### Esito 28/10 — Alpha 10.6 installata, riaperta e timer verificato
 
 Installato il sorgente `9a2a98e53aed53db6a61224aebf6f6fb444056b0`, pacchetto

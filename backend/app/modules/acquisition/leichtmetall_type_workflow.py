@@ -13,6 +13,9 @@ from sqlalchemy import or_
 from app.core.config import settings
 from .document_type_guard import DocumentTypeReviewRequired, require_complete_pages
 from .models import AcquisitionRow, CertificateMatch, CertificateMatchCandidate, Document, DocumentEvidence, ManualMatchBlock
+from .ai_usage import usage_scope
+from .certificate_ai_reuse import cached_payload, remember_checked_payload
+from .manual_document_protection import automatic_ai_disabled
 
 DDT_CACHE_KEY = "leichtmetall_ddt_checked"
 BLOCKED_KEY = "leichtmetall_type_blocked"
@@ -57,6 +60,11 @@ def record_check(db, document, *, initial_type, decision, checks, actor_id, reas
 
 
 def read_document(db, document, assigned, api_key):
+    with usage_scope(db, document):
+        return _read_document(db, document, assigned, api_key)
+
+
+def _read_document(db, document, assigned, api_key):
     from . import service as s
     processing_state = document.stato_elaborazione
     if not document.pages:
@@ -82,10 +90,11 @@ def read_document(db, document, assigned, api_key):
         if not payload:
             raise DocumentTypeReviewRequired("nessuna riga DDT utilizzabile.", check=check)
     else:
-        crops = s._select_leichtmetall_certificate_document_images(s._build_leichtmetall_certificate_safe_crops(pages))
-        raw = s._extract_leichtmetall_certificate_payload_from_openai(crops, openai_api_key=api_key)
+        payload = s._get_leichtmetall_certificate_ai_payload(
+            db, certificate_document=document, openai_api_key=api_key, certificate_ai_cache=None,
+        )
+        raw = json.loads(payload.get("debug_raw_output") or "{}")
         check = raw["document_check"]
-        payload = s._normalize_leichtmetall_certificate_ai_payload(crops, raw)
         if not any(payload.get("match_values", {}).values()):
             raise DocumentTypeReviewRequired("certificato riconosciuto ma privo di dati identificativi leggibili.", check=check)
     return payload, check
@@ -100,12 +109,22 @@ def preflight_documents(db, documents, *, explicit_ids, certificate_ai_cache, ap
     for document in documents:
         if document.id in blocked:
             continue
+        if automatic_ai_disabled(db, document):
+            accepted.append(document)
+            continue
         if not is_leichtmetall(document) or document.id in checked:
             accepted.append(document)
             continue
         initial = document.tipo_documento
         checks = []
         try:
+            if initial == "certificato":
+                stored = cached_payload(db, document, "leichtmetall")
+                if stored is not None:
+                    certificate_ai_cache[document.id] = stored
+                    checked.add(document.id)
+                    accepted.append(document)
+                    continue
             try:
                 payload, check = read_document(db, document, initial, api_key)
                 target = initial
@@ -133,6 +152,7 @@ def preflight_documents(db, documents, *, explicit_ids, certificate_ai_cache, ap
             if target == "ddt":
                 db.info.setdefault(DDT_CACHE_KEY, {})[document.id] = payload
             else:
+                remember_checked_payload(db, document, "leichtmetall", payload)
                 certificate_ai_cache[document.id] = payload
             checked.add(document.id)
             accepted.append(document)

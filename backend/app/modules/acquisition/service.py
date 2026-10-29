@@ -32,6 +32,11 @@ from app.modules.acquisition.arconic_identity import (
     DDT_IDENTITY_INSTRUCTION,
     recover_identity as _recover_arconic_identity,
 )
+from app.modules.acquisition.certificate_ai_reuse import explicit_refresh, reuse_certificate_payload
+from app.modules.acquisition.ai_usage import record_attempt as _record_ai_attempt, usage_scope, document_usage, require_scoped_ai_allowed
+from app.modules.acquisition.manual_document_protection import (
+    allow_explicit_ai, automatic_ai_disabled, manual_document_reason, mark_manual_entry,
+)
 from app.core.database import SessionLocal
 from app.core.email.schemas import NotificationEmail
 from app.core.email.service import email_service
@@ -213,8 +218,18 @@ def _make_openai_client(openai_api_key: str) -> OpenAI:
 
 
 def _create_openai_response(client: OpenAI, **kwargs):
+    require_scoped_ai_allowed()
     kwargs.setdefault("store", False)
-    return client.responses.create(**kwargs)
+    started = time.monotonic()
+    try:
+        response = client.responses.create(**kwargs)
+    except Exception as exc:
+        _record_ai_attempt(model=kwargs.get("model"), error=exc,
+                           duration_ms=int((time.monotonic() - started) * 1000))
+        raise
+    _record_ai_attempt(response=response, model=kwargs.get("model"),
+                       duration_ms=int((time.monotonic() - started) * 1000))
+    return response
 
 
 CHEMISTRY_CAPTURE_PATTERN = re.compile(r"^(?P<prefix><=|<|≤)?\s*(?P<number>\d+(?:[.,]\d+)?)\s*%?$")
@@ -7126,6 +7141,9 @@ def upload_or_reuse_manual_document(
             message = "Documento gia presente: uso il fornitore eSolver scelto per le nuove righe manuali."
         else:
             message = "Documento gia presente: mostro il PDF e le righe gia create."
+        if not rows:
+            mark_manual_entry(db, document, actor_id=actor_id)
+            db.commit()
         document = prepare_document_for_reader(db, document)
         return ManualDocumentUploadResponse(
             document=serialize_document_detail(document),
@@ -7153,6 +7171,8 @@ def upload_or_reuse_manual_document(
             detail=f"Il file caricato risulta {document.tipo_documento}, non {tipo_documento}",
         )
     document = _detach_manual_document_from_upload_batch(db, document)
+    mark_manual_entry(db, document, actor_id=actor_id)
+    db.commit()
     if supplier_selection.is_external_esolver and document.fornitore_id is not None:
         document.fornitore_id = None
         db.add(document)
@@ -8970,6 +8990,7 @@ def run_autonomous_processing(
         )
 
         certificate_ai_cache: dict[int, dict[str, object]] = {}
+        manual_rematch_rows: set[int] = set()
         explicit_ids = {*ddt_document_ids, *certificate_document_ids}
         if use_ai_intervention and openai_api_key:
             explicit_documents = [get_document(db, document_id) for document_id in sorted(explicit_ids)]
@@ -9002,8 +9023,11 @@ def run_autonomous_processing(
         explicit_certificate_documents = [
             document for document in certificate_documents if document.id in set(certificate_document_ids)
         ]
+        manual_certificate_ids = {d.id for d in certificate_documents if automatic_ai_disabled(db,d)}
         if use_ai_intervention and openai_api_key:
             for certificate_index, certificate_document in enumerate(certificate_documents, start=1):
+                if automatic_ai_disabled(db, certificate_document):
+                    continue
                 if certificate_document.id in certificate_ai_cache:
                     continue
                 template = resolve_supplier_template(
@@ -9018,7 +9042,7 @@ def run_autonomous_processing(
                     fase_corrente="lettura_certificati",
                     current_document_name=certificate_document.nome_file_originale,
                     messaggio_corrente=(
-                        f"Leggo certificato {certificate_index}/{len(certificate_documents)}: "
+                        f"Recupero o leggo certificato {certificate_index}/{len(certificate_documents)}: "
                         f"{certificate_document.nome_file_originale}"
                     ),
                 )
@@ -9051,6 +9075,9 @@ def run_autonomous_processing(
                     )
         total_target_rows = 0
         for ddt_index, ddt_document in enumerate(ddt_documents, start=1):
+            if automatic_ai_disabled(db, ddt_document):
+                total_target_rows += len(ddt_document.rows_as_ddt)
+                continue
             _save_run(
                 db,
                 run,
@@ -9078,7 +9105,13 @@ def run_autonomous_processing(
                 ddt_document.nome_file_originale,
             )
             ddt_supplier_key = ddt_template.supplier_key if ddt_template is not None else None
-            if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(ddt_supplier_key):
+            manual_ddt = automatic_ai_disabled(db, ddt_document)
+            if manual_ddt:
+                # No splitting/re-reading of a manually entered DDT. Its actual
+                # rows and ALL saved supplier fields remain the match inputs.
+                rows = list(ddt_document.rows_as_ddt)
+                created_count = 0
+            elif use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(ddt_supplier_key):
                 _save_run(
                     db,
                     run,
@@ -9148,7 +9181,7 @@ def run_autonomous_processing(
                 row_processing_error: str | None = None
 
                 try:
-                    if not (use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)):
+                    if not manual_ddt and not (use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)):
                         _save_run(
                             db,
                             run,
@@ -9158,7 +9191,7 @@ def run_autonomous_processing(
                         extract_core_fields(db=db, row=row, actor_id=actor_id)
                         row = get_acquisition_row(db, row.id)
 
-                    if use_ddt_vision and (not use_ai_intervention) and openai_api_key and _row_needs_ddt_vision(db, row):
+                    if not manual_ddt and use_ddt_vision and (not use_ai_intervention) and openai_api_key and _row_needs_ddt_vision(db, row):
                         _save_run(
                             db,
                             run,
@@ -9202,10 +9235,20 @@ def run_autonomous_processing(
                         fase_corrente="match_certificato",
                         messaggio_corrente=f"Cerco il certificato piu coerente per la riga #{row.id}",
                     )
-                    matched = _auto_propose_certificate_match(
+                    # Manual documents have no synthetic/global AI payload. Use
+                    # the existing row rematcher after all submitted certificate
+                    # rows exist, including its ambiguity rules and hidden fields.
+                    defer_manual = _has_manual_rematch_candidate(db, row, certificate_documents,
+                        certificate_ai_cache=certificate_ai_cache,
+                        manual_document_ids=manual_certificate_ids,
+                        ai_only_mode=bool(use_ai_intervention and _supplier_supports_ai_vision_pipeline(ddt_supplier_key)))
+                    if defer_manual:
+                        manual_rematch_rows.add(row.id)
+                    matched = False if defer_manual else _auto_propose_certificate_match(
                         db=db,
                         row=row,
-                        certificate_documents=certificate_documents,
+                        certificate_documents=_automatic_certificate_candidates(db, row, certificate_documents,
+                            manual_document_ids=manual_certificate_ids),
                         actor_id=actor_id,
                         openai_api_key=openai_api_key if use_ai_intervention else None,
                         certificate_ai_cache=certificate_ai_cache,
@@ -9339,7 +9382,7 @@ def run_autonomous_processing(
                 supplier_ids=rematch_supplier_ids,
                 actor_id=actor_id,
                 run_id=run.id,
-                protected_row_ids=_type_guard_blocked_row_ids(db) | {
+                protected_row_ids=_type_guard_blocked_row_ids(db) | ({
                     row_id
                     for (row_id,) in (
                         db.query(AcquisitionRow.id)
@@ -9349,7 +9392,10 @@ def run_autonomous_processing(
                         )
                         .all()
                     )
-                },
+                } - manual_rematch_rows),
+                # A finished, coupled row can still supply saved certificate
+                # data. A type-rejected row must never supply them.
+                protected_source_row_ids=_type_guard_blocked_row_ids(db),
             )
             if cross_run_matches:
                 _save_run(db, run, match_proposti=run.match_proposti + cross_run_matches)
@@ -10680,6 +10726,7 @@ def create_manual_document_row(
     document.scadenza_batch = None
     document.stato_elaborazione = "letto"
     db.add(document)
+    mark_manual_entry(db, document, actor_id=actor_id)
 
     normalized_fields = {
         field: _normalize_document_side_field(field, payload.fields.get(field))
@@ -12380,6 +12427,7 @@ def upsert_match(
     return serialize_match(updated_row.certificate_match)
 
 
+@document_usage("document_certificato_id")
 def detect_standard_notes(
     db: Session,
     row: AcquisitionRow,
@@ -12486,6 +12534,7 @@ def detect_standard_notes(
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+@document_usage("document_certificato_id")
 def detect_chemistry(
     db: Session,
     row: AcquisitionRow,
@@ -12601,6 +12650,7 @@ def detect_chemistry(
     return serialize_acquisition_row_detail(get_acquisition_row(db, row.id))
 
 
+@document_usage("document_certificato_id")
 def detect_properties(
     db: Session,
     row: AcquisitionRow,
@@ -15307,6 +15357,7 @@ def _apply_grupa_kety_ai_candidate_to_row(
     return True
 
 
+@reuse_certificate_payload("grupa_kety")
 def _get_grupa_kety_certificate_ai_payload(
     db: Session,
     *,
@@ -15928,6 +15979,7 @@ def _sanitize_arconic_hannover_ai_row_groups(
     return sanitized_rows
 
 
+@reuse_certificate_payload("arconic_hannover")
 def _get_arconic_hannover_certificate_ai_payload(
     db: Session,
     *,
@@ -16252,6 +16304,7 @@ def _normalize_arconic_diameter_from_text(value: str | None) -> str | None:
     return None
 
 
+@reuse_certificate_payload("metalba")
 def _get_metalba_certificate_ai_payload(
     db: Session,
     *,
@@ -16492,6 +16545,7 @@ def _sanitize_metalba_vision_certificate_fields(
     }
 
 
+@document_usage("document_ddt_id")
 def extract_ddt_fields_with_vision(
     db: Session,
     row: AcquisitionRow,
@@ -16686,6 +16740,17 @@ def run_ai_intervention(
     actor_id: int,
     openai_api_key: str,
 ) -> AcquisitionRowDetailResponse:
+    for document_id in (row.document_ddt_id, row.document_certificato_id):
+        document = db.get(Document, document_id) if document_id is not None else None
+        if manual_document_reason(db, document):
+            mark_manual_entry(db, document, actor_id=actor_id)
+    with allow_explicit_ai(row.document_ddt_id, row.document_certificato_id), explicit_refresh(row.document_certificato_id):
+        return _run_ai_intervention(db, row, actor_id=actor_id, openai_api_key=openai_api_key)
+
+
+def _run_ai_intervention(
+    db: Session, row: AcquisitionRow, *, actor_id: int, openai_api_key: str,
+) -> AcquisitionRowDetailResponse:
     ensure_acquisition_row_ai_editable(db, row)
     supplier_key = _resolve_row_supplier_key(row)
     if not _supplier_supports_ai_vision_pipeline(supplier_key):
@@ -16802,6 +16867,8 @@ def _process_certificate_side_blocks(
     current_row = get_acquisition_row(db, row.id)
     if current_row.document_certificato_id is None:
         return current_row
+    if automatic_ai_disabled(db, current_row.certificate_document):
+        return current_row
 
     supplier_key = _resolve_row_supplier_key(current_row)
     if use_ai_intervention and openai_api_key and _supplier_supports_ai_vision_pipeline(supplier_key):
@@ -16847,6 +16914,7 @@ def _process_certificate_side_blocks(
     return current_row
 
 
+@document_usage("document_certificato_id")
 def _extract_certificate_core_fields_with_vision(
     db: Session,
     row: AcquisitionRow,
@@ -17338,6 +17406,8 @@ def _ensure_autonomous_rows_with_ai(
     openai_api_key: str,
     run_id: int,
 ) -> tuple[list[AcquisitionRow], int]:
+    if automatic_ai_disabled(db, ddt_document):
+        return list(ddt_document.rows_as_ddt), 0
     existing_rows = (
         db.query(AcquisitionRow)
         .filter(AcquisitionRow.document_ddt_id == ddt_document.id)
@@ -17516,6 +17586,8 @@ def _ensure_certificate_first_rows(
     created_count = 0
     linked_match_count = 0
     for certificate_document in certificate_documents:
+        if automatic_ai_disabled(db, certificate_document):
+            continue
         existing_for_document = (
             db.query(AcquisitionRow)
             .filter(AcquisitionRow.document_certificato_id == certificate_document.id)
@@ -18895,6 +18967,39 @@ class _CrossRunRematchPlan:
     candidates: tuple[_CrossRunRematchCandidate, ...]
 
 
+def _current_cross_run_rematch_plan(
+    db: Session, *, supplier_ids: set[int], row_id: int,
+    protected_source_row_ids: set[int] | None,
+) -> _CrossRunRematchPlan | None:
+    for _ in range(3):
+        plan = next((p for p in _plan_cross_run_auto_rematch(
+            db=db, supplier_ids=supplier_ids, target_row_ids={row_id},
+            protected_source_row_ids=protected_source_row_ids,
+        ) if p.row_id == row_id), None)
+        if plan is None or not plan.candidates or plan.candidates[0].source_has_ddt:
+            return plan
+        source_id = plan.candidates[0].source_row_id
+        expected_ids = {row_id, source_id}
+        # Two runs may have planned to absorb the same certificate-only row.
+        # Lock in the same ID order as manual merging. PostgreSQL omits a row
+        # deleted while waiting: replan against its new coupled source instead
+        # of raising 404 or reusing the obsolete source ID.
+        locked_ids = {i for (i,) in db.query(AcquisitionRow.id).filter(
+            AcquisitionRow.id.in_(expected_ids)).order_by(AcquisitionRow.id).with_for_update().all()}
+        if locked_ids == expected_ids:
+            db.expire_all()
+            fresh = next((p for p in _plan_cross_run_auto_rematch(
+                db=db, supplier_ids=supplier_ids, target_row_ids={row_id},
+                protected_source_row_ids=protected_source_row_ids,
+            ) if p.row_id == row_id), None)
+            if fresh and fresh.candidates and fresh.candidates[0].source_row_id == source_id:
+                return fresh
+        # No business writes have happened here. Release obsolete locks and
+        # reread live values/blocks; never repeat AI work or clear human values.
+        db.rollback()
+    return None
+
+
 def _run_cross_run_auto_rematch(
     *,
     db: Session,
@@ -18902,17 +19007,29 @@ def _run_cross_run_auto_rematch(
     actor_id: int,
     run_id: int,
     protected_row_ids: set[int] | None = None,
+    protected_source_row_ids: set[int] | None = None,
 ) -> int:
     applied = 0
-    for plan in _plan_cross_run_auto_rematch(db=db, supplier_ids=supplier_ids):
+    source_protection = protected_row_ids if protected_source_row_ids is None else protected_source_row_ids
+    initial_plans = _plan_cross_run_auto_rematch(
+        db=db, supplier_ids=supplier_ids, protected_source_row_ids=source_protection,
+    )
+    for initial_plan in initial_plans:
+        if protected_row_ids and initial_plan.row_id in protected_row_ids:
+            continue
+        # An earlier merge can delete the certificate-only source. Rebuild the
+        # plan from current rows, including the coupled source it just produced;
+        # never keep following the absorbed row ID or substitute a weaker plan.
+        plan = _current_cross_run_rematch_plan(
+            db, supplier_ids=supplier_ids, row_id=initial_plan.row_id,
+            protected_source_row_ids=source_protection,
+        )
+        if plan is None:
+            continue
         if protected_row_ids and plan.row_id in protected_row_ids:
             continue
-        eligible_candidates = tuple(
-            candidate
-            for candidate in plan.candidates
-            if not protected_row_ids or candidate.source_row_id not in protected_row_ids
-        )
-        if not eligible_candidates:
+        eligible_candidates = plan.candidates
+        if not eligible_candidates or (source_protection and eligible_candidates[0].source_row_id in source_protection):
             continue
         row = get_acquisition_row(db, plan.row_id)
         if _row_is_locked_for_auto_rematch(row):
@@ -18967,6 +19084,9 @@ def _run_cross_run_auto_rematch(
             )
             for rank, candidate in enumerate(eligible_candidates[:3], start=1)
         ]
+        # Planning may have loaded a previously empty relationship. Let the
+        # upsert see its actual new match even in non-expiring worker sessions.
+        db.expire(row, ["certificate_match"])
         upsert_match(
             db=db,
             row=row,
@@ -19010,6 +19130,9 @@ def _run_cross_run_auto_rematch(
                     run_id=run_id,
                 )
         applied += 1
+        # Also refresh relationships for sessions configured not to expire on
+        # commit (including tests); no pending writes remain at this point.
+        db.expire_all()
     return applied
 
 
@@ -19017,6 +19140,8 @@ def _plan_cross_run_auto_rematch(
     *,
     db: Session,
     supplier_ids: set[int],
+    target_row_ids: set[int] | None = None,
+    protected_source_row_ids: set[int] | None = None,
 ) -> list[_CrossRunRematchPlan]:
     if not supplier_ids:
         return []
@@ -19038,9 +19163,12 @@ def _plan_cross_run_auto_rematch(
         (candidate_row, _build_row_certificate_bridge(candidate_row))
         for candidate_row in rows
         if candidate_row.document_certificato_id is not None
+        and (not protected_source_row_ids or candidate_row.id not in protected_source_row_ids)
     ]
     plans: list[_CrossRunRematchPlan] = []
     for row in rows:
+        if target_row_ids is not None and row.id not in target_row_ids:
+            continue
         if row.document_ddt_id is None or _row_is_locked_for_auto_rematch(row):
             continue
         ddt_bridge = _build_row_ddt_bridge(row)
@@ -19118,6 +19246,59 @@ def _row_is_locked_for_auto_rematch(row: AcquisitionRow) -> bool:
     if match.stato != "proposto":
         return True
     return match.fonte_proposta not in {"sistema", "chatgpt"}
+
+
+def _automatic_certificate_candidates(db, row, documents, *, manual_document_ids=None):
+    manual_ids = manual_document_ids if manual_document_ids is not None else {d.id for d in documents if automatic_ai_disabled(db,d)}
+    # Exactly the existing manual-block semantics for (DDT row, no source row),
+    # fetched once rather than a query for every historical certificate.
+    blocked = {i for (i,) in db.query(ManualMatchBlock.document_certificato_id).filter(
+        ManualMatchBlock.document_ddt_id==row.document_ddt_id, ManualMatchBlock.attivo.is_(True),
+        or_(ManualMatchBlock.source_row_id.is_(None),ManualMatchBlock.source_row_id==row.id))}
+    return [doc for doc in documents if doc.id not in manual_ids and doc.id not in blocked]
+
+
+def _has_manual_rematch_candidate(db: Session, row: AcquisitionRow, documents: list[Document], *,
+        certificate_ai_cache=None, ai_only_mode=True, manual_document_ids=None) -> bool:
+    """Routing only: same pure row bridges/scores as the existing rematcher.
+
+    Do not cache this decision. A user's change may weaken/remove the candidate.
+    The eventual rematch still evaluates every competing stored certificate.
+    """
+    if row.document_ddt_id is None or row.document_certificato_id is not None or _row_is_locked_for_auto_rematch(row):
+        return False
+    ids = [d.id for d in documents]
+    if not ids:
+        return False
+    left = _build_row_ddt_bridge(row)
+    manual_ids = manual_document_ids if manual_document_ids is not None else {d.id for d in documents if automatic_ai_disabled(db,d)}
+    edited_ids = set()
+    for source in db.query(AcquisitionRow).options(selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.supplier), joinedload(AcquisitionRow.certificate_match)).filter(
+            AcquisitionRow.document_certificato_id.in_(ids)).all():
+        edited = any(v.blocco=='match' and v.metodo_lettura=='utente' and v.stato!='scartato'
+                     for v in source.values)
+        if source.document_certificato_id not in manual_ids and not edited:
+            continue
+        if source.document_ddt_id is None and not _certificate_only_row_can_merge(source):
+            continue
+        if _manual_match_block_exists(db, ddt_document_id=row.document_ddt_id,
+                certificate_document_id=source.document_certificato_id, ddt_row_id=row.id, certificate_row_id=None):
+            continue
+        if edited and source.document_certificato_id not in manual_ids:
+            edited_ids.add(source.document_certificato_id)
+        if score_bridge_match(left, _build_row_certificate_bridge(source)).decision != RematchDecision.NONE:
+            return True
+    # An edited value may deliberately REMOVE a former raw-AI match. Do not let
+    # the old JSON recreate it. Use the original full supplier scorer only to
+    # detect this case, never a simplified seven-field comparison or new score.
+    ddt_values = _row_source_read_values(row,'ddt')
+    for doc in documents:
+        if doc.id in edited_ids and _score_certificate_candidate(db,row=row,certificate_document=doc,
+                ddt_certificate_number=ddt_values.get('numero_certificato_ddt') or row.cdq,
+                row_ddt_values=ddt_values,certificate_ai_cache=certificate_ai_cache,ai_only_mode=ai_only_mode) is not None:
+            return True
+    return False
 
 
 def _certificate_only_row_can_merge(row: AcquisitionRow) -> bool:
@@ -19460,6 +19641,7 @@ def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
         supplier_name=_row_supplier_name(row),
         row_id=row.id,
         document_id=row.document_ddt_id,
+        supplier_key=_resolve_row_supplier_key(row),
     )
 
 
@@ -19471,6 +19653,7 @@ def _build_row_certificate_bridge(row: AcquisitionRow) -> RematchBridge:
         supplier_name=_row_supplier_name(row),
         row_id=row.id,
         document_id=row.document_certificato_id,
+        supplier_key=_resolve_row_supplier_key(row),
     )
 
 
@@ -23389,6 +23572,7 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
     return normalized
 
 
+@reuse_certificate_payload("aluminium_bozen")
 def _get_aluminium_bozen_certificate_ai_payload(
     db: Session,
     *,
@@ -23681,6 +23865,7 @@ def _normalize_aluminium_bozen_certificate_ai_payload(
     }
 
 
+@reuse_certificate_payload("impol")
 def _get_impol_certificate_ai_payload(
     db: Session,
     *,
@@ -25594,6 +25779,7 @@ def _normalize_aluminium_bozen_measured_rows_payload(
     return normalized
 
 
+@reuse_certificate_payload("leichtmetall")
 def _get_leichtmetall_certificate_ai_payload(
     db: Session,
     *,
@@ -25827,6 +26013,7 @@ def _sanitize_leichtmetall_vision_certificate_fields(
     }
 
 
+@reuse_certificate_payload("aww")
 def _get_aww_certificate_ai_payload(
     db: Session,
     *,
@@ -26163,6 +26350,7 @@ def _normalize_aww_charge_from_text(value: str | None) -> str | None:
     return _extract_token_from_value_or_evidence(value, value, r"\b\d{5,7}\b")
 
 
+@reuse_certificate_payload("neuman")
 def _get_neuman_certificate_ai_payload(
     db: Session,
     *,
@@ -26709,6 +26897,15 @@ def _extract_supplier_ddt_row_groups_with_vision(
     ddt_document: Document,
     openai_api_key: str,
 ) -> list[ReaderRowSplitCandidateResponse]:
+    with usage_scope(db, ddt_document):
+        return _read_supplier_ddt_row_groups_with_vision(
+            db, supplier_key=supplier_key, ddt_document=ddt_document, openai_api_key=openai_api_key,
+        )
+
+
+def _read_supplier_ddt_row_groups_with_vision(
+    db: Session, *, supplier_key: str | None, ddt_document: Document, openai_api_key: str,
+) -> list[ReaderRowSplitCandidateResponse]:
     if supplier_key == "aluminium_bozen":
         return _extract_aluminium_bozen_ddt_row_groups_with_vision(
             db=db,
@@ -27208,6 +27405,7 @@ def _apply_zalco_ai_candidate_to_row(
     return True
 
 
+@reuse_certificate_payload("zalco")
 def _get_zalco_certificate_ai_payload(
     db: Session,
     *,
@@ -28156,6 +28354,11 @@ def _sync_row_cdq_from_certificate_document(
             row.cdq = match_certificate_number
             db.add(row)
             db.flush()
+        return
+
+    if automatic_ai_disabled(db, certificate_document):
+        # A newly linked row receives its values from the actual manual source
+        # next. Do not replace them with a fresh local PDF/OCR interpretation.
         return
 
     if not certificate_document.pages:

@@ -5,6 +5,12 @@ from enum import Enum
 import re
 from typing import Mapping
 
+from app.modules.document_reader.matching import (
+    _normalize_order_confirmation_root,
+    aww_weights_are_compatible, neuman_weights_are_compatible, weights_are_compatible,
+)
+from app.modules.document_reader.registry import resolve_supplier_template
+
 
 BridgeValues = Mapping[str, str | None]
 
@@ -23,6 +29,7 @@ class RematchBridge:
     row_id: int | None = None
     document_id: int | None = None
     values: dict[str, str | None] = field(default_factory=dict)
+    supplier_key: str | None = None
 
     def value(self, field_name: str) -> str | None:
         value = self.values.get(field_name)
@@ -49,6 +56,7 @@ def build_ddt_bridge(
     supplier_name: str | None = None,
     row_id: int | None = None,
     document_id: int | None = None,
+    supplier_key: str | None = None,
 ) -> RematchBridge:
     return _build_bridge(
         side="ddt",
@@ -62,17 +70,21 @@ def build_ddt_bridge(
             "colata": ("colata",),
             "ddt": ("ddt",),
             "peso": ("peso",),
-            "ordine": ("customer_order_no", "ordine"),
+            "ordine": (("vs_rif", "customer_order_no", "ordine") if supplier_key == "metalba"
+                       else ("customer_order_no", "ordine")),
             "article_code": ("arconic_item_number", "article_code", "articolo"),
             "customer_code": ("customer_item_number", "customer_code", "codice_cliente"),
             "line_no": ("line_no", "product_code"),
             "supplier_order_no": ("sales_order_number", "supplier_order_no"),
             "lot_batch_no": ("lot_batch_no", "job_number"),
+            "profile_code": ("profile_code", "product_code"),
+            "order_confirmation_root": ("order_confirmation_root", "supplier_order_no"),
         },
         supplier_id=supplier_id,
         supplier_name=supplier_name,
         row_id=row_id,
         document_id=document_id,
+        supplier_key=supplier_key,
     )
 
 
@@ -84,6 +96,7 @@ def build_certificate_bridge(
     supplier_name: str | None = None,
     row_id: int | None = None,
     document_id: int | None = None,
+    supplier_key: str | None = None,
 ) -> RematchBridge:
     return _build_bridge(
         side="certificato",
@@ -103,11 +116,14 @@ def build_certificate_bridge(
             "line_no": ("line_no_certificato", "line_no", "product_code"),
             "supplier_order_no": ("sales_order_number_certificato", "sales_order_number", "supplier_order_no"),
             "lot_batch_no": ("lot_batch_no_certificato", "job_number", "lot_batch_no"),
+            "profile_code": ("profile_code_certificato",),
+            "order_confirmation_root": ("supplier_order_no_certificato",),
         },
         supplier_id=supplier_id,
         supplier_name=supplier_name,
         row_id=row_id,
         document_id=document_id,
+        supplier_key=supplier_key,
     )
 
 
@@ -251,6 +267,7 @@ def _build_bridge(
     supplier_name: str | None,
     row_id: int | None,
     document_id: int | None,
+    supplier_key: str | None,
 ) -> RematchBridge:
     values: dict[str, str | None] = {}
     for target_field, source_fields in field_sources.items():
@@ -264,6 +281,7 @@ def _build_bridge(
         row_id=row_id,
         document_id=document_id,
         values=values,
+        supplier_key=supplier_key,
     )
 
 
@@ -289,6 +307,8 @@ def _supplier_blocker(left: RematchBridge, right: RematchBridge) -> str | None:
 
 
 def _is_arconic_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
+    if "arconic_hannover" in {left.supplier_key, right.supplier_key}:
+        return True
     left_name = _compact_text(left.value("fornitore") or left.supplier_name)
     right_name = _compact_text(right.value("fornitore") or right.supplier_name)
     names = [name for name in (left_name, right_name) if name]
@@ -296,6 +316,8 @@ def _is_arconic_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
 
 
 def _is_grupa_kety_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
+    if "grupa_kety" in {left.supplier_key, right.supplier_key}:
+        return True
     left_name = _compact_text(left.value("fornitore") or left.supplier_name)
     right_name = _compact_text(right.value("fornitore") or right.supplier_name)
     names = [name for name in (left_name, right_name) if name]
@@ -303,6 +325,8 @@ def _is_grupa_kety_bridge_pair(left: RematchBridge, right: RematchBridge) -> boo
 
 
 def _is_leichtmetall_bridge_pair(left: RematchBridge, right: RematchBridge) -> bool:
+    if "leichtmetall" in {left.supplier_key, right.supplier_key}:
+        return True
     left_name = _compact_text(left.value("fornitore") or left.supplier_name)
     right_name = _compact_text(right.value("fornitore") or right.supplier_name)
     names = [name for name in (left_name, right_name) if name]
@@ -312,6 +336,21 @@ def _is_leichtmetall_bridge_pair(left: RematchBridge, right: RematchBridge) -> b
 def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]:
     blockers: list[str] = []
     hard_fields = ["colata", "diametro"]
+    template = resolve_supplier_template(left.supplier_name, right.supplier_name,
+                                         left.value("fornitore"), right.value("fornitore"))
+    supplier_key = left.supplier_key or right.supplier_key or (template.supplier_key if template else None)
+    # A high bridge score cannot override contradictions already rejected by
+    # the supplier's initial matcher. Missing data stays missing: no additional
+    # required anchors, family-wide alloy substitutions or score changes here.
+    hard_fields.extend({
+        "metalba": ("lega", "peso", "ordine"),
+        "impol": ("lega", "peso", "ordine"),
+        "leichtmetall": ("lega",),
+        "neuman": ("lega", "peso", "article_code"),
+        "aww": ("lega", "peso", "ordine", "article_code", "profile_code", "order_confirmation_root"),
+        "arconic_hannover": ("ddt", "ordine"),
+        "grupa_kety": ("lega",),
+    }.get(supplier_key, ()))
     if _is_leichtmetall_bridge_pair(left, right):
         # Leichtmetall DDTs may contain multiple rows and duplicated cdq/diameter
         # across deliveries. If present on both sides, these fields identify the
@@ -322,7 +361,24 @@ def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]
         right_value = right.value(field_name)
         if left_value is None or right_value is None:
             continue
-        if not _field_matches(field_name, left_value, right_value):
+        matches = _field_matches(field_name, left_value, right_value)
+        if field_name == "ordine" and supplier_key == "metalba" and not matches:
+            # Old confirmed Incoming values can contain only the numeric order
+            # root (169) while Vs.Rif. retains 169/26. Absence of the year is
+            # not a contradiction and earns no new score; two supplied but
+            # different years, or different roots, still block the rematch.
+            left_order = re.fullmatch(r"\s*(\d+)\s*(?:/\s*(\d{2}|20\d{2}))?\s*", left_value)
+            right_order = re.fullmatch(r"\s*(\d+)\s*(?:/\s*(\d{2}|20\d{2}))?\s*", right_value)
+            if left_order and right_order and left_order[1] == right_order[1]:
+                left_year, right_year = left_order[2], right_order[2]
+                matches = not left_year or not right_year or left_year[-2:] == right_year[-2:]
+        if field_name == "peso" and supplier_key in {"metalba", "impol", "aww", "neuman"}:
+            # Keep the existing supplier tolerances, not the bridge's tighter
+            # bonus threshold (which is intentionally unchanged).
+            weight_matcher = {"aww": aww_weights_are_compatible,
+                              "neuman": neuman_weights_are_compatible}.get(supplier_key, weights_are_compatible)
+            matches = weight_matcher(left_value, right_value)
+        if not matches:
             blockers.append(f"{field_name} diverso")
     return tuple(blockers)
 
@@ -338,6 +394,10 @@ def _field_matches(field_name: str, left: str | None, right: str | None) -> bool
         return _weights_match(left, right)
     if field_name == "colata":
         return _normalize_primary_code(left) == _normalize_primary_code(right)
+    if field_name == "order_confirmation_root":
+        left_root = _normalize_order_confirmation_root(left)
+        right_root = _normalize_order_confirmation_root(right)
+        return bool(left_root and right_root and left_root == right_root)
     if field_name in {"cdq", "ordine", "ddt", "article_code", "customer_code", "line_no", "supplier_order_no", "lot_batch_no"}:
         return _compact_text(left) == _compact_text(right)
     if field_name == "fornitore":

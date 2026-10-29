@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession, require_quality_area_admin, require_quality_area_manager_or_admin
 from app.core.security.crypto import decrypt_secret
+from app.modules.acquisition.manual_document_protection import allow_explicit_ai
 from app.modules.acquisition.schemas import (
     AutonomousRunResponse,
     AutonomousRunStartRequest,
@@ -729,7 +730,8 @@ def detect_standard_notes_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = _get_ai_editable_row(db, row_id)
-    return detect_standard_notes(db=db, row=row, actor_id=current_user.id)
+    with allow_explicit_ai(row.document_certificato_id):
+        return detect_standard_notes(db=db, row=row, actor_id=current_user.id)
 
 
 @router.post("/rows/{row_id}/detect-chemistry", response_model=AcquisitionRowDetailResponse)
@@ -739,7 +741,8 @@ def detect_chemistry_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = _get_ai_editable_row(db, row_id)
-    return detect_chemistry(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
+    with allow_explicit_ai(row.document_certificato_id):
+        return detect_chemistry(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
 @router.post("/rows/{row_id}/detect-properties", response_model=AcquisitionRowDetailResponse)
@@ -749,7 +752,8 @@ def detect_properties_route(
     db: DbSession,
 ) -> AcquisitionRowDetailResponse:
     row = _get_ai_editable_row(db, row_id)
-    return detect_properties(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
+    with allow_explicit_ai(row.document_certificato_id):
+        return detect_properties(db=db, row=row, actor_id=current_user.id, openai_api_key=_resolve_openai_api_key(current_user))
 
 
 @router.post("/rows/{row_id}/extract-core-fields", response_model=AcquisitionRowDetailResponse)
@@ -772,7 +776,8 @@ def extract_ddt_vision_route(
     if not openai_api_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OpenAI API key is not configured")
     row = _get_ai_editable_row(db, row_id)
-    return extract_ddt_fields_with_vision(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
+    with allow_explicit_ai(row.document_ddt_id):
+        return extract_ddt_fields_with_vision(db=db, row=row, actor_id=current_user.id, openai_api_key=openai_api_key)
 
 
 @router.post("/rows/{row_id}/process-minimal", response_model=AcquisitionRowDetailResponse)

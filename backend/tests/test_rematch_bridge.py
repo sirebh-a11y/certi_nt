@@ -38,6 +38,69 @@ class RematchBridgeTest(unittest.TestCase):
         self.assertEqual(result.decision, RematchDecision.NONE, result)
         return result
 
+    def test_supplier_contradictions_cannot_be_hidden_by_a_matching_certificate_number(self):
+        for supplier, fields in {
+            'Metalba': ('lega', 'peso', 'ordine'),
+            'Impol': ('lega', 'peso', 'ordine'),
+            'Leichtmetall': ('lega',),
+            'Neuman': ('lega', 'peso', 'article_code'),
+            'AWW': ('lega', 'peso', 'ordine', 'article_code', 'profile_code', 'order_confirmation_root'),
+            'Arconic': ('ordine', 'ddt'),
+            'Grupa Kety': ('lega',),
+        }.items():
+            base={'fornitore':supplier,'cdq':'C1','colata':'CAST1','diametro':'33',
+                  'lega_base':'6082 F','peso':'2827','ordine':'O1','ddt':'D1'}
+            for field in fields:
+                with self.subTest(supplier=supplier,field=field):
+                    left_read={field:'AAA' if field not in {'peso','lega','order_confirmation_root'} else
+                               {'peso':'2827','lega':'6082 F','order_confirmation_root':'123456/1'}[field]}
+                    right_read={field:'BBB' if field not in {'peso','lega','order_confirmation_root'} else
+                                {'peso':'9999','lega':'7075 T6','order_confirmation_root':'654321/1'}[field]}
+                    # Test the actual field aliases, not synthetic bridge keys.
+                    aliases={'lega':'lega_certificato','peso':'peso_certificato',
+                             'ordine':'ordine_cliente_certificato','ddt':'ddt_certificato',
+                             'article_code':'articolo_certificato','profile_code':'profile_code_certificato',
+                             'order_confirmation_root':'supplier_order_no_certificato'}
+                    right_read={aliases[field]:right_read[field]}
+                    result=self.assert_no_match(ddt(base,left_read,supplier_name=supplier),
+                                                cert(base,right_read,supplier_name=supplier))
+                    self.assertIn(f'{field} diverso',result.blockers)
+
+    def test_new_contradiction_guards_keep_supplier_weight_tolerances_and_missing_fields(self):
+        for supplier,left_weight,right_weight in [('Metalba','2827','2830'),('Impol','1603','1610'),
+                                                  ('AWW','1540','1540.9'),('Neuman','8420','8421')]:
+            with self.subTest(supplier=supplier):
+                base={'fornitore':supplier,'cdq':'C1','colata':'CAST1','diametro':'33',
+                      'lega_base':'6082 F','ordine':'O1'}
+                self.assert_strong(ddt({**base,'peso':left_weight},supplier_name=supplier),
+                                   cert({**base,'peso':right_weight},supplier_name=supplier))
+                self.assert_strong(ddt(base,supplier_name=supplier),cert(base,supplier_name=supplier))
+
+    def test_aww_order_confirmation_uses_existing_root_parser(self):
+        base={'fornitore':'AWW','cdq':'C1','colata':'CAST1','diametro':'33','lega_base':'6082A T1'}
+        self.assert_strong(ddt(base,{'order_confirmation_root':'70123456/3'},supplier_name='AWW'),
+            cert(base,{'supplier_order_no_certificato':'70123456'},supplier_name='AWW'))
+
+    def test_configured_supplier_key_and_metalba_vs_rif_are_not_lost(self):
+        left=build_ddt_bridge(row_values={'cdq':'C1','colata':'CAST1','diametro':'33','peso':'120','ordine':'OLD'},
+            read_values={'vs_rif':'REAL'},supplier_id=1,supplier_name='Custom supplier',supplier_key='metalba')
+        right=build_certificate_bridge(row_values={'cdq':'C1','colata':'CAST1','diametro':'33','peso':'120'},
+            read_values={'ordine_cliente_certificato':'OTHER'},supplier_id=1,
+            supplier_name='Custom supplier',supplier_key='metalba')
+        self.assertEqual(left.value('ordine'),'REAL')
+        self.assertIn('ordine diverso',self.assert_no_match(left,right).blockers)
+
+    def test_metalba_legacy_order_root_is_incomplete_not_a_different_order(self):
+        base={'fornitore':'Metalba','cdq':'C1','colata':'CAST1','diametro':'33',
+              'lega_base':'6082 F','peso':'2827'}
+        left=ddt({**base,'ordine':'169/26'},supplier_name='Metalba')
+        result=self.assert_strong(left,cert({**base,'ordine':'169'},supplier_name='Metalba'))
+        self.assertNotIn('ordine',result.matched_fields)
+        for wrong in ('170','169/25','169/2025','OTHER'):
+            with self.subTest(wrong=wrong):
+                self.assertIn('ordine diverso',self.assert_no_match(left,
+                    cert({**base,'ordine':wrong},supplier_name='Metalba')).blockers)
+
     def test_aluminium_bozen_existing_match(self):
         left = ddt(
             {
