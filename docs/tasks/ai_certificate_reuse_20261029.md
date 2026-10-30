@@ -332,3 +332,167 @@ non le usa e riprenderebbe le riletture costose, senza applicare il nuovo guard
 dei manuali: dichiarare il ritorno di questi limiti, non presentarlo come rollback
 equivalente o riaprire l'automatismo senza valutazione. Non eliminare
 cache, righe, documenti o ledger per fare rollback del codice.
+
+## Collaudo reale non invasivo 30/10 dopo Alpha 10.7 — ESITO PARZIALE
+
+L'utente ha autorizzato una prova sotto 1 EUR, senza alcuna scrittura su Alpha.
+Codice esatto del pacchetto fc1d1f74, modello runtime gpt-5.5, quattro chiamate
+reali completate (tier default), sette pagine complessive. Sole scritture in
+SQLite/file QA privati; connessioni ai DB Alpha/locali e driver PostgreSQL/ODBC
+bloccati, nessuna credenziale DB Alpha nel processo di prova. Chiave AI letta
+con SELECT READ ONLY, tenuta solo in RAM. Nessun endpoint operativo Alpha usato.
+Mail/integratori soppressi nel replay completo; nessun fermo o riavvio Alpha.
+
+Spesa dalle usage effettive: 0,355265 USD, circa 0,318 EUR al cambio BCE 30/10
+(1 EUR = 1,1172 USD), prima di eventuali imposte. Il conteggio prudenziale con
+FX sfavorevole, margini imposte/region/payment e gate preventivo per chiamata
+e 0,500604 EUR, sotto la soglia operativa di 0,80 EUR. Output limitato SOLO nel
+test a 3500 token; tutte le risposte completed. Listino verificato:
+https://developers.openai.com/api/docs/models/gpt-5.5 e cambio
+https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.eu.html.
+
+### Verifiche positive
+
+- Numero Arconic completo: EEP73061-44262209, non il solo prefisso EEP73061.
+- Tre nuove sessioni su tre certificati: nessuna nuova API, stessi campi di
+  identita, fornitore, chimica, proprieta, note e requisiti; cache persistita.
+- Manuali DDT/certificato: HTTP 409 prima della chiamata AI, dati utente intatti.
+- Matrice Arconic: due coppie forti corrette, due incroci incompatibili respinti;
+  anche un diametro volutamente incompatibile nel SOLO QA viene rifiutato.
+- Non sono stati osservati abbinamenti sbagliati nel campione.
+
+### Due criticita confermate nel workflow completo, non corrette nel pacchetto Alpha 10.7
+
+1. **Arconic, arrivo unico DDT/certificati.** Il DDT 28209127 ha righe 2.1
+   (diametro 87, EEP73062-44270958) e 3.1 (diametro 98, EEP73061-44262209).
+   La lettura contiene discriminanti sufficienti, ma il primo scorer riceve
+   `ddt_supplier_fields={}`: `extract_row_supplier_match_fields` non ha il ramo
+   Arconic. Il rematch finale del run esclude i target appena marcati `pronta`.
+   Nel run completo restano due DDT-only e due certificate-only, anche se la
+   matrice del bridge riconosce le coppie giuste. Una rivalutazione applicativa
+   successiva nel SOLO QA applica esattamente i due match, senza AI aggiuntiva.
+   NON risolvere eliminando genericamente protezioni delle righe: futuro piano
+   mirato ai discriminanti Arconic per riga e alle due fasi, con lock/manuali
+   conservati e prove degli ordini di arrivo. Nessuna modifica autorizzata ora.
+2. **Metalba LST03, lettura parziale lega/stato.** Coppia reale Alpha: documenti
+   DDT208/cert213, Incoming167, DDT 26-02887 e certificato 26-2220, peso 2317,
+   ordine 232/26, diametro 60. PDF verificato visivamente: lega/stato 6082F F e
+   nota LST03-A presenti. La nuova AI restituisce core.lega=6082F e descrizione
+   prodotto priva della lega; `_normalize_metalba_alloy_from_text('6082F')`
+   restituisce None (richiede anche lo stato). L'abbinamento corretto avviene
+   per gli altri dati, ma la conversione prudente a 6082H NON scatta perche
+   manca la lega sul lato certificato. La lettura storica dello stesso PDF
+   conteneva 6082F F. Questo e anche un caso da considerare nella validita/
+   qualita della cache: non riprendere a rileggere tutti gli storici per curarlo.
+   Futuro piano: estrazione completa e gestione mirata del parziale, senza
+   inventare stati o rendere piu permissivo il match. Nessuna correzione ora.
+
+Parser, prompt Metalba, scorer iniziale e auto-proposta sono AST-identici al
+precedente Alpha 9a2a98e5; anche quel run escludeva i target pronti correnti
+dal rematch (nei casi in prova non ci sono manual_rematch_rows). Non attribuire
+queste due cause alla sola nuova cache. I test unitari precedenti restano
+validi, ma NON coprivano integralmente questi input reali e il run completo.
+Non dichiarare il collaudo globale verde: riuso/manuali passano, i due casi sopra no.
+
+### Integrita Alpha provata e differenze spiegate
+
+Impronte prima/dopo su 46 tabelle e 4.454 file: codice/configurazione, Incoming,
+valori, match, cache/consumi AI Alpha, Word/PDF e file identici; stesso container,
+immagine e avvio, nessun restart. I soli delta sono i cinque normali insiemi
+di sync DDT/Quarta e `users.last_login` dell'utente 1. Quest'ultimo coincide
+con il login HTTP 200 delle 20:19:13, durante il preflight e PRIMA delle chiamate
+pagate. Il backup utenti coincide con l'inizio prova; confronto puntuale:
+solo last_login, password/chiavi/ruoli e tutti gli altri campi identici.
+Nessuna scrittura del collaudo su Alpha. Non mascherare il delta utenti con
+una whitelist generica: audit puntuale conservato separatamente.
+
+Evidenze private locali, escluse da Git: `tmp_eval/ai_match_trial_20261030/`.
+Conservati ledger/risposte, `full_flow_result.json`, `offline_cases_result.json`,
+impronte e `alpha_integrity_verified.json`. L'asserzione iniziale fallita e
+conservata; verificato successivamente anche il workflow completo per non
+confondere un primo rifiuto con l'esito finale. Nessun codice prodotto,
+commit/push o ulteriore deploy eseguiti per questa prova.
+
+## Correzioni locali Arconic/Metalba 30/10 sera
+
+Approvazione successiva dell'utente: intervenire in locale sui due problemi;
+prompt invariati. Per Metalba sono esplicitamente equivalenti `6082F`, `6082F F`
+e `6082FF`, senza perdere il testo letto e senza indebolire il match. Nessuna
+autorizzazione a deploy, bonifica Alpha, riavvio dei servizi o nuove API pagate.
+Questa sezione supera il piano preliminare sopra: **non si completa la lettura
+cambiando il prompt e non si rilegge il documento per aggiungere una F**.
+
+### Modifiche implementate
+
+1. **Metalba, conservazione.** Il normalizzatore non scarta piu il campo
+   `core.lega=6082F` o `6082FF`. Rimane salvata la forma originale, non una
+   ricostruzione del PDF. La stessa regola opera sul campo lega del DDT.
+2. **Metalba, confronti e LST03.** Equivalenza circoscritta ai tre modi concordati
+   in match iniziale, ricerca certificate-first, rematch, confronto in schermata
+   e applicazione LST03. Ordine, diametro, peso, colata/CDQ dove presenti,
+   unicita, conferme e modifiche utente restano determinanti. `6082F T6`, T62,
+   6082H/L, 6092 o 7075 non sono nuovi sinonimi. Nessuna equivalenza generica
+   per tutte le leghe o per gli altri fornitori. Due fonti equivalenti a pari
+   merito nel percorso certificate-first non vengono scelte per ordine di lista.
+3. **Metalba, letture gia salvate.** Correzione compatibile in sola memoria dei
+   due campi normalizzati lega solo se entrambi vuoti e il medesimo JSON raw
+   contiene esattamente una delle due forme prima scartate. Nessun cambio di
+   fingerprint/versione cache, chimica, proprieta, note o requisiti; nessuna
+   API, invalidazione, modifica di cache persistite o backfill Incoming.
+   Se il dato manca davvero nel JSON, non viene inventato. Le letture manuali
+   restano escluse dall'AI automatica, anche se i campi sono incompleti.
+4. **Arconic, completamento run.** Tolta la protezione finale esclusivamente
+   per i target Arconic del run corrente ancora DDT-only, senza match e non
+   validati. Viene usato lo stesso rematcher esistente con tutti i campi interni
+   (articoli, ordini, riga, lotto), non un matcher nuovo o piu permissivo.
+   Righe gia abbinate/confermate, blocchi tipo documento, sganci manuali,
+   margine tra candidati e lock rimangono. Il rematch ricalcola il piano dopo
+   ogni merge: piu righe logiche possono usare lo stesso PDF senza essere unite.
+
+Esempi verificati sul codice locale con risposte AI reali **gia salvate**:
+
+- Arconic DDT28209127: diametro87 -> EEP73062-44270958; diametro98 ->
+  EEP73061-44262209. Le due associazioni si completano nel medesimo run,
+  sia insieme sia certificati-prima sia DDT-prima. Restano due righe logiche;
+  rilanciare il flusso non crea altre righe o chiamate AI.
+- Metalba DDT26-02887 / certificato26-2220: il certificato da solo mostra la
+  lega letta `6082F`; con il DDT `6082F F`, ordine232/26, diametro60 e peso2317
+  coerenti, LST03 porta entrambi a `6082H F` conservando gli originali.
+  I tre ordini di arrivo producono lo stesso risultato. Non e una bonifica
+  della reale Incoming167, gia confermata e rimasta intatta su Alpha.
+
+### Collaudo e perimetro
+
+- Nove combinazioni delle tre forme Metalba: punteggio iniziale, entrambi i
+  percorsi di arrivo, rematch, LST03, raw e ripristino dopo sgancio.
+- Casi negativi: altra lega/stato, materiale incompatibile, fonte ambigua,
+  LST00/altre specifiche, correzione manuale e riga validata/confermata.
+- Arconic: due diametri nello stesso DDT, stesso PDF su due righe legittime,
+  due documenti a pari merito, materiale diverso, segnali deboli, blocco manuale,
+  sorgente protetta e ripetizione idempotente.
+- PostgreSQL temporaneo sulla porta55439: 11 test superati, compresi due worker
+  Arconic concorrenti, riuso concorrente della vecchia cache Metalba senza API
+  ne riscrittura, salvataggio indipendente e protezioni manuali.
+- Confronto AST: tutte le 20 funzioni contenenti i prompt invariati. Nessuna
+  modifica ai numeri certificati, alla parte dopo il trattino Arconic o agli
+  automatismi DDT/Word/PDF. Suite generale finale: **830 test superati, 127
+  opt-in saltati**, zero errori; inclusi gli 11 PostgreSQL sopra. Separatamente
+  ripetuti i 21 test Metalba dopo le ultime asserzioni su DDT e parita del
+  punteggio delle nove combinazioni: tutti superati. `git diff --check` positivo.
+
+Solo database QA nuovi/in memoria e risposte archiviate: rete esterna/API
+bloccate; database dell'app locale e Alpha esclusi. Zero nuovi costi AI.
+Nel primo lancio generale il blocco socket del collaudo impediva anche la
+socketpair interna di asyncio/Windows: corretta solo la barriera QA, mantenendo
+il divieto di connessioni esterne, e rieseguita la suite. Non era un difetto
+applicativo. I nuovi test hanno inoltre richiesto il corretto contesto run e
+pagine fittizie come nei test esistenti; nessun guard prodotto rimosso per superarli.
+
+Evidenze private, non da distribuire: replay
+`tmp_eval/ai_match_trial_20261030/reassessment_20261030_212003_840291.json`,
+`tmp_eval/supplier_scope_20261030.json` e report `supplier_regression_*_20261030.xml`.
+Gli script QA non sono migrazioni o comandi da eseguire su Alpha. Per il futuro
+deploy valgono le precauzioni aggiunte al runbook; nessun DB locale va copiato.
+Al termine rimosso il solo container `certi-qa-alloy-rematch-20261030`, con dati
+usa-e-getta in tmpfs e nessun volume persistente. I quattro container dell'app
+locale sono rimasti attivi senza riavvio. Conservati report e fixture QA.

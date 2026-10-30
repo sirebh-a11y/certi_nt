@@ -222,6 +222,43 @@ def _save(db, document, reader_key, fingerprint, payload, source, evidence_id=No
     write_independent(db, write)
 
 
+def _recover_saved_metalba_alloy(payload, reader_key):
+    """Recover the two formerly discarded spellings from the SAME saved read.
+
+    Pure, field-only compatibility fix: no schema/fingerprint invalidation,
+    new AI, cache writes, chemistry re-normalization or Incoming backfill.
+    Never replace a populated value, even when the old raw JSON differs.
+    """
+    if reader_key != "metalba" or not isinstance(payload, dict):
+        return payload
+    match_values = payload.get("match_values") or {}
+    core_fields = payload.get("core_fields") or {}
+    if not isinstance(match_values, dict) or not isinstance(core_fields, dict):
+        return payload
+    if not isinstance(core_fields.get("lega_certificato") or {}, dict):
+        return payload
+    if match_values.get("lega_certificato") or (core_fields.get("lega_certificato") or {}).get("value"):
+        return payload
+    try:
+        raw = json.loads(payload.get("debug_raw_output") or "{}")
+        core = raw.get("core") or {}
+        alloy = core.get("lega")
+        if not isinstance(alloy, str) or alloy.strip().upper() not in {"6082F", "6082FF"}:
+            return payload
+    except (TypeError, ValueError, AttributeError):
+        return payload
+    from . import service as s
+    field = s._sanitize_metalba_vision_certificate_fields({"lega": alloy}, None)["lega_certificato"]
+    if not field.get("value"):
+        return payload
+    result = deepcopy(payload)
+    result["match_values"] = {**match_values, "lega_certificato": field["value"]}
+    existing_field = deepcopy(core_fields.get("lega_certificato") or {})
+    existing_field.update(value=field["value"], evidence=field["evidence"])
+    result["core_fields"] = {**core_fields, "lega_certificato": existing_field}
+    return result
+
+
 def cached_payload(db, document, reader_key, *, persist_legacy=False, cache_table_available=True):
     """No images, no AI and no changes to Incoming. Used also by type preflight."""
     if automatic_ai_disabled(db, document):
@@ -243,6 +280,7 @@ def cached_payload(db, document, reader_key, *, persist_legacy=False, cache_tabl
         except (TypeError, ValueError):
             payload = None
         if _valid_payload(payload, document) and _type_reusable(db, document, reader_key, payload):
+            payload = _recover_saved_metalba_alloy(payload, reader_key)
             payload["_reuse_fingerprint"] = fingerprint
             payload["_reuse_source"] = cached.source
             payload["_reuse_persisted"] = True
@@ -296,7 +334,7 @@ def reuse_certificate_payload(reader_key):
             type_failed = reader_key == "leichtmetall" and _latest_type_failure(db, document.id)
             if not force and not type_failed and memory is not None and memory.get("_reuse_fingerprint", fingerprint) == fingerprint:
                 if not memory.get("_reuse_persistence_pending"):
-                    return deepcopy(memory)
+                    return deepcopy(_recover_saved_metalba_alloy(memory, reader_key))
             if not force and not (memory or {}).get("_reuse_persistence_pending"):
                 existing = cached_payload(db, document, reader_key)
                 if existing is not None and existing.get("_reuse_persisted"):
@@ -304,7 +342,8 @@ def reuse_certificate_payload(reader_key):
                         certificate_ai_cache[document.id] = deepcopy(existing)
                     return deepcopy(existing)
             with _document_lock(db, document.id):
-                pending = memory if memory and memory.get("_reuse_persistence_pending") else None
+                pending = (_recover_saved_metalba_alloy(memory, reader_key)
+                           if memory and memory.get("_reuse_persistence_pending") else None)
                 payload = deepcopy(pending) if pending else (None if force else cached_payload(db, document, reader_key,persist_legacy=True))
                 needs_save = pending is not None
                 if payload is None:

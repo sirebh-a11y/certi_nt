@@ -7,7 +7,104 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Preparazione 29/10 — riuso letture AI certificati (solo locale, NON distribuito)
+### Preparazione locale 30/10 sera — Arconic/Metalba, NON ancora distribuita
+
+Correzioni autorizzate dopo il collaudo reale di Alpha 10.7; dettaglio e prove
+nel [verbale AI](../tasks/ai_certificate_reuse_20261029.md#correzioni-locali-arconicmetalba-3010-sera).
+Questa nota non autorizza commit/push, deploy o bonifiche dati Alpha.
+
+- Arconic: il rematch esistente completa nello stesso run i soli DDT appena
+  letti e ancora non abbinati. Invariati punteggi/soglie iniziali, discriminanti
+  di riga, ambiguita, sganci manuali, lock e protezioni delle righe gia abbinate.
+- Metalba: conservare `6082F`, `6082F F`, `6082FF` e confrontarli come equivalenti
+  solo per questo fornitore. LST03 conserva tutti gli altri requisiti e le
+  protezioni manuali. Prompt AI invariati per entrambi i fornitori.
+- **Nessuna nuova migrazione/schema, invalidazione cache o rilettura storici.**
+  Non rieseguire `prepare_certificate_ai_reuse` su Alpha 10.7 per questo fix.
+  Se una lettura salvata contiene la lega nel JSON originale ma il vecchio
+  normalizzatore l'aveva persa, recuperarla in memoria durante il normale riuso:
+  nessuna chiamata AI, nessuna riscrittura massiva dei valori Incoming.
+- Non correggere automaticamente Incoming167 o altri record gia confermati;
+  non azzerare match, cache, consumo AI, Word/PDF o documenti. Un eventuale
+  recupero di vecchi match non associati richiede inventario e autorizzazione
+  separati, non e un'azione implicita di questo deploy.
+
+Al futuro deploy: seguire tutto il runbook (spazio, utenti/run attivi, backup,
+restore e pacchetto da commit); distribuire insieme i quattro moduli acquisizione
+modificati. Verificare sul clone del DB Alpha i tre ordini di arrivo e le righe
+multiple, non caricare documenti operativi di prova sul server senza consenso.
+Dopo l'avvio controllare normale elaborazione, nessun run in errore, nessun
+aumento AI dovuto al solo riuso e protezione manuali. Snapshot DDT e riuso Word
+non cambiano: preservare i flag correnti. Nessun test pagato implicito.
+Rollback del solo codice: conservare dati/cache/schema, senza cancellazioni;
+il codice precedente ripresenta i due limiti documentati, non annulla i match
+gia proposti dal nuovo codice.
+
+### Pulizia PC dopo il deploy 30/10 — autorizzata e completata dopo i controlli
+
+Per Alpha 10.7 l'utente ha chiesto esplicitamente di pulire il PC **dopo**
+il completamento e la verifica del deploy. La copia esterna serve durante la
+manutenzione e per il restore isolato; non eliminarla mentre il deploy e in corso.
+
+A esito positivo: ricontrollare sul server SHA-256 e integrita di app/SQL/storage
+in `/srv/certi_nt/backup/alpha_deploy_20261030_194000`, preservando manifest,
+prove di restore e verbale. Solo allora eliminare sul PC i tre archivi di questa
+operazione e la loro estrazione `restore_check`, dentro il percorso esatto
+`backups/alpha_deploy_20261030_194000`. Arrestare esclusivamente il PostgreSQL
+QA `certi-alpha-qa-pg-20261030-194000`, creato senza volumi persistenti e senza
+rete; NON toccare i quattro container locali dell'app.
+
+Prima delle rimozioni risolvere i percorsi assoluti, escludere symlink/reparse
+point e confrontarli col perimetro autorizzato. Nessuna pulizia generale di
+workspace, Docker, altri backup o dati locali. Conservare i piccoli manifest,
+hash e risultati del collaudo; riferire cosa e stato rimosso e quanto recuperato.
+I backup completi restano sul server: dopo la pulizia questa copia PC non e piu
+un backup esterno disponibile. Non estendere questa autorizzazione ai deploy
+futuri: proporre e concordare ogni volta la conservazione/pulizia, senza
+eliminare risk mitigation o la documentazione delle precedenti operazioni.
+
+Esito 30/10 ore 20:08: rimosse le sole tre copie/estrazione PC e il container QA
+previsti, **4.367.180.422 byte** di file temporanei. Hash e tutti i contenuti
+server ricontrollati prima delle rimozioni. App locale intatta; sul PC conservati
+soltanto piccoli manifest/prove, sul server conservati integralmente i backup.
+
+### Esito 30/10 — Alpha 10.7 installata, riaperta e timer verificato
+
+Sorgente `fc1d1f74effc7b38a61f15b1bdbf275a91eb0367`, pacchetto immutabile
+`v0.1.0-alpha.10.7-deploy` (deploy `8c0f33e`). Restore isolato riuscito e
+preparazione provata due volte sul clone prima dell'Alpha: due tabelle additive,
+219 letture riutilizzabili e sette protezioni manuali per documenti
+9/60/206/277/43/205/401. I conteggi della preparazione 29/10 sotto sono storici.
+
+Su Alpha applicazione riuscita nella manutenzione autorizzata: ID evidenze
+6853..6859, tutti i record originari e i 4.454 file invariati; nessuna AI,
+rigenerazione Word/PDF, modifica numero, match, standard o recupero storico.
+Riaperta circa 19:51, versione applicativa sempre `0.1.0.alpha.10`; sito/API 200,
+219 cache effettivamente persistite, dati/export/file intatti. Snapshot DDT e
+riuso Word preservati attivi; frontend/dipendenze, PostgreSQL e altro stack intatti.
+Primo timer naturale alle 20:06 verificato: DDT 2694 success (664 righe),
+Quarta 10249 ok. Controlli finali di sito/API, cache, file/export e dati Incoming
+positivi; nessun consumo AI. Solo i normali delta nelle cinque tabelle dei job.
+Root libera circa 7,40 GB, disco dati/backup circa 82,51 GB (non sommare i mount).
+Pulizia PC autorizzata completata e documentata sopra, con backup server conservati.
+
+Verbale e perimetro: [Alpha 10.7 del 30/10](alpha10_7_preflight_20261030.md).
+Backup server privati: `/srv/certi_nt/backup/alpha_deploy_20261030_194000`.
+NON rieseguire automaticamente questa preparazione o le vecchie migrazioni
+DDT/Word/standard nei deploy seguenti; nuova preview se dati o perimetro cambiano.
+
+**Collaudo reale successivo 30/10, separato dal deploy:** prova AI autorizzata
+sotto 1 EUR eseguita solo su QA locale con Alpha in sola lettura. Riuso e
+protezione manuali positivi; trovate due criticita di logiche gia presenti:
+Arconic stesso-batch non applica due match pur riconoscibili alla rivalutazione,
+Metalba con core lega parziale non applica LST03/6082H. Nessuna correzione o
+bonifica Alpha autorizzata/eseguita. Il successo operativo del deploy non e
+un collaudo globale verde di questi casi. Dettaglio/costi/integrita nel
+[piano e verbale AI](../tasks/ai_certificate_reuse_20261029.md#collaudo-reale-non-invasivo-3010-dopo-alpha-107--esito-parziale).
+Per futuri interventi partire da quei casi, senza togliere genericamente
+protezioni manuali/righe pronte ne riattivare riletture massive degli storici.
+
+### Preparazione 29/10 — riuso letture AI certificati (fotografia storica prima del deploy)
 
 Piano, motivazioni, multiriga, rischi e collaudi:
 [riuso letture AI](../tasks/ai_certificate_reuse_20261029.md).
@@ -2141,6 +2238,14 @@ docker compose --env-file .env -f docker-compose.alpha.yml exec -T postgres \
 
 La query non mostra password. I nomi effettivi dei ruoli devono essere aggiornati nel comando
 se Matteo sceglie nomi diversi.
+
+Verifica 30/10/2026: su Alpha il ruolo effettivo e **solo
+`certi_esolver_reader`**, senza privilegi amministrativi e con solo `SELECT`
+sulla vista; il dump predeploy conferma lo stesso grant. `certi_quarta_reader`
+non era presente: l'elenco di nomi nel comando sopra NON implica che debbano
+esistere entrambi. Non creare ruoli per soddisfare un controllo ipotetico;
+confrontare sempre grant/assetto correnti con configurazione e backup precedenti.
+Il collegamento Quarta esterno non richiede di inventare un secondo ruolo locale.
 
 Controllare che i file installati corrispondano all'archivio. Le differenze di UID e GID sono normali nel passaggio da archivio Windows a server Linux; qualsiasi altra differenza deve bloccare la chiusura del deploy:
 

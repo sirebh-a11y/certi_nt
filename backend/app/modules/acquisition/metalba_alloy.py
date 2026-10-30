@@ -5,6 +5,24 @@ import re
 DERIVED_METHOD = "metalba_lst03"
 
 
+def source_alloy_token(value: str | None) -> str | None:
+    """Compare only Metalba's agreed 6082F spellings, without rewriting source.
+
+    6082F, 6082F F and 6082FF denote the same supplied material here. This is
+    NOT a family-wide 6082/H/L equivalence or a missing-temper wildcard: an
+    explicit T temper, another suffix or another alloy remains different.
+    """
+    text = (value or "").strip().upper()
+    if re.fullmatch(r"6082\s*F(?:\s*F)?", text):
+        return "6082FF"
+    return re.sub(r"[^A-Z0-9]", "", text) or None
+
+
+def same_source_alloy(left: str | None, right: str | None) -> bool:
+    token = source_alloy_token(left)
+    return token is not None and token == source_alloy_token(right)
+
+
 def lst03_material_quote(text: str | None) -> str | None:
     """Only an affirmative material requirement, never a loose LST substring."""
     normalized = re.sub(r"\s+", " ", text or "").strip()
@@ -28,10 +46,13 @@ def lst03_material_quote(text: str | None) -> str | None:
 def eligible_alloy(value: str | None) -> bool:
     # F attached to 6082 is present on the real Metalba documents; L is a
     # different variant and must never be swallowed by a family comparison.
-    return bool(re.fullmatch(r"6082(?:F|H)?(?:\s+(?:F|T\d+))?", (value or "").strip(), re.I))
+    return source_alloy_token(value) == "6082FF" or bool(
+        re.fullmatch(r"6082(?:F|H)?(?:\s+(?:F|T\d+))?", (value or "").strip(), re.I))
 
 
 def interpreted_alloy(value: str) -> str:
+    if source_alloy_token(value) == "6082FF":
+        return "6082H F"
     temper = re.search(r"\s+(F|T\d+)\s*$", value, re.I)
     return "6082H" + (f" {temper.group(1).upper()}" if temper else "")
 

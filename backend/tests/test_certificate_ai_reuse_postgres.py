@@ -1,6 +1,7 @@
 """Opt-in PostgreSQL tests, strictly restricted to the disposable local DB."""
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import json
 import os
 import threading
 import time
@@ -231,9 +232,23 @@ class CertificateAiReusePostgresTest(unittest.TestCase):
             self.assertEqual(db.query(DocumentAiUsage).count(),0)
 
     def test_concurrent_rematches_can_absorb_the_same_manual_source_once(self):
+        self.concurrent_rematch_fixture(arconic=False)
+
+    def test_current_run_arconic_rematches_are_safe_with_two_workers(self):
+        self.concurrent_rematch_fixture(arconic=True)
+
+    def concurrent_rematch_fixture(self, *, arconic):
         from unittest.mock import patch
         from app.modules.acquisition.models import AcquisitionRow
         source_id,targets,runs,supplier_id=self.saved_rematch_fixture()
+        if arconic:
+            with self.Session() as db:
+                db.get(Supplier,supplier_id).ragione_sociale='Arconic Extrusions Hannover GmbH'
+                for target,run in zip(targets,runs):
+                    row=db.get(AcquisitionRow,target)
+                    row.ai_processing_run_id=run
+                    row.ai_processing_status='pronta'
+                db.commit()
         barrier=threading.Barrier(2);local=threading.local();plan=s._plan_cross_run_auto_rematch
         def both_planned(*args,**kwargs):
             result=plan(*args,**kwargs)
@@ -243,8 +258,10 @@ class CertificateAiReusePostgresTest(unittest.TestCase):
         def worker(index):
             with self.Session() as db:
                 db.info[s.AI_PROCESSING_SESSION_RUN_KEY]=runs[index]
+                protected=s._current_run_rematch_protected_ids(db,runs[index],set()) if arconic else set()
+                self.assertNotIn(targets[index],protected)
                 return s._run_cross_run_auto_rematch(db=db,supplier_ids={supplier_id},actor_id=None,
-                    run_id=runs[index],protected_row_ids={targets[1-index]},protected_source_row_ids=set())
+                    run_id=runs[index],protected_row_ids=protected | {targets[1-index]},protected_source_row_ids=set())
         with patch.object(s,'_plan_cross_run_auto_rematch',side_effect=both_planned):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 self.assertEqual(list(pool.map(worker,range(2))),[1,1])
@@ -252,3 +269,32 @@ class CertificateAiReusePostgresTest(unittest.TestCase):
             self.assertIsNone(db.get(AcquisitionRow,source_id))
             self.assertEqual([db.get(AcquisitionRow,i).document_certificato_id for i in targets],
                              [self.doc_id,self.doc_id])
+
+    def test_saved_partial_metalba_alloy_two_sessions_recover_without_reread_or_rewrite(self):
+        from app.modules.acquisition import certificate_ai_reuse as reuse
+        with self.Session() as db:
+            doc=db.get(Document,self.doc_id)
+            raw=metalba_raw()
+            raw['core']['lega']='6082F'
+            raw['core']['product_description_raw']='BARRA TONDA DIAM 33 mm'
+            page=doc.pages[0]
+            old=s._normalize_metalba_certificate_ai_payload({'page1':{'page_id':page.id,'page_number':1}},raw)
+            old['match_values']['lega_certificato']=None
+            old['core_fields']['lega_certificato']['value']=None
+            reuse._save(db,doc,'metalba',reuse._identity(doc,'metalba'),old,'ai')
+            original=db.query(DocumentAiExtraction).one().payload_json
+        @reuse_certificate_payload('metalba')
+        def forbidden(*args,**kwargs):
+            raise AssertionError('The saved raw reading must not cause a new AI call')
+        def worker(_):
+            with self.Session() as db:
+                return forbidden(db,certificate_document=db.get(Document,self.doc_id),openai_api_key='unused')
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(worker,range(2)))
+        for result in results:
+            self.assertEqual(result['match_values']['lega_certificato'],'6082F')
+            self.assertEqual(result['chemistry'],old['chemistry'])
+            self.assertEqual(result['debug_raw_output'],old['debug_raw_output'])
+        with self.Session() as db:
+            self.assertEqual(db.query(DocumentAiExtraction).one().payload_json,original)
+            self.assertIsNone(json.loads(original)['match_values']['lega_certificato'])

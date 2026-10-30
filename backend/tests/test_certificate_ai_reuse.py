@@ -113,6 +113,49 @@ class CertificateAiReuseTest(unittest.TestCase):
         self.assertEqual(payload['match_values']['numero_certificato_certificato'], '26-1791')
         self.assertEqual(self.db.query(DocumentAiExtraction).one().source_evidence_id, evidence.id)
 
+    def test_saved_metalba_null_alloy_recovers_only_same_raw_field_without_ai_or_db_writes(self):
+        doc = self.document()
+        raw = metalba_raw()
+        raw['core']['lega'] = '6082F'
+        raw['core']['product_description_raw'] = 'BARRA TONDA DIAM 33 mm'
+        payload = reuse._normalizer_payload(doc, 'metalba', raw)
+        # Actual old-normalizer shape: AI had read the alloy but both normalized
+        # identity fields were null. Preserve all other historical results.
+        payload['match_values']['lega_certificato'] = None
+        payload['core_fields']['lega_certificato']['value'] = None
+        payload['core_fields']['lega_certificato']['evidence'] = None
+        reuse._save(self.db, doc, 'metalba', reuse._identity(doc, 'metalba'), payload, 'ai')
+        before = self.db.query(DocumentAiExtraction).one().payload_json
+        with patch.object(s, '_make_openai_client', side_effect=AssertionError('AI forbidden')):
+            for _ in range(3):
+                result = self.call(doc, {})
+                self.assertEqual(result['match_values']['lega_certificato'], '6082F')
+                self.assertEqual(result['core_fields']['lega_certificato']['value'], '6082F')
+                for field in ('chemistry','properties','notes','mechanical_requirement','supplier_fields','debug_raw_output'):
+                    self.assertEqual(result[field], payload[field])
+            memory = {doc.id: {**deepcopy(payload), '_reuse_fingerprint': reuse._identity(doc, 'metalba')}}
+            self.assertEqual(self.call(doc, memory)['match_values']['lega_certificato'], '6082F')
+            self.assertIsNone(memory[doc.id]['match_values']['lega_certificato'])
+        self.db.expire_all()
+        self.assertEqual(self.db.query(DocumentAiExtraction).one().payload_json, before)
+        self.assertEqual(self.db.query(AcquisitionRow).count(), 0)
+        self.assertEqual(self.db.query(DocumentAiUsage).count(), 0)
+
+    def test_metalba_cached_correction_is_scoped_and_does_not_replace_populated_values(self):
+        doc = self.document()
+        raw = metalba_raw()
+        raw['core']['lega'] = '6082FF'
+        payload = reuse._normalizer_payload(doc, 'metalba', raw)
+        for existing in ('7075 F', '6082H', '6082F T6'):
+            payload['match_values']['lega_certificato'] = existing
+            self.assertEqual(reuse._recover_saved_metalba_alloy(payload, 'metalba'), payload)
+        payload['match_values']['lega_certificato'] = None
+        payload['core_fields']['lega_certificato']['value'] = None
+        self.assertEqual(reuse._recover_saved_metalba_alloy(payload, 'impol'), payload)
+        self.assertEqual(reuse._recover_saved_metalba_alloy(payload, 'metalba')['match_values']['lega_certificato'], '6082FF')
+        payload['debug_raw_output'] = 'invalid'
+        self.assertEqual(reuse._recover_saved_metalba_alloy(payload, 'metalba'), payload)
+
     def test_change_hash_never_reuses_old_json_or_run_cache(self):
         doc = self.document()
         self.legacy(doc, metalba_raw())

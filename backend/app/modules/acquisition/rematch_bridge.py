@@ -10,6 +10,7 @@ from app.modules.document_reader.matching import (
     aww_weights_are_compatible, neuman_weights_are_compatible, weights_are_compatible,
 )
 from app.modules.document_reader.registry import resolve_supplier_template
+from .metalba_alloy import same_source_alloy as metalba_same_source_alloy
 
 
 BridgeValues = Mapping[str, str | None]
@@ -173,8 +174,10 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
                 "lot_batch_no": 35,
             }
         )
+    supplier_key = _bridge_supplier_key(ddt_bridge, certificate_bridge)
     for field_name, points in weights.items():
-        if _field_matches(field_name, ddt_bridge.value(field_name), certificate_bridge.value(field_name)):
+        if _field_matches(field_name, ddt_bridge.value(field_name), certificate_bridge.value(field_name),
+                          supplier_key=supplier_key):
             matched_fields.append(field_name)
             score += points
             reasons.append(f"{field_name} coerente")
@@ -333,12 +336,16 @@ def _is_leichtmetall_bridge_pair(left: RematchBridge, right: RematchBridge) -> b
     return any("LEICHTMETALL" in name for name in names)
 
 
+def _bridge_supplier_key(left: RematchBridge, right: RematchBridge) -> str | None:
+    template = resolve_supplier_template(left.supplier_name, right.supplier_name,
+                                         left.value("fornitore"), right.value("fornitore"))
+    return left.supplier_key or right.supplier_key or (template.supplier_key if template else None)
+
+
 def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]:
     blockers: list[str] = []
     hard_fields = ["colata", "diametro"]
-    template = resolve_supplier_template(left.supplier_name, right.supplier_name,
-                                         left.value("fornitore"), right.value("fornitore"))
-    supplier_key = left.supplier_key or right.supplier_key or (template.supplier_key if template else None)
+    supplier_key = _bridge_supplier_key(left, right)
     # A high bridge score cannot override contradictions already rejected by
     # the supplier's initial matcher. Missing data stays missing: no additional
     # required anchors, family-wide alloy substitutions or score changes here.
@@ -361,7 +368,7 @@ def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]
         right_value = right.value(field_name)
         if left_value is None or right_value is None:
             continue
-        matches = _field_matches(field_name, left_value, right_value)
+        matches = _field_matches(field_name, left_value, right_value, supplier_key=supplier_key)
         if field_name == "ordine" and supplier_key == "metalba" and not matches:
             # Old confirmed Incoming values can contain only the numeric order
             # root (169) while Vs.Rif. retains 169/26. Absence of the year is
@@ -383,10 +390,13 @@ def _hard_blockers(left: RematchBridge, right: RematchBridge) -> tuple[str, ...]
     return tuple(blockers)
 
 
-def _field_matches(field_name: str, left: str | None, right: str | None) -> bool:
+def _field_matches(field_name: str, left: str | None, right: str | None,
+                   *, supplier_key: str | None = None) -> bool:
     if left is None or right is None:
         return False
     if field_name == "lega":
+        if supplier_key == "metalba":
+            return metalba_same_source_alloy(_normalize_alloy(left), _normalize_alloy(right))
         return _normalize_alloy(left) == _normalize_alloy(right)
     if field_name == "diametro":
         return _normalize_number(left) == _normalize_number(right)

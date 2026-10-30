@@ -167,6 +167,8 @@ from app.modules.acquisition.metalba_alloy import (
     interpreted_alloy as metalba_lst03_interpreted_alloy,
     lst03_material_quote,
     same_interpreted_display as metalba_same_interpreted_display,
+    same_source_alloy as metalba_same_source_alloy,
+    source_alloy_token as metalba_source_alloy_token,
 )
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
@@ -8211,12 +8213,13 @@ def _find_existing_certificate_first_row_for_split_candidate(
         if not normalized_customer_order:
             return None
 
-        normalized_lega = _normalize_row_signature_token(candidate.lega)
+        normalized_lega = metalba_source_alloy_token(candidate.lega)
         normalized_diameter = _normalize_row_signature_token(candidate.diametro)
         normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
 
         best_row: AcquisitionRow | None = None
         best_score = 0
+        best_count = 0
         for row in rows:
             if row.document_ddt_id is not None:
                 continue
@@ -8233,7 +8236,7 @@ def _find_existing_certificate_first_row_for_split_candidate(
             material_match_count = 0
             available_material_signals = 0
 
-            row_alloy = _normalize_row_signature_token(row.lega_base)
+            row_alloy = metalba_source_alloy_token(_metalba_source_alloy(row, "match"))
             if normalized_lega:
                 available_material_signals += 1
                 if row_alloy:
@@ -8267,8 +8270,11 @@ def _find_existing_certificate_first_row_for_split_candidate(
             if score > best_score:
                 best_score = score
                 best_row = row
+                best_count = 1
+            elif score == best_score:
+                best_count += 1
 
-        if best_score >= 230:
+        if best_score >= 230 and best_count == 1:
             return best_row
         return None
 
@@ -9382,17 +9388,7 @@ def run_autonomous_processing(
                 supplier_ids=rematch_supplier_ids,
                 actor_id=actor_id,
                 run_id=run.id,
-                protected_row_ids=_type_guard_blocked_row_ids(db) | ({
-                    row_id
-                    for (row_id,) in (
-                        db.query(AcquisitionRow.id)
-                        .filter(
-                            AcquisitionRow.ai_processing_run_id == run.id,
-                            AcquisitionRow.ai_processing_status == "pronta",
-                        )
-                        .all()
-                    )
-                } - manual_rematch_rows),
+                protected_row_ids=_current_run_rematch_protected_ids(db, run.id, manual_rematch_rows),
                 # A finished, coupled row can still supply saved certificate
                 # data. A type-rejected row must never supply them.
                 protected_source_row_ids=_type_guard_blocked_row_ids(db),
@@ -11707,7 +11703,8 @@ def _document_side_field_conflicts(
         certificate_value = side_values["match"].get(ui_field)
         if ddt_value is None or certificate_value is None:
             continue
-        if not _document_side_values_match(ui_field, ddt_value, certificate_value):
+        if not _document_side_values_match(ui_field, ddt_value, certificate_value,
+                                           supplier_key=_resolve_row_supplier_key(row)):
             label = DOCUMENT_SIDE_FIELD_LABELS.get(ui_field, ui_field)
             conflicts.append(f"{label} diversa: DDT {ddt_value} / Certificato {certificate_value}")
     return conflicts
@@ -11751,8 +11748,12 @@ def _document_side_compare_token(field_name: str, value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip().upper()
 
 
-def _document_side_values_match(field_name: str, ddt_value: str, certificate_value: str) -> bool:
+def _document_side_values_match(field_name: str, ddt_value: str, certificate_value: str,
+                                *, supplier_key: str | None = None) -> bool:
     if field_name == "lega_base":
+        if supplier_key == "metalba":
+            return metalba_same_source_alloy(
+                _document_side_alloy_token(ddt_value), _document_side_alloy_token(certificate_value))
         return _document_side_alloy_token(ddt_value) == _document_side_alloy_token(certificate_value)
     if field_name == "diametro":
         return _normalize_value_for_field("ddt", "diametro", ddt_value) == _normalize_value_for_field("ddt", "diametro", certificate_value)
@@ -14371,7 +14372,7 @@ def _score_metalba_ai_group_against_row(
         else:
             return 0
     if row_alloy and ai_candidate.lega:
-        if reader_same_token(row_alloy, ai_candidate.lega):
+        if metalba_same_source_alloy(row_alloy, ai_candidate.lega):
             score += 25
         else:
             return 0
@@ -18101,7 +18102,7 @@ def _find_existing_metalba_row_for_certificate(
     if not normalized_customer_order:
         return None
 
-    normalized_alloy = reader_normalize_match_token(alloy)
+    normalized_alloy = metalba_source_alloy_token(alloy)
     normalized_diameter = reader_normalize_match_token(diameter)
 
     best_row: AcquisitionRow | None = None
@@ -18142,7 +18143,7 @@ def _find_existing_metalba_row_for_certificate(
                 score += 55
                 material_match_count += 1
 
-        row_alloy = reader_normalize_match_token(_metalba_source_alloy(row))
+        row_alloy = metalba_source_alloy_token(_metalba_source_alloy(row))
         if normalized_alloy:
             available_material_signals += 1
             if row_alloy:
@@ -18863,7 +18864,8 @@ def _score_ddt_link_candidate_from_certificate_row(
         add_reason(100, "Colata coerente")
     if reader_same_token(certificate_row.ordine, candidate_row.ordine):
         add_reason(95, "Ordine coerente")
-    if reader_same_token(_row_high_alloy_value(certificate_row), _row_high_alloy_value(candidate_row)):
+    alloy_comparator = metalba_same_source_alloy if supplier_key == "metalba" else reader_same_token
+    if alloy_comparator(_row_high_alloy_value(certificate_row), _row_high_alloy_value(candidate_row)):
         add_reason(55, "Lega coerente")
     if _supplier_decimal_tokens_match(certificate_row.diametro, candidate_row.diametro):
         add_reason(55, "Diametro coerente")
@@ -18998,6 +19000,26 @@ def _current_cross_run_rematch_plan(
         # reread live values/blocks; never repeat AI work or clear human values.
         db.rollback()
     return None
+
+
+def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_rows: set[int]) -> set[int]:
+    """Let the existing row matcher finish only still-unmatched Arconic DDTs.
+
+    A just-read row is not necessarily already paired. Keep all protections on
+    paired/confirmed/validated rows, other suppliers and type-rejected rows;
+    manual detach blocks, ambiguity and locks are checked by the rematcher.
+    """
+    ready_rows = db.query(AcquisitionRow).options(
+        joinedload(AcquisitionRow.supplier), joinedload(AcquisitionRow.certificate_match),
+    ).filter(AcquisitionRow.ai_processing_run_id == run_id,
+             AcquisitionRow.ai_processing_status == "pronta").all()
+    protected = {row.id for row in ready_rows}
+    for row in ready_rows:
+        if (row.document_ddt_id is not None and row.document_certificato_id is None
+                and row.certificate_match is None and not row.validata_finale
+                and _resolve_row_supplier_key(row) == "arconic_hannover"):
+            protected.discard(row.id)
+    return _type_guard_blocked_row_ids(db) | (protected - manual_rematch_rows)
 
 
 def _run_cross_run_auto_rematch(
@@ -19769,7 +19791,7 @@ def _metalba_pair_identity(ddt_values: dict, certificate_values: dict) -> bool:
     if not all(metalba_lst03_eligible_alloy(v.get("lega")) for v in (ddt_values, certificate_values)):
         return False
     # Matching still uses the actual source alloy, not the newly assigned H.
-    if not reader_same_token(ddt_values["lega"], certificate_values["lega"]):
+    if not metalba_same_source_alloy(ddt_values["lega"], certificate_values["lega"]):
         return False
     for field in ("colata", "cdq"):
         if ddt_values.get(field) and certificate_values.get(field):
@@ -19817,7 +19839,8 @@ def _apply_metalba_lst03_alloy(db: Session, row: AcquisitionRow, *, actor_id: in
         if other.document_certificato_id == row.document_certificato_id:
             other_material = _metalba_identity_values(other, "match")
             if any(other_material.get(key) and right.get(key)
-                   and not reader_same_token(other_material[key], right[key])
+                   and not (metalba_same_source_alloy(other_material[key], right[key]) if key == "lega"
+                            else reader_same_token(other_material[key], right[key]))
                    for key in ("lega", "diametro", "ordine", "colata")):
                 return False
         if other.document_ddt_id and _metalba_pair_identity(_metalba_identity_values(other, "ddt"), right):
@@ -20353,11 +20376,8 @@ def _score_certificate_candidate(
             and reader_normalize_match_token(row.diametro)
             == reader_normalize_match_token(_string_or_none(matches.get("diametro_certificato", {}).get("final")))
         )
-        alloy_match = bool(
-            reader_normalize_match_token(_metalba_source_alloy(row))
-            and reader_normalize_match_token(_metalba_source_alloy(row))
-            == reader_normalize_match_token(_string_or_none(matches.get("lega_certificato", {}).get("final")))
-        )
+        alloy_match = metalba_same_source_alloy(
+            _metalba_source_alloy(row), _string_or_none(matches.get("lega_certificato", {}).get("final")))
         weight_match = reader_weights_are_compatible(row.peso, certificate_weight)
         strong_mismatch = False
         if row.diametro and _string_or_none(matches.get("diametro_certificato", {}).get("final")) and not diameter_match:
@@ -25677,6 +25697,10 @@ def _normalize_metalba_alloy_from_text(value: str | None) -> str | None:
     if cleaned is None:
         return None
     normalized = re.sub(r"\s+", " ", cleaned.upper())
+    # Keep the actual AI spelling. These explicit Metalba aliases are valid
+    # even without the duplicated, separately printed F. No prompt/re-read.
+    if re.fullmatch(r"6082FF?", normalized):
+        return normalized
     match = re.search(r"\b([1-9][0-9]{3}[A-Z]?)\s+(F|T\d+[A-Z0-9/-]*)\b", normalized)
     if match is None:
         return None

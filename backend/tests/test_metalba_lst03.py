@@ -1,4 +1,5 @@
 import unittest
+from itertools import product
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -7,9 +8,10 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.startup import bootstrap  # noqa: F401
 from app.modules.acquisition import service as s
-from app.modules.acquisition.metalba_alloy import lst03_material_quote
+from app.modules.acquisition.metalba_alloy import lst03_material_quote, same_source_alloy
 from app.modules.acquisition.models import AcquisitionRow, Document, DocumentPage, DocumentEvidence, ReadValue, CertificateMatch
 from app.modules.acquisition.schemas import DocumentMatchDetachRequest
+from app.modules.document_reader.schemas import ReaderRowSplitCandidateResponse
 from app.modules.suppliers.models import Supplier
 
 
@@ -232,6 +234,124 @@ class MetalbaLST03Test(unittest.TestCase):
         self.db.flush()
         self.value(sibling, "match", "diametro_certificato", "80")
         self.assertFalse(self.apply(row))
+
+    def test_all_nine_spellings_keep_source_and_apply_same_lst03(self):
+        forms = ("6082F", "6082F F", "6082FF")
+        for index, (left, right) in enumerate(product(forms, repeat=2), start=1):
+            with self.subTest(left=left, right=right):
+                order = f"{index}/26"
+                row = self.pair(lega=left, lega_certificato=right,
+                                ordine=order, ordine_cliente_certificato=order)
+                self.assertTrue(same_source_alloy(left, right))
+                self.assertTrue(self.apply(row))
+                self.assertEqual(row.lega_base, "6082H F")
+                for block, field, original in (("ddt", "lega", left), ("match", "lega_certificato", right)):
+                    value = next(v for v in row.values if v.blocco == block and v.campo == field)
+                    self.assertEqual(value.valore_grezzo, original)
+                    self.assertEqual(value.valore_finale, "6082H F")
+                self.assertEqual(s._build_row_ddt_bridge(row).value("lega"), left)
+                self.assertEqual(s._build_row_certificate_bridge(row).value("lega"), right)
+
+    def test_partial_and_compact_readings_are_not_lost_and_other_alloys_are_not_aliased(self):
+        for value in ("6082F", "6082F F", "6082FF"):
+            fields = s._sanitize_metalba_vision_certificate_fields({"lega": value}, None)
+            self.assertEqual(fields["lega_certificato"]["value"], value)
+            rows = s._sanitize_metalba_ai_row_groups(ddt_number_raw="DDT26-02887",
+                raw_rows=[{"alloy_raw": value, "vs_rif_raw": "232/26", "net_weight_raw": "2317",
+                           "product_description_raw": "BARRA TONDA DIAM 60 mm"}])
+            self.assertEqual(rows[0].lega, value)
+        for value in ("6082", "6082H", "6082L F", "6092F F", "7075 F", "6082F T6", "6082F T62"):
+            self.assertFalse(same_source_alloy("6082F", value), value)
+        self.assertIsNone(s._normalize_metalba_alloy_from_text("non leggibile"))
+        self.assertEqual(s._normalize_metalba_alloy_from_text("6082F T6"), "6082F T6")
+
+    def test_alias_without_lst03_is_kept_and_detach_restores_both_original_forms(self):
+        plain = self.pair("Materiale secondo specifica LST00", lega="6082FF", lega_certificato="6082F")
+        self.assertFalse(self.apply(plain))
+        row = self.pair(lega="6082F", lega_certificato="6082FF", ordine="10/26", ordine_cliente_certificato="10/26")
+        certificate_id = row.document_certificato_id
+        self.assertTrue(self.apply(row))
+        self.db.commit()
+        s.detach_document_match(self.db, row=row, payload=DocumentMatchDetachRequest(), actor_id=1)
+        self.assertEqual(s.get_acquisition_row(self.db, row.id).lega_base, "6082F")
+        source = self.db.query(AcquisitionRow).filter_by(document_certificato_id=certificate_id).one()
+        self.assertEqual(s._metalba_source_alloy(source, "match"), "6082FF")
+        self.assertIsNone(s.get_acquisition_row(self.db, row.id).document_certificato_id)
+
+    def test_aliases_do_not_hide_ambiguous_material_or_explicit_temper(self):
+        first = self.pair(lega="6082F", lega_certificato="6082FF")
+        self.pair(lega="6082F F", lega_certificato="6082FF")
+        self.assertFalse(self.apply(first))
+        wrong = self.pair(lega="6082F", lega_certificato="6082F T6", ordine="11/26", ordine_cliente_certificato="11/26")
+        self.assertFalse(self.apply(wrong))
+
+    def test_alias_comparison_does_not_bypass_supplier_or_manual_conflict_checks(self):
+        self.assertTrue(s._document_side_values_match("lega_base", "6082F", "6082FF", supplier_key="metalba"))
+        self.assertFalse(s._document_side_values_match("lega_base", "6082F", "6082FF", supplier_key="impol"))
+        self.assertFalse(s._document_side_values_match("lega_base", "6082F", "6082F T6", supplier_key="metalba"))
+        row = self.pair(lega="6082F", lega_certificato="6082FF")
+        next(v for v in row.values if v.campo == "lega").metodo_lettura = "utente"
+        self.assertFalse(self.apply(row))
+
+    def test_nine_spellings_initial_matching_both_arrival_directions_and_rematch(self):
+        row = self.pair()
+        cert = row.certificate_document
+        page = DocumentPage(document_id=cert.id, numero_pagina=1, testo_estratto="")
+        self.db.add(page)
+        source = AcquisitionRow(fornitore_id=self.supplier.id, document_certificato_id=cert.id,
+                                lega_base="6082F F", diametro="60", peso="2317", ordine="232/26")
+        self.db.add(source)
+        self.db.flush()
+        for value in row.values:
+            if value.blocco == "match":
+                value.acquisition_row_id = source.id
+        row.document_certificato_id = None
+        self.db.commit()
+        row = s.get_acquisition_row(self.db, row.id)
+        source = s.get_acquisition_row(self.db, source.id)
+        initial_scores = set()
+        for left, right in product(("6082F", "6082F F", "6082FF"), repeat=2):
+            with self.subTest(ddt=left, certificate=right):
+                row.lega_base = left
+                source.lega_base = right
+                for obj, block, field, value in ((row, "ddt", "lega", left),
+                                                (source, "match", "lega_certificato", right)):
+                    model = next(v for v in obj.values if v.blocco == block and v.campo == field)
+                    model.valore_grezzo = model.valore_standardizzato = model.valore_finale = value
+                self.db.commit()
+                candidate = ReaderRowSplitCandidateResponse(candidate_index=1, supplier_key="metalba",
+                    lega=left, diametro="60", peso_netto="2317", customer_order_no="232/26")
+                self.assertIs(s._find_existing_certificate_first_row_for_split_candidate(self.db,
+                    rows=[source], document=row.ddt_document, candidate=candidate, fallback_ddt=None,
+                    supplier_key="metalba"), source)
+                self.assertIs(s._find_existing_metalba_row_for_certificate(rows=[row],
+                    customer_order="232/26", alloy=right, diameter="60", weight="2317"), row)
+                candidate.lega = right
+                self.assertEqual(s._score_metalba_ai_group_against_row(row=row, ddt_values={}, ai_candidate=candidate), 205)
+                score = s.score_bridge_match(s._build_row_ddt_bridge(row), s._build_row_certificate_bridge(source))
+                self.assertEqual(score.decision, s.RematchDecision.STRONG)
+                self.assertIn("lega", score.matched_fields)
+                raw = {"core": {"numero_certificato": "26-2220", "ordine_cliente": "232/26",
+                    "lega": right, "peso_netto": "2317", "product_description_raw": "BARRA TONDA DIAM 60 mm"}}
+                payload = s._normalize_metalba_certificate_ai_payload({"page1": {"page_id": page.id, "page_number": 1}}, raw)
+                result = s._score_certificate_candidate(self.db, row=row, certificate_document=cert,
+                    ddt_certificate_number=None, row_ddt_values={"lega": left, "vs_rif": "232/26"},
+                    certificate_ai_cache={cert.id: payload}, ai_only_mode=True)
+                self.assertIsNotNone(result)
+                initial_scores.add(result["score"])
+                self.assertEqual(next(v for v in row.values if v.campo == "lega").valore_grezzo, left)
+        self.assertEqual(len(initial_scores), 1, "Equivalent spellings must not weaken the initial score")
+
+    def test_certificate_first_equivalent_alloys_do_not_choose_between_two_sources(self):
+        rows = [self.pair(lega_certificato=value) for value in ("6082F", "6082FF")]
+        ddt = rows[0].ddt_document
+        for row in rows:
+            row.document_ddt_id = None
+        self.db.commit()
+        candidate = ReaderRowSplitCandidateResponse(candidate_index=1, lega="6082F F",
+            diametro="60", peso_netto="2317", customer_order_no="232/26")
+        self.assertIsNone(s._find_existing_certificate_first_row_for_split_candidate(self.db,
+            rows=rows, document=ddt, candidate=candidate, fallback_ddt=None, supplier_key="metalba"))
 
 
 if __name__ == "__main__":
