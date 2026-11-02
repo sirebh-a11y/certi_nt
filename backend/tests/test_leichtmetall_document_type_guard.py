@@ -101,7 +101,7 @@ class TypeWorkflowTest(unittest.TestCase):
 
     def test_correct_ddt_read_once_cached(self):
         d=self.doc()
-        payload=[NS(cdq='94668')]
+        payload=[s.ReaderRowSplitCandidateResponse(candidate_index=1,supplier_key='leichtmetall',cdq='94668')]
         with patch.object(w,'read_document',return_value=(payload,check())) as read:
             accepted,failed=self.preflight([d])
             self.preflight([d])
@@ -115,7 +115,7 @@ class TypeWorkflowTest(unittest.TestCase):
         for initial,target in [('ddt','certificato'),('certificato','ddt')]:
             d=self.doc(initial)
             mismatch=DocumentTypeReviewRequired('wrong',check=check(target,initial))
-            payload={'match_values':{'numero_certificato_certificato':'94668'}} if target=='certificato' else ['ddt-row']
+            payload={'match_values':{'numero_certificato_certificato':'94668'}} if target=='certificato' else [s.ReaderRowSplitCandidateResponse(candidate_index=1,supplier_key='leichtmetall',cdq='94668')]
             with patch.object(w,'read_document',side_effect=[mismatch,(payload,check(target,target))]) as read:
                 accepted,failed=self.preflight([d])
             self.assertEqual(read.call_count,2)

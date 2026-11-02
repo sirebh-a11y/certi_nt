@@ -997,25 +997,8 @@ def _build_leichtmetall_row_split_candidates(
 
     batch_groups = _extract_leichtmetall_batch_groups(document)
     if batch_groups:
-        if quantity is not None:
-            header_total = _parse_leichtmetall_weight_token(quantity)
-            if header_total is not None:
-                if len(batch_groups) == 1:
-                    only_batch_payload = next(iter(batch_groups.values()))
-                    only_batch_payload["weight_total"] = header_total
-                else:
-                    grouped_total = sum(int(payload.get("weight_total", 0)) for payload in batch_groups.values())
-                    if 0 < grouped_total < header_total:
-                        dominant_batch_payload = max(
-                            batch_groups.values(),
-                            key=lambda payload: (
-                                int(payload.get("weight_total", 0)),
-                                len(list(payload.get("snippets", []))),
-                            ),
-                        )
-                        dominant_batch_payload["weight_total"] = int(dominant_batch_payload.get("weight_total", 0)) + (
-                            header_total - grouped_total
-                        )
+        # OCR detail is evidence, not a place to distribute an unexplained
+        # header remainder. The checked AI path reconciles complete readings.
         candidates: list[ReaderRowSplitCandidateResponse] = []
         for index, (batch, payload) in enumerate(batch_groups.items(), start=1):
             weight_total = int(payload.get("weight_total", 0))

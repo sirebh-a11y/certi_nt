@@ -12,6 +12,7 @@ from sqlalchemy import or_
 
 from app.core.config import settings
 from .document_type_guard import DocumentTypeReviewRequired, require_complete_pages
+from .ddt_packing import DdtPackingReviewRequired
 from .models import AcquisitionRow, CertificateMatch, CertificateMatchCandidate, Document, DocumentEvidence, ManualMatchBlock
 from .ai_usage import usage_scope
 from .certificate_ai_reuse import cached_payload, remember_checked_payload
@@ -77,16 +78,31 @@ def _read_document(db, document, assigned, api_key):
     pages = document.pages
     require_complete_pages(document)
     if assigned == "ddt":
+        saved = s._metalba_saved_ddt_groups(db, document, "leichtmetall")
+        if saved is not None:
+            try:
+                check = json.loads(saved[0].ai_document_payload_raw)["document_check"]
+                if check.get("detected_type") != "ddt" or check.get("matches_assigned") is not True:
+                    raise ValueError("invalid saved type")
+            except (TypeError, ValueError, KeyError):
+                raise DdtPackingReviewRequired("Verifica del tipo assente dalla lettura DDT salvata.") from None
+            return saved, check
         crops = s._build_leichtmetall_ddt_group_crops(pages)
-        number, rows, raw = s._extract_leichtmetall_ddt_row_groups_from_openai(crops, openai_api_key=api_key)
-        check = s._parse_openai_json_payload_for_certificate_bundle(raw)["document_check"]
-        if not rows:
-            raise DocumentTypeReviewRequired("DDT riconosciuto ma senza righe leggibili.", check=check)
-        if not number:
-            matches = s.reader_detect_ddt_core_matches(pages, supplier_key="leichtmetall")
-            number = s._split_plan_match_value(matches, "ddt")
-        payload = s._sanitize_leichtmetall_ai_row_groups(ddt_number_raw=number, raw_rows=rows, ai_document_payload_raw=raw)
-        payload = s._reconcile_leichtmetall_ai_candidates_with_document(ddt_document=document, ai_candidates=payload)
+        for attempt in range(2):
+            try:
+                number, rows, raw = s._extract_leichtmetall_ddt_row_groups_from_openai(crops, openai_api_key=api_key)
+                check = s._parse_openai_json_payload_for_certificate_bundle(raw)["document_check"]
+                if not rows:
+                    raise DocumentTypeReviewRequired("DDT riconosciuto ma senza righe leggibili.", check=check)
+                if not number:
+                    matches = s.reader_detect_ddt_core_matches(pages, supplier_key="leichtmetall")
+                    number = s._split_plan_match_value(matches, "ddt")
+                payload = s._sanitize_leichtmetall_ai_row_groups(ddt_number_raw=number, raw_rows=rows, ai_document_payload_raw=raw)
+                payload = s._reconcile_leichtmetall_ai_candidates_with_document(ddt_document=document, ai_candidates=payload)
+                break
+            except DdtPackingReviewRequired:
+                if attempt == 1:
+                    raise
         if not payload:
             raise DocumentTypeReviewRequired("nessuna riga DDT utilizzabile.", check=check)
     else:
@@ -150,6 +166,8 @@ def preflight_documents(db, documents, *, explicit_ids, certificate_ai_cache, ap
                 db.add(locked)
             record_check(db, document, initial_type=initial, decision="corretto" if target != initial else "confermato", checks=checks, actor_id=actor_id)
             if target == "ddt":
+                if not document.rows_as_ddt and s._metalba_saved_ddt_groups(db, document, "leichtmetall") is None:
+                    s._save_metalba_ddt_groups(db, document, payload, actor_id, "leichtmetall")
                 db.info.setdefault(DDT_CACHE_KEY, {})[document.id] = payload
             else:
                 remember_checked_payload(db, document, "leichtmetall", payload)

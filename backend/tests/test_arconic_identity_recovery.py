@@ -115,7 +115,7 @@ class ArconicIdentityRecoveryTest(unittest.TestCase):
              patch.object(s, '_build_arconic_hannover_ddt_group_crops', return_value={'p': {}}), \
              patch.object(s, 'reader_detect_ddt_core_matches', return_value={}), \
              patch.object(s, '_extract_arconic_hannover_ddt_row_groups_from_openai', side_effect=[('28209127',raw['rows'],json.dumps(raw)), TimeoutError()]):
-            doc = SimpleNamespace(pages=[SimpleNamespace(immagine_pagina_storage_key='unused')])
+            doc = SimpleNamespace(id=1, numero_pagine=1, pages=[SimpleNamespace(numero_pagina=1, immagine_pagina_storage_key='unused')])
             rows = s._extract_arconic_hannover_ddt_row_groups_with_vision(None, ddt_document=doc, openai_api_key='unused')
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].article_code, 'BG5207530')
@@ -143,7 +143,7 @@ class ArconicIdentityRecoveryTest(unittest.TestCase):
              patch.object(s, '_build_arconic_hannover_ddt_group_crops', return_value={'p': {}}), \
              patch.object(s, 'reader_detect_ddt_core_matches', return_value={}), \
              patch.object(s, '_extract_arconic_hannover_ddt_row_groups_from_openai', side_effect=[('28209127',raw['rows'],original_raw),('28209127',second['rows'],json.dumps(second))]):
-            doc = SimpleNamespace(pages=[SimpleNamespace(immagine_pagina_storage_key='unused')])
+            doc = SimpleNamespace(id=1, numero_pagine=1, pages=[SimpleNamespace(numero_pagina=1, immagine_pagina_storage_key='unused')])
             rows = s._extract_arconic_hannover_ddt_row_groups_with_vision(None,ddt_document=doc,openai_api_key='unused')
         self.assertEqual(rows[0].lot_batch_no,'44270958')
         self.assertEqual(rows[1].lot_batch_no,'44262209')

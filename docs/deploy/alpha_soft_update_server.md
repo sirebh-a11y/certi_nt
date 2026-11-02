@@ -7,7 +7,62 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Preparazione locale 30/10 sera — Arconic/Metalba, NON ancora distribuita
+### Altri fornitori 02/11 — protezioni DDT, solo sviluppo locale
+
+Estensione locale autorizzata dopo l'audit Metalba; **non distribuita su Alpha**.
+[Audit, perimetro e prove](../tasks/ddt_supplier_safety_20261102.md). Questa nota
+non autorizza il deploy o correzioni di dati storici.
+
+- Al futuro deploy distribuire insieme `acquisition/service.py`, i nuovi moduli
+  `acquisition/ddt_packing.py` e `acquisition/metalba_packing.py`,
+  `acquisition/leichtmetall_type_workflow.py` e `document_reader/service.py`.
+  Non fare overlay del solo service; usare comunque il pacchetto da commit
+  approvato e i controlli integrali previsti qui sotto.
+- Nessuna migrazione schema: letture verificate e avanzamento dei nuovi DDT
+  automatici usano `DocumentEvidence` già esistente. Nessun backfill, reset cache,
+  ricreazione righe o rilettura AI dello storico; manuali e validati protetti.
+- Protezioni comuni su pagine, invio unico di ogni immagine mascherata, lock e
+  ripresa salvataggi per i nove fornitori supportati. Nuovo contratto AI dei soli
+  DDT Leichtmetall/Neuman/Grupa Kety; prompt certificati, match/rematch e soglie,
+  LST03, chimica/meccanica, Word/PDF ed eSolver non modificati da questa estensione.
+  Bozen/Impol/AWW/Arconic/Zalco mantengono i raggruppamenti specifici precedenti.
+- Verificare prima sul clone isolato anche Leichtmetall (preflight tipo e riuso
+  della lettura), recupero dopo interruzione, manuali e lavoratori simultanei.
+  Nessun caricamento operativo di prova su Alpha senza consenso separato.
+- Rollback: preservare dati ed evidenze; non lasciare DDT incompleti in esecuzione
+  prima di tornare a codice che non conosce la nuova ripresa. Le protezioni
+  precedenti su manutenzione, spazio, backup, utenti attivi e pulizia restano.
+
+### Metalba 02/11 — DDT multipagina/multicolata, solo sviluppo locale
+
+Intervento locale autorizzato, **non ancora pubblicato su Alpha**. Audit, regole
+e prove nel [verbale Metalba](../tasks/metalba_multicolata_ddt_20261102.md).
+Prima di un futuro deploy verificare l'esito finale del verbale e il commit
+effettivamente approvato. Questa nota non autorizza deploy o bonifiche.
+
+- Distribuire insieme `backend/app/modules/acquisition/service.py` e il nuovo
+  `metalba_packing.py`: non aggiornare soltanto il service, che importa il modulo.
+- Nessuna nuova colonna/migrazione o preparazione DB; non rieseguire i vecchi
+  script di recupero DDT/Word/cache. Non copiare DB, fixture o report locali.
+- Non rimuovere protezioni manuali, non invalidare letture salvate e non
+  rimandare documenti storici all'AI. DDT401 e righe290/295/296 sono già corretti
+  e validati dall'utente: nessun recupero automatico di questo caso su Alpha.
+- Cambiano lettura/ricostruzione packing e discriminazione colata Metalba,
+  non prompt certificati, LST03, regole chimica/meccanica, Word/PDF o eSolver.
+  Conservare i flag correnti e tutte le risk mitigation di questo runbook.
+- Provare il pacchetto sul clone isolato prima del server; nessun caricamento
+  operativo di prova su Alpha senza consenso. Dopo l'avvio verificare import,
+  normali run e assenza di nuove riletture degli storici. Ambiguità vere o
+  quadrature impossibili fermano solo il DDT, senza forzare match o somme.
+- Rollback del solo codice: non cancellare righe nuove, evidenze o manuali;
+  ritornano i limiti della versione precedente, non si annullano i dati salvati.
+
+### Arconic/Metalba 30/10 sera — installata con il pacchetto 10.8
+
+**Aggiornamento operativo:** installata come pacchetto 10.8 il 30/10 sera;
+riapertura, controlli di integrita e primo timer naturale verificati.
+[Verbale corrente 10.8](alpha10_8_preflight_20261030.md). I passi e i vincoli
+seguenti restano la traccia della preparazione, non operazioni da ripetere.
 
 Correzioni autorizzate dopo il collaudo reale di Alpha 10.7; dettaglio e prove
 nel [verbale AI](../tasks/ai_certificate_reuse_20261029.md#correzioni-locali-arconicmetalba-3010-sera).
@@ -406,10 +461,21 @@ nessuna variazione dei valori normalizzati di chimica, proprietà e note.
 Preflight e successivo verbale del passaggio:
 [Alpha 10.4 — Arconic](alpha10_4_preflight_20261024.md).
 
-### Punto di ingresso per i prossimi deploy — aggiornato 28/10/2026
+### Punto di ingresso per i prossimi deploy — aggiornato 30/10/2026
 
-**Alpha 10.6 installata il 28/10; riapertura e primo timer verificati nel verbale.**
-Ultimo pacchetto `v0.1.0-alpha.10.6-deploy`, deploy `322a9f0`,
+**Alpha 10.8 installata il 30/10 sera; riapertura, integrita e primo timer verificati.**
+Pacchetto `v0.1.0-alpha.10.8-deploy`, deploy `8ab26e5`, sorgente
+`f74c29384eb10e5b2ac6bd88555768bc938e6040`, app sempre `0.1.0.alpha.10`.
+[Verbale 10.8](alpha10_8_preflight_20261030.md). Solo codice Arconic/Metalba:
+nessuna migrazione, bonifica, nuova AI, aggiornamento dipendenze o pulizia.
+Preservare backup e immagini di rollback; non ripetere la preparazione AI
+o recuperi DDT/Word gia conclusi. Alpha 10.7 e lo stato di rollback immediato.
+Primo timer 22:09–22:10 italiane: DDT2701 success, Quarta10256 ok. File/export e
+dati protetti invariati; solo normali sync e last_login utente1 documentato.
+Resta il rallentamento Quarta sincrono di circa 29 s gia noto prima del deploy.
+
+**Storico: Alpha 10.6 installata il 28/10; riapertura e primo timer verificati.**
+Pacchetto `v0.1.0-alpha.10.6-deploy`, deploy `322a9f0`,
 `SOURCE_COMMIT=9a2a98e53aed53db6a61224aebf6f6fb444056b0`, app sempre
 `0.1.0.alpha.10`. [Esito e recuperi 28/10](alpha10_6_recovery_20261028.md).
 Non ripetere i quattro metadati né la copia quota 894. Nessuna nuova migrazione.

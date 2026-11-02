@@ -496,3 +496,15 @@ deploy valgono le precauzioni aggiunte al runbook; nessun DB locale va copiato.
 Al termine rimosso il solo container `certi-qa-alloy-rematch-20261030`, con dati
 usa-e-getta in tmpfs e nessun volume persistente. I quattro container dell'app
 locale sono rimasti attivi senza riavvio. Conservati report e fixture QA.
+
+## Pubblicazione Alpha 10.8 del 30/10 sera — completata
+
+Su richiesta esplicita successiva: sorgente f74c2938, pacchetto 10.8/deploy
+8ab26e5, runtime identico salvo i quattro moduli acquisizione. Nessuna migrazione,
+bonifica o rilettura AI; 136 test sulla candidata, restore isolato e verifica
+read-only del clone Alpha riusciti. Riaperta alle 21:54 circa, HTTP e dati/file
+verificati; primo timer naturale DDT2701/Quarta10256 riuscito alle 22:09–22:10.
+219 cache riusabili, protezioni manuali conservate, nessun consumo AI aggiunto.
+Rallentamento Quarta preesistente e login utente1 distinti dalle correzioni,
+con evidenze puntuali. Verbale, backup e limiti:
+[deploy Alpha 10.8](../deploy/alpha10_8_preflight_20261030.md).
