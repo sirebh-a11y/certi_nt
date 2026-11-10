@@ -7,6 +7,39 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Numerazione 10/11 — F3 a sette cifre, solo sviluppo locale
+
+Solo nuove numerazioni: F3 di sette cifre -> segmento lavorazione `00`.
+Vecchi numeri/Word/PDF **invariati**, compresi gli aperti. Nuovi DDT da vecchi
+Word applicano `00` senza azzerare il progressivo; nuove quote di un DDT già
+numerato conservano il numero del gruppo. Altre lavorazioni/altre lunghezze
+mantengono il proprio suffisso. [Audit e collaudo](../tasks/seven_digit_certificate_numbering_20261110.md).
+Nessun deploy Alpha autorizzato da questa nota.
+
+- Pubblicare il pacchetto coerente completo, non il solo `service.py`: nuovo
+  `certificate_numbering.py`, `ddt_shipments.py`, `ddt_word_reuse.py`,
+  `word_reference.py`, `register_presentation.py` e `ddt_queue.py`.
+- **Nessuna migrazione o bonifica DB**, backfill, rinomina/rinumerazione dello
+  storico, rigenerazione massiva o copia del DB locale. Non lanciare vecchi
+  script di recupero per questa modifica. Non disattivare il riuso Word.
+- Sul clone verificare 7 cifre con zero iniziale, altri F3, sorgente vecchia
+  `..._23/26` e copia nuova `..._00_01/26`, quote aggiuntive dello stesso DDT,
+  progressivi già assegnati (anche padding vecchio), generazioni simultanee,
+  Word manuali/varianti e conflitti reali. Nessuna fusione per solo nome/numero.
+- Verificare controllo CERT_NUMBER dentro Word/PDF, nomi standard di download,
+  nome PDF personalizzato, record/versione PDF ed export SQL/JSON eSolver.
+  Seconda pagina/allegati, firme e formato restano intatti. Percorsi interni
+  UUID, ID e URL rimangono distinti dai nomi pubblici; non rinominarli in massa.
+- Confrontare hash di vecchi Word/PDF e numeri aperti/chiusi prima/dopo sul clone.
+  Controllare che il Registro non riproponga la base anticipata come duplicato
+  e che le altre lavorazioni conservino il proprio numero. Verifica dati
+  Alpha correnti prima del deploy; il riscontro 28/10 è solo storico.
+- Rollback: nessun ripristino indiscriminato di DB/storage e nessuna cancellazione
+  di numeri nuovi. Un vecchio pacchetto non conosce l'equivalenza della serie
+  storica/nuova: collaudare su clone i DDT nuovi prima di un downgrade operativo,
+  preferendo correzione in avanti. Restano tutte le cautele generali su spazio,
+  backup/restore, manutenzione, utenti attivi, esclusione Lab e pulizie approvate.
+
 ### DDT 10/11 — riordino etichette e filtri, solo sviluppo locale
 
 Tre contatori Aperti/Completati/Esclusi; Stato con Tutti/PDF da generare/

@@ -59,6 +59,7 @@ from app.modules.quarta_taglio.file_names import (
 )
 from app.modules.quarta_taglio import word_standard, word_reference, ddt_shipments
 from app.modules.quarta_taglio import customer_requirement_filter
+from app.modules.quarta_taglio.certificate_numbering import workmanship_suffix
 from app.modules.quarta_taglio.ddt_context import (
     certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
@@ -2756,12 +2757,7 @@ def _format_certificate_suffix(suffix: int) -> str:
 
 
 def _cod_f3_certificate_suffix(cod_f3: str | None) -> str:
-    digits = re.sub(r"\D", "", _clean_text(cod_f3) or "")
-    if len(digits) >= 2:
-        return digits[-2:]
-    if digits:
-        return digits.zfill(2)
-    return "00"
+    return workmanship_suffix(cod_f3)
 
 
 def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_token: str | None) -> tuple[Path, str]:

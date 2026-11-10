@@ -32,6 +32,7 @@ def sources_for(db, ol, f3):
 
 
 MESSAGES = {
+    'certificate_number_conflict': 'Numerazione del nuovo certificato da verificare. I documenti esistenti restano invariati; contattare il referente interno IT.',
     'reference_file_changed': 'Il Word di riferimento non coincide con la versione registrata: verifica tecnica necessaria. Il documento viene conservato.',
     'source_file_or_controls_invalid': 'Il Word di riferimento o i suoi campi automatici non sono verificabili. Il documento viene conservato.',
     'different_word_sources': 'Sono presenti versioni Word diverse: occorre verificare quale documento completo usare come riferimento.',
@@ -154,11 +155,11 @@ def choose(db, sources):
                 return None, 'source_file_or_controls_invalid'
             if chosen is not None and template != metadata(c).get('template_hash'):
                 return None, 'reference_file_changed'
-            from app.modules.quarta_taglio.ddt_shipments import base_number
+            from app.modules.quarta_taglio.ddt_shipments import series_base_number
             _, comparison = reuse.word_facts(c.storage_key_docx, ignore_number=True, compare_managed_layout=True)
             attachments = [(a.storage_key_pdf, a.original_filename, reuse.file_hash(a.storage_key_pdf))
                            for a in reuse.service._pdf_attachments_for_certificate(db, certificate=c)]
-            fingerprints.add(reuse.digest([base_number(c), comparison, attachments,
+            fingerprints.add(reuse.digest([series_base_number(c), comparison, attachments,
                                           c.conformity_status, c.conformity_issues]))
             candidates.append((c, {}, attachments))
         except (OSError, ValueError, HTTPException, reuse.zipfile.BadZipFile, reuse.etree.XMLSyntaxError):

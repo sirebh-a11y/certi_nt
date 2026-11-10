@@ -15,6 +15,7 @@ from sqlalchemy import inspect, select, text
 
 from app.modules.quarta_taglio.models import QuartaTaglioDdtWorkItem as Item, QuartaTaglioFinalCertificate as Certificate
 from app.modules.quarta_taglio.ddt_decisions import source_revision
+from app.modules.quarta_taglio.certificate_numbering import comparable_base, new_shipment_base
 
 MESSAGE = 'Le righe o il totale del DDT sono cambiati: aggiornare il Word prima di generare il PDF.'
 
@@ -24,6 +25,12 @@ def base_number(certificate):
     number = str(getattr(certificate, 'certificate_number', None) or '')
     # Only the NEW fourth segment is shipment sequence; old OL/F3 segments stay.
     return context.get('base_number') or re.sub(r'^(\d+_\d+_\d+)_\d+(/\d{2})$', r'\1\2', number)
+
+
+def series_base_number(certificate):
+    # Comparison only: retain the literal historic number/context for existing
+    # documents, while recognizing the old/new spelling of the SAME OL/F3.
+    return comparable_base(base_number(certificate), getattr(certificate, 'cod_f3', None))
 
 
 def group_key(item):
@@ -103,15 +110,22 @@ def number_plan(db, item, source, target=None):
         chosen_base = base_number(next((c for c in peers if c.certificate_number == assigned), target) or source)
         suffix = re.fullmatch(re.escape(chosen_base.rsplit('/',1)[0]) + r'_(\d+)/\d{2}', assigned)
         return checked(dict(base_number=chosen_base, sequence=int(suffix[1]) if suffix else 0, number=assigned))
-    related = [c for c in certificates if c.certificate_number and base_number(c) == base]
+    try:
+        base = new_shipment_base(base, item.cod_f3)
+    except ValueError:
+        raise HTTPException(409, 'Numero del Word di riferimento non coerente con il F3 a sette cifre: verifica richiesta.') from None
+    related = [c for c in certificates if c.certificate_number and series_base_number(c) == base]
     used = {c.certificate_number for c in related}
     has_previous = any(c.ddt or c.esolver_id_documento for c in related)
     sequence = 0
     if has_previous:
         sequence = 1
-        prefix, year = base.rsplit('/',1)
+        _, year = base.rsplit('/',1)
         for c in related:
-            match = re.fullmatch(re.escape(prefix) + r'_(\d+)/' + year, c.certificate_number)
+            # Count sequences of both spellings: 23_03 and 00_04 must lead to
+            # 00_05, not restart at 01 or relabel an existing document.
+            own_prefix = base_number(c).rsplit('/', 1)[0]
+            match = re.fullmatch(re.escape(own_prefix) + r'_(\d+)/' + year, c.certificate_number)
             if match:
                 sequence = max(sequence, int(match[1]) + 1)
     number = base if sequence == 0 else base.replace('/', f'_{sequence:02d}/')

@@ -269,19 +269,23 @@ def plan_item(db, item):
     if target and not refreshing and target.cdq_values and not _compatible_materials(target.cdq_values, current_values):
         return stop('target_material_changed')
     if target and target.certificate_number:
-        sources = [c for c in sources if shipments.base_number(c) == shipments.base_number(target)]
+        sources = [c for c in sources if shipments.series_base_number(c) == shipments.series_base_number(target)]
     if not sources:
         return stop('no_compatible_word')
     fingerprints, candidates = set(), []
     for source in sources:
         try:
             controls, template = word_facts(source.storage_key_docx, ignore_number=True, compare_managed_layout=True)
-            allocation = shipments.number_plan(db, item, source, target)
+            try:
+                allocation = shipments.number_plan(db, item, source, target)
+            except HTTPException as exc:
+                result['numbering_message'] = str(exc.detail)
+                return stop('certificate_number_conflict')
             values = shipment_values(item, source, controls, db=db)
             values['CERT_NUMBER'] = allocation['number']
             attachments = service._pdf_attachments_for_certificate(db, certificate=source)
             attachment_facts = [(a.storage_key_pdf, a.original_filename, file_hash(a.storage_key_pdf)) for a in attachments]
-            fingerprints.add(digest([shipments.base_number(source), template, attachment_facts, source.conformity_status,
+            fingerprints.add(digest([shipments.series_base_number(source), template, attachment_facts, source.conformity_status,
                                      source.conformity_issues]))
             candidates.append((source, values, attachment_facts))
         except (OSError, ValueError, HTTPException, zipfile.BadZipFile, etree.XMLSyntaxError):
