@@ -7,6 +7,7 @@ import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { resolveOlCustomerRequirements, hasOlCustomerRequirements } from "../../app/customerRequirements";
 import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
+import CustomerRequirementBadges from "./CustomerRequirementBadges";
 
 const STATUS_CLASSES = {
   green: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -927,17 +928,12 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
                   <td className="min-w-[220px] max-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_cliente || "-"}</div>
-                    {hasOlCustomerRequirements(item, requirementGroups) ? <button type="button"
-                      disabled={!requirementGroups.length}
+                    <CustomerRequirementBadges matches={requirementGroups.map(group => group.match)}
+                      present={hasOlCustomerRequirements(item, requirementGroups)} context={item.cod_odp}
                       onClick={event => {
                         event.stopPropagation();
                         setRequirementsDialog({ item: { cliente: item.esolver_cliente, cod_odp: item.cod_odp }, groups: requirementGroups });
-                      }}
-                      title={requirementGroups.length ? "Consulta i requisiti previsti per gli articoli di questo OL" : "Requisiti presenti: dettagli non disponibili, riprova il caricamento"}
-                      aria-label={`Requisiti cliente per ${item.cod_odp}`}
-                      className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100">
-                      Requisiti cliente
-                    </button> : null}
+                      }} />
                   </td>
                   <td className="min-w-[110px] max-w-[150px] px-2 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_ddt || "-"}</div>

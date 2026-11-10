@@ -18,6 +18,7 @@ const BOOLEAN_COLUMNS = [
   { field: "requires_marking", label: "Marcature (Tracciabilità aggiuntive)" },
   { field: "requires_macro_micro", label: "Macrografie e/o Micrografie" },
   { field: "requires_ndt", label: "Tracciabilità Controllo NDT" },
+  { field: "requires_custom_pdf_name", label: "Nome PDF particolare" },
 ];
 
 const TEXT_FIELDS = ["cod_f3", "cliente", "specific_requirements", "note"];
@@ -38,6 +39,7 @@ const DEFAULT_DRAFT = {
   requires_marking: false,
   requires_macro_micro: false,
   requires_ndt: false,
+  requires_custom_pdf_name: false,
 };
 
 const DEFAULT_TABLE_STATE = {

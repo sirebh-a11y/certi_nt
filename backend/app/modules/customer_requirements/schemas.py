@@ -26,6 +26,7 @@ class CustomerRequirementBase(BaseModel):
     requires_marking: bool = False
     requires_macro_micro: bool = False
     requires_ndt: bool = False
+    requires_custom_pdf_name: bool = False
     specific_requirements: str | None = None
     note: str | None = None
 
@@ -65,6 +66,7 @@ class CustomerRequirementResponse(BaseModel):
     requires_marking: bool
     requires_macro_micro: bool
     requires_ndt: bool
+    requires_custom_pdf_name: bool
     specific_requirements: str | None
     note: str | None
     source_sheet: str | None

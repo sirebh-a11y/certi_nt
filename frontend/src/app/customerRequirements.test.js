@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveCustomerRequirements, resolveOlCustomerRequirements } from "./customerRequirements.js";
+import { customerRequirementBadges, pdfNameRequirement, resolveCustomerRequirements, resolveOlCustomerRequirements } from "./customerRequirements.js";
 
 test("exact CodF3 wins over same-family variants", () => {
   const rows = [{ id: 1, cod_f3: "811000700" }, { id: 2, cod_f3: "811000701" }];
@@ -48,4 +48,42 @@ test("OL family ambiguity and proposed F3 remain visible as warnings", () => {
   assert.equal(groups[0].match.ambiguous, true);
   assert.equal(groups[0].match.item, null);
   assert.equal(groups[0].needs_verification, true);
+});
+
+test("name-only, other requirements, and both have distinct badges, not distinct filters", () => {
+  for (const [profile, general, pdfName] of [
+    [{}, true, false], // Existing blank profiles retain their badge.
+    [{ note: "Seconda pagina" }, true, false],
+    [{ requires_custom_pdf_name: true }, false, true],
+    [{ requires_custom_pdf_name: true, note: "  " }, false, true],
+    [{ requires_custom_pdf_name: true, requires_ndt: true }, true, true],
+    [{ requires_custom_pdf_name: true, specific_requirements: "Allegato" }, true, true],
+    [{ requires_custom_pdf_name: true, note: "Grafico" }, true, true],
+  ]) {
+    const match = resolveCustomerRequirements([{ cod_f3: "096007800", ...profile }], "096007830");
+    assert.deepEqual(customerRequirementBadges([match]), { general, pdfName, ambiguous: false });
+    assert.equal(pdfNameRequirement(match), pdfName ? "required" : "none");
+  }
+});
+
+test("PDF name checks use exact article priority and do not choose ambiguous alternatives", () => {
+  const profiles = [
+    { cod_f3: "096007800", requires_custom_pdf_name: true },
+    { cod_f3: "096007830", requires_marking: true },
+    { cod_f3: "322000100", requires_custom_pdf_name: true, active: false },
+  ];
+  assert.equal(pdfNameRequirement(resolveCustomerRequirements(profiles, "096007830")), "none");
+  assert.equal(pdfNameRequirement(resolveCustomerRequirements(profiles, "096007840")), "ambiguous");
+  for (const code of ["322000100", "96007800", "", null, "999999900"])
+    assert.equal(pdfNameRequirement(resolveCustomerRequirements(profiles, code)), "none");
+});
+
+test("multiple OL articles keep both badge kinds without multiplying DDTs", () => {
+  const profiles = [{ cod_f3: "1142000100", note: "Grafico" }, { cod_f3: "096007800", requires_custom_pdf_name: true }];
+  const groups = resolveOlCustomerRequirements(profiles, [
+    { cod_f3: "1142000100" }, { cod_f3: "096007830" }, { cod_f3: "096007830" },
+  ]);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(customerRequirementBadges(groups.map(group => group.match)), { general: true, pdfName: true, ambiguous: false });
+  assert.deepEqual(customerRequirementBadges([]), { general: false, pdfName: false, ambiguous: false });
 });

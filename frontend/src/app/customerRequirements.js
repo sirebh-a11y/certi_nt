@@ -10,7 +10,26 @@ export const CUSTOMER_REQUIREMENT_FIELDS = [
   { field: "requires_marking", label: "Marcature (Tracciabilita aggiuntive)" },
   { field: "requires_macro_micro", label: "Macrografie e/o Micrografie" },
   { field: "requires_ndt", label: "Tracciabilita Controllo NDT" },
+  { field: "requires_custom_pdf_name", label: "Nome PDF particolare" },
 ];
+
+// A visual distinction only: both kinds remain a single customer requirement
+// for the existing with/without filter. Preserve blank legacy profiles as well.
+export function customerRequirementBadges(matches = []) {
+  const profiles = matches.flatMap(match => match?.candidates || []);
+  return {
+    general: profiles.some(profile => !profile.requires_custom_pdf_name ||
+      CUSTOMER_REQUIREMENT_FIELDS.some(({ field }) => field !== "requires_custom_pdf_name" && profile[field]) ||
+      String(profile.specific_requirements || "").trim() || String(profile.note || "").trim()),
+    pdfName: profiles.some(profile => profile.requires_custom_pdf_name),
+    ambiguous: matches.some(match => match?.ambiguous),
+  };
+}
+
+export function pdfNameRequirement(match) {
+  if (!match?.candidates?.some(profile => profile.requires_custom_pdf_name)) return "none";
+  return match.ambiguous ? "ambiguous" : "required";
+}
 
 function digits(value) {
   return String(value || "").replace(/\D/g, "");

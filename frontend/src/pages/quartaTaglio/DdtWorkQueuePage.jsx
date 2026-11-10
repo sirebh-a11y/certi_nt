@@ -11,6 +11,7 @@ import { ddtDeadline } from "../../app/ddtDeadline";
 import { DDT_WORK_FILTERS, ddtQueueStatus, isClosedQueueScope, updateDdtQueueFilters } from "../../app/ddtQueuePresentation";
 import DdtDecisionDialog from "./DdtDecisionDialog";
 import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
+import CustomerRequirementBadges from "./CustomerRequirementBadges";
 import ConfirmPdfDialog from "./ConfirmPdfDialog";
 
 const DEADLINE_CLASSES = {
@@ -393,12 +394,10 @@ export default function DdtWorkQueuePage() {
                   <td className="min-w-24 whitespace-nowrap px-3 py-3">{item.cod_f3 || "-"}</td>
                   <td className="min-w-36 break-words px-3 py-3">
                     <div>{item.cliente || "-"}</div>
-                    {requirementMatch.candidates.length ? <button type="button"
+                    <CustomerRequirementBadges matches={[requirementMatch]}
+                      context={`${item.cod_odp}, Cod. F3 ${item.cod_f3}, DDT ${item.ddt_raw}`}
                       onClick={() => setRequirementsDialog({ item, match: requirementMatch })}
-                      className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100"
-                      aria-label={`Requisiti cliente per ${item.cod_odp}, Cod. F3 ${item.cod_f3}, DDT ${item.ddt_raw}`}>
-                      Requisiti cliente
-                    </button> : null}
+                    />
                   </td>
                   <td className="whitespace-nowrap px-3 py-3">{formatQuantity(item.quantita)}</td>
                   <td className="min-w-40 break-words px-3 py-3">{item.ordine_cliente || "-"}</td>

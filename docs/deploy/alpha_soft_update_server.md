@@ -7,6 +7,47 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Requisiti 10/11 — nome PDF particolare, solo sviluppo locale
+
+Nuova spunta **Nome PDF particolare** nella scheda Requisiti cliente; tag
+compatto sotto Cliente in Certificazione e DDT da certificare. Solo nome ->
+tag sul nome; altri requisiti -> tag esistente; entrambi -> entrambi i tag.
+**Un solo filtro requisiti, invariato**: Tutte/Con/Senza include anche il solo
+nome PDF. Nessun filtro nuovo e nessuna modifica a contatori/stati/sidebar.
+[Perimetro e verifiche](../tasks/customer_pdf_name_requirement_20261110.md).
+
+- Pubblicare backend/frontend coerenti: modello/schema/servizio Requisiti e
+  bootstrap, helper/componenti frontend e finestra PDF condivisa. Il backend
+  deve completare l'aggiunta della colonna prima di servire il nuovo frontend.
+- In manutenzione e dopo backup verificato, il normale bootstrap aggiunge
+  **solo il nuovo campo** `customer_requirements.requires_custom_pdf_name`,
+  `BOOLEAN NOT NULL DEFAULT FALSE`, se assente. Migrazione ripetibile; nessuna
+  nuova bonifica, attivazione automatica per clienti, importazione dal locale
+  o modifica ai nomi/certificati/Word/PDF storici. Le altre manutenzioni già
+  esistenti del bootstrap restano quelle descritte nel runbook.
+- Prima/dopo confrontare numero schede, codici F3, note e vecchie spunte. Tutti
+  i nuovi flag partono false; se il campo era già presente, conservarne i valori.
+  Non ricreare/ripopolare la tabella e non rieseguire seed per classificare clienti.
+- Verificare che Qualità/IT admin possano salvare la spunta e gli altri ruoli
+  restino in sola lettura. Un vecchio frontend che omette il campo non lo azzera.
+- Provare i tre casi visivi, note sole, scheda storica vuota, più F3, codice
+  esatto/famiglia, inattive/ambigue; il clic sul tag non deve aprire la riga OL.
+  Il filtro requisiti rimane unico, prima di conteggio e paginazione come ora.
+- Aprire Genera PDF sia dai DDT sia dal Registro: la finestra legge i requisiti
+  correnti del F3 effettivo del certificato, mostra il promemoria sopra il nome
+  e conserva un nome già personalizzato. Non impone di cambiarlo o una conferma
+  aggiuntiva. In caso di errore lettura avviso/Riprova, non falsa assenza;
+  attesa iniziale limitata (10 s), poi nessun blocco permanente del lavoro.
+- Download, versione/archivio e `NomeFilePdf` eSolver continuano a usare il nome
+  scelto con il flusso esistente. Nessuna rinomina fisica UUID, modifica del
+  numero interno Word/PDF, nome Word, ereditarietà o generazione di seconde pagine.
+- Rollback applicativo: non eliminare la colonna né ripristinare il DB per
+  questa sola modifica; vecchio codice può ignorare il campo. Conservare i flag
+  già scelti. Rimangono tutte le cautele generali di questo documento.
+
+Nessun deploy Alpha autorizzato da questa nota. Serve la normale verifica del
+server e autorizzazione esplicita; nessun dato del collaudo va copiato su Alpha.
+
 ### Numerazione 10/11 — F3 a sette cifre, solo sviluppo locale
 
 Solo nuove numerazioni: F3 di sette cifre -> segmento lavorazione `00`.

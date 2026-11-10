@@ -112,6 +112,7 @@ def seed_customer_requirements(db: Session) -> None:
                 requires_marking=bool(seed.get("requires_marking")),
                 requires_macro_micro=bool(seed.get("requires_macro_micro")),
                 requires_ndt=bool(seed.get("requires_ndt")),
+                requires_custom_pdf_name=bool(seed.get("requires_custom_pdf_name")),
                 specific_requirements=seed.get("specific_requirements"),
                 note=seed.get("note"),
                 source_sheet=seed.get("source_sheet"),
@@ -147,6 +148,9 @@ def _apply_payload(
     item.requires_marking = payload.requires_marking
     item.requires_macro_micro = payload.requires_macro_micro
     item.requires_ndt = payload.requires_ndt
+    # An older client omitting this new field must not clear a saved requirement.
+    if isinstance(payload, CustomerRequirementCreateRequest) or "requires_custom_pdf_name" in payload.model_fields_set:
+        item.requires_custom_pdf_name = payload.requires_custom_pdf_name
     item.specific_requirements = payload.specific_requirements
     item.note = payload.note
 

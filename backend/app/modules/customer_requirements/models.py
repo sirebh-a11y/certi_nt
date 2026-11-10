@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -25,6 +25,7 @@ class CustomerRequirement(Base):
     requires_marking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     requires_macro_micro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     requires_ndt: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requires_custom_pdf_name: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     specific_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_sheet: Mapped[str | None] = mapped_column(String(128), nullable=True)

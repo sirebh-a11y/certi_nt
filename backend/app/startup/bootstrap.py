@@ -186,6 +186,11 @@ def ensure_customer_requirement_columns() -> None:
         )
     if "specific_requirements" not in columns:
         statements.append("ALTER TABLE customer_requirements ADD COLUMN specific_requirements TEXT")
+    if "requires_custom_pdf_name" not in columns:
+        statements.append(
+            "ALTER TABLE customer_requirements "
+            "ADD COLUMN requires_custom_pdf_name BOOLEAN NOT NULL DEFAULT FALSE"
+        )
 
     with engine.begin() as connection:
         for statement in statements:

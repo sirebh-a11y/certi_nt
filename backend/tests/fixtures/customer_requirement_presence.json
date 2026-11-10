@@ -4,6 +4,8 @@
   {"name":"leading_zero_not_optional","requirements":[{"cod_f3":"096007800"}],"articles":[{"cod_f3":"96007800"}],"expected":false},
   {"name":"inactive","requirements":[{"cod_f3":"322000100","active":false}],"articles":[{"cod_f3":"322000100"}],"expected":false},
   {"name":"notes_only","requirements":[{"cod_f3":"1142000100","note":"Grafico e tabella"}],"articles":[{"cod_f3":"1142000100"}],"expected":true},
+  {"name":"pdf_name_only","requirements":[{"cod_f3":"1142000100","requires_custom_pdf_name":true}],"articles":[{"cod_f3":"1142000100"}],"expected":true},
+  {"name":"pdf_name_family","requirements":[{"cod_f3":"096007800","requires_custom_pdf_name":true}],"articles":[{"cod_f3":"096007830"}],"expected":true},
   {"name":"multiple_articles","requirements":[{"cod_f3":"1142000100"}],"articles":[{"cod_f3":"999999900"},{"cod_f3":"1142000100"},{"cod_f3":"1142000100"}],"expected":true},
   {"name":"ambiguous_family","requirements":[{"cod_f3":"811000700"},{"cod_f3":"811000701"}],"articles":[{"cod_f3":"811000702","needs_verification":true}],"expected":true},
   {"name":"joined_display_not_article","requirements":[{"cod_f3":"1142000100"}],"articles":[{"cod_f3":"1142000100, 096007800"}],"expected":false},

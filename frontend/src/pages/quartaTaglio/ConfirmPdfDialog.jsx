@@ -1,6 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { apiRequest } from "../../app/api";
+import { useAuth } from "../../app/auth";
+import { pdfNameRequirement, resolveCustomerRequirements } from "../../app/customerRequirements";
 
 export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfirm, onClearError }) {
+  const { token } = useAuth();
+  const [requirementState, setRequirementState] = useState({ status: "loading", name: "none" });
+  const [requirementRetry, setRequirementRetry] = useState(0);
+  // Always read current requirements for THIS certificate/F3, including when
+  // opened from the Register (which does not load the list's badge profiles).
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    setRequirementState({ status: "loading", name: "none" });
+    apiRequest("/customer-requirements", { signal: controller.signal }, token).then(data => {
+      if (!Array.isArray(data?.items)) throw new Error("Invalid customer requirements");
+      const match = resolveCustomerRequirements(data.items, item.cod_f3);
+      if (!cancelled) setRequirementState({ status: "ready", name: pdfNameRequirement(match) });
+    }).catch(() => {
+      if (!cancelled) setRequirementState({ status: "error", name: "none" });
+    }).finally(() => clearTimeout(timeout));
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+  }, [token, item.id, item.cod_f3, requirementRetry]);
   const inheritedWord = item.has_word && item.word_source === "inherited";
   const [fileName, setFileName] = useState(item.pdf_file_name || item.default_pdf_file_name || "");
   const trimmedFileName = fileName.trim();
@@ -35,6 +57,17 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
                 l'ufficio qualità.
               </p>
             )}
+            {requirementState.status === "loading" ? <p className="mt-4 text-sm text-slate-600" role="status">Verifica requisiti cliente…</p> : null}
+            {requirementState.status === "error" ? <p role="alert" className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+              Requisiti cliente non disponibili: verifica se è richiesto un nome PDF particolare prima di confermare.{" "}
+              <button type="button" disabled={busy} className="font-semibold underline" onClick={() => setRequirementRetry(value => value + 1)}>Riprova</button>
+            </p> : null}
+            {requirementState.name !== "none" ? <div id="pdf-name-requirement" role="note" className="mt-4 rounded-lg border border-amber-400 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+              <p className="font-bold">Nome PDF particolare</p>
+              <p>{requirementState.name === "ambiguous"
+                ? "Tra le schede alternative per questo Cod. F3 è richiesto un nome PDF particolare. Verifica quale richiesta si applica e controlla il nome prima di generare."
+                : "Questo cliente richiede un nome PDF particolare. Verifica e modifica il nome prima di generare il PDF."}</p>
+            </div> : null}
             <label className="mt-4 block text-sm font-semibold text-slate-800" htmlFor="pdf-file-name">Nome file PDF</label>
             <input
               id="pdf-file-name"
@@ -44,7 +77,7 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
               disabled={busy}
               maxLength={255}
               autoComplete="off"
-              aria-describedby="pdf-file-name-help"
+              aria-describedby={`pdf-file-name-help${requirementState.name !== "none" ? " pdf-name-requirement" : ""}`}
             />
             <p id="pdf-file-name-help" className="mt-2 text-xs leading-5 text-slate-600">
               Puoi adattare il nome alle richieste del cliente. Sarà usato per il download e reso disponibile a eSolver.
@@ -70,7 +103,7 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
           </button>
           <button
             className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            disabled={busy || !trimmedFileName}
+            disabled={busy || !trimmedFileName || requirementState.status === "loading"}
             onClick={() => onConfirm(normalizedFileName)}
             type="button"
           >
