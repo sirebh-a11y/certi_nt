@@ -11,6 +11,7 @@ from pathlib import Path
 
 import fitz
 from PIL import Image
+from lxml import etree
 from docxcompose.composer import Composer
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -43,11 +44,20 @@ FOOTER_SIGNATURE_COLUMN_WIDTH = Inches(1.60)
 FOOTER_HORIZONTAL_CELL_MARGIN = 35
 HEADER_FLOW_COLUMN_WIDTHS = [Inches(2.05), Inches(2.525), Inches(2.525)]
 HEADER_FLOW_ROW_HEIGHT = Twips(355)
+# Order/Drawing's three-line row renders at 27.4 pt including borders. Use
+# the same minimum for Order, DDT and Quantity, also when shipment SDTs are
+# empty. AT_LEAST must remain: a long reference must wrap, never be clipped.
+HEADER_FLOW_DETAIL_ROW_HEIGHT = Twips(538)
 HEADER_FLOW_LINE_SPACING = 205 / 240
 CHEMISTRY_TABLE_WIDTH_INCHES = 7.1
 CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES = 0.70
 PDF_ATTACHMENT_PAGE_MARKER = "CERTI_PDF_ATTACHMENT_PAGE"
 LEGACY_PDF_ATTACHMENT_PREFIX = "Attachment:"
+PDF_ATTACHMENT_TOP_MARGIN = Inches(0.45)
+PDF_ATTACHMENT_BOTTOM_MARGIN = Inches(0.65)
+# Reserve space for the hidden marker and the inline picture's paragraph box,
+# not just the image. Otherwise a maximum-height page can overflow by a line.
+PDF_ATTACHMENT_VERTICAL_RESERVE = Inches(0.20)
 
 PROPERTY_HEADER_LABELS = {
     "HB": "HB",
@@ -609,11 +619,12 @@ def _append_pdf_attachments(
                 continue
             pdf_document = fitz.open(str(pdf_path))
             for page_index, page in enumerate(pdf_document, start=1):
+                start_new_page = attachment_section is not None
                 if attachment_section is None:
                     attachment_section = document.add_section(WD_SECTION.NEW_PAGE)
                     _set_section_a4(attachment_section)
-                    attachment_section.top_margin = Inches(0.45)
-                    attachment_section.bottom_margin = Inches(0.65)
+                    attachment_section.top_margin = PDF_ATTACHMENT_TOP_MARGIN
+                    attachment_section.bottom_margin = PDF_ATTACHMENT_BOTTOM_MARGIN
                     attachment_section.left_margin = Inches(0.45)
                     attachment_section.right_margin = Inches(0.45)
                     attachment_section.header_distance = Inches(0.12)
@@ -623,13 +634,11 @@ def _append_pdf_attachments(
                     attachment_section.footer.is_linked_to_previous = False
                     _clear_header_footer(attachment_section.header)
                     _fill_signature_footer(attachment_section.footer, certified_by=certified_by, quality_manager=quality_manager, include_operator=True)
-                else:
-                    document.add_page_break()
-
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 image_path = tmp_dir / f"{_safe_attachment_name(original_filename)}_{page_index}.png"
                 pixmap.save(image_path)
-                _add_pdf_attachment_page(document, image_path=image_path, section=attachment_section)
+                _add_pdf_attachment_page(document, image_path=image_path, section=attachment_section,
+                                         page_break_before=start_new_page)
             pdf_document.close()
     document.save(str(base_docx_path))
 
@@ -697,11 +706,17 @@ def _strip_app_pdf_attachment_pages(path: Path) -> None:
         document.save(str(path))
 
 
-def _add_pdf_attachment_page(document: Document, *, image_path: Path, section) -> None:
+def _add_pdf_attachment_page(document: Document, *, image_path: Path, section, page_break_before: bool = False) -> None:
     marker = document.add_paragraph()
     marker.paragraph_format.space_before = Pt(0)
     marker.paragraph_format.space_after = Pt(0)
     marker.paragraph_format.line_spacing = Pt(1)
+    marker.paragraph_format.keep_with_next = True
+    if page_break_before:
+        # A separate break paragraph can overflow after a full-page image and
+        # then jump again, creating a blank page. Start the next marker/image
+        # directly on a new page, without an extra paragraph to paginate.
+        marker.paragraph_format.page_break_before = True
     marker_run = marker.add_run(PDF_ATTACHMENT_PAGE_MARKER)
     marker_run.font.hidden = True
     marker_run.font.size = Pt(1)
@@ -714,7 +729,8 @@ def _add_pdf_attachment_page(document: Document, *, image_path: Path, section) -
     usable_width = max(1.0, (int(section.page_width) - int(section.left_margin) - int(section.right_margin)) / 914400)
     usable_height = max(
         1.0,
-        (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)) / 914400 - 0.10,
+        (int(section.page_height) - int(section.top_margin) - int(section.bottom_margin)
+         - int(PDF_ATTACHMENT_VERTICAL_RESERVE)) / 914400,
     )
     aspect_ratio = width_px / height_px
     target_width = usable_width
@@ -844,7 +860,7 @@ def update_docx_content_controls(source_path: Path, output_path: Path, values: d
 
 
 def normalize_certificate_docx_layout(path: Path) -> None:
-    """Apply the exact Word/PDF-safe header values selected in the audit tests."""
+    """Apply verified header geometry and app-owned PDF attachment pagination."""
     _ensure_docx_a4_page_size(path)
     tmp_path = path.with_suffix(f"{path.suffix}.layout.tmp")
     changed = False
@@ -858,6 +874,12 @@ def normalize_certificate_docx_layout(path: Path) -> None:
                     if normalized != xml:
                         content = normalized.encode("utf-8")
                         changed = True
+                elif item.filename == "word/document.xml":
+                    xml = content.decode("utf-8", errors="ignore")
+                    normalized = canonical_app_attachment_breaks(xml)
+                    if normalized != xml:
+                        content = normalized.encode("utf-8")
+                        changed = True
                 target.writestr(item, content)
     except (OSError, zipfile.BadZipFile):
         tmp_path.unlink(missing_ok=True)
@@ -868,6 +890,154 @@ def normalize_certificate_docx_layout(path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def certificate_docx_needs_layout_update(path: Path) -> bool:
+    """Read-only check; callers keep provenance and copy-on-write safeguards.
+
+    Never normalize a stored reference in place merely to inspect it. Closed
+    PDF paths and unverified Word sources are excluded by the service first.
+    """
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                if name == "word/document.xml":
+                    xml = archive.read(name).decode("utf-8", errors="ignore")
+                    if canonical_app_attachment_breaks(xml) != xml:
+                        return True
+                if name.startswith("word/header") and name.endswith(".xml"):
+                    xml = archive.read(name).decode("utf-8", errors="ignore")
+                    if _header_xml_looks_like_certificate(xml) and _normalize_header_flow_xml(xml) != xml:
+                        return True
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return False
+
+
+def canonical_app_attachment_breaks(xml: str) -> str:
+    """Normalize only CERTI's hidden marker + picture page boundaries.
+
+    No removal of blank PDF pages, user paragraphs, images, fields or sections.
+    The same pure function supports legacy/new layout comparisons, while raw
+    hashes continue to enforce file integrity. Callers own copy-on-write.
+    """
+    if PDF_ATTACHMENT_PAGE_MARKER not in xml:
+        return xml
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    try:
+        root = etree.fromstring(xml.encode('utf-8'), parser)
+    except etree.XMLSyntaxError:
+        return xml
+    wrapper = etree.tostring(etree.Element('certi_attachment_check', nsmap=root.nsmap), encoding='unicode')
+    opening = wrapper[:-2] + '>'
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    # Only the default app-managed final attachment section is eligible for
+    # legacy maximum-image fitting. Preserve custom/manual section geometry.
+    final_section = root.find('./w:body/w:sectPr', ns)
+    cap = legacy_cap = None
+    if final_section is not None:
+        margins, page_size = final_section.find('w:pgMar', ns), final_section.find('w:pgSz', ns)
+        if (margins is not None and page_size is not None
+                and margins.get(qn('w:top')) == str(PDF_ATTACHMENT_TOP_MARGIN.twips)
+                and margins.get(qn('w:bottom')) == str(PDF_ATTACHMENT_BOTTOM_MARGIN.twips)):
+            try:
+                available = int(Twips(int(page_size.get(qn('w:h'))))) - int(PDF_ATTACHMENT_TOP_MARGIN) - int(PDF_ATTACHMENT_BOTTOM_MARGIN)
+                cap = available - int(PDF_ATTACHMENT_VERTICAL_RESERVE)
+                legacy_cap = available - int(Inches(0.10))
+            except (TypeError, ValueError):
+                pass
+
+    def parsed(fragment):
+        try:
+            return etree.fromstring((opening + fragment + '</certi_attachment_check>').encode('utf-8'), parser)[0]
+        except (etree.XMLSyntaxError, IndexError):
+            return None
+
+    def is_break(node):
+        if node is None or node.find('./w:pPr/w:sectPr', ns) is not None:
+            return False
+        if any(child.tag not in {qn('w:pPr'), qn('w:r')} for child in node):
+            return False
+        runs = node.findall('./w:r', ns)
+        if any(child.tag not in {qn('w:rPr'), qn('w:br')} for run in runs for child in run):
+            return False
+        breaks = node.findall('./w:r/w:br', ns)
+        return len(breaks) == 1 and breaks[0].get(qn('w:type')) == 'page'
+
+    def marker_properties(fragment, new_page):
+        additions = '<w:keepNext/>'
+        if new_page:
+            additions += '<w:pageBreakBefore/>'
+        properties = re.search(r'<w:pPr\b[^>]*(?:/>|>.*?</w:pPr>)', fragment, re.DOTALL)
+        if properties:
+            block = properties[0]
+            if not block.endswith('/>'):
+                block = re.sub(r'<w:keepNext\b[^>]*/>', '', block)
+                if new_page:
+                    block = re.sub(r'<w:pageBreakBefore\b[^>]*/>', '', block)
+                start = block.index('>') + 1
+                block = block[:start] + additions + block[start:]
+            else:
+                block = block[:-2] + '>' + additions + '</w:pPr>'
+            return fragment[:properties.start()] + block + fragment[properties.end():]
+        return re.sub(r'(<w:p(?:\s[^>]*)?>)', r'\g<1><w:pPr>' + additions + '</w:pPr>', fragment, count=1)
+
+    def fit_legacy_picture(fragment, node):
+        wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+        a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+        extents = node.findall('.//{' + wp + '}extent')
+        transforms = node.findall('.//{' + a + '}xfrm/{' + a + '}ext')
+        if cap is None or len(extents) != 1 or len(transforms) != 1:
+            return fragment
+        extent, transform = extents[0], transforms[0]
+        try:
+            cx, cy = int(extent.get('cx')), int(extent.get('cy'))
+        except (TypeError, ValueError):
+            return fragment
+        if (not cap < cy <= legacy_cap + 635 or cx <= 0
+                or transform.get('cx') != str(cx) or transform.get('cy') != str(cy)
+                or transform.getparent().attrib or node.findall('.//{' + a + '}srcRect')):
+            return fragment
+        width = round(cx * cap / cy)
+        for element in (extent, transform):
+            tag = (element.prefix + ':' if element.prefix else '') + etree.QName(element).localname
+            def resize(match):
+                value = re.sub(r'\bcx="\d+"', f'cx="{width}"', match[0])
+                return re.sub(r'\bcy="\d+"', f'cy="{cap}"', value)
+            fragment = re.sub(r'<' + re.escape(tag) + r'\b[^>]*/>', resize, fragment, count=1)
+        return fragment
+
+    paragraphs = list(re.finditer(r'<w:p(?:\s[^>]*)?>.*?</w:p>', xml, re.DOTALL))
+    edits = []
+    for index, marker in enumerate(paragraphs[:-1]):
+        if PDF_ATTACHMENT_PAGE_MARKER not in marker[0]:
+            continue
+        node = parsed(marker[0])
+        picture = paragraphs[index + 1]
+        image = parsed(picture[0])
+        if (node is None or image is None or xml[marker.end():picture.start()].strip()
+                or ''.join(node.itertext()).strip() != PDF_ATTACHMENT_PAGE_MARKER
+                or node.find('./w:pPr/w:sectPr', ns) is not None
+                or image.find('./w:pPr/w:sectPr', ns) is not None
+                or image.findall('.//w:t', ns)
+                or len(image.findall('.//w:drawing', ns)) != 1):
+            continue
+        hidden = node.find('./w:r/w:rPr/w:vanish', ns)
+        if hidden is None or hidden.get(qn('w:val'), 'true') in {'0', 'false', 'off'}:
+            continue
+        previous = paragraphs[index - 1] if index else None
+        standalone = bool(previous and not xml[previous.end():marker.start()].strip() and is_break(parsed(previous[0])))
+        if standalone:
+            edits.append((previous.start(), previous.end(), ''))
+        normalized = marker_properties(marker[0], standalone)
+        if normalized != marker[0]:
+            edits.append((marker.start(), marker.end(), normalized))
+        normalized_image = fit_legacy_picture(picture[0], image)
+        if normalized_image != picture[0]:
+            edits.append((picture.start(), picture.end(), normalized_image))
+    for start, end, value in sorted(edits, reverse=True):
+        xml = xml[:start] + value + xml[end:]
+    return xml
+
+
 def _ensure_docx_a4_page_size(path: Path) -> None:
     try:
         document = Document(str(path))
@@ -876,7 +1046,9 @@ def _ensure_docx_a4_page_size(path: Path) -> None:
 
     changed = False
     for section in document.sections:
-        if int(section.page_width) != int(A4_PAGE_WIDTH) or int(section.page_height) != int(A4_PAGE_HEIGHT):
+        # DOCX serializes page sizes in integer twips. Comparing the original
+        # millimetre EMUs would re-save an already-A4 Word on every call.
+        if section.page_width.twips != A4_PAGE_WIDTH.twips or section.page_height.twips != A4_PAGE_HEIGHT.twips:
             _set_section_a4(section)
             changed = True
     if changed:
@@ -921,26 +1093,73 @@ def _normalize_logo_xml(xml: str) -> str:
     )
 
 
-def _normalize_header_flow_xml(xml: str) -> str:
+def canonical_header_heights_for_comparison(xml: str) -> str:
+    """Compare the two app-owned height profiles without rewriting any file.
+
+    Raw hashes remain authoritative for integrity/provenance. Do not hide custom
+    heights, exact/clipping rules, missing properties, text or font differences.
+    """
+    return _normalize_header_flow_xml(xml, comparison_only=True)
+
+
+def _normalize_header_flow_xml(xml: str, *, comparison_only: bool = False) -> str:
     if 'w:val="COD_F3_RAW"' not in xml and "Cod. F3 Raw:" not in xml:
         return xml
-    xml = re.sub(
-        r'<w:tblCellMar><w:left w:w="\d+" w:type="dxa"\s*/><w:right w:w="\d+" w:type="dxa"\s*/><w:top w:w="\d+" w:type="dxa"\s*/><w:bottom w:w="\d+" w:type="dxa"\s*/></w:tblCellMar>',
-        '<w:tblCellMar><w:left w:w="26" w:type="dxa"/><w:right w:w="26" w:type="dxa"/><w:top w:w="7" w:type="dxa"/><w:bottom w:w="7" w:type="dxa"/></w:tblCellMar>',
-        xml,
-        count=1,
-    )
-    xml = re.sub(
-        r'<w:trHeight w:val="\d+" w:hRule="atLeast"\s*/>',
-        '<w:trHeight w:val="355" w:hRule="atLeast"/>',
-        xml,
-        count=4,
-    )
-    return re.sub(
-        r'(<w:spacing w:after="0" w:line=")\d+(" w:lineRule="auto"\s*/>)',
-        r'\g<1>205\g<2>',
-        xml,
-    )
+    # Locate semantic rows, not the first four height attributes in a header:
+    # uploaded headers may contain other tables or missing/exact row heights.
+    def normalize_row(match: re.Match[str]) -> str:
+        row = match.group(0)
+        tags = set(re.findall(r'<w:tag\b[^>]*\bw:val=[\"\x27]([^\"\x27]+)[\"\x27]', row))
+        if tags & {"ORDER_CLIENT", "RAW_DESCRIPTION", "FINISHED_DESCRIPTION", "DDT_RAW", "DDT_FINISHED", "QUANTITY_RAW", "QUANTITY_FINISHED"}:
+            height = HEADER_FLOW_DETAIL_ROW_HEIGHT
+        elif tags & {"PURCHASER", "COD_F3_RAW", "COD_F3_FINISHED"}:
+            height = HEADER_FLOW_ROW_HEIGHT
+        elif any(label in row for label in ("Drawing / Description Raw:", "Delivery Note:", "T.D.:", "Quantity:")):
+            height = HEADER_FLOW_DETAIL_ROW_HEIGHT  # Compatible legacy labels.
+        elif "Cod. F3 Raw:" in row:
+            height = HEADER_FLOW_ROW_HEIGHT
+        else:
+            return row
+        if comparison_only:
+            current = re.search(r'<w:trHeight\b[^>]*/>', row)
+            if current is None:
+                return row
+            value_match = re.search(r'\bw:val="(\d+)"', current[0])
+            known_heights = {str(HEADER_FLOW_ROW_HEIGHT.twips)}
+            if height == HEADER_FLOW_DETAIL_ROW_HEIGHT:
+                known_heights.add(str(HEADER_FLOW_DETAIL_ROW_HEIGHT.twips))
+            if (value_match is None or value_match[1] not in known_heights
+                    or 'w:hRule="atLeast"' not in current[0]):
+                return row
+        value = f'<w:trHeight w:val="{height.twips}" w:hRule="atLeast"/>'
+        if re.search(r'<w:trHeight\b[^>]*/>', row):
+            return re.sub(r'<w:trHeight\b[^>]*/>', value, row, count=1)
+        properties = re.search(r'<w:trPr\b[^>]*>', row)
+        if properties is not None:
+            if properties[0].endswith('/>'):
+                replacement = properties[0][:-2] + '>' + value + '</w:trPr>'
+                return row[:properties.start()] + replacement + row[properties.end():]
+            return row[:properties.end()] + value + row[properties.end():]
+        return re.sub(r'(<w:tr(?:\s[^>]*)?>)', r'\g<1><w:trPr>' + value + '</w:trPr>', row, count=1)
+
+    def normalize_table(match: re.Match[str]) -> str:
+        table = match.group(0)
+        if 'w:val="COD_F3_RAW"' not in table and "Cod. F3 Raw:" not in table:
+            return table
+        if comparison_only:
+            return re.sub(r'<w:tr(?:\s[^>]*)?>.*?</w:tr>', normalize_row, table, flags=re.DOTALL)
+        table = re.sub(
+            r'<w:tblCellMar><w:left w:w="\d+" w:type="dxa"\s*/><w:right w:w="\d+" w:type="dxa"\s*/><w:top w:w="\d+" w:type="dxa"\s*/><w:bottom w:w="\d+" w:type="dxa"\s*/></w:tblCellMar>',
+            '<w:tblCellMar><w:left w:w="26" w:type="dxa"/><w:right w:w="26" w:type="dxa"/><w:top w:w="7" w:type="dxa"/><w:bottom w:w="7" w:type="dxa"/></w:tblCellMar>',
+            table, count=1,
+        )
+        table = re.sub(r'<w:tr(?:\s[^>]*)?>.*?</w:tr>', normalize_row, table, flags=re.DOTALL)
+        return re.sub(
+            r'(<w:spacing w:after="0" w:line=")\d+(" w:lineRule="auto"\s*/>)',
+            r'\g<1>205\g<2>', table,
+        )
+
+    return re.sub(r'<w:tbl(?:\s[^>]*)?>.*?</w:tbl>', normalize_table, xml, flags=re.DOTALL)
 
 
 def _replace_content_control_text(xml: str, tag: str, value: str) -> tuple[str, bool]:
@@ -1156,9 +1375,9 @@ def _add_certificate_header_flow_table(container, certificate_header: dict[str, 
             ("Quantity:", "Quantità:", certificate_header.get("quantita_finished"), "QUANTITY_FINISHED", True),
         ),
     ]
-    for cells_data in rows:
+    for index, cells_data in enumerate(rows):
         row = table.add_row()
-        row.height = HEADER_FLOW_ROW_HEIGHT
+        row.height = HEADER_FLOW_ROW_HEIGHT if index == 0 else HEADER_FLOW_DETAIL_ROW_HEIGHT
         row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
         cells = row.cells
         for cell, cell_data in zip(cells, cells_data):

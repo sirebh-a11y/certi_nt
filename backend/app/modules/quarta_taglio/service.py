@@ -35,6 +35,7 @@ from app.modules.quarta_taglio.certificate_docx import (
     append_pdf_attachments_to_docx,
     build_additional_page_template_docx,
     build_forgialluminio_draft_docx,
+    certificate_docx_needs_layout_update,
     inspect_docx_content_controls,
     prepare_manual_docx_base,
     normalize_certificate_docx_layout,
@@ -2954,7 +2955,8 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
                 db=db if certificate.shipment_context else None)
         except (OSError, ValueError, zipfile.BadZipFile):
             raise HTTPException(status_code=409, detail="Campi del Word riutilizzato non verificabili") from None
-        if any(controls.get(key) != str(value) for key, value in values.items()):
+        fields_changed = any(controls.get(key) != str(value) for key, value in values.items())
+        if fields_changed or certificate_docx_needs_layout_update(path):
             # A changed sibling share changes only the total, not the technical
             # Word. Refresh tracked automatic copies, never a manual edit.
             from app.modules.quarta_taglio.ddt_word_reuse import file_hash
@@ -2962,7 +2964,7 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
             # An explicit attachment edit promotes this document to a reference
             # without erasing its ddt_reused origin. Both roles may refresh ONLY
             # verified shipment controls; reference integrity was checked above.
-            if (not certificate.shipment_context or metadata.get('kind') not in {'copy', 'reference'}
+            if fields_changed and (not certificate.shipment_context or metadata.get('kind') not in {'copy', 'reference'}
                     or (metadata.get('kind') == 'copy'
                         and metadata.get('file_hash') != file_hash(certificate.storage_key_docx))):
                 raise HTTPException(status_code=409, detail="Dati DDT diversi dal Word predisposto: verifica richiesta")
@@ -3013,8 +3015,8 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
             raise HTTPException(409, 'Campi numero/quantità DDT mancanti: ripristinarli nel Word e ricaricarlo.')
     values = _word_content_control_values(detail, certificate)
     output_path = path
-    if _docx_needs_content_control_update(path, values):
-        # Copy-on-write only when a field really changed. Repeated downloads
+    if _docx_needs_content_control_update(path, values) or certificate_docx_needs_layout_update(path):
+        # Copy-on-write only when fields or managed header geometry changed. Repeated downloads
         # must not grow storage or cancel a simultaneous PDF for a no-op.
         storage_key = _certificate_docx_storage_key(certificate.cod_odp)
         output_path = _certificate_storage_path(storage_key)

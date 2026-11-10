@@ -155,7 +155,7 @@ def choose(db, sources):
             if chosen is not None and template != metadata(c).get('template_hash'):
                 return None, 'reference_file_changed'
             from app.modules.quarta_taglio.ddt_shipments import base_number
-            _, comparison = reuse.word_facts(c.storage_key_docx, ignore_number=True)
+            _, comparison = reuse.word_facts(c.storage_key_docx, ignore_number=True, compare_managed_layout=True)
             attachments = [(a.storage_key_pdf, a.original_filename, reuse.file_hash(a.storage_key_pdf))
                            for a in reuse.service._pdf_attachments_for_certificate(db, certificate=c)]
             fingerprints.add(reuse.digest([base_number(c), comparison, attachments,

@@ -102,12 +102,12 @@ def _action(db, request):
         latest = refs.declared(refs.sources_for(db, c.cod_odp, c.cod_f3))
         if latest is None or latest.id != c.id or refs.material_changed(db, c) or word_standard.is_stale(c, db, for_reuse=True):
             raise ValueError('reference_not_current')
-        technical = reuse.word_facts(c.storage_key_docx, ignore_number=True)[1]
+        technical = reuse.word_facts(c.storage_key_docx, ignore_number=True, compare_managed_layout=True)[1]
         for copy in refs.sources_for(db, c.cod_odp, c.cod_f3):
             meta = refs.metadata(copy)
             if (meta.get('kind') == 'copy' and meta.get('source_id') == c.id
                     and meta.get('revision') == before['revision'] and copy.status != 'pdf_final'
-                    and reuse.word_facts(copy.storage_key_docx, ignore_number=True)[1] != technical):
+                    and reuse.word_facts(copy.storage_key_docx, ignore_number=True, compare_managed_layout=True)[1] != technical):
                 raise ValueError('open_descendant_content_requires_review')
         after['template_hash'] = template
     else:

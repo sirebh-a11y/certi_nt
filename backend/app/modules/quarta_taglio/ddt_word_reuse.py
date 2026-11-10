@@ -19,7 +19,9 @@ from app.core.database import SessionLocal
 from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio import word_standard, word_reference
 from app.modules.quarta_taglio import ddt_shipments as shipments
-from app.modules.quarta_taglio.certificate_docx import update_docx_content_controls
+from app.modules.quarta_taglio.certificate_docx import (
+    update_docx_content_controls, canonical_header_heights_for_comparison, canonical_app_attachment_breaks,
+)
 from app.modules.quarta_taglio.ddt_context import exact_certificate, quantity_matches
 from app.modules.quarta_taglio.ddt_decisions import exclusion_valid, latest_decisions
 from app.modules.quarta_taglio.models import (
@@ -46,13 +48,21 @@ def file_hash(key):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def word_facts(key, *, ignore_number=False):
-    """Compare templates ignoring only shipment values, not manual/technical text."""
+def word_facts(key, *, ignore_number=False, compare_managed_layout=False):
+    """Keep raw layout by default; source equivalence may canonicalize app layout.
+
+    Shipment values are ignored, never manual/technical text or image content.
+    Integrity/provenance callers do not opt into managed-layout comparison.
+    """
     controls = {}
     hashes = []
     with zipfile.ZipFile(service._certificate_storage_path(key)) as archive:
         for name in sorted(archive.namelist()):
             data = archive.read(name)
+            if compare_managed_layout and name.startswith('word/header') and name.endswith('.xml'):
+                data = canonical_header_heights_for_comparison(data.decode('utf-8')).encode('utf-8')
+            elif compare_managed_layout and name == 'word/document.xml':
+                data = canonical_app_attachment_breaks(data.decode('utf-8')).encode('utf-8')
             if name.startswith('word/') and name.endswith('.xml'):
                 root = etree.fromstring(data, parser=etree.XMLParser(resolve_entities=False, no_network=True))
                 for node in root.xpath('//w:sdt', namespaces=NS):
@@ -265,7 +275,7 @@ def plan_item(db, item):
     fingerprints, candidates = set(), []
     for source in sources:
         try:
-            controls, template = word_facts(source.storage_key_docx, ignore_number=True)
+            controls, template = word_facts(source.storage_key_docx, ignore_number=True, compare_managed_layout=True)
             allocation = shipments.number_plan(db, item, source, target)
             values = shipment_values(item, source, controls, db=db)
             values['CERT_NUMBER'] = allocation['number']

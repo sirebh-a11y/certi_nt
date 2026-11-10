@@ -7,9 +7,45 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
-### Altri fornitori 02/11 — protezioni DDT, solo sviluppo locale
+### Word 10/11 — altezza DDT/Quantity, solo sviluppo locale
 
-Estensione locale autorizzata dopo l'audit Metalba; **non distribuita su Alpha**.
+Intervento locale e commit/push autorizzati; deploy da autorizzare a parte.
+[Perimetro, misure, prove e ricadute](../tasks/certificate_header_row_height_20261110.md).
+
+- Distribuire insieme i cinque moduli `quarta_taglio/certificate_docx.py`,
+  `service.py`, `ddt_word_reuse.py`, `word_reference.py` e
+  `word_lifecycle_recovery.py`; non fare overlay del solo generatore.
+- Il motore di ripristino rimane attivo: Order/Drawing, DDT e Quantity usano
+  la stessa altezza standard maggiore. Font/colori/larghezze, dati spedizione,
+  numerazione e nomi file non cambiano. Il modello seconda pagina non riceve
+  campi duplicati: l'intestazione e aggiunta dal generatore alla composizione.
+- **Nessuna migrazione o bonifica DB**, nessuna riscrittura massiva dei Word
+  e nessuna rigenerazione PDF chiusi. Non lanciare vecchi script di recupero
+  per questo intervento. Non copiare file di collaudo o DB locale su Alpha.
+- Sul clone provare anche una fonte chiusa con vecchie misure e due DDT
+  successivi: differenze fra i soli profili altezza app non devono causare
+  falsi conflitti; gli hash d'integrita reali restano rigorosi. I Word aperti
+  validi vengono adeguati con copia tracciata una sola volta al normale
+  download/preparazione PDF, anche senza variazioni nei dati DDT.
+- Verificare Word/PDF multipagina, modello seconda pagina, allegati e firme.
+  Dopo il primo audit l'utente ha autorizzato anche la correzione della pagina
+  vuota fra allegati: salto sul marcatore del prossimo allegato e margine
+  verticale sufficiente per l'immagine. I Word aperti validi vengono adeguati
+  con la normale copia tracciata, preservando contenuti e pixel; i PDF chiusi
+  non si riscrivono. Non e una cancellazione di pagine bianche dai PDF: pagine
+  originali, testo manuale, immagini e firme devono essere conservati. Sul
+  clone includere due allegati, PDF molto alto/ruotato e riuso di una fonte
+  storica chiusa con i vecchi separatori. Nessuna bonifica massiva dello storico.
+- Rollback del solo codice: preservare file, copie tracciate e metadati; il
+  motore precedente torna alle vecchie misure nelle operazioni successive.
+  Tutte le cautele sotto su spazio, backup/restore, attivita utenti e pulizia
+  preventiva da concordare restano obbligatorie e non sono sostituite qui.
+
+### Altri fornitori 02/11 — protezioni DDT, installate con Alpha 10.9
+
+Estensione autorizzata dopo l'audit Metalba, installata e riaperta il 02/11 con
+il pacchetto 10.9. Postcheck e primo timer naturale verificati positivamente.
+[Verbale operativo corrente](alpha10_9_preflight_20261102.md).
 [Audit, perimetro e prove](../tasks/ddt_supplier_safety_20261102.md). Questa nota
 non autorizza il deploy o correzioni di dati storici.
 
@@ -33,9 +69,9 @@ non autorizza il deploy o correzioni di dati storici.
   prima di tornare a codice che non conosce la nuova ripresa. Le protezioni
   precedenti su manutenzione, spazio, backup, utenti attivi e pulizia restano.
 
-### Metalba 02/11 — DDT multipagina/multicolata, solo sviluppo locale
+### Metalba 02/11 — DDT multipagina/multicolata, installata con Alpha 10.9
 
-Intervento locale autorizzato, **non ancora pubblicato su Alpha**. Audit, regole
+Intervento autorizzato, pubblicato con il pacchetto 10.9 il 02/11. Audit, regole
 e prove nel [verbale Metalba](../tasks/metalba_multicolata_ddt_20261102.md).
 Prima di un futuro deploy verificare l'esito finale del verbale e il commit
 effettivamente approvato. Questa nota non autorizza deploy o bonifiche.
@@ -461,15 +497,35 @@ nessuna variazione dei valori normalizzati di chimica, proprietà e note.
 Preflight e successivo verbale del passaggio:
 [Alpha 10.4 — Arconic](alpha10_4_preflight_20261024.md).
 
-### Punto di ingresso per i prossimi deploy — aggiornato 30/10/2026
+### Punto di ingresso per i prossimi deploy — aggiornato 02/11/2026
 
-**Alpha 10.8 installata il 30/10 sera; riapertura, integrita e primo timer verificati.**
+**Alpha 10.9 installata e riaperta il 02/11; integrita e primo timer verificati.**
+Pacchetto `v0.1.0-alpha.10.9-deploy`, deploy `b628288`, sorgente
+`7485ff6e2480cfb21a0d7cdf5e1388a79d51eac1`, app sempre `0.1.0.alpha.10`.
+[Verbale 10.9](alpha10_9_preflight_20261102.md). Cinque moduli backend; frontend,
+dipendenze e configurazione invariati. Nessuna migrazione, bonifica o pulizia.
+Backup e restore isolato verificati; prima di riaprire tutte le46 tabelle,
+4.526 file storage ed export identici. Riuso227 letture, sette manuali protetti,
+13 registrazioni consumo AI preesistenti invariate. Non azzerarle o rileggerle.
+Per i prossimi postcheck rilevare conteggi dalla nuova baseline: una cache
+valida può avere fonte `legacy_evidence` oppure `ai`. Contare ogni lettura
+persistita effettivamente riutilizzabile, non soltanto le storiche; non imporre
+219/227 letture o zero consumi a un database su cui gli utenti hanno lavorato.
+Rollback immediato: codice/runtime10.8, con backup della manutenzione
+`20261102_194500`; preservare nuove evidenze e verificare eventuali DDT parziali
+prima di un downgrade. Copie PC e server conservate, nessuna pulizia implicita.
+Primo timer naturale20:13–20:14 italiane: DDT2968 success, Quarta10535 ok,
+nessuna sincronizzazione manuale. File/export e dati protetti invariati;
+solo le cinque normali tabelle job cambiate. Quarta circa28,55 secondi contro
+28,51 prima del deploy: rallentamento preesistente conservato nel verbale.
+
+**Storico: Alpha 10.8 installata il 30/10 sera; riapertura, integrita e primo timer verificati.**
 Pacchetto `v0.1.0-alpha.10.8-deploy`, deploy `8ab26e5`, sorgente
 `f74c29384eb10e5b2ac6bd88555768bc938e6040`, app sempre `0.1.0.alpha.10`.
 [Verbale 10.8](alpha10_8_preflight_20261030.md). Solo codice Arconic/Metalba:
 nessuna migrazione, bonifica, nuova AI, aggiornamento dipendenze o pulizia.
 Preservare backup e immagini di rollback; non ripetere la preparazione AI
-o recuperi DDT/Word gia conclusi. Alpha 10.7 e lo stato di rollback immediato.
+o recuperi DDT/Word gia conclusi. Alpha 10.7 era lo stato di rollback di quel deploy.
 Primo timer 22:09–22:10 italiane: DDT2701 success, Quarta10256 ok. File/export e
 dati protetti invariati; solo normali sync e last_login utente1 documentato.
 Resta il rallentamento Quarta sincrono di circa 29 s gia noto prima del deploy.
