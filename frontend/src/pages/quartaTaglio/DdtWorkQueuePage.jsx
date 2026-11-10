@@ -8,6 +8,7 @@ import { resolveCustomerRequirements } from "../../app/customerRequirements";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
 import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
 import { ddtDeadline } from "../../app/ddtDeadline";
+import { DDT_WORK_FILTERS, ddtQueueStatus, isClosedQueueScope, updateDdtQueueFilters } from "../../app/ddtQueuePresentation";
 import DdtDecisionDialog from "./DdtDecisionDialog";
 import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
 import ConfirmPdfDialog from "./ConfirmPdfDialog";
@@ -19,19 +20,6 @@ const DEADLINE_CLASSES = {
   today: "border-orange-200 bg-orange-50 text-orange-800",
   overdue: "border-rose-300 bg-rose-100 text-rose-900",
 };
-
-const STATE_OPTIONS = [
-  ["", "Tutti gli stati"],
-  ["ready", "Pronti lato Incoming"],
-  ["word_ready", "Word pronto"],
-  ["waiting_incoming", "In attesa Incoming"],
-  ["quality_rejected", "Qualità respinta"],
-  ["to_link", "Da collegare"],
-  ["review", "Da verificare"],
-  ["completed", "Completati"],
-  ["excluded", "Esclusi"],
-  ["archived", "Archiviati per avvio"],
-];
 
 const STATE_CLASSES = {
   ready: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -173,13 +161,7 @@ export default function DdtWorkQueuePage() {
   }
 
   const updateDraft = useCallback((field, value) => {
-    setDraftFilters((current) => {
-      const next = { ...current, [field]: value };
-      if (field === "state" && ["completed", "excluded", "archived"].includes(value)) next.scope = value;
-      if (field === "state" && value && !["completed", "excluded", "archived"].includes(value) && ["completed", "excluded", "archived"].includes(current.scope)) next.scope = "active";
-      if (field === "scope") next.state = "";
-      return next;
-    });
+    setDraftFilters((current) => updateDdtQueueFilters(current, field, value));
   }, []);
 
   function applyFilters(event) {
@@ -206,6 +188,9 @@ export default function DdtWorkQueuePage() {
     apiRequest(`/quarta-taglio/ddt-work-items?${filterParams(filters, offset)}`, {}, token)
       .then((result) => {
         if (cancelled) return;
+        if (!Array.isArray(result?.items) || !Number.isInteger(result.total_items) || result.total_items < 0) {
+          throw new Error("Risposta DDT non valida. Premi Aggiorna vista per riprovare.");
+        }
         if (offset > 0 && offset >= result.total_items) {
           setOffset(Math.max(0, Math.ceil(result.total_items / Number(filters.limit)) - 1) * Number(filters.limit));
           return;
@@ -226,7 +211,10 @@ export default function DdtWorkQueuePage() {
       })
       .catch((requestError) => {
         if (!cancelled) {
-          setError(requestError.message || "Impossibile caricare i DDT.");
+          setData(null); // Do not show old rows under a different, failed filter.
+          setError(requestError.status === 422 && ["pdf_ready", "anomalies"].includes(filters.state)
+            ? "Filtro non disponibile. Seleziona Tutti e riprova; se il problema persiste contatta il referente interno IT."
+            : requestError.message || "Impossibile caricare i DDT. Premi Aggiorna vista per riprovare.");
           setRecovery((current) => current?.phase === "refreshing" ? { ...current, phase: "error" } : current);
         }
       })
@@ -293,15 +281,11 @@ export default function DdtWorkQueuePage() {
       </div>
 
       <div className="flex flex-wrap gap-2" aria-label="Contatori DDT">
-        <StatusCard label="Attivi" value={data?.active} />
-        <StatusCard label="Pronti Incoming" value={(data?.by_state?.ready || 0) + (data?.by_state?.word_ready || 0)} tone="green" />
-        <StatusCard label="In attesa Incoming" value={data?.by_state?.waiting_incoming} tone="amber" />
-        <StatusCard label="Da collegare" value={data?.by_state?.to_link} tone="amber" />
-        <StatusCard label="Da verificare" value={(data?.by_state?.review || 0) + (data?.by_state?.quality_rejected || 0)} tone="rose" />
-        <StatusCard label="Completati" value={data?.by_state?.completed} />
+        <StatusCard label="Aperti" value={data?.active} />
+        <StatusCard label="Completati" value={data?.by_state?.completed} tone="green" />
         <StatusCard label="Esclusi" value={data?.by_state?.excluded} />
       </div>
-      <p className="text-xs text-slate-500">I contatori seguono la ricerca e la presenza eSolver; vista, stato e pagina non li restringono.</p>
+      <p className="text-xs text-slate-500">Conteggi delle righe nella ricerca: non cambiano scegliendo Vista, Stato o pagina. L'archivio pre-avvio è separato.</p>
 
       <div role={syncAlert ? "alert" : recovery ? "status" : undefined} className={`rounded-xl border px-4 py-3 text-sm ${syncFailed ? "border-rose-200 bg-rose-50 text-rose-800" : syncStale || neverSucceeded ? "border-amber-200 bg-amber-50 text-amber-800" : recovery ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700"}`}>
         <span>Ultima lettura eSolver riuscita: <strong>{formatTimestamp(lastSuccess?.finished_at)}</strong>.</span>
@@ -316,7 +300,7 @@ export default function DdtWorkQueuePage() {
       {requirementsError ? <p role="alert" className="text-sm text-amber-800">Requisiti cliente non disponibili: premi Aggiorna vista per verificarli.</p> : null}
       {pdfNotice ? <p role="status" className="text-sm font-semibold text-emerald-800">{pdfNotice}</p> : null}
       <form className="rounded-xl border border-slate-200 bg-white p-4" onSubmit={applyFilters}>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(210px,1.2fr)_repeat(3,minmax(0,1fr))] xl:grid-cols-[minmax(210px,1.2fr)_repeat(5,minmax(0,1fr))]">
           {[
             ["query", "Ricerca generale"], ["ddt", "DDT"], ["cod_odp", "OL"],
             ["cod_f3", "Cod. F3"], ["cliente", "Cliente"],
@@ -329,13 +313,15 @@ export default function DdtWorkQueuePage() {
           ))}
           <label className="block text-xs font-semibold text-slate-600">Vista
             <select value={draftFilters.scope} onChange={(event) => updateDraft("scope", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
-              <option value="active">Attivi</option><option value="completed">Completati</option><option value="excluded">Esclusi</option><option value="all">Tutti</option>
-              <option value="archived">Archiviati per avvio</option>
+              <option value="active">Aperti</option><option value="completed">Completati</option><option value="excluded">Esclusi</option><option value="all">Tutti</option>
+              <option value="archived">Archivio pre-avvio</option>
             </select>
           </label>
           <label className="block text-xs font-semibold text-slate-600">Stato
-            <select value={draftFilters.state} onChange={(event) => updateDraft("state", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
-              {STATE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            <select value={draftFilters.state} disabled={isClosedQueueScope(draftFilters.scope)}
+              title={isClosedQueueScope(draftFilters.scope) ? "Filtra il lavoro nella vista Aperti o Tutti" : undefined}
+              onChange={(event) => updateDraft("state", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal disabled:bg-slate-50 disabled:text-slate-500">
+              {DDT_WORK_FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           <label className="block text-xs font-semibold text-slate-600">Data DDT da
@@ -389,6 +375,7 @@ export default function DdtWorkQueuePage() {
               const certificationPath = ddtCertificationPath(item);
               const linkedPath = incomingPath(item, returnTo);
               const deadline = ddtDeadline(item, clock);
+              const displayStatus = ddtQueueStatus(item);
               const requirementMatch = resolveCustomerRequirements(requirements, item.cod_odp ? item.cod_f3 : null);
               return (
                 <tr key={item.id} className="align-top hover:bg-slate-50/70">
@@ -424,7 +411,7 @@ export default function DdtWorkQueuePage() {
                       className="inline-block rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50"
                       aria-label={`Genera PDF per ${item.cod_odp}, DDT ${item.ddt_raw}, Cod. F3 ${item.cod_f3}`}>
                       Genera PDF
-                    </button> : <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[item.state] || STATE_CLASSES.review}`}>{item.label}</span>}
+                    </button> : <span className={`inline-block rounded-md border px-2 py-1 text-xs font-semibold ${STATE_CLASSES[displayStatus.tone] || STATE_CLASSES.review}`}>{displayStatus.label}</span>}
                     {item.latest_decision ? <div className="mt-2 max-w-xs text-xs text-slate-600">
                       <p className="line-clamp-3 whitespace-pre-wrap break-words" title={item.latest_decision.reason}>{item.latest_decision.reason}</p>
                       <p className="mt-1">{item.latest_decision.actor_name} · {formatTimestamp(item.latest_decision.created_at)}</p>
@@ -452,7 +439,11 @@ export default function DdtWorkQueuePage() {
                 </tr>
               );
             })}
-            {!loading && !error && data?.items?.length === 0 ? <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-600">Nessun DDT per i filtri selezionati.</td></tr> : null}
+            {!loading && !error && data?.items?.length === 0 ? <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-600">
+              {filters.state === "pdf_ready" ? "Nessun PDF da generare con questi filtri. Scegli Stato → Tutti per cercare anche le altre righe."
+                : filters.state === "anomalies" ? "Nessuna anomalia per i filtri selezionati."
+                  : "Nessun DDT per i filtri selezionati."}
+            </td></tr> : null}
             {loading ? <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-600">Caricamento DDT...</td></tr> : null}
           </tbody>
         </table>

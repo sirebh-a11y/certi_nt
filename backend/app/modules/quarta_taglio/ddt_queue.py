@@ -30,8 +30,8 @@ from app.modules.quarta_taglio.models import (
 
 LABELS = {
     "completed": "Completato", "to_link": "Da collegare",
-    "quality_rejected": "Qualità respinta", "waiting_incoming": "In attesa Incoming",
-    "word_ready": "Word pronto - completare PDF", "ready": "Pronto lato Incoming",
+    "quality_rejected": "Qualità respinta", "waiting_incoming": "Incoming da completare",
+    "word_ready": "Word presente", "ready": "Da certificare",
     "review": "Verifica richiesta", "excluded": "Non richiede certificazione",
     "archived": "Archiviato per avvio",
 }
@@ -41,6 +41,38 @@ SORT_FIELDS = {
     "ordine_cliente", "conferma_ordine", "incoming", "certificazione",
     "state", "last_seen_at",
 }
+
+
+def _matches_state_filter(item, selection):
+    if selection == "pdf_ready":
+        return item.state == "word_ready" and item.pdf_action is not None
+    if selection == "anomalies":
+        if item.state in {"completed", "excluded", "archived"}:
+            return False
+        return not item.ddt_date or item.state in {"review", "quality_rejected", "to_link"} or (
+            item.state == "word_ready" and item.pdf_action is None
+        )
+    return selection is None or item.state == selection
+
+
+def _word_pdf_unavailable_reason(item, certificate):
+    """Explain a present Word without promising a PDF or changing its lifecycle."""
+    if certificate is None:
+        return "Apri Certificazione per verificare il documento di questa riga DDT."
+    conformity = service._certificate_conformity_status(certificate)
+    if conformity == "non_conforme":
+        return "Word non conforme: apri Certificazione per verificare e gestire la non conformità."
+    if conformity != "conforme":
+        return "Conformità da verificare in Certificazione prima di generare il PDF."
+    if not _quantity_matches(item, certificate):
+        return "Quantità diversa da quella del Word: apri Certificazione per verificare i dati della spedizione."
+    if not item.ddt_date:
+        return "Data DDT mancante o non leggibile: verifica i dati della spedizione."
+    if not certificate.certificate_number or not certificate.cert_date:
+        return "Numero o data del certificato mancanti: apri Certificazione per completarli."
+    if certificate.storage_key_pdf:
+        return "È presente un PDF precedente: verifica lo stato del documento in Certificazione."
+    return "Apri Certificazione per verificare i dati prima di generare il PDF."
 
 
 def _clean(value):
@@ -301,6 +333,20 @@ def _project(db, items):
                 row.reasons = [archive_event.reason]
             elif archive_event.action in {'archive', 'review'}:
                 row.reasons.insert(0, ARCHIVE_REVIEW)
+        # Presentation only, after every exclusion/archive/integrity check.
+        # A file existing is NOT equivalent to being allowed to generate its PDF.
+        if row.state not in {'completed', 'excluded', 'archived'} and not item.ddt_date:
+            explanation = 'Data DDT mancante o non leggibile: verifica i dati della spedizione.'
+            if explanation not in row.reasons:
+                row.reasons.append(explanation)
+            if row.state == 'ready':
+                row.label = 'Data DDT da verificare'
+        if row.state == 'word_ready':
+            row.label = 'PDF da generare' if row.pdf_action else 'Word da verificare'
+            if not row.pdf_action:
+                explanation = _word_pdf_unavailable_reason(item, exact_doc)
+                if explanation not in row.reasons:
+                    row.reasons.append(explanation)
         result.append(row)
     return result
 
@@ -344,7 +390,7 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
                    date_to: date | None = None, source_present=None,
                    limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
-    if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS):
+    if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS and state not in {"pdf_ready", "anomalies"}):
         raise HTTPException(status_code=422, detail="Filtro stato non valido")
     if limit < 1 or limit > 200 or offset < 0 or sort_field not in SORT_FIELDS or sort_direction not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
@@ -377,7 +423,7 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
             return DdtQueueCountersResponse(**counters)
         selected = [item for item in projected if (scope == "all" or item.state == scope
                     or (scope == "active" and item.state not in {"completed", "excluded", "archived"}))
-                    and (state is None or item.state == state)]
+                    and _matches_state_filter(item, state)]
         # Sort the whole filtered population before pagination; missing values stay last.
         present = sorted((item for item in selected if _sort_value(item, sort_field) is not None),
                          key=lambda item: (_sort_value(item, sort_field), item.id),

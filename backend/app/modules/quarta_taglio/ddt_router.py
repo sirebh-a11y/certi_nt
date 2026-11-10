@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.deps import CurrentUser, DbSession, user_is_in_department
 from app.modules.quarta_taglio.ddt_queue import read_ddt_queue, read_ddt_sync
-from app.modules.quarta_taglio.ddt_schemas import DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse, DdtScope, DdtState
+from app.modules.quarta_taglio.ddt_schemas import DdtQueueCountersResponse, DdtQueueResponse, DdtQueueSyncResponse, DdtScope, DdtStateFilter
 from app.modules.quarta_taglio.ddt_schemas import DdtDecisionRequest, DdtDecisionResponse
 from app.modules.quarta_taglio.ddt_decisions import change_decision
 from app.modules.quarta_taglio.models import QuartaTaglioDdtDecision, QuartaTaglioDdtWorkItem
@@ -41,7 +41,7 @@ def list_ddt_work_items(
     db: DbSession,
     filters: Annotated[dict, Depends(source_filters)],
     scope: DdtScope = "active",
-    state: DdtState | None = None,
+    state: DdtStateFilter | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     sort_field: Literal["ddt_date", "ddt_raw", "cod_odp", "cod_f3", "cliente", "quantita",

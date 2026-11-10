@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 DdtState = Literal["completed", "excluded", "archived", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
+# Public work filters do not replace the internal lifecycle states. Keep old
+# state queries valid for existing clients, including the sidebar counters.
+DdtStateFilter = DdtState | Literal["pdf_ready", "anomalies"]
 DdtScope = Literal["active", "completed", "excluded", "archived", "all"]
 
 

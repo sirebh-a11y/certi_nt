@@ -7,6 +7,33 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### DDT 10/11 — riordino etichette e filtri, solo sviluppo locale
+
+Tre contatori Aperti/Completati/Esclusi; Stato con Tutti/PDF da generare/
+Incoming da completare/Anomalie. Le viste archivio, esclusi e completati
+rimangono raggiungibili, senza ripeterle nel filtro Stato.
+[Audit, regole e collaudo](../tasks/ddt_queue_labels_filters_20261110.md).
+Questa nota non autorizza commit/push o deploy; Alpha non toccata.
+
+- Pubblicare insieme backend/frontend, inclusi `ddt_queue.py`, `ddt_router.py`,
+  `ddt_schemas.py` e il nuovo helper frontend `ddtQueuePresentation.js`.
+  Alias API additivi `state=pdf_ready/anomalies`; vecchi filtri di stato ancora
+  validi. Stati interni e conteggi/sidebar non vengono rinumerati o migrati.
+- **Nessuna migrazione o bonifica DB**, recupero Word/DDT, pulizia, rilettura AI
+  o rigenerazione documenti. Nessuna modifica al riuso Word/ereditarietà,
+  motore di matching, standard/conformità o permessi di generazione PDF.
+- Sul clone provare PDF effettivamente generabile, Word non conforme o con
+  quantità/data/numero mancanti, Incoming incompleto anche con Word presente,
+  OL/data DDT assenti, Word di riferimento riutilizzabile, PDF chiuso e viste
+  Completati/Esclusi/Archivio con ripristino autorizzato. Nessuna quota deve
+  sparire da Tutti; i filtri operano prima di ordinamento/paginazione.
+- Verificare i messaggi vuoti/errore/riprova e i contatori. Un vecchio backend
+  non deve causare filtro client su 25 righe o fallback silenzioso a Tutti.
+  Archivio pre-avvio rimane distinto dai DDT operativi fuori finestra eSolver.
+- Rollback del solo pacchetto coerente: nessun intervento DB/storage. Restano
+  tutte le cautele generali su spazio, backup/restore, manutenzione, utenti
+  attivi, esclusione Lab e autorizzazione preventiva a qualsiasi pulizia.
+
 ### Certificazione 10/11 — filtro Requisiti cliente, solo sviluppo locale
 
 Menu Tutte/Con requisiti cliente/Senza requisiti cliente nella lista OL,
