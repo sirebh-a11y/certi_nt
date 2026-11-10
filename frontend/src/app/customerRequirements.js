@@ -45,3 +45,11 @@ export function resolveOlCustomerRequirements(requirements, articles = []) {
     ...article, match: resolveCustomerRequirements(requirements, article.cod_f3),
   })).filter(group => group.match.candidates.length);
 }
+
+// A filtered response carries the server's article snapshot. Keep its badge
+// visible even if the separate dialog-data request is still loading/fails.
+export function hasOlCustomerRequirements(item, groups) {
+  return typeof item.has_customer_requirements === "boolean"
+    ? item.has_customer_requirements
+    : groups.length > 0;
+}

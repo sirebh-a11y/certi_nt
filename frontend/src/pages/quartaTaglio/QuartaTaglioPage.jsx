@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { normalizeWordFilters, toggleWordFilter } from "./wordFilters";
+import { normalizeCustomerRequirementFilter } from "./customerRequirementFilter";
 import { Link, useNavigate } from "react-router-dom";
 
 import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
-import { resolveOlCustomerRequirements } from "../../app/customerRequirements";
+import { resolveOlCustomerRequirements, hasOlCustomerRequirements } from "../../app/customerRequirements";
 import CustomerRequirementsDialog from "./CustomerRequirementsDialog";
 
 const STATUS_CLASSES = {
@@ -52,6 +53,7 @@ const DEFAULT_LIST_STATE = {
   hideCertified: false,
   onlyWordPending: false,
   onlyAdditionalWords: false,
+  requirementsFilter: "all",
   sortConfig: { field: null, direction: "asc" },
   scrollLeft: 0,
   scrollTop: 0,
@@ -97,6 +99,7 @@ function loadPersistedListState() {
       operatorTwo: parsed?.operatorTwo === "or" ? "or" : DEFAULT_LIST_STATE.operatorTwo,
       rowLimit: ["25", "50", "75", "100", "all"].includes(parsed?.rowLimit) ? parsed.rowLimit : DEFAULT_LIST_STATE.rowLimit,
       ...normalizeWordFilters(parsed || {}),
+      requirementsFilter: normalizeCustomerRequirementFilter(parsed?.requirementsFilter),
       sortConfig,
       scrollLeft: Number.isFinite(Number(parsed?.scrollLeft)) ? Number(parsed.scrollLeft) : 0,
       scrollTop: Number.isFinite(Number(parsed?.scrollTop)) ? Number(parsed.scrollTop) : 0,
@@ -349,6 +352,7 @@ export default function QuartaTaglioPage() {
   const [error, setError] = useState("");
   const [requirements, setRequirements] = useState([]);
   const [requirementsError, setRequirementsError] = useState(false);
+  const [requirementsLoading, setRequirementsLoading] = useState(true);
   const [requirementsRetry, setRequirementsRetry] = useState(0);
   const [requirementsDialog, setRequirementsDialog] = useState(null);
   const [queryOne, setQueryOne] = useState(initialListStateRef.current.queryOne);
@@ -360,6 +364,7 @@ export default function QuartaTaglioPage() {
   const [hideCertified, setHideCertified] = useState(initialListStateRef.current.hideCertified);
   const [onlyWordPending, setOnlyWordPending] = useState(initialListStateRef.current.onlyWordPending);
   const [onlyAdditionalWords, setOnlyAdditionalWords] = useState(initialListStateRef.current.onlyAdditionalWords);
+  const [requirementsFilter, setRequirementsFilter] = useState(initialListStateRef.current.requirementsFilter);
   const [quickIncomingConfirm, setQuickIncomingConfirm] = useState(loadQuickIncomingConfirmSetting);
   const [sortConfig, setSortConfig] = useState(initialListStateRef.current.sortConfig);
   const [totalItems, setTotalItems] = useState(0);
@@ -378,10 +383,13 @@ export default function QuartaTaglioPage() {
     let cancelled = false;
     setRequirements([]);
     setRequirementsError(false);
+    setRequirementsLoading(true);
     apiRequest("/customer-requirements", {}, token).then(data => {
       if (!cancelled) setRequirements(data.items || []);
     }).catch(() => {
       if (!cancelled) setRequirementsError(true);
+    }).finally(() => {
+      if (!cancelled) setRequirementsLoading(false);
     });
     return () => { cancelled = true; };
   }, [token, requirementsRetry]);
@@ -406,6 +414,7 @@ export default function QuartaTaglioPage() {
       hide_certified: hideCertified ? "true" : "false",
       only_word_pending: onlyWordPending ? "true" : "false",
       only_additional_words: onlyAdditionalWords ? "true" : "false",
+      requirements_filter: requirementsFilter,
       limit: rowLimit === "all" ? "1000" : rowLimit,
       offset: String(offset),
       query_one: queryOne,
@@ -431,6 +440,10 @@ export default function QuartaTaglioPage() {
         return;
       }
       setError(requestError.message);
+      if (!append && requirementsFilter !== "all") {
+        setItems([]);
+        setTotalItems(0);
+      }
     } finally {
       if (requestId !== latestRequestRef.current) {
         return;
@@ -457,7 +470,7 @@ export default function QuartaTaglioPage() {
     return () => {
       ignore = true;
     };
-  }, [hideCertified, onlyWordPending, onlyAdditionalWords, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
+  }, [hideCertified, onlyWordPending, onlyAdditionalWords, requirementsFilter, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig, token]);
 
   useEffect(() => {
     const viewport = tableViewportRef.current;
@@ -472,12 +485,13 @@ export default function QuartaTaglioPage() {
       hideCertified,
       onlyWordPending,
       onlyAdditionalWords,
+      requirementsFilter,
       sortConfig,
       scrollLeft: viewport ? viewport.scrollLeft : initialListStateRef.current.scrollLeft,
       scrollTop: viewport ? viewport.scrollTop : initialListStateRef.current.scrollTop,
       windowScrollY: pageScroller?.scrollTop || 0,
     });
-  }, [hideCertified, onlyWordPending, onlyAdditionalWords, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
+  }, [hideCertified, onlyWordPending, onlyAdditionalWords, requirementsFilter, operatorOne, operatorTwo, queryOne, queryThree, queryTwo, rowLimit, sortConfig]);
 
   useEffect(() => {
     const pageScroller = getScrollablePageContainer(sectionRef.current);
@@ -592,6 +606,7 @@ export default function QuartaTaglioPage() {
       hideCertified,
       onlyWordPending,
       onlyAdditionalWords,
+      requirementsFilter,
       sortConfig,
       scrollLeft: viewport?.scrollLeft || 0,
       scrollTop: viewport?.scrollTop || 0,
@@ -628,7 +643,7 @@ export default function QuartaTaglioPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Certificazione</p>
           <h2 className="mt-1 text-2xl font-semibold text-slate-950">OL Quarta</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Aggiornamento automatico da Quarta all'apertura pagina. eSolver viene controllato solo sulle righe caricate.
+            Aggiornamento automatico da Quarta all'apertura pagina. I DDT eSolver vengono aggiornati sulle righe caricate.
           </p>
         </div>
         <div className="flex flex-col gap-2 text-sm text-slate-500 xl:items-end">
@@ -702,6 +717,21 @@ export default function QuartaTaglioPage() {
         >
           Altri Word da preparare
         </button>
+        <div className="min-w-[210px] max-w-[220px]">
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-requirements-filter">
+            Requisiti cliente
+          </label>
+          <select
+            className="w-full rounded-xl border border-border bg-white px-2 py-2 text-sm text-slate-700"
+            id="quarta-requirements-filter"
+            onChange={event => setRequirementsFilter(normalizeCustomerRequirementFilter(event.target.value))}
+            value={requirementsFilter}
+          >
+            <option value="all">Tutte</option>
+            <option value="with" disabled={requirementsLoading || requirementsError}>Con requisiti cliente</option>
+            <option value="without" disabled={requirementsLoading || requirementsError}>Senza requisiti cliente</option>
+          </select>
+        </div>
         <div className="min-w-[220px] max-w-[220px]">
           <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500" htmlFor="quarta-taglio-search-1">
             Filtro 1
@@ -788,7 +818,7 @@ export default function QuartaTaglioPage() {
       {loading ? <p className="text-sm text-slate-500">Aggiornamento da Quarta in corso...</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
       {requirementsError ? <p role="alert" className="text-sm text-amber-800">
-        Requisiti cliente non disponibili: i tag potrebbero mancare.{" "}
+        Requisiti cliente non disponibili: tag o dettagli potrebbero mancare. Puoi selezionare Tutte o riprovare.{" "}
         <button type="button" className="font-semibold underline" onClick={() => setRequirementsRetry(value => value + 1)}>Riprova</button>
       </p> : null}
       {syncRun?.status === "error" ? <p className="text-sm text-rose-600">{syncRun.message}</p> : null}
@@ -897,12 +927,13 @@ export default function QuartaTaglioPage() {
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{formatQuantity(item.qta_totale)}</td>
                   <td className="min-w-[220px] max-w-[300px] px-3 py-2.5 text-slate-700">
                     <div className="whitespace-normal break-words">{item.esolver_cliente || "-"}</div>
-                    {requirementGroups.length ? <button type="button"
+                    {hasOlCustomerRequirements(item, requirementGroups) ? <button type="button"
+                      disabled={!requirementGroups.length}
                       onClick={event => {
                         event.stopPropagation();
                         setRequirementsDialog({ item: { cliente: item.esolver_cliente, cod_odp: item.cod_odp }, groups: requirementGroups });
                       }}
-                      title="Consulta i requisiti previsti per gli articoli di questo OL"
+                      title={requirementGroups.length ? "Consulta i requisiti previsti per gli articoli di questo OL" : "Requisiti presenti: dettagli non disponibili, riprova il caricamento"}
                       aria-label={`Requisiti cliente per ${item.cod_odp}`}
                       className="mt-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100">
                       Requisiti cliente

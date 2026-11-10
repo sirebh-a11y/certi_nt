@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -102,6 +103,7 @@ class QuartaTaglioRowResponse(BaseModel):
     esolver_cliente: str | None = None
     esolver_cod_f3: str | None = None
     customer_requirement_articles: list[QuartaTaglioRequirementArticleResponse] = Field(default_factory=list)
+    has_customer_requirements: bool | None = None
     esolver_ordine_cliente: str | None = None
     esolver_conferma_ordine: str | None = None
     esolver_ddt: str | None = None
@@ -129,6 +131,7 @@ class QuartaTaglioListResponse(BaseModel):
     hide_certified: bool = False
     only_word_pending: bool = False
     only_additional_words: bool = False
+    requirements_filter: Literal['all', 'with', 'without'] = 'all'
 
 
 class QuartaTaglioFinalCertificateRegisterItem(BaseModel):

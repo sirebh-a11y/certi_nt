@@ -58,6 +58,7 @@ from app.modules.quarta_taglio.file_names import (
     certificate_pdf_file_name, normalize_pdf_file_name, standard_certificate_file_name,
 )
 from app.modules.quarta_taglio import word_standard, word_reference, ddt_shipments
+from app.modules.quarta_taglio import customer_requirement_filter
 from app.modules.quarta_taglio.ddt_context import (
     certificate_for_saved_ddt, exact_certificate, resolve_saved_ddt, saved_ddt_row,
 )
@@ -310,6 +311,29 @@ where ltrim(rtrim(cast(ORP as varchar(128)))) in ({placeholders})
 order by ORP, CodF3
 """
 
+# Read complete candidate context only for OLs potentially related to an active
+# requirements family. Filtering individual rows would change candidate counts,
+# raw-anomaly detection and the existing ready/medium/review rules.
+ESOLVER_CERTIOL_REQUIREMENTS_QUERY_TEMPLATE = """
+select
+    cast(ORP as varchar(128)) as ORP,
+    cast(CodCli as varchar(128)) as CodCli,
+    cast(RagSoc as varchar(255)) as RagSoc,
+    cast(CodF3ODP as varchar(128)) as CodF3ODP,
+    cast(CodF3 as varchar(128)) as CodF3,
+    cast(DesF3 as varchar(max)) as DesF3
+from {qualified_view} as current_ol
+where exists (
+    select 1 from {qualified_view} as requirement_ol
+    cross apply (select ltrim(rtrim(cast(requirement_ol.CodF3 as varchar(128)))) as code,
+                        ltrim(rtrim(cast(requirement_ol.CodF3ODP as varchar(128)))) as raw_code) as article
+    where ltrim(rtrim(cast(requirement_ol.ORP as varchar(128)))) = ltrim(rtrim(cast(current_ol.ORP as varchar(128))))
+      and (left(article.code, case when len(article.code) > 2 then len(article.code) - 2 else 0 end) in ({placeholders})
+        or left(article.raw_code, case when len(article.raw_code) > 2 then len(article.raw_code) - 2 else 0 end) in ({placeholders}))
+)
+order by ORP, CodF3
+"""
+
 
 def sync_and_list_quarta_taglio(
     db: Session,
@@ -320,6 +344,7 @@ def sync_and_list_quarta_taglio(
     hide_certified: bool = False,
     only_word_pending: bool = False,
     only_additional_words: bool = False,
+    requirements_filter: str = 'all',
     limit: int = 25,
     offset: int = 0,
     query_one: str | None = None,
@@ -330,6 +355,8 @@ def sync_and_list_quarta_taglio(
     sort_field: str | None = None,
     sort_direction: str = "asc",
 ) -> QuartaTaglioListResponse:
+    if requirements_filter not in {'all', 'with', 'without'}:
+        raise HTTPException(422, 'Filtro requisiti cliente non valido')
     if only_word_pending and only_additional_words:
         raise HTTPException(status_code=422, detail="Selezionare un solo filtro Word alla volta")
     run = _sync_quarta_rows(db, actor_id=actor_id) if sync_data else _latest_quarta_sync_run(db)
@@ -383,6 +410,11 @@ def sync_and_list_quarta_taglio(
             for summary, group_rows in filtered_groups
             if progress_by_odp.get(summary.cod_odp, _OlCertificationProgress()).status != "completed"
         ]
+    requirement_candidates = {}
+    if requirements_filter != 'all' and filtered_groups:
+        filtered_groups, requirement_candidates = _filter_customer_requirement_groups(
+            db, groups=filtered_groups, esolver_links=cached_esolver_links, selection=requirements_filter,
+        )
     filtered_groups.sort(
         key=lambda item: _quarta_group_sort_key(item[0], sort_field=sort_field),
         reverse=True if not sort_field else (sort_direction == "desc"),
@@ -399,7 +431,10 @@ def sync_and_list_quarta_taglio(
         if only_additional_words
         else _refresh_esolver_links_for_rows(db, rows=page_raw_rows)
     )
-    certiol_rows_by_odp = _fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _group_rows in page_groups])
+    certiol_rows_by_odp = dict(requirement_candidates)
+    certiol_rows_by_odp.update(_fetch_certiol_rows_batch(db, [
+        summary.cod_odp for summary, _group_rows in page_groups if summary.cod_odp not in certiol_rows_by_odp
+    ]))
     if only_word_pending:
         page_groups = _enrich_todo_groups_with_word_reasons(
             db,
@@ -428,6 +463,14 @@ def sync_and_list_quarta_taglio(
         )
         for summary, group_rows in page_groups
     ]
+    if requirements_filter != 'all':
+        # A page-only eSolver refresh may discover new data after membership was
+        # computed. Badge and filter use the SAME article snapshot in this
+        # response; a subsequent refresh sees the newly persisted links. Never
+        # reclassify only the selected page after counting/pagination.
+        for item, (summary, _rows) in zip(page_items, page_groups, strict=True):
+            item.customer_requirement_articles = summary.customer_requirement_articles
+            item.has_customer_requirements = summary.has_customer_requirements
     return QuartaTaglioListResponse(
         sync_run=_serialize_run(run),
         items=page_items,
@@ -438,6 +481,7 @@ def sync_and_list_quarta_taglio(
         hide_certified=hide_certified,
         only_word_pending=only_word_pending,
         only_additional_words=only_additional_words,
+        requirements_filter=requirements_filter,
     )
 
 
@@ -4984,29 +5028,52 @@ def _fetch_esolver_ddt_rows_batch(
     return result
 
 
-def _fetch_certiol_rows_batch(db: Session, cod_odps: list[str]) -> dict[str, list[_CertiOlRow]]:
+def _fetch_certiol_rows_batch(
+    db: Session, cod_odps: list[str], *, requirement_families: list[str] | None = None,
+) -> dict[str, list[_CertiOlRow]]:
     cleaned_odps = _unique_clean(cod_odps)
     if not cleaned_odps:
         return {}
-    if len(cleaned_odps) > ESOLVER_DDT_BATCH_SIZE:
+    if requirement_families is not None:
+        requirement_families = sorted(set(requirement_families))
+        if not requirement_families:
+            return {}
+        if len(requirement_families) > ESOLVER_DDT_BATCH_SIZE:
+            combined = {}
+            for index in range(0, len(requirement_families), ESOLVER_DDT_BATCH_SIZE):
+                block = _fetch_certiol_rows_batch(
+                    db, cleaned_odps, requirement_families=requirement_families[index:index + ESOLVER_DDT_BATCH_SIZE],
+                )
+                for odp, values in block.items():
+                    combined.setdefault(odp, values)  # Each query returns full OL context.
+            return combined
+    elif len(cleaned_odps) > ESOLVER_DDT_BATCH_SIZE:
         combined: dict[str, list[_CertiOlRow]] = {}
         for index in range(0, len(cleaned_odps), ESOLVER_DDT_BATCH_SIZE):
             combined.update(_fetch_certiol_rows_batch(db, cleaned_odps[index : index + ESOLVER_DDT_BATCH_SIZE]))
         return combined
 
     connection = db.query(ExternalConnection).filter(ExternalConnection.code == "esolver").one_or_none()
-    if connection is None or not connection.enabled or not connection.password_encrypted:
+    if connection is None or not connection.enabled:
+        return {}
+    if not connection.password_encrypted:
+        if requirement_families is not None:
+            raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.')
         return {}
 
     try:
         import pymssql
     except ImportError:
+        if requirement_families is not None:
+            raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.') from None
         return {}
 
     object_settings = connection.object_settings or {}
     view_name = _sql_identifier(str(object_settings.get("certiol_view") or "CertiOL"))
     schema_name = _sql_identifier(connection.schema_name or "dbo")
     if view_name is None or schema_name is None:
+        if requirement_families is not None:
+            raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.')
         return {}
 
     result: dict[str, list[_CertiOlRow]] = defaultdict(list)
@@ -5023,12 +5090,15 @@ def _fetch_certiol_rows_batch(db: Session, cod_odps: list[str]) -> dict[str, lis
             as_dict=True,
         ) as sql_connection:
             with sql_connection.cursor() as cursor:
-                placeholders = ", ".join(["%s"] * len(cleaned_odps))
-                query = ESOLVER_CERTIOL_BATCH_QUERY_TEMPLATE.format(
+                parameters = requirement_families if requirement_families is not None else cleaned_odps
+                placeholders = ", ".join(["%s"] * len(parameters))
+                template = (ESOLVER_CERTIOL_REQUIREMENTS_QUERY_TEMPLATE if requirement_families is not None
+                            else ESOLVER_CERTIOL_BATCH_QUERY_TEMPLATE)
+                query = template.format(
                     qualified_view=f"[{schema_name}].[{view_name}]",
                     placeholders=placeholders,
                 )
-                cursor.execute(query, tuple(cleaned_odps))
+                cursor.execute(query, tuple(parameters) * (2 if requirement_families is not None else 1))
                 odp_key_map = {_norm(cod_odp): cod_odp for cod_odp in cleaned_odps}
                 for raw_row in list(cursor.fetchall()):
                     source_odp = odp_key_map.get(_norm(raw_row.get("ORP")))
@@ -5045,8 +5115,34 @@ def _fetch_certiol_rows_batch(db: Session, cod_odps: list[str]) -> dict[str, lis
                         )
                     )
     except Exception:
+        if requirement_families is not None:
+            raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.') from None
         return {}
     return dict(result)
+
+
+def _filter_customer_requirement_groups(
+    db: Session, *, groups: list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]],
+    esolver_links: dict[str, QuartaTaglioEsolverLink], selection: str,
+) -> tuple[list[tuple[QuartaTaglioRowResponse, list[QuartaTaglioRow]]], dict[str, list[_CertiOlRow]]]:
+    families = customer_requirement_filter.active_families(db)
+    # Fetch complete context also for an OL already positive from Quarta/DDT:
+    # its dialog must not lose additional eligible F3 from the same OL.
+    candidates = (_fetch_certiol_rows_batch(db, [summary.cod_odp for summary, _rows in groups],
+                                           requirement_families=sorted(families))
+                  if families and groups else {})
+    filtered = []
+    for summary, rows in groups:
+        if summary.cod_odp in candidates:
+            link = esolver_links.get(summary.cod_odp)
+            proposed = _build_certiol_candidates(certiol_rows=candidates[summary.cod_odp], quarta_rows=rows,
+                                                esolver_rows=_esolver_rows_from_link(link))
+            summary.customer_requirement_articles = _customer_requirement_articles(rows, link, proposed)
+        present = customer_requirement_filter.has_requirements(summary.customer_requirement_articles, families)
+        summary.has_customer_requirements = present
+        if present == (selection == 'with'):
+            filtered.append((summary, rows))
+    return filtered, candidates
 
 
 def _esolver_status_for_rows(

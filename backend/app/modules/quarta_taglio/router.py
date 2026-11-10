@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Body, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
@@ -98,6 +100,7 @@ def list_quarta_taglio_route(
     hide_certified: bool = Query(default=False),
     only_word_pending: bool = Query(default=False),
     only_additional_words: bool = Query(default=False),
+    requirements_filter: Literal['all', 'with', 'without'] = Query(default='all'),
     limit: int = Query(default=25, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     query_one: str | None = Query(default=None),
@@ -116,6 +119,7 @@ def list_quarta_taglio_route(
         hide_certified=hide_certified,
         only_word_pending=only_word_pending,
         only_additional_words=only_additional_words,
+        requirements_filter=requirements_filter,
         limit=limit,
         offset=offset,
         query_one=query_one,

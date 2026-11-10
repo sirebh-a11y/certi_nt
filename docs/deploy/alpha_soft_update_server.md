@@ -7,6 +7,36 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Certificazione 10/11 — filtro Requisiti cliente, solo sviluppo locale
+
+Menu Tutte/Con requisiti cliente/Senza requisiti cliente nella lista OL,
+con lo stesso significato del tag esistente, non della seconda pagina caricata.
+[Audit, perimetro e prove](../tasks/certification_requirements_filter_20261110.md).
+Non autorizza commit/push o deploy; Alpha non toccata da questo intervento.
+
+- Distribuire backend e frontend coerenti, incluso il nuovo modulo
+  `quarta_taglio/customer_requirement_filter.py`. Parametro API additivo
+  `requirements_filter`, default `all`, e presenza nullable nella risposta.
+- **Nessuna migrazione o bonifica DB**, rilettura AI, recupero Word/DDT,
+  rigenerazione PDF o copia del database locale. Non rieseguire vecchi script
+  di recupero per questo filtro. Non cambia permessi, ereditarietà o raccolta.
+- Con filtro attivo: SELECT parametrizzata sulla vista CertiOL già configurata,
+  in blocco per famiglie attive, preservando l'intero contesto di ciascun OL.
+  Non sono interrogazioni per ogni OL. Nel preflight autorizzato controllare
+  compatibilità e tempi reali della SELECT con i dati correnti; i test locali
+  del provider sono simulati. Non usare GET operative come sola lettura:
+  la pagina mantiene i suoi aggiornamenti Quarta/DDT preesistenti.
+- Sul clone verificare requisiti oltre la prima pagina, totali/carica altri,
+  più F3, schede inattive/ambigue, combinazione Word/testo/ordinamento,
+  errore eSolver/API requisiti e Riprova. Il filtro non può trattare un errore
+  del collegamento configurato come assenza di requisiti. Tutte resta disponibile.
+- Conteggio, filtro e tag condividono l'istantanea della risposta. Un DDT
+  acquisito dal normale refresh di pagina dopo la classificazione entra alla
+  richiesta successiva; non tagliare soltanto le righe già paginate.
+- Rollback del pacchetto coerente, senza interventi DB/storage; vecchie sessioni
+  ricadono su Tutte. Restano obbligatorie tutte le cautele sotto su spazio,
+  autorizzazione, utenti attivi, backup/restore e pulizia da concordare.
+
 ### Word 10/11 — altezza DDT/Quantity, solo sviluppo locale
 
 Intervento locale e commit/push autorizzati; deploy da autorizzare a parte.
