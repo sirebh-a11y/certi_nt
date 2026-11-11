@@ -3619,6 +3619,7 @@ def _load_matching_app_rows(db: Session, rows: list[QuartaTaglioRow]) -> list[Ac
     return (
         db.query(AcquisitionRow)
         .options(
+            selectinload(AcquisitionRow.evidences),
             selectinload(AcquisitionRow.values),
             selectinload(AcquisitionRow.history_events),
             selectinload(AcquisitionRow.certificate_match),
@@ -3696,6 +3697,17 @@ def _matching_override_for_material(
     )
 
 
+def _incoming_rows_for_quarta_cast(rows: list[AcquisitionRow], colata: str | None) -> list[AcquisitionRow]:
+    exact = [r for r in rows if _norm(r.colata) == _norm(colata)]
+    if exact:
+        return exact
+    # Same exact CDQ, but Quarta explicitly names ONE member of its cast list.
+    # Do not alias an individual CDQ to a compound certificate number.
+    from app.modules.acquisition.service import _leichtmetall_group_marker, _row_read_values
+    return [r for r in rows if _leichtmetall_group_marker(r)
+            and _norm(_row_read_values(r, "ddt").get("colata")) == _norm(colata)]
+
+
 def _effective_incoming_rows_for_quarta_material(
     db: Session,
     *,
@@ -3706,6 +3718,28 @@ def _effective_incoming_rows_for_quarta_material(
     exact_rows: list[AcquisitionRow],
     article_code: str | None = None,
 ) -> tuple[list[AcquisitionRow], str | None]:
+    from app.modules.acquisition.service import (
+        _leichtmetall_group_marker, verified_leichtmetall_group_rows, verified_leichtmetall_member_rows)
+    grouped = any(_leichtmetall_group_marker(row) for row in exact_rows)
+    if grouped:
+        # Resolve material/diameter first, but NEVER choose one of its lots by
+        # the OL consumption weight: that may be only a part of the delivery.
+        article_rows = _incoming_rows_matching_quarta_article(article_code=article_code, rows=exact_rows)
+        relevant = article_rows or exact_rows
+        if verified_leichtmetall_member_rows(relevant, _clean_text(colata)):
+            return relevant, None
+        override = _matching_override_for_material(db, cod_odp=cod_odp, cdq=cdq, colata=colata)
+        if override is not None:
+            chosen = next((r for r in relevant if r.id == override.acquisition_row_id), None)
+            if chosen is not None:
+                selected = [r for r in relevant if (r.document_ddt_id, r.document_certificato_id)
+                    == (chosen.document_ddt_id, chosen.document_certificato_id)]
+                if verified_leichtmetall_group_rows(selected):
+                    return selected, None
+            return relevant, "Scelta manuale non più coerente con la copertura dei lotti Leichtmetall"
+        if verified_leichtmetall_group_rows(relevant):
+            return relevant, None
+        return relevant, "Copertura dei lotti Leichtmetall non completa o non più coerente: verifica Incoming"
     if len(exact_rows) <= 1:
         return exact_rows, None
 
@@ -3777,6 +3811,7 @@ def _evaluate_quarta_rows_from_incoming(db: Session, *, rows: list[QuartaTaglioR
 
     app_rows = (
         db.query(AcquisitionRow)
+        .options(selectinload(AcquisitionRow.evidences))
         .filter(AcquisitionRow.cdq.in_(sorted(cdq_values)))
         .filter(
             or_(
@@ -4005,7 +4040,8 @@ def _standard_confirmation_blockers(
             blockers.append(f"{label}: colata mancante da Quarta")
             continue
 
-        exact_rows = app_rows_by_key.get(key, [])
+        exact_rows = app_rows_by_key.get(key, []) or _incoming_rows_for_quarta_cast(
+            [r for r in app_rows if _norm(r.cdq) == key[0]], quarta_row.colata)
         if not exact_rows:
             candidates = [row for row in app_rows if _norm(row.cdq) == key[0]]
             if candidates:
@@ -4104,7 +4140,8 @@ def _word_queue_visibility_blockers(
             blockers.append(f"{label}: colata mancante da Quarta")
             continue
 
-        exact_rows = app_rows_by_key.get(key, [])
+        exact_rows = app_rows_by_key.get(key, []) or _incoming_rows_for_quarta_cast(
+            [r for r in app_rows if _norm(r.cdq) == key[0]], quarta_row.colata)
         if not exact_rows:
             blockers.append(f"{label}: certificato non presente in Incoming")
             continue
@@ -4122,13 +4159,13 @@ def _word_queue_visibility_blockers(
             blockers.append(f"{label}: certificato presente su più righe Incoming ({ids}), serve verifica manuale")
             continue
 
-        row = exact_rows[0]
-        block_states = _compute_block_states_from_db(db, row)
-        for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
-            if block_states.get(block) != "verde":
-                blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
-        if row.qualita_valutazione not in {"accettato", "accettato_con_riserva", "respinto"}:
-            blockers.append(f"{label}: riga Incoming #{row.id} qualità non valutata")
+        for row in exact_rows:
+            block_states = _compute_block_states_from_db(db, row)
+            for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
+                if block_states.get(block) != "verde":
+                    blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
+            if row.qualita_valutazione not in {"accettato", "accettato_con_riserva", "respinto"}:
+                blockers.append(f"{label}: riga Incoming #{row.id} qualità non valutata")
 
     return sorted(set(blockers))
 
@@ -4164,7 +4201,8 @@ def _word_creation_blockers(
             blockers.append(f"{label}: colata mancante da Quarta")
             continue
 
-        exact_rows = app_rows_by_key.get(key, [])
+        exact_rows = app_rows_by_key.get(key, []) or _incoming_rows_for_quarta_cast(
+            [r for r in app_rows if _norm(r.cdq) == key[0]], quarta_row.colata)
         if not exact_rows:
             candidates = [row for row in app_rows if _norm(row.cdq) == key[0]]
             if candidates:
@@ -4187,19 +4225,18 @@ def _word_creation_blockers(
             blockers.append(f"{label}: CDQ/colata presenti su più righe Incoming ({ids}), serve verifica manuale")
             continue
 
-        row = exact_rows[0]
-        if row.id not in supplier_ref_by_row_id:
-            blockers.append(
-                f"{label}: codice Ref. fornitore mancante per {supplier_ref_missing_by_row_id.get(row.id) or 'fornitore'}"
-            )
-        block_states = _compute_block_states_from_db(db, row)
-        for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
-            if block_states.get(block) != "verde":
-                blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
-        if row.qualita_valutazione == "respinto":
-            blockers.append(f"{label}: riga Incoming #{row.id} respinta da qualità")
-        elif row.qualita_valutazione not in {"accettato", "accettato_con_riserva"}:
-            blockers.append(f"{label}: riga Incoming #{row.id} non accettata da qualità")
+        for row in exact_rows:
+            if row.id not in supplier_ref_by_row_id:
+                blockers.append(
+                    f"{label}: codice Ref. fornitore mancante per {supplier_ref_missing_by_row_id.get(row.id) or 'fornitore'}")
+            block_states = _compute_block_states_from_db(db, row)
+            for block, label_text in (("chimica", "chimica"), ("proprieta", "proprietà"), ("note", "note")):
+                if block_states.get(block) != "verde":
+                    blockers.append(f"{label}: riga Incoming #{row.id} manca conferma {label_text}")
+            if row.qualita_valutazione == "respinto":
+                blockers.append(f"{label}: riga Incoming #{row.id} respinta da qualità")
+            elif row.qualita_valutazione not in {"accettato", "accettato_con_riserva"}:
+                blockers.append(f"{label}: riga Incoming #{row.id} non accettata da qualità")
 
     return sorted(set(blockers))
 
@@ -4450,6 +4487,22 @@ def _material_weight_for_app_row(row: AcquisitionRow, material_weights: dict[str
 
 
 def _aggregate_numeric_values(values: list[tuple[AcquisitionRow, float, float | None]], *, block: str) -> tuple[float, str]:
+    # New Leichtmetall lot rows share one measured certificate (often explicitly
+    # "Average of 2 batches"). Count identical shared data once, not once per
+    # received lot, otherwise other certificates get the wrong relative weight.
+    from app.modules.acquisition.service import _leichtmetall_group_marker
+    seen_shared = set()
+    unique = []
+    for item in values:
+        row, value, weight = item
+        marker = _leichtmetall_group_marker(row)
+        key = (getattr(row, "document_certificato_id", None), marker.get("identity"), value) if marker else None
+        if key is not None and key in seen_shared:
+            continue
+        if key is not None:
+            seen_shared.add(key)
+        unique.append(item)
+    values = unique
     if len(values) == 1:
         return values[0][1], "single"
     if block == "proprieta":
@@ -5242,7 +5295,8 @@ def _serialize_esolver_ddt_row(row: dict[str, Any], *, cod_art_keys: set[str]) -
 def _persist_quarta_rows(db: Session, *, run: QuartaTaglioSyncRun, external_rows: list[dict[str, Any]]) -> None:
     app_rows = (
         db.query(AcquisitionRow)
-        .options(selectinload(AcquisitionRow.values), selectinload(AcquisitionRow.certificate_match))
+        .options(selectinload(AcquisitionRow.values), selectinload(AcquisitionRow.certificate_match),
+                 selectinload(AcquisitionRow.evidences))
         .all()
     )
     rows_by_cdq: dict[str, list[AcquisitionRow]] = defaultdict(list)
@@ -5319,7 +5373,7 @@ def _evaluate_cdq(
     if not candidates:
         return "red", "CDQ non presente in Incoming Quality", ["Certificato/riga mancante nella nostra lista"], []
 
-    exact_rows = [row for row in candidates if _norm(row.colata) == _norm(colata)]
+    exact_rows = _incoming_rows_for_quarta_cast(candidates, colata)
     if not exact_rows:
         details = [f"Colate in app: {', '.join(sorted({_clean_text(row.colata) or '-' for row in candidates}))}"]
         return "red", "CDQ trovato in app, ma colata non coerente con Quarta", details, [row.id for row in candidates]

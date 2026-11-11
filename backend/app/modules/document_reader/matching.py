@@ -198,16 +198,17 @@ def _extract_leichtmetall_order_confirmation(lines: list[str]) -> str | None:
 
 
 def _extract_leichtmetall_charge_cast_no(lines: list[str]) -> str | None:
+    from app.modules.acquisition.leichtmetall_groups import cast_text
     direct = _extract_anchor_value_from_lines(
         lines,
         anchors=("charge/ cast no", "charge/cast no", "charge / cast no", "cast no"),
-        pattern=r"\b\d{5}\b",
+        pattern=r"\b\d{5,6}(?:(?:\s*[`'\"]*\s*[./,;:+\-·•|–—]\s*[`'\"]*\s*|\s+(?:AND|UND)\s+)\d+)*\b",
         exclude_tokens=set(),
         lookahead=6,
     )
     if direct is not None:
         _, value = direct
-        return value
+        return cast_text(value)
     return None
 
 

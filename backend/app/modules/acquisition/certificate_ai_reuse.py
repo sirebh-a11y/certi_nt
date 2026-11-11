@@ -229,6 +229,8 @@ def _recover_saved_metalba_alloy(payload, reader_key):
     new AI, cache writes, chemistry re-normalization or Incoming backfill.
     Never replace a populated value, even when the old raw JSON differs.
     """
+    from .leichtmetall_groups import recover_cached_identity
+    payload = recover_cached_identity(payload, reader_key)
     if reader_key != "metalba" or not isinstance(payload, dict):
         return payload
     match_values = payload.get("match_values") or {}

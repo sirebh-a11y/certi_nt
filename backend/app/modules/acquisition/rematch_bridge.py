@@ -11,6 +11,7 @@ from app.modules.document_reader.matching import (
 )
 from app.modules.document_reader.registry import resolve_supplier_template
 from .metalba_alloy import same_source_alloy as metalba_same_source_alloy
+from .leichtmetall_groups import DdtMember, is_group_reference, coverage
 
 
 BridgeValues = Mapping[str, str | None]
@@ -31,6 +32,9 @@ class RematchBridge:
     document_id: int | None = None
     values: dict[str, str | None] = field(default_factory=dict)
     supplier_key: str | None = None
+    # Populated only from the current, complete DDT groups, never from a CDQ
+    # prefix or the certificate's aggregate weight.
+    leichtmetall_members: tuple[DdtMember, ...] = ()
 
     def value(self, field_name: str) -> str | None:
         value = self.values.get(field_name)
@@ -138,6 +142,20 @@ def score_bridge_match(ddt_bridge: RematchBridge, certificate_bridge: RematchBri
             blockers=(supplier_blocker,),
             reasons=(),
         )
+
+    if _is_leichtmetall_bridge_pair(ddt_bridge, certificate_bridge):
+        if any(is_group_reference(certificate_bridge.value(k)) for k in ("cdq", "colata")):
+            if (ddt_bridge.supplier_id is None or certificate_bridge.supplier_id is None
+                    or ddt_bridge.supplier_id != certificate_bridge.supplier_id):
+                return RematchScore(RematchDecision.NONE, 0, (),
+                    ("Fornitore del gruppo non confermato su entrambi i documenti",), ())
+            result = coverage(members=ddt_bridge.leichtmetall_members,
+                              target_id=ddt_bridge.row_id, certificate=certificate_bridge.values)
+            if not result.valid:
+                return RematchScore(RematchDecision.NONE, 0, (), (result.reason,), ())
+            return RematchScore(RematchDecision.STRONG, 520,
+                ("cdq", "colata", "diametro", "lega", "gruppo_lotti"), (),
+                ("Copertura lotti e somma pesi DDT verificate",))
 
     blockers = list(_hard_blockers(ddt_bridge, certificate_bridge))
     if blockers:

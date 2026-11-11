@@ -8,7 +8,7 @@ import math
 import re
 import time
 import pytesseract
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -25,7 +25,15 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from pypdf import PdfReader
 from sqlalchemy import inspect as sqlalchemy_inspect, or_, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload, object_session
+from app.modules.acquisition.leichtmetall_groups import (
+    DdtMember as LeichtmetallMember, EVIDENCE_TYPE as LEICHTMETALL_GROUP_EVIDENCE,
+    cast_identity as leichtmetall_cast_identity, cast_text as leichtmetall_cast_text,
+    kg as leichtmetall_kg, token as leichtmetall_token,
+    is_group_reference as leichtmetall_is_group_reference,
+    coverage as leichtmetall_coverage,
+    order_token as leichtmetall_order_token,
+)
 
 from app.core.config import settings
 from app.modules.acquisition.arconic_identity import (
@@ -7268,6 +7276,7 @@ def _manual_document_linked_rows(
     query = (
         db.query(AcquisitionRow)
         .options(
+            selectinload(AcquisitionRow.evidences),
             selectinload(AcquisitionRow.values),
             selectinload(AcquisitionRow.history_events),
             joinedload(AcquisitionRow.supplier),
@@ -8098,6 +8107,10 @@ def _find_existing_certificate_first_row_for_split_candidate(
             if row.fornitore_id != document.fornitore_id:
                 continue
             if row.document_certificato_id is None:
+                continue
+            if leichtmetall_is_group_reference(row.colata or row.cdq):
+                # Keep the common source until every DDT lot has been saved.
+                # The group rematcher will absorb it once, not while splitting.
                 continue
 
             row_customer_order = _normalize_row_signature_token(_certificate_first_row_identity_fields(row).get("customer_order"))
@@ -9605,6 +9618,7 @@ def list_acquisition_rows(
     query = (
         db.query(AcquisitionRow)
         .options(
+            selectinload(AcquisitionRow.evidences),
             selectinload(AcquisitionRow.values),
             joinedload(AcquisitionRow.supplier),
             joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
@@ -10513,6 +10527,21 @@ def delete_single_document_acquisition_row(
 
     storage_keys: list[str] = []
     try:
+        if (preview.side == "ddt" and not preview.will_delete_document
+                and _resolve_row_supplier_key(current_row) == "leichtmetall"):
+            signatures = []
+            for evidence in current_row.evidences:
+                if evidence.tipo_evidenza == "supplier_ddt_group_complete_v1":
+                    try:
+                        signatures.append(json.loads(evidence.testo_grezzo or "{}").get("signature"))
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+            signatures.append(list(_autonomous_ddt_row_signature(current_row)))
+            db.add(DocumentEvidence(document_id=document.id, acquisition_row_id=None, blocco="ddt",
+                tipo_evidenza="leichtmetall_deleted_ddt_groups_v1", metodo_estrazione="utente", mascherato=True,
+                utente_creazione_id=actor_id, testo_grezzo=json.dumps({
+                    "identity": _ddt_reading_identity(document, "leichtmetall"),
+                    "signatures": [sig for sig in signatures if isinstance(sig, list)]})))
         storage_keys.extend(_delete_evidence_records(db, list(current_row.evidences)))
         if preview.will_delete_document:
             _delete_manual_blocks_for_document(db, document.id)
@@ -11297,6 +11326,8 @@ def _ensure_user_candidate_can_link(
 
 
 def _manual_link_reason(score: RematchScore) -> str:
+    if "gruppo_lotti" in score.matched_fields:
+        return "Certificato comune: lotti e peso totale DDT verificati"
     fields = ", ".join(score.matched_fields[:5]) or "campi ponte"
     return f"Aggancio manuale utente: {fields} coerenti (score {score.score})"
 
@@ -11767,11 +11798,17 @@ def _document_side_field_conflicts(
     if row.document_ddt_id is None or row.document_certificato_id is None:
         return []
     side_values = side_values or _document_side_confirmed_payloads(db, row=row)
+    group_score = _leichtmetall_link_score(row)
+    group_valid = group_score is not None and group_score.decision == RematchDecision.STRONG
     conflicts: list[str] = []
     for ui_field in DOCUMENT_SIDE_UI_FIELDS:
         ddt_value = side_values["ddt"].get(ui_field)
         certificate_value = side_values["match"].get(ui_field)
         if ddt_value is None or certificate_value is None:
+            continue
+        if group_valid and ui_field in {"cdq", "colata", "peso"}:
+            # Explicit membership and AGGREGATE weight were verified together.
+            # The literal single-lot vs compound difference is not a conflict.
             continue
         if not _document_side_values_match(ui_field, ddt_value, certificate_value,
                                            supplier_key=_resolve_row_supplier_key(row)):
@@ -11921,12 +11958,9 @@ def refresh_certificate_first_row(
         touched_fields=touched_fields,
     )
     if current_row.document_ddt_id is not None:
-        _sync_ddt_values_from_row_fields(
-            db=db,
-            row=current_row,
-            actor_id=actor_id,
-            touched_fields=touched_fields,
-        )
+        if not _leichtmetall_group_marker(current_row):
+            _sync_ddt_values_from_row_fields(
+                db=db, row=current_row, actor_id=actor_id, touched_fields=touched_fields)
     _sync_row_statuses(db, current_row)
     db.add(current_row)
     db.commit()
@@ -12457,6 +12491,10 @@ def upsert_match(
     db.flush()
 
     existing_candidates = {candidate.document_certificato_id: candidate for candidate in match.candidates}
+    if _resolve_row_supplier_key(row) == "leichtmetall":
+        # Same-run row creation can have loaded an empty relationship. Worker
+        # sessions do not expire on commit; expose the match just flushed.
+        db.expire(row, ["certificate_match"])
     requested_candidate_ids = {candidate.document_certificato_id for candidate in payload.candidates}
     for candidate in list(match.candidates):
         if candidate.document_certificato_id not in requested_candidate_ids:
@@ -17633,9 +17671,33 @@ def _ddt_group_is_complete(row: AcquisitionRow, signature: tuple) -> bool:
 
 def _mark_ddt_group_complete(db: Session, row: AcquisitionRow, signature: tuple, actor_id: int) -> None:
     if not _ddt_group_is_complete(row, signature):
+        payload = {"signature": signature}
+        if _resolve_row_supplier_key(row) == "leichtmetall":
+            payload["document_identity"] = _ddt_reading_identity(row.ddt_document, "leichtmetall")
+            db.flush()
+            current_values = {v.campo: _final_value_for_row(v) for v in db.query(ReadValue).filter(
+                ReadValue.acquisition_row_id == row.id, ReadValue.blocco == "ddt").all()}
+            payload["ddt_fields"] = _leichtmetall_ddt_proof_fields(current_values)
         db.add(DocumentEvidence(document_id=row.document_ddt_id, acquisition_row_id=row.id, blocco="ddt",
             tipo_evidenza="supplier_ddt_group_complete_v1", metodo_estrazione="sistema", mascherato=True,
-            utente_creazione_id=actor_id, testo_grezzo=json.dumps({"signature": signature})))
+            utente_creazione_id=actor_id, testo_grezzo=json.dumps(payload)))
+        if _resolve_row_supplier_key(row) == "leichtmetall":
+            db.flush()
+            db.expire(row, ["evidences"])
+
+
+def _leichtmetall_deleted_ddt_signatures(db: Session, document: Document) -> set[tuple]:
+    result = set()
+    for evidence in db.query(DocumentEvidence).filter(DocumentEvidence.document_id == document.id,
+            DocumentEvidence.tipo_evidenza == "leichtmetall_deleted_ddt_groups_v1").all():
+        try:
+            payload = json.loads(evidence.testo_grezzo or "{}")
+            if payload.get("identity") == _ddt_reading_identity(document, "leichtmetall"):
+                result.update(tuple(sig) for sig in payload.get("signatures", [])
+                              if isinstance(sig, list) and all(isinstance(v, str) for v in sig))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return result
 
 
 DDT_GROUP_ANCHORS = ("article_code", "customer_code", "profile_code", "product_code", "supplier_order_no")
@@ -17689,6 +17751,10 @@ def _ensure_autonomous_rows_with_ai(
             signature = _autonomous_ddt_candidate_signature(document=ddt_document, candidate=c, fallback_ddt=c.ddt_number)
             if any(_ddt_group_is_complete(row, signature) for row in existing_rows):
                 row_signatures.add(signature)
+        if supplier_key == "leichtmetall":
+            # An intentional deletion is not an interrupted save. Keep its
+            # document-level tombstone after deleting the disposable row.
+            row_signatures.update(_leichtmetall_deleted_ddt_signatures(db, ddt_document))
     resuming = bool(existing_rows and saved_candidates and any(
         _autonomous_ddt_candidate_signature(document=ddt_document, candidate=c, fallback_ddt=c.ddt_number)
         not in row_signatures for c in saved_candidates
@@ -18087,6 +18153,11 @@ def _ensure_certificate_first_rows(
             packing_list=certificate_packing_list,
             supplier_order=certificate_supplier_order,
         )
+        if (supplier_key == "leichtmetall" and linked_row is not None
+                and _leichtmetall_has_competing_group(db, linked_row, certificate_documents,
+                    certificate_document.id, certificate_ai_cache,
+                    ai_only_mode=bool(use_ai_intervention and openai_api_key))):
+            linked_row = None  # stage the source; compare ALL documents together
         if linked_row is not None:
             if linked_row.document_certificato_id is None:
                 linked_row = _set_row_ai_processing_state(
@@ -18137,6 +18208,7 @@ def _ensure_certificate_first_rows(
                 )
                 .all()
                 if _certificate_first_signature_from_row(row) == certificate_signature
+                and not (supplier_key == "leichtmetall" and leichtmetall_is_group_reference(certificate_cast))
             ),
             None,
         )
@@ -18217,6 +18289,46 @@ def _ensure_certificate_first_rows(
         created_count += 1
 
     return created_count, linked_match_count
+
+
+def _leichtmetall_has_competing_group(db, row, documents, excluded_id, cache, *, ai_only_mode):
+    left = _build_row_ddt_bridge(row)
+    type_blocked = _type_guard_blocked_row_ids(db)
+    sources = db.query(AcquisitionRow).filter(AcquisitionRow.fornitore_id == row.fornitore_id,
+        AcquisitionRow.document_certificato_id.isnot(None),
+        AcquisitionRow.document_certificato_id != excluded_id).all()
+    existing_document_ids = {source.document_certificato_id for source in sources}
+    for source in sources:
+        if source.id in type_blocked:
+            continue
+        if _manual_match_block_exists(db, ddt_document_id=row.document_ddt_id,
+                certificate_document_id=source.document_certificato_id, ddt_row_id=row.id, certificate_row_id=None):
+            continue
+        if "gruppo_lotti" in score_bridge_match(left, _build_row_certificate_bridge(source)).matched_fields:
+            return True
+    values = _row_read_values(row, "ddt")
+    for document in documents:
+        if (document.id == excluded_id or document.id in existing_document_ids
+                or automatic_ai_disabled(db, document)):
+            continue
+        if _manual_match_block_exists(db, ddt_document_id=row.document_ddt_id,
+                certificate_document_id=document.id, ddt_row_id=row.id, certificate_row_id=None):
+            continue
+        # Inspect only an already-read compound. Do not index unrelated old
+        # PDFs here, or let a raw cache override corrected saved source rows.
+        cached_values = ((cache or {}).get(document.id) or {}).get("match_values") or {}
+        identity = cached_values.get("colata_certificato") or cached_values.get("numero_certificato_certificato")
+        if not identity and not ai_only_mode and document.pages:
+            local = reader_detect_certificate_core_matches(document.pages, supplier_key="leichtmetall")
+            identity = (local.get("colata_certificato") or {}).get("final")
+        if not leichtmetall_is_group_reference(identity):
+            continue
+        candidate = _score_certificate_candidate(db, row=row, certificate_document=document,
+            ddt_certificate_number=row.cdq, row_ddt_values=values,
+            certificate_ai_cache=cache, ai_only_mode=ai_only_mode)
+        if candidate and candidate.get("leichtmetall_group"):
+            return True
+    return False
 
 
 def _find_existing_aluminium_bozen_row_for_certificate(
@@ -18755,6 +18867,10 @@ def _find_existing_leichtmetall_row_for_certificate(
     cast: str | None,
     weight: str | None,
 ) -> AcquisitionRow | None:
+    if leichtmetall_is_group_reference(cast):
+        # A group must be decided with all live DDT members, never by choosing
+        # a single row here (including the former first-token/first-winner path).
+        return None
     if not rows:
         return None
 
@@ -19320,10 +19436,19 @@ def _current_cross_run_rematch_plan(
             db=db, supplier_ids=supplier_ids, target_row_ids={row_id},
             protected_source_row_ids=protected_source_row_ids,
         ) if p.row_id == row_id), None)
-        if plan is None or not plan.candidates or plan.candidates[0].source_has_ddt:
+        if plan is None or not plan.candidates:
+            return plan
+        group_link = "gruppo_lotti" in getattr(getattr(plan.candidates[0], "score", None), "matched_fields", ())
+        if plan.candidates[0].source_has_ddt and not group_link:
             return plan
         source_id = plan.candidates[0].source_row_id
         expected_ids = {row_id, source_id}
+        if group_link:
+            target = db.get(AcquisitionRow, row_id)
+            if target is None:
+                return None
+            expected_ids.update(i for (i,) in db.query(AcquisitionRow.id).filter(
+                AcquisitionRow.document_ddt_id == target.document_ddt_id).all())
         # Two runs may have planned to absorb the same certificate-only row.
         # Lock in the same ID order as manual merging. PostgreSQL omits a row
         # deleted while waiting: replan against its new coupled source instead
@@ -19345,7 +19470,7 @@ def _current_cross_run_rematch_plan(
 
 
 def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_rows: set[int]) -> set[int]:
-    """Let the existing row matcher finish only still-unmatched Arconic DDTs.
+    """Finish unmatched Arconic rows and proven Leichtmetall cast groups.
 
     A just-read row is not necessarily already paired. Keep all protections on
     paired/confirmed/validated rows, other suppliers and type-rejected rows;
@@ -19361,6 +19486,17 @@ def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_
                 and row.certificate_match is None and not row.validata_finale
                 and _resolve_row_supplier_key(row) == "arconic_hannover"):
             protected.discard(row.id)
+        elif (row.document_ddt_id is not None and row.document_certificato_id is None
+                and row.certificate_match is None and not row.validata_finale
+                and _resolve_row_supplier_key(row) == "leichtmetall"):
+            # Narrow same-run exception: only a proven compound certificate.
+            # The real rematcher still checks competing documents and detaches.
+            bridge = _build_row_ddt_bridge(row)
+            sources = db.query(AcquisitionRow).filter(AcquisitionRow.fornitore_id == row.fornitore_id,
+                AcquisitionRow.document_certificato_id.isnot(None)).all()
+            if any("gruppo_lotti" in score_bridge_match(bridge, _build_row_certificate_bridge(s)).matched_fields
+                   for s in sources if s.id not in _type_guard_blocked_row_ids(db)):
+                protected.discard(row.id)
     return _type_guard_blocked_row_ids(db) | (protected - manual_rematch_rows)
 
 
@@ -19400,6 +19536,7 @@ def _run_cross_run_auto_rematch(
             continue
         best_candidate = eligible_candidates[0]
         merging = not best_candidate.source_has_ddt and best_candidate.source_row_id != row.id
+        atomic_link = merging or "gruppo_lotti" in getattr(getattr(best_candidate, "score", None), "matched_fields", ())
         if merging:
             source = get_acquisition_row(db, best_candidate.source_row_id)
             _lock_merge_quality_rows(db, source, row)
@@ -19415,7 +19552,7 @@ def _run_cross_run_auto_rematch(
             row,
             processing_status="in_lavorazione",
             run_id=run_id,
-            commit=not merging,
+            commit=not atomic_link,
         )
         if _row_is_locked_for_auto_rematch(row):
             _set_row_ai_processing_state(
@@ -19435,7 +19572,7 @@ def _run_cross_run_auto_rematch(
                     source_row,
                     processing_status="in_lavorazione",
                     run_id=run_id,
-                    commit=not merging,
+                    commit=not atomic_link,
                 )
                 source_row_claimed = True
         candidates = [
@@ -19462,7 +19599,7 @@ def _run_cross_run_auto_rematch(
                 candidates=candidates,
             ),
             actor_id=actor_id,
-            commit=not merging,
+            commit=not atomic_link,
         )
         if best_candidate.source_has_ddt and best_candidate.source_row_id != row.id:
             _copy_certificate_side_blocks_between_rows(
@@ -19570,6 +19707,9 @@ def _plan_cross_run_auto_rematch(
         )
         if not scored_candidates:
             continue
+        if (len(scored_candidates) > 1
+                and any("gruppo_lotti" in c.score.matched_fields for c in scored_candidates)):
+            continue  # a complete group does not outrank another valid document
         best = scored_candidates[0]
         if best.document_id == row.document_certificato_id:
             continue
@@ -19953,6 +20093,8 @@ def _copy_certificate_side_blocks_between_rows(
 
     if copied:
         refreshed_target = get_acquisition_row(db, target_row_id)
+        if _resolve_row_supplier_key(refreshed_target) == "leichtmetall":
+            _sync_row_from_match_values(db, refreshed_target)
         _apply_metalba_lst03_alloy(db, refreshed_target, actor_id=actor_id)
         _sync_row_statuses(db, refreshed_target)
         db.add(refreshed_target)
@@ -19998,7 +20140,7 @@ def _copy_document_evidence_for_target_row(
 
 
 def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
-    return build_ddt_bridge(
+    bridge = build_ddt_bridge(
         row_values=_row_bridge_values(row),
         read_values=_row_source_read_values(row, "ddt"),
         supplier_id=row.fornitore_id,
@@ -20007,13 +20149,213 @@ def _build_row_ddt_bridge(row: AcquisitionRow) -> RematchBridge:
         document_id=row.document_ddt_id,
         supplier_key=_resolve_row_supplier_key(row),
     )
+    if bridge.supplier_key == "leichtmetall":
+        bridge = replace(bridge, leichtmetall_members=_leichtmetall_ddt_members(row))
+    return bridge
+
+
+def _leichtmetall_group_marker(row: AcquisitionRow) -> dict | None:
+    for evidence in sorted(getattr(row, "evidences", None) or [], key=lambda e:e.id or 0, reverse=True):
+        if evidence.tipo_evidenza == LEICHTMETALL_GROUP_EVIDENCE:
+            try:
+                data = json.loads(evidence.testo_grezzo or "{}")
+                if (data.get("ddt_id") == row.document_ddt_id
+                        and data.get("certificate_id") == row.document_certificato_id):
+                    return data
+            except (ValueError, TypeError, AttributeError):
+                pass
+    return None
+
+
+def _leichtmetall_ddt_proof_fields(values: dict) -> dict:
+    return {key: _normalize_value_for_field("ddt", key, values.get(key))
+            for key in ("ddt", "ordine", "customer_order_no", "lega", "diametro", "colata", "peso",
+                        "cdq", "numero_certificato_ddt")}
+
+
+def _leichtmetall_ddt_members(row: AcquisitionRow) -> tuple[LeichtmetallMember, ...]:
+    """Rebuild proof from LIVE independent DDT values, not the displayed CDQ.
+
+    The existing completion signature is our persisted packing provenance. A
+    changed value, deleted member or stale document must not reuse that proof.
+    No row creation, OCR, AI or other side effect is permitted in this function.
+    """
+    if not isinstance(row, AcquisitionRow):
+        return ()
+    db = object_session(row)
+    if db is None or row.document_ddt_id is None:
+        return ()
+    document = row.ddt_document
+    if (document is None or not document.pages
+            or document.fornitore_id != row.fornitore_id
+            or {p.numero_pagina for p in document.pages}
+               != set(range(1, (document.numero_pagine or len(document.pages)) + 1))):
+        return ()
+    try:
+        saved_candidates = _metalba_saved_ddt_groups(db, document, "leichtmetall")
+        manifest_valid = saved_candidates is not None
+    except DdtPackingReviewRequired:
+        return ()
+    peers = db.query(AcquisitionRow).options(selectinload(AcquisitionRow.values),
+        selectinload(AcquisitionRow.evidences)).filter(
+        AcquisitionRow.document_ddt_id == row.document_ddt_id,
+        AcquisitionRow.fornitore_id == row.fornitore_id).order_by(AcquisitionRow.id).all()
+    result = []
+    for peer in peers:
+        values = {v.campo: _final_value_for_row(v) for v in db.query(ReadValue).filter(
+            ReadValue.acquisition_row_id == peer.id, ReadValue.blocco == "ddt").all()}
+        batch = values.get("colata")
+        fields = _leichtmetall_ddt_proof_fields(values)
+        complete = False
+        # Do not populate_existing() on business rows: worker sessions disable
+        # autoflush and a proof read must not discard pending derived fields.
+        for evidence in db.query(DocumentEvidence).filter(
+                DocumentEvidence.acquisition_row_id == peer.id,
+                DocumentEvidence.tipo_evidenza == "supplier_ddt_group_complete_v1").all():
+            if (evidence.tipo_evidenza == "supplier_ddt_group_complete_v1"
+                    and evidence.document_id == row.document_ddt_id):
+                try:
+                    payload = json.loads(evidence.testo_grezzo or "{}")
+                    provenance = (payload.get("document_identity") == _ddt_reading_identity(document, "leichtmetall")
+                                  or manifest_valid)
+                    if payload.get("ddt_fields") is not None:
+                        complete |= provenance and payload["ddt_fields"] == fields
+                    elif manifest_valid:
+                        # Legacy completion signatures used the displayed row
+                        # notation (150.00); ReadValues canonicalize it to 150.
+                        # Recover exact provenance from the saved candidate,
+                        # then compare canonical document fields, not digits
+                        # obtained by erasing the decimal separator.
+                        for candidate in saved_candidates:
+                            expected = _autonomous_ddt_candidate_signature(document=document,
+                                candidate=candidate, fallback_ddt=candidate.ddt_number)
+                            expected_fields = _leichtmetall_ddt_proof_fields(dict(ddt=candidate.ddt_number,
+                                ordine=candidate.customer_order_no, customer_order_no=candidate.customer_order_no,
+                                lega=candidate.lega, diametro=candidate.diametro, colata=candidate.colata,
+                                peso=candidate.peso_netto, cdq=candidate.cdq, numero_certificato_ddt=candidate.cdq))
+                            complete |= (tuple(payload.get("signature", [])) == expected and fields == expected_fields)
+                except (ValueError, TypeError, AttributeError):
+                    pass
+        # Explicit side confirmation can replace an old AI reading, including
+        # a genuine user correction; it must not create a permanent dead end.
+        required = {"colata", "peso", "lega", "diametro", "ordine", "ddt"}
+        confirmed = required.issubset({v.campo for v in peer.values
+            if v.blocco == "ddt" and v.stato == "confermato" and _final_value_for_row(v)})
+        if automatic_ai_disabled(db, document):
+            complete = confirmed
+        else:
+            complete |= confirmed
+        if values.get("customer_order_no") and values.get("ordine"):
+            complete &= (leichtmetall_order_token(values["customer_order_no"])
+                         == leichtmetall_order_token(values["ordine"]))
+        # The top-level material cannot secretly contradict the document side.
+        marker = _leichtmetall_group_marker(peer)
+        if marker and marker.get("ddt_hash") != document.hash_file:
+            complete = False
+        allowed_casts = {batch, (marker or {}).get("identity")}
+        complete &= (peer.colata in allowed_casts
+            and leichtmetall_kg(peer.peso) == leichtmetall_kg(values.get("peso"))
+            and leichtmetall_token(peer.lega_base) == leichtmetall_token(values.get("lega"))
+            and _supplier_decimal_tokens_match(peer.diametro, values.get("diametro"))
+            and leichtmetall_order_token(peer.ordine) == leichtmetall_order_token(values.get("ordine")))
+        result.append(LeichtmetallMember(peer.id, batch, values.get("peso"), values.get("lega"),
+            values.get("diametro"), values.get("ordine"), bool(complete),
+            values.get("numero_certificato_ddt"), values.get("cdq")))
+    return tuple(result)
+
+
+def _leichtmetall_link_score(row: AcquisitionRow) -> RematchScore | None:
+    if (_resolve_row_supplier_key(row) != "leichtmetall" or not row.document_ddt_id
+            or not row.document_certificato_id):
+        return None
+    bridge = _build_row_certificate_bridge(row)
+    if not any(leichtmetall_is_group_reference(bridge.value(k)) for k in ("cdq", "colata")):
+        return None
+    marker = _leichtmetall_group_marker(row)
+    if marker and marker.get("certificate_hash") != row.certificate_document.hash_file:
+        return RematchScore(RematchDecision.NONE, 0, (), ("Documento certificato modificato",), ())
+    return score_bridge_match(_build_row_ddt_bridge(row), bridge)
+
+
+def verified_leichtmetall_group_rows(rows: list[AcquisitionRow]) -> bool:
+    """A Quarta compound refers to ALL pertinent lots, not the first row.
+
+    False leaves legacy ambiguity handling intact. Callers must not use their
+    weight heuristic to pick one member when the new evidence is present.
+    """
+    if not rows or not all(_leichtmetall_group_marker(r) for r in rows):
+        return False
+    if len({r.document_certificato_id for r in rows}) != 1:
+        return False
+    technical = {tuple(sorted((v.blocco, v.campo, _final_value_for_row(v))
+        for v in r.values if v.blocco in {"chimica", "proprieta", "note"}
+        and _final_value_for_row(v) is not None)) for r in rows}
+    if len(technical) > 1:
+        # A common certificate is one measured analysis, not an allocation of
+        # different manual measurements to unknown quantities consumed by Quarta.
+        # Explicit individual casts remain supported by the member path below.
+        return False
+    deliveries = {r.document_ddt_id for r in rows}
+    if len(deliveries) > 1:
+        return all(verified_leichtmetall_group_rows([r for r in rows if r.document_ddt_id == d])
+                   for d in deliveries)
+    identity = leichtmetall_cast_identity(rows[0].colata)
+    if not identity or not identity.grouped:
+        return False
+    proof = leichtmetall_coverage(members=_leichtmetall_ddt_members(rows[0]), target_id=rows[0].id,
+        certificate=_build_row_certificate_bridge(rows[0]).values)
+    expected_ids = set(proof.row_ids)
+    if expected_ids != {r.id for r in rows}:
+        return False
+    return all((score := _leichtmetall_link_score(r)) is not None
+               and score.decision == RematchDecision.STRONG for r in rows)
+
+
+def verified_leichtmetall_member_rows(rows: list[AcquisitionRow], batch: str | None) -> bool:
+    """An explicit individual Quarta cast is not an inferred lot allocation."""
+    if not rows or len({r.document_certificato_id for r in rows}) != 1:
+        return False
+    return all(_leichtmetall_group_marker(r)
+        and _row_read_values(r, "ddt").get("colata") == batch
+        and (score := _leichtmetall_link_score(r)) is not None
+        and score.decision == RematchDecision.STRONG for r in rows)
+
+
+def _apply_leichtmetall_group_reference(db: Session, row: AcquisitionRow) -> None:
+    if _resolve_row_supplier_key(row) != "leichtmetall":
+        return
+    db.flush()
+    db.expire(row, ["values", "certificate_document", "ddt_document"])
+    score = _leichtmetall_link_score(row)
+    if score is None or score.decision != RematchDecision.STRONG:
+        return
+    identity = _build_row_certificate_bridge(row).value("colata")
+    data = {"identity": identity, "ddt_id": row.document_ddt_id,
+            "certificate_id": row.document_certificato_id,
+            "ddt_hash": row.ddt_document.hash_file,
+            "certificate_hash": row.certificate_document.hash_file}
+    if _leichtmetall_group_marker(row) != data:
+        evidence = DocumentEvidence(document_id=row.document_certificato_id,
+            acquisition_row_id=row.id, blocco="match", tipo_evidenza=LEICHTMETALL_GROUP_EVIDENCE,
+            metodo_estrazione="sistema", mascherato=True, testo_grezzo=json.dumps(data))
+        db.add(evidence)
+        db.flush()
+        db.expire(row, ["evidences"])
+    row.cdq = identity
+    row.colata = identity
 
 
 def _build_row_certificate_bridge(row: AcquisitionRow) -> RematchBridge:
+    supplier_id = row.fornitore_id
+    if (_resolve_row_supplier_key(row) == "leichtmetall"
+            and any(leichtmetall_is_group_reference(_row_source_read_values(row, "match").get(k))
+                    for k in ("numero_certificato_certificato", "colata_certificato"))
+            and row.certificate_document is not None):
+        supplier_id = row.certificate_document.fornitore_id
     return build_certificate_bridge(
         row_values=_row_certificate_bridge_values(row),
         read_values=_row_source_read_values(row, "match"),
-        supplier_id=row.fornitore_id,
+        supplier_id=supplier_id,
         supplier_name=_row_supplier_name(row),
         row_id=row.id,
         document_id=row.document_certificato_id,
@@ -20254,6 +20596,8 @@ def _row_supplier_name(row: AcquisitionRow) -> str | None:
 
 
 def _cross_run_candidate_reason(score: RematchScore) -> str:
+    if "gruppo_lotti" in score.matched_fields:
+        return "Certificato comune: lotti e peso totale DDT verificati"
     fields = ", ".join(score.matched_fields[:5]) or "campi ponte"
     return f"Rematch automatico cross-run: {fields} coerenti (score {score.score})"
 
@@ -20306,12 +20650,16 @@ def _auto_propose_certificate_match(
             scored_candidates.append(candidate)
     if not scored_candidates:
         return False
+    if len(scored_candidates) > 1 and any(c.get("leichtmetall_group") for c in scored_candidates):
+        return False
 
     scored_candidates.sort(key=lambda item: (-int(item["score"]), int(item["document"].id)))
     best_candidate = scored_candidates[0]
     second_score = int(scored_candidates[1]["score"]) if len(scored_candidates) > 1 else 0
     best_score = int(best_candidate["score"])
-    if _resolve_row_supplier_key(row) == "metalba" and second_score and best_score - second_score < 20:
+    ambiguity_gap = 45 if _resolve_row_supplier_key(row) == "leichtmetall" else 20
+    if (_resolve_row_supplier_key(row) in {"metalba", "leichtmetall"}
+            and second_score and best_score - second_score < ambiguity_gap):
         return False
     should_propose = (
         best_score >= 80
@@ -20319,6 +20667,13 @@ def _auto_propose_certificate_match(
         or (len(scored_candidates) == 1 and best_score >= 35)
     )
     if not should_propose:
+        return False
+    if (_resolve_row_supplier_key(row) == "leichtmetall"
+            and best_candidate.get("leichtmetall_group")
+            and db.query(AcquisitionRow.id).filter(
+                AcquisitionRow.document_certificato_id == best_candidate["document"].id).first()):
+        # Let the row rematcher perform the one source merge, including quality
+        # date choices and stale IDs. Do not commit a partial link first.
         return False
 
     candidates = []
@@ -20353,11 +20708,7 @@ def _auto_propose_certificate_match(
     )
     if source_row_id is not None:
         _copy_certificate_side_blocks_between_rows(
-            db=db,
-            source_row_id=source_row_id,
-            target_row_id=row.id,
-            actor_id=actor_id,
-        )
+            db=db, source_row_id=source_row_id, target_row_id=row.id, actor_id=actor_id)
     return True
 
 
@@ -20548,6 +20899,26 @@ def _score_certificate_candidate(
             matches["lega_certificato"] = {"final": _string_or_none(ai_match_values.get("lega_certificato"))}
         if "diametro_certificato" not in matches and _string_or_none(ai_match_values.get("diametro_certificato")) is not None:
             matches["diametro_certificato"] = {"final": _string_or_none(ai_match_values.get("diametro_certificato"))}
+
+    if supplier_key == "leichtmetall":
+        if leichtmetall_is_group_reference(certificate_cast or certificate_number):
+            right = build_certificate_bridge(row_values={}, read_values={
+                "numero_certificato_certificato": certificate_number,
+                "colata_certificato": certificate_cast,
+                "peso_certificato": certificate_weight,
+                "lega_certificato": _string_or_none(matches.get("lega_certificato", {}).get("final")),
+                "diametro_certificato": _string_or_none(matches.get("diametro_certificato", {}).get("final")),
+                "ordine_cliente_certificato": certificate_supplier_fields.get("po_no")
+                    or certificate_supplier_fields.get("customer_order_no")
+                    or (ai_match_values.get("ordine_cliente_certificato") if certificate_ai_cache is not None else None),
+            }, supplier_id=certificate_document.fornitore_id, supplier_key="leichtmetall",
+                document_id=certificate_document.id)
+            group_score = score_bridge_match(_build_row_ddt_bridge(row), right)
+            if group_score.decision != RematchDecision.STRONG:
+                return None
+            return {"document": certificate_document, "score": group_score.score,
+                    "reason": "Certificato comune: lotti e somma pesi DDT verificati",
+                    "leichtmetall_group": True}
 
     score = 0
     reasons: list[tuple[int, str]] = []
@@ -21200,7 +21571,7 @@ def _compute_block_states_from_db(db: Session, row: AcquisitionRow) -> dict[str,
 
     return {
         "ddt": _compute_ddt_block_state(row, values_by_block.get("ddt", []), supplier_key=supplier_key),
-        "match": _compute_match_block_state_from_match(row.document_certificato_id, match),
+        "match": _leichtmetall_checked_match_state(row, match),
         "chimica": (
             "verde"
             if "chimica" in quick_confirmed_blocks
@@ -21257,7 +21628,15 @@ def _quick_confirmed_blocks_from_db(db: Session, acquisition_row_id: int) -> set
 
 
 def _compute_match_block_state(row: AcquisitionRow) -> str:
-    return _compute_match_block_state_from_match(row.document_certificato_id, row.certificate_match)
+    return _leichtmetall_checked_match_state(row, row.certificate_match)
+
+
+def _leichtmetall_checked_match_state(row: AcquisitionRow, match: CertificateMatch | None) -> str:
+    if _leichtmetall_group_marker(row):
+        score = _leichtmetall_link_score(row)
+        if score is None or score.decision != RematchDecision.STRONG:
+            return "rosso"
+    return _compute_match_block_state_from_match(row.document_certificato_id, match)
 
 
 def _compute_match_block_state_from_match(
@@ -26144,12 +26523,7 @@ def _normalize_leichtmetall_order_token(value: str | None) -> str | None:
 
 
 def _normalize_leichtmetall_batch_token(value: str | None) -> str | None:
-    return _extract_token_from_value_or_evidence(
-        value,
-        value,
-        r"\b\d{5,6}\b",
-        disallow={"10204"},
-    )
+    return leichtmetall_cast_text(value)
 
 
 def _normalize_aluminium_bozen_measured_rows_payload(
@@ -28643,6 +29017,9 @@ def _sync_ddt_values_from_row_fields(
         "lega": {"lega_base", "lega_designazione", "variante_lega"},
     }
     for field_name in ("cdq", "numero_certificato_ddt", "colata", "diametro", "peso", "ordine", "ddt", "lega"):
+        if (touched_fields is None and _resolve_row_supplier_key(row) == "leichtmetall"
+                and _leichtmetall_group_marker(row) and field_name in {"cdq", "numero_certificato_ddt", "colata"}):
+            continue  # displayed compound must not overwrite the original DDT lot
         dependencies = field_dependencies[field_name]
         if touched_fields is not None and not (dependencies & touched_fields):
             continue
@@ -28694,6 +29071,10 @@ def _sync_match_values_from_row_fields(
     actor_id: int,
     touched_fields: set[str],
 ) -> None:
+    if _resolve_row_supplier_key(row) == "leichtmetall" and _leichtmetall_group_marker(row):
+        # Editing the DDT row invalidates its proof if necessary. It must NEVER
+        # rewrite the independent certificate total/cast/material to hide that.
+        return
     field_dependencies = {
         "numero_certificato_certificato": {"cdq"},
         "ordine_cliente_certificato": {"ordine"},
@@ -28749,6 +29130,7 @@ def _sync_row_from_match_values(db: Session, row: AcquisitionRow) -> None:
         row.ddt = _final_value_for_row(value_map.get("ddt_certificato"))
     if row.peso is None and "peso_certificato" in value_map:
         row.peso = _final_value_for_row(value_map.get("peso_certificato"))
+    _apply_leichtmetall_group_reference(db, row)
 
 
 def _sync_row_cdq_from_certificate_document(

@@ -7,6 +7,50 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Leichtmetall 11/11 — certificato comune a più lotti, sviluppo locale
+
+Nuova logica ancora da pubblicare **solo su autorizzazione esplicita**.
+[Piano, perimetro e collaudo](../tasks/leichtmetall_grouped_certificate_plan_20261110.md).
+Un certificato `95131.33` può coprire due righe DDT, con peso individuale;
+CDQ e colata visibili restano completi, come Quarta, ma il lotto originale
+DDT e il totale certificato rimangono distinti nei dati di lettura.
+
+- Pacchetto backend coerente: `leichtmetall_groups.py`, parser locale,
+  `acquisition/service.py`, `rematch_bridge.py`, `certificate_ai_reuse.py`
+  e consumatori `quarta_taglio/service.py`. Nessun cambio prompt/modello AI.
+- **Nessuna migrazione SQL, nuova colonna/tabella, backfill o bonifica** per
+  questa funzione. Usa evidenze JSON nelle tabelle esistenti. Le altre
+  integrazioni DB del pacchetto cumulativo (es. Nome PDF particolare) restano
+  obbligatorie secondo le rispettive sezioni: non confondere i due perimetri.
+- Le nuove evidenze includono campi DDT canonici/provenienza e, per future
+  eliminazioni volontarie di righe Leichtmetall con PDF ancora condiviso,
+  `leichtmetall_deleted_ddt_groups_v1`: non cancellarle o confonderle con cache
+  rigenerabile, altrimenti il recupero potrebbe ricreare righe rimosse dall'utente.
+- Non dividere automaticamente i cinque casi storici del precedente audit:
+  alcuni sono manuali, validati o con Word/PDF. Nessuno script di recupero
+  storico va dedotto da questa nota. Anteprima e approvazione separata per
+  eventuali correzioni dati; nessuna copia del DB locale.
+- Prima di pubblicare, sul clone isolato verificare ordine DDT/certificato,
+  contemporaneità, tre lotti non consecutivi, parità tra certificati, peso
+  totale/non netto, membro mancante/eliminato, manuali/sganci, refresh e retry.
+  Quarta deve valutare tutti i membri pertinenti e non selezionare solo quello
+  il cui peso somiglia al consumo OL. Un membro respinto non diventa verde.
+  Provare anche analisi modificate manualmente e diverse fra i membri: il
+  riferimento comune non autorizza una media inventata; la richiesta Quarta
+  per un lotto individuale esplicito resta distinta.
+- Cache esistenti non invalidate globalmente: recupero puro del nome completo
+  dal JSON originale valido. Nessuna rilettura AI massiva o riapertura dei manuali.
+  PDF chiusi, numeri, nomi file e documenti approvati non si rigenerano.
+- Backup/spazio/utenti attivi restano prerequisiti, come tutte le mitigazioni
+  del runbook. Confrontare prima/dopo conteggi e impronte delle righe storiche
+  protette e dei file chiusi; nessuna prova in produzione che scriva dati fittizi.
+- Rollback: la vecchia versione non conosce la copertura del gruppo. Dopo
+  nuove elaborazioni non basta ignorare l'evidenza o tornare al vecchio matcher.
+  Tenere la manutenzione, inventariare le sole nuove righe/evidenze e preferire
+  correzione in avanti; ripristino del backup solo se non perde attività successive
+  e dopo autorizzazione. Mai cancellare membri o azzerare le cache per aggirare
+  la situazione. Nessun ripristino indiscriminato di DB/storage.
+
 ### Requisiti 10/11 — nome PDF particolare, solo sviluppo locale
 
 Nuova spunta **Nome PDF particolare** nella scheda Requisiti cliente; tag
