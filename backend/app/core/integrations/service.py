@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.logs.service import log_service
 from app.core.security.crypto import encrypt_secret
 from app.core.integrations.models import EsolverExportPublicationSettings, ExternalConnection
+from app.core.integrations.read_policy import NO_DEADLINE_CODES, query_timeout
 from app.core.integrations.schemas import (
     EsolverExportEndpointResponse,
     EsolverExportPublicationResponse,
@@ -37,7 +38,7 @@ DEFAULT_CONNECTIONS = {
         "encrypt": False,
         "trust_server_certificate": True,
         "connection_timeout": 10,
-        "query_timeout": 30,
+        "query_timeout": 0,
         "schema_name": "dbo",
         "object_settings": {
             "anagrafiche_view": "CertiCliForF3",
@@ -58,7 +59,7 @@ DEFAULT_CONNECTIONS = {
         "encrypt": False,
         "trust_server_certificate": True,
         "connection_timeout": 10,
-        "query_timeout": 30,
+        "query_timeout": 0,
         "schema_name": "dbo",
         "object_settings": {
             "traceability_view": "CFG_Q3ESS_ONGIUDET_TRACMP",
@@ -140,7 +141,7 @@ def serialize_connection(connection: ExternalConnection) -> ExternalConnectionRe
         encrypt=connection.encrypt,
         trust_server_certificate=connection.trust_server_certificate,
         connection_timeout=connection.connection_timeout,
-        query_timeout=connection.query_timeout,
+        query_timeout=query_timeout(connection),
         schema_name=connection.schema_name,
         object_settings=connection.object_settings or {},
         notes=connection.notes,
@@ -178,7 +179,7 @@ def update_external_connection(
     connection.encrypt = payload.encrypt
     connection.trust_server_certificate = payload.trust_server_certificate
     connection.connection_timeout = payload.connection_timeout
-    connection.query_timeout = payload.query_timeout
+    connection.query_timeout = 0 if connection.code in NO_DEADLINE_CODES else payload.query_timeout
     connection.schema_name = payload.schema_name
     connection.object_settings = payload.object_settings
     connection.notes = payload.notes

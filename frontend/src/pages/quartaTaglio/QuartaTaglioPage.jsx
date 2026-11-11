@@ -460,9 +460,12 @@ export default function QuartaTaglioPage() {
   useEffect(() => {
     let ignore = false;
     const shouldSync = !initialSyncDoneRef.current;
-    initialSyncDoneRef.current = true;
     async function load() {
       await fetchItems({ append: false, sync: shouldSync, offset: 0 });
+      // Do not mark a refresh complete merely because it was submitted.
+      // StrictMode/session refresh can re-enter while it is still pending;
+      // keeping the same request lets the transport attach to that job.
+      initialSyncDoneRef.current = true;
       if (ignore) {
         return;
       }
@@ -816,7 +819,7 @@ export default function QuartaTaglioPage() {
         </div>
       </div>
 
-      {loading ? <p className="text-sm text-slate-500">Aggiornamento da Quarta in corso...</p> : null}
+      {loading ? <p role="status" className="text-sm text-slate-500">Attendo eSolver/Quarta. Puoi continuare a usare le altre pagine.</p> : null}
       {error ? <p className="text-sm text-rose-600">{error}</p> : null}
       {requirementsError ? <p role="alert" className="text-sm text-amber-800">
         Requisiti cliente non disponibili: tag o dettagli potrebbero mancare. Puoi selezionare Tutte o riprovare.{" "}

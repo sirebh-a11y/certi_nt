@@ -97,3 +97,42 @@ non ha un'associazione da mostrare. Il filtro non inventa associazioni.
 Il frontend abituale non viene riavviato senza accordo: per il browser è stato
 usato Vite temporaneo 5174, fermato al termine. Commit/push e deploy richiedono
 indicazione separata.
+
+## Audit reale e correzione locale — 11/11/2026
+
+L'interrogazione globale iniziale con `EXISTS` correlato raggiungeva il vecchio
+timeout di 30 s sui dati reali. Correzione autorizzata: un solo riferimento
+alla vista, con `MAX(CASE ...) OVER (PARTITION BY OL)` per conservare tutte
+le righe degli OL pertinenti, non solo gli F3 che coincidono con una famiglia.
+Nessun cambiamento a classificazione/tag, ambiguità, conteggi o paginazione.
+
+Riscontro READ ONLY: 181 famiglie, 569 OL e 815 righe. Contesto e duplicati
+identici alla selezione di riferimento calcolata su 10.063 righe della vista.
+Query finale 26,749 s; lettura completa semplice 24,391 s: una parte importante
+dell'attesa è esterna. Anche la fixture T-SQL sintetica (solo SELECT/VALUES)
+supera controlli su null, zeri iniziali, raw/finito e duplicati.
+
+Non è stato introdotto alcun limite nuovo di 30 s: era già la configurazione
+delle integrazioni. Test aggiunti per il rispetto dei valori 30/120/600 s,
+con/senza filtro. Il requisito chiarito dall'utente è accettare le letture
+esterne valide anche quando lente; configurazione operativa dei tempi distinta
+dal fix della query e non modificata implicitamente. Vedere il
+[preflight cumulativo](../deploy/beta1_preflight_20261111.md).
+
+Variante ID + recupero contesto provata e scartata: più lenta (65,060 s).
+Non è nel codice applicativo. Nessuna scrittura Alpha, modifica alla vista,
+tabella temporanea, bootstrap o chiamata AI durante questi riscontri.
+
+Collaudo del fix: 78 mirati superati, 1 PostgreSQL non attivato; regressione
+generale 1.053 superati, 212 opt-in esclusi, nessun fallimento. Le verifiche
+PostgreSQL e i sei rendering reali del pacchetto cumulativo erano già stati
+completati separatamente, come registrato nel preflight. Nessun nuovo driver,
+dipendenza, timeout fisso o comportamento diverso con Tutte.
+
+Decisione successiva 11/11: l'utente rifiuta anche 120 s; la lettura esterna deve
+poter attendere senza scadenza temporale. Il relativo piano trasversale è
+stato poi approvato e implementato **in locale**, distinto dalla correzione SQL:
+policy zero per eSolver/Quarta, scheduler isolato, lavoro persistente e richieste
+HTTP brevi. Vedere [perimetro e collaudo](external_read_wait_20261111.md).
+I nuovi test del provider verificano zero anche con i valori storici 30/120/600,
+senza cambiare il timeout di apertura connessione. Nessun intervento Alpha.

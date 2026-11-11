@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.integrations.models import ExternalConnection
+from app.core.integrations.read_policy import query_timeout, connection_revision, ensure_connection_unchanged
 from app.core.security.crypto import decrypt_secret
 from app.modules.clients.schemas import EsolverClientListResponse, EsolverClientResponse
 
@@ -61,6 +62,7 @@ def _fetch_esolver_client_rows(
         f"ORDER BY RagSoc1 ASC, CodCliFor ASC "
         f"OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
     )
+    revision = connection_revision(connection)
     password = decrypt_secret(connection.password_encrypted)
     with pymssql.connect(
         server=connection.server_host,
@@ -69,7 +71,7 @@ def _fetch_esolver_client_rows(
         password=password,
         database=connection.database_name,
         login_timeout=connection.connection_timeout,
-        timeout=connection.query_timeout,
+        timeout=query_timeout(connection),
         as_dict=True,
     ) as sql_connection:
         with sql_connection.cursor() as cursor:
@@ -77,7 +79,9 @@ def _fetch_esolver_client_rows(
             total_row = cursor.fetchone() or {}
             total = int(total_row.get("TotalRows") or 0)
             cursor.execute(query, tuple([*params, safe_offset, safe_limit]))
-            return [_serialize_esolver_client_row(row) for row in cursor.fetchall()], total, safe_limit, safe_offset
+            rows = [_serialize_esolver_client_row(row) for row in cursor.fetchall()]
+            ensure_connection_unchanged(db, connection, revision)
+            return rows, total, safe_limit, safe_offset
 
 
 def _serialize_esolver_client_row(row: dict[str, Any]) -> dict[str, str | None]:

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiRequest, onAuthExpired } from "./api";
+import { apiRequest, onAuthExpired, onIntegrationWait, setApiSessionToken } from "./api";
 
 const AuthContext = createContext(null);
 
@@ -49,6 +49,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => readStoredUser());
   const [setupToken, setSetupToken] = useState(() => localStorage.getItem(STORAGE_KEYS.setupToken));
   const [loading, setLoading] = useState(Boolean(token));
+  const [integrationWaitActive, setIntegrationWaitActive] = useState(false);
   const [acquisitionAiFlowActive, setAcquisitionAiFlowActiveState] = useState(
     () => localStorage.getItem(STORAGE_KEYS.acquisitionAiFlowActive) === "1",
   );
@@ -56,6 +57,9 @@ export function AuthProvider({ children }) {
   const lastRenewAttemptRef = useRef(Date.now());
   const lastAcquisitionAiFlowSignalRef = useRef(0);
   const renewInProgressRef = useRef(false);
+
+  useEffect(() => { setApiSessionToken(token); }, [token]);
+  useEffect(() => onIntegrationWait(setIntegrationWaitActive), []);
 
   useEffect(() => {
     if (!token) {
@@ -88,6 +92,7 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const persistAuth = useCallback((accessToken, currentUser) => {
+    setApiSessionToken(accessToken);
     setToken(accessToken);
     setUser(currentUser);
     localStorage.setItem(STORAGE_KEYS.token, accessToken);
@@ -95,6 +100,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const clearAuth = useCallback(() => {
+    setApiSessionToken(null);
     setToken(null);
     setUser(null);
     setSetupToken(null);
@@ -155,7 +161,7 @@ export function AuthProvider({ children }) {
     const intervalId = window.setInterval(async () => {
       const now = Date.now();
       const recentUserActivity = now - lastUserActivityRef.current <= USER_ACTIVITY_WINDOW_MS;
-      const shouldKeepAlive = recentUserActivity || acquisitionAiFlowActive;
+      const shouldKeepAlive = recentUserActivity || acquisitionAiFlowActive || integrationWaitActive;
       if (!shouldKeepAlive || now - lastRenewAttemptRef.current < SESSION_RENEW_INTERVAL_MS) {
         return;
       }
@@ -164,7 +170,7 @@ export function AuthProvider({ children }) {
     }, SESSION_RENEW_CHECK_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [acquisitionAiFlowActive, renewSession, token, user]);
+  }, [acquisitionAiFlowActive, integrationWaitActive, renewSession, token, user]);
 
   useEffect(() => {
     if (!token || !acquisitionAiFlowActive) {

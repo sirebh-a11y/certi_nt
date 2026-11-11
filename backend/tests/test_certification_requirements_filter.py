@@ -162,13 +162,18 @@ def test_family_metadata_query_is_single_and_keeps_complete_ol_rows():
     db.query.return_value.filter.return_value.one_or_none.return_value = connection
     cursor = sql.connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     cursor.fetchall.return_value = [dict(ORP='OL999', CodF3ODP='1234', CodF3='123400', DesF3='RAW'),
+                                   dict(ORP='OL999', CodF3ODP='1234', CodF3='888800', DesF3='OTHER F3'),
+                                   dict(ORP='OL999', CodF3ODP='1234', CodF3='888800', DesF3='OTHER F3'),
                                    dict(ORP='OTHER', CodF3ODP='1234', CodF3='123401', DesF3='IGNORE')]
     with patch.dict(sys.modules, pymssql=sql), patch.object(s, 'decrypt_secret', return_value='fake'):
         result = s._fetch_certiol_rows_batch(db, [f'OL{n}' for n in range(16000)], requirement_families=['1234'])
     assert set(result) == {'OL999'}
+    assert [r.cod_f3 for r in result['OL999']] == ['123400', '888800', '888800']
     assert sql.connect.call_count == 1
     query, params = cursor.execute.call_args.args
-    assert 'where exists' in query.lower() and 'current_ol' in query and 'CodF3ODP' in query
+    assert query.count('[dbo].[CertiOL]') == 1 and 'where exists' not in query.lower()
+    assert 'max(case when' in query.lower() and 'partition by' in query.lower()
+    assert 'where has_requirement_family = 1' in query.lower() and 'CodF3ODP' in query
     assert params == ('1234', '1234') and query.count('%s') == 2
     sql.connect.side_effect = RuntimeError('unavailable')
     with patch.dict(sys.modules, pymssql=sql), patch.object(s, 'decrypt_secret', return_value='fake'):
@@ -176,6 +181,22 @@ def test_family_metadata_query_is_single_and_keeps_complete_ol_rows():
             s._fetch_certiol_rows_batch(db, ['OL1'], requirement_families=['1234'])
         assert error.value.status_code == 503
         assert s._fetch_certiol_rows_batch(db, ['OL1']) == {}  # unfiltered behavior preserved
+
+
+@pytest.mark.parametrize('query_timeout', [0, 30, 120, 600])
+@pytest.mark.parametrize('families', [None, ['1234']])
+def test_external_read_waits_without_deadline_even_with_legacy_setting(query_timeout, families):
+    db, sql = MagicMock(), MagicMock()
+    db.query.return_value.filter.return_value.one_or_none.return_value = SimpleNamespace(
+        code='esolver', enabled=True, password_encrypted='encrypted', object_settings={}, schema_name='dbo',
+        server_host='isolated-mock', port=1433, username='fake', database_name='fake',
+        connection_timeout=10, query_timeout=query_timeout)
+    sql.connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+    with patch.dict(sys.modules, pymssql=sql), patch.object(s, 'decrypt_secret', return_value='fake'):
+        assert s._fetch_certiol_rows_batch(db, ['OL1'], requirement_families=families) == {}
+    assert sql.connect.call_args.kwargs['timeout'] == 0
+    assert db.query.return_value.filter.return_value.one_or_none.return_value.query_timeout == query_timeout
+    assert sql.connect.call_args.kwargs['login_timeout'] == 10
 
 
 @pytest.mark.parametrize('configuration', ['disabled', 'no_secret', 'bad_view'])

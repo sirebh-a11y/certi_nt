@@ -1,9 +1,16 @@
 # Passaggio alla beta - decisioni e verifiche aperte
 
-Aggiornato: 08/10/2026, dopo audit di riduzione arretrato locale e Alpha.
+Aggiornato: 11/11/2026, numerazione Beta approvata e aggiornata in locale.
 Stato: documento di lavoro, non autorizzazione a modificare codice o server.
 
-La versione è `0.1.0.alpha.10`. Al controllo del 08/10 la coda DDT, il recupero
+La versione locale è **`0.1.0.beta.1`**; i rilasci successivi useranno
+`0.1.0.beta.2`, `.3`, ecc. Non è una conferma di installazione sul server.
+Footer, backend e controlli del deploy vengono allineati; nessuna modifica
+implicita a database, documenti, numeri certificato o soglie dello storico.
+L'autorizzazione riguarda la modifica locale: deploy e data di avvio operativo
+restano da concordare separatamente.
+
+Al controllo del 08/10 la versione era `0.1.0.alpha.10`: la coda DDT, il recupero
 storico e la raccolta automatica sono già presenti su Alpha. Le correzioni
 locali successive non vanno considerate installate senza verificarne il commit.
 Le annotazioni del 29–30/09 sotto sono il resoconto di quelle date, non lo stato

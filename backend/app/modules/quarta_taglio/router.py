@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, DbSession
+from app.core.integrations.background import background_response
 from app.modules.quarta_taglio.ddt_router import router as ddt_queue_router, require_certification_reader
 from app.modules.quarta_taglio.schemas import (
     QuartaTaglioArticleDataRequest,
@@ -45,6 +46,7 @@ router.include_router(ddt_queue_router)
 
 
 @router.post('/certificates/{certificate_id}/word-reference', response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def adopt_word_reference(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
                          current_user: CurrentUser, db: DbSession):
     from fastapi import HTTPException
@@ -58,6 +60,7 @@ def adopt_word_reference(certificate_id: int, payload: QuartaTaglioWordReference
 
 
 @router.post('/certificates/{certificate_id}/update-material-word', response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def update_material_word(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
                          current_user: CurrentUser, db: DbSession):
     from fastapi import HTTPException
@@ -80,6 +83,7 @@ def _reference_response(certificate):
 
 
 @router.post('/certificates/{certificate_id}/refresh-reference-copy', response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def refresh_reference_copy(certificate_id: int, payload: QuartaTaglioWordReferenceRequest,
                            current_user: CurrentUser, db: DbSession):
     from fastapi import HTTPException
@@ -92,6 +96,7 @@ def refresh_reference_copy(certificate_id: int, payload: QuartaTaglioWordReferen
 
 
 @router.get("", response_model=QuartaTaglioListResponse)
+@background_response
 def list_quarta_taglio_route(
     current_user: CurrentUser,
     db: DbSession,
@@ -133,6 +138,7 @@ def list_quarta_taglio_route(
 
 
 @router.get("/certificates/register", response_model=QuartaTaglioFinalCertificateRegisterResponse)
+@background_response
 def list_quarta_taglio_final_certificates_route(
     current_user: CurrentUser,
     db: DbSession,
@@ -141,6 +147,7 @@ def list_quarta_taglio_final_certificates_route(
 
 
 @router.post("/certificates/register/refresh-visible", response_model=QuartaTaglioFinalCertificateRegisterResponse)
+@background_response
 def refresh_quarta_taglio_visible_final_certificates_route(
     current_user: CurrentUser,
     db: DbSession,
@@ -150,6 +157,7 @@ def refresh_quarta_taglio_visible_final_certificates_route(
 
 
 @router.post("/certificates/{certificate_id}/pdf", response_model=QuartaTaglioFinalCertificateRegisterItem)
+@background_response
 def generate_quarta_taglio_certificate_pdf_route(
     certificate_id: int,
     current_user: CurrentUser,
@@ -165,6 +173,7 @@ def generate_quarta_taglio_certificate_pdf_route(
 
 
 @router.post("/certificates/{certificate_id}/reopen", response_model=QuartaTaglioFinalCertificateRegisterItem)
+@background_response
 def reopen_quarta_taglio_certificate_pdf_route(
     certificate_id: int,
     payload: QuartaTaglioPdfReopenRequest,
@@ -201,6 +210,7 @@ def get_quarta_taglio_additional_page_template_route(
 
 
 @router.get("/{cod_odp}", response_model=QuartaTaglioDetailResponse)
+@background_response
 def get_quarta_taglio_detail_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -216,6 +226,7 @@ def get_quarta_taglio_detail_route(
 
 
 @router.post("/{cod_odp}/standard", response_model=QuartaTaglioDetailResponse)
+@background_response
 def confirm_quarta_taglio_standard_route(
     cod_odp: str,
     payload: QuartaTaglioStandardSelectionRequest,
@@ -226,6 +237,7 @@ def confirm_quarta_taglio_standard_route(
 
 
 @router.post("/{cod_odp}/quick-incoming-confirm", response_model=QuartaTaglioDetailResponse)
+@background_response
 def apply_quick_incoming_confirmation_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -236,6 +248,7 @@ def apply_quick_incoming_confirmation_route(
 
 
 @router.post("/{cod_odp}/incoming-row-override", response_model=QuartaTaglioDetailResponse)
+@background_response
 def set_quarta_taglio_incoming_row_override_route(
     cod_odp: str,
     payload: QuartaTaglioIncomingRowOverrideRequest,
@@ -246,6 +259,7 @@ def set_quarta_taglio_incoming_row_override_route(
 
 
 @router.patch("/{cod_odp}/article-data", response_model=QuartaTaglioDetailResponse)
+@background_response
 def update_quarta_taglio_article_data_route(
     cod_odp: str,
     payload: QuartaTaglioArticleDataRequest,
@@ -263,6 +277,7 @@ def update_quarta_taglio_article_data_route(
 
 
 @router.post("/{cod_odp}/word-draft", response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def create_quarta_taglio_word_draft_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -284,6 +299,7 @@ def create_quarta_taglio_word_draft_route(
 
 
 @router.post("/{cod_odp}/word-file", response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def upload_quarta_taglio_word_file_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -295,6 +311,7 @@ def upload_quarta_taglio_word_file_route(
 
 
 @router.post("/{cod_odp}/additional-pages", response_model=QuartaTaglioWordDraftResponse)
+@background_response
 def upload_quarta_taglio_additional_pages_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -312,6 +329,7 @@ def upload_quarta_taglio_additional_pages_route(
 
 
 @router.post("/{cod_odp}/pdf-attachments", response_model=QuartaTaglioDetailResponse)
+@background_response
 def upload_quarta_taglio_pdf_attachment_route(
     cod_odp: str,
     current_user: CurrentUser,
@@ -329,6 +347,7 @@ def upload_quarta_taglio_pdf_attachment_route(
 
 
 @router.delete("/{cod_odp}/pdf-attachments/{attachment_id}", response_model=QuartaTaglioDetailResponse)
+@background_response
 def delete_quarta_taglio_pdf_attachment_route(
     cod_odp: str,
     attachment_id: int,
@@ -346,6 +365,7 @@ def delete_quarta_taglio_pdf_attachment_route(
 
 
 @router.get("/word-drafts/{draft_id}/file")
+@background_response
 def get_quarta_taglio_word_draft_file_route(
     draft_id: int,
     db: DbSession,

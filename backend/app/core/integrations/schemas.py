@@ -46,7 +46,7 @@ class ExternalConnectionUpdateRequest(BaseModel):
     encrypt: bool
     trust_server_certificate: bool
     connection_timeout: int = Field(ge=1, le=120)
-    query_timeout: int = Field(ge=1, le=600)
+    query_timeout: int = Field(ge=0, le=600)
     schema_name: str = Field(min_length=1, max_length=128)
     object_settings: dict[str, Any] = Field(default_factory=dict)
     notes: str = ""

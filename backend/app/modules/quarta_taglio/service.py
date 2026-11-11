@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
 from app.core.integrations.models import ExternalConnection
+from app.core.integrations.read_policy import query_timeout as external_query_timeout, connection_revision, ensure_connection_unchanged
 from app.core.pdf.converter import PDFConversionError, convert_docx_to_pdf
 from app.core.deps import is_quality_area_manager_or_admin, is_quality_area_user
 from app.core.roles.constants import ROLE_ADMIN, ROLE_MANAGER
@@ -315,23 +316,30 @@ order by ORP, CodF3
 # Read complete candidate context only for OLs potentially related to an active
 # requirements family. Filtering individual rows would change candidate counts,
 # raw-anomaly detection and the existing ready/medium/review rules.
+# Mark the whole OL partition with one reference to the view: a correlated
+# self-read exceeded the configured timeout on the real eSolver dataset.
+# This is not a new deadline; pymssql still uses the integration's own timeout.
 ESOLVER_CERTIOL_REQUIREMENTS_QUERY_TEMPLATE = """
-select
-    cast(ORP as varchar(128)) as ORP,
-    cast(CodCli as varchar(128)) as CodCli,
-    cast(RagSoc as varchar(255)) as RagSoc,
-    cast(CodF3ODP as varchar(128)) as CodF3ODP,
-    cast(CodF3 as varchar(128)) as CodF3,
-    cast(DesF3 as varchar(max)) as DesF3
-from {qualified_view} as current_ol
-where exists (
-    select 1 from {qualified_view} as requirement_ol
-    cross apply (select ltrim(rtrim(cast(requirement_ol.CodF3 as varchar(128)))) as code,
-                        ltrim(rtrim(cast(requirement_ol.CodF3ODP as varchar(128)))) as raw_code) as article
-    where ltrim(rtrim(cast(requirement_ol.ORP as varchar(128)))) = ltrim(rtrim(cast(current_ol.ORP as varchar(128))))
-      and (left(article.code, case when len(article.code) > 2 then len(article.code) - 2 else 0 end) in ({placeholders})
-        or left(article.raw_code, case when len(article.raw_code) > 2 then len(article.raw_code) - 2 else 0 end) in ({placeholders}))
-)
+select ORP, CodCli, RagSoc, CodF3ODP, CodF3, DesF3
+from (
+    select
+        cast(ORP as varchar(128)) as ORP,
+        cast(CodCli as varchar(128)) as CodCli,
+        cast(RagSoc as varchar(255)) as RagSoc,
+        cast(CodF3ODP as varchar(128)) as CodF3ODP,
+        cast(CodF3 as varchar(128)) as CodF3,
+        cast(DesF3 as varchar(max)) as DesF3,
+        max(case when
+            left(article.code, case when len(article.code) > 2 then len(article.code) - 2 else 0 end) in ({placeholders})
+            or left(article.raw_code, case when len(article.raw_code) > 2 then len(article.raw_code) - 2 else 0 end) in ({placeholders})
+            then 1 else 0 end) over (
+                partition by ltrim(rtrim(cast(ORP as varchar(128))))
+            ) as has_requirement_family
+    from {qualified_view}
+    cross apply (select ltrim(rtrim(cast(CodF3 as varchar(128)))) as code,
+                        ltrim(rtrim(cast(CodF3ODP as varchar(128)))) as raw_code) as article
+) as ol_context
+where has_requirement_family = 1 and ORP is not null
 order by ORP, CodF3
 """
 
@@ -487,6 +495,22 @@ def sync_and_list_quarta_taglio(
 
 
 def _sync_quarta_rows(db: Session, *, actor_id: int | None = None) -> QuartaTaglioSyncRun:
+    if isinstance(db, Session) and db.info.get("integration_background"):
+        from app.core.integrations.background import serialized_background_source
+        baseline = _latest_quarta_sync_run(db)
+        before = (baseline.id, baseline.status) if baseline else None
+        with serialized_background_source(db, 'quarta_full_refresh'):
+            db.expire_all()
+            latest = _latest_quarta_sync_run(db)
+            # A refresh completed while this job waited: reuse its complete
+            # snapshot, not a second concurrent update of seen_in_last_sync.
+            if latest is not None and latest.status == 'ok' and before != (latest.id, latest.status):
+                return latest
+            return _sync_quarta_rows_unlocked(db, actor_id=actor_id)
+    return _sync_quarta_rows_unlocked(db, actor_id=actor_id)
+
+
+def _sync_quarta_rows_unlocked(db: Session, *, actor_id: int | None = None) -> QuartaTaglioSyncRun:
     run = QuartaTaglioSyncRun(status="running", triggered_by_user_id=actor_id)
     db.add(run)
     db.commit()
@@ -4983,6 +5007,7 @@ def _fetch_quarta_taglio_rows(db: Session) -> list[dict[str, Any]]:
     except ImportError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Driver SQL Server pymssql non installato") from exc
 
+    revision = connection_revision(connection)
     password = decrypt_secret(connection.password_encrypted)
     with pymssql.connect(
         server=connection.server_host,
@@ -4991,12 +5016,14 @@ def _fetch_quarta_taglio_rows(db: Session) -> list[dict[str, Any]]:
         password=password,
         database=connection.database_name,
         login_timeout=connection.connection_timeout,
-        timeout=connection.query_timeout,
+        timeout=external_query_timeout(connection),
         as_dict=True,
     ) as sql_connection:
         with sql_connection.cursor() as cursor:
             cursor.execute(TAGLIO_QUERY)
-            return list(cursor.fetchall())
+            rows = list(cursor.fetchall())
+            ensure_connection_unchanged(db, connection, revision)
+            return rows
 
 
 def _load_esolver_ddt_rows(
@@ -5040,6 +5067,7 @@ def _fetch_esolver_ddt_rows_batch(
         return {cod_odp: ([], "error", "Nome vista eSolver non valido") for cod_odp in groups}
 
     result: dict[str, tuple[list[QuartaTaglioEsolverDdtRowResponse], str, str | None]] = {}
+    revision = connection_revision(connection)
     try:
         password = decrypt_secret(connection.password_encrypted)
         with pymssql.connect(
@@ -5049,7 +5077,7 @@ def _fetch_esolver_ddt_rows_batch(
             password=password,
             database=connection.database_name,
             login_timeout=connection.connection_timeout,
-            timeout=connection.query_timeout,
+            timeout=external_query_timeout(connection),
             as_dict=True,
         ) as sql_connection:
             with sql_connection.cursor() as cursor:
@@ -5066,11 +5094,16 @@ def _fetch_esolver_ddt_rows_batch(
                     source_odp = odp_key_map.get(_norm(raw_row.get("ORP")))
                     if source_odp:
                         raw_rows_by_odp[source_odp].append(raw_row)
+                ensure_connection_unchanged(db, connection, revision)
 
                 for cod_odp, cod_art_values in groups.items():
                     cod_art_keys = {_norm(value) for value in cod_art_values if _norm(value)}
                     rows = [_serialize_esolver_ddt_row(row, cod_art_keys=cod_art_keys) for row in raw_rows_by_odp.get(cod_odp, [])]
                     result[cod_odp] = _esolver_status_for_rows(rows, cod_art_keys=cod_art_keys)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise  # changed source parameters: do not replace any cached links
+        return {cod_odp: ([], "error", f"Lettura eSolver fallita: {exc}") for cod_odp in groups}
     except Exception as exc:
         return {cod_odp: ([], "error", f"Lettura eSolver fallita: {exc}") for cod_odp in groups}
 
@@ -5126,6 +5159,7 @@ def _fetch_certiol_rows_batch(
         return {}
 
     result: dict[str, list[_CertiOlRow]] = defaultdict(list)
+    revision = connection_revision(connection)
     try:
         password = decrypt_secret(connection.password_encrypted)
         with pymssql.connect(
@@ -5135,7 +5169,7 @@ def _fetch_certiol_rows_batch(
             password=password,
             database=connection.database_name,
             login_timeout=connection.connection_timeout,
-            timeout=connection.query_timeout,
+            timeout=external_query_timeout(connection),
             as_dict=True,
         ) as sql_connection:
             with sql_connection.cursor() as cursor:
@@ -5163,6 +5197,13 @@ def _fetch_certiol_rows_batch(
                             des_f3=_clean_text(raw_row.get("DesF3")),
                         )
                     )
+                ensure_connection_unchanged(db, connection, revision)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise  # never reinterpret a changed source as absent material
+        if requirement_families is not None:
+            raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.') from None
+        return {}
     except Exception:
         if requirement_families is not None:
             raise HTTPException(503, 'Filtro requisiti cliente non disponibile: riprova oppure seleziona Tutte.') from None
@@ -5218,9 +5259,14 @@ def _refresh_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow])
 
     fetched = _fetch_esolver_ddt_rows_batch(db, groups)
     now = datetime.now(timezone.utc)
+    if isinstance(db, Session) and db.info.get("integration_background") and db.get_bind().dialect.name == 'postgresql':
+        # Lock only the short cache-write transaction, not the slow SQL read.
+        # Prevent concurrent first inserts for the same OL without widening
+        # any matching/Word rules or reordering real document operations.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('quarta_esolver_link_cache'))"))
     existing_links = {
         link.cod_odp: link
-        for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(groups.keys())).all()
+        for link in db.query(QuartaTaglioEsolverLink).filter(QuartaTaglioEsolverLink.cod_odp.in_(groups.keys())).populate_existing().all()
     }
     for cod_odp in groups:
         esolver_rows, esolver_status, esolver_message = fetched.get(cod_odp, ([], "missing", "Nessuna riga DDT eSolver trovata per questo OL"))
@@ -5228,6 +5274,8 @@ def _refresh_esolver_links_for_rows(db: Session, *, rows: list[QuartaTaglioRow])
         if link is None:
             link = QuartaTaglioEsolverLink(cod_odp=cod_odp)
             existing_links[cod_odp] = link
+        elif link.last_checked_at is not None and link.last_checked_at.replace(tzinfo=timezone.utc) > now:
+            continue  # another completed read was applied after this one
         _apply_esolver_link_values(link, esolver_rows=esolver_rows, status_value=esolver_status, message=esolver_message, checked_at=now)
         db.add(link)
     db.commit()

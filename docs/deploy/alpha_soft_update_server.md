@@ -7,6 +7,88 @@ Questo documento descrive come aggiornare la alpha sul server `certi-test.forgia
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,
 senza sostituire il database con quello locale.
 
+### Audit cumulativo 11/11 — correzione locale e attese esterne
+
+[Preflight Beta 1](beta1_preflight_20261111.md): perimetro da altezza righe
+certificato in poi, spazio/schema reali Alpha e controlli Word/PDF.
+La SELECT correlata del filtro andava in timeout; **corretta in locale** con
+un solo riferimento alla vista e contesto completo per OL. Riscontro reale:
+26,749 s e stessi 569 OL / 815 righe del riferimento indipendente. La semplice
+lettura completa della vista impiega già 24,391 s: non attribuire tutta l'attesa
+a CERTI né usare i 30 s come nuovo requisito di velocità. La cronologia prova
+che il limite era già nelle integrazioni Alpha. **Decisione successiva utente:
+nessuna scadenza della lettura esterna; proposta 120 s rifiutata.** Il relativo
+piano in background è distinto dalla correzione query ed è stato autorizzato
+e implementato **solo in locale**: non è la sola modifica `timeout=0`.
+Le richieste HTTP brevi evitano il limite proxy e il timer non esegue più
+SQL bloccante nel ciclo principale. Nessuna configurazione/server Alpha
+modificata, nessun deploy, fermo, migrazione o pulizia eseguiti da questa attività.
+
+### Attesa eSolver/Quarta 11/11 — preparazione del prossimo deploy
+
+[Perimetro e collaudo locale](../tasks/external_read_wait_20261111.md).
+Letture senza scadenza per il solo trascorrere del tempo; apertura della
+connessione, AI, PDF e lock restano distinti. Errori reali non sono nascosti.
+
+- Pacchetto coerente: `core/integrations/{background,background_router,read_policy}.py`,
+  modelli/schemi/service integrazioni, sei punti di connessione SQL, router interessati,
+  scheduler/main, trasporto `api.js`, gestione sessione e pagina Certificazione.
+  Nessuna nuova dipendenza o modifica del proxy/Nginx IT.
+- **Schema cumulativo: due tabelle additive** `integration_background_jobs`
+  e `integration_background_receipts`, oltre alla colonna Nome PDF particolare
+  già descritta sotto. Le tabelle sono registrate in `Base.metadata` e create
+  dal bootstrap normale: sul clone verificare prima l'addizione ripetibile e
+  l'invarianza dei dati preesistenti. Niente DROP/bonifica su Alpha, niente
+  copia del DB locale e nessun recupero Word/DDT/AI da rilanciare.
+- La policy passa `timeout=0` ai profili `esolver`/`quarta` anche se in DB è
+  ancora memorizzato 30. I vecchi valori non vengono aggiornati in massa;
+  API/editor restituiscono e conservano zero. Non confondere il timeout
+  connessione (10 s al precedente audit) con quello della lettura.
+- Prima del fermo, oltre agli altri controlli attività, leggere gli stati
+  queued/running di queste tabelle **se esistono già**. Un lavoro lento non
+  è un orfano per età: non terminarlo per fare il deploy. Interruzione reale
+  rilevata dalla perdita del lock di processo, senza replay automatico di
+  possibili scritture. Richieste accodate di un codice diverso vengono rifiutate,
+  non eseguite silenziosamente col nuovo pacchetto. Non forzare gli stati via SQL.
+- Backup anche di `storage/integration_jobs`, normalmente accanto a
+  `storage/documents` nel mount `/app/storage`. Payload DB cifrati con la
+  **stessa APP_SECRET_KEY**, upload e risultati privati non esposti dal server
+  statico. Verificare il percorso effettivo se DOCUMENT_STORAGE_ROOT è diverso,
+  persistenza, permessi e spazio. Non cancellare lavori/file pendenti; nessuna
+  pulizia automatica dei risultati terminali è stata introdotta. La loro
+  crescita va misurata e l'eventuale pulizia concordata, senza cancellare Word/PDF.
+- Sul clone controllare `statement_timeout`, `idle_in_transaction_session_timeout`
+  e `idle_session_timeout` PostgreSQL: una policy infrastrutturale incompatibile
+  richiede valutazione esplicita, non una modifica globale nascosta. Il collaudo
+  locale non certifica le impostazioni serali del server.
+- Dopo l'aggiornamento ricaricare le schede browser: il nuovo client usa
+  `Prefer: respond-async`, riceve 202 e consulta richieste brevi fino all'esito.
+  Il client vecchio resta compatibile ma conserva l'HTTP sincrono e il limite
+  del proxy. Verificare sessione rinnovata, doppi clic, cambio pagina e download
+  Word realmente binario; i link pubblici PDF/export eSolver restano invariati.
+  Sul percorso pubblico verificare davvero ticket 202 e poll autenticato:
+  non presumere che un proxy inoltri il nuovo header senza controllare.
+- Rollback: attendere l'assenza di lavori attivi, tornare al pacchetto completo
+  backend/frontend, conservare tabelle/file tecnici e valori originali senza
+  ripristinare indiscriminatamente il DB. Dopo riapertura con utenti attivi
+  valgono tutte le cautele preesistenti su numeri, documenti e nuove scritture.
+  Le nuove richieste ricevute non vanno eliminate né rigiocate alla cieca.
+
+### Versione 11/11 — Beta 1, modifica locale
+
+Numerazione approvata: **`0.1.0.beta.1`**, poi `.beta.2`, `.beta.3`, ecc.
+Backend, footer e bundle devono riportare la stessa versione; i controlli sotto
+riconoscono sia Alpha sia Beta, senza accettare due versioni vuote come allineate.
+La versione base del pacchetto npm resta `0.1.0`: non è l'etichetta applicativa.
+
+Beta significa uso reale in produzione, come concordato, ma questa modifica
+locale non esegue il passaggio operativo, non fissa una data di taglio DDT e
+non autorizza deploy, pulizie o recuperi. Non rinominare ora dominio, directory,
+container, volumi o `.env` Alpha: sono riferimenti infrastrutturali da preservare.
+Le date/versioni Alpha nei verbali storici sotto restano intenzionalmente tali.
+Il prossimo pacchetto deve provenire dal nuovo commit pubblicato che include
+anche questa numerazione, non dal precedente commit Leichtmetall da solo.
+
 ### Leichtmetall 11/11 — certificato comune a più lotti, sviluppo locale
 
 Nuova logica ancora da pubblicare **solo su autorizzazione esplicita**.
@@ -171,6 +253,14 @@ Non autorizza commit/push o deploy; Alpha non toccata da questo intervento.
   compatibilità e tempi reali della SELECT con i dati correnti; i test locali
   del provider sono simulati. Non usare GET operative come sola lettura:
   la pagina mantiene i suoi aggiornamenti Quarta/DDT preesistenti.
+- Preflight reale 11/11: corretta localmente la rilettura correlata (prima
+  timeout a 30,042 s). Nuova query uguale al riferimento indipendente sui
+  dati reali, con duplicati/contesto conservati. Non confondere il costo di
+  una lettura completa eSolver da circa 24 s con quella di un solo OL.
+  Successivamente autorizzata e implementata in locale la policy senza
+  scadenza e il lavoro in background descritti in apertura: i vecchi valori
+  memorizzati non reintroducono il tetto di 30 s nei nuovi consumatori.
+  Dettaglio e prove nel preflight Beta 1 sopra.
 - Sul clone verificare requisiti oltre la prima pagina, totali/carica altri,
   più F3, schede inattive/ambigue, combinazione Word/testo/ordinamento,
   errore eSolver/API requisiti e Riprova. Il filtro non può trattare un errore
@@ -2280,16 +2370,16 @@ cd C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy
 git status
 git add alpha-produzione
 git diff --cached --check
-git commit -m "Update alpha deploy package 0.1.0.alpha.X"
+git commit -m "Update deploy package 0.1.0.beta.1"
 ```
 
 Eseguire ora il confronto integrale e i controlli versione descritti nella sezione precedente. Solo se terminano senza errori creare tag e archivio:
 
 ```powershell
-git tag v0.1.0-alpha.X-deploy
-git archive --format=tar --output alpha-produzione-v0.1.0-alpha.X-deploy.tar v0.1.0-alpha.X-deploy:alpha-produzione
+git tag v0.1.0-beta.1-deploy
+git archive --format=tar --output alpha-produzione-v0.1.0-beta.1-deploy.tar v0.1.0-beta.1-deploy:alpha-produzione
 
-$archive = 'alpha-produzione-v0.1.0-alpha.X-deploy.tar'
+$archive = 'alpha-produzione-v0.1.0-beta.1-deploy.tar'
 $archiveEntries = @(tar -tf $archive)
 $forbiddenEntries = @(
     $archiveEntries | Where-Object {
@@ -2312,14 +2402,18 @@ if ($archiveSize -gt 50MB) {
 
 Get-FileHash -Algorithm SHA256 -LiteralPath $archive
 git push origin main
-git push origin v0.1.0-alpha.X-deploy
+git push origin v0.1.0-beta.1-deploy
 ```
 
-`X` va sostituito con il numero reale della versione.
+Questi esempi indicano il prossimo pacchetto Beta 1, non un'autorizzazione a
+crearlo o pubblicarlo. Nei rilasci successivi aggiornare coerentemente il numero
+in tutti i comandi, senza riutilizzare un tag già pubblicato.
 
 Se il tag esiste gia e si scopre che non rappresenta il pacchetto corretto, non spostare il tag con force push.
-Creare invece un tag progressivo, per esempio `v0.1.0-alpha.6.1-deploy`.
-In quel caso la versione applicativa resta `0.1.0.alpha.6`, mentre il suffisso `.1` indica solo il pacchetto deploy aggiornato.
+Creare invece un tag progressivo, per esempio `v0.1.0-beta.1.1-deploy`.
+In quel caso la versione applicativa resta `0.1.0.beta.1`, mentre il suffisso
+aggiuntivo `.1` indica solo la revisione del pacchetto deploy. Un nuovo rilascio
+applicativo usa invece `.beta.2`, allineando backend e frontend.
 
 Gli archivi `.tar` creati localmente servono solo per il trasferimento sul server. Possono rimanere non tracciati nel repo deploy e non vanno aggiunti al commit.
 
@@ -2331,7 +2425,7 @@ Da PowerShell locale:
 
 ```powershell
 scp -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" `
-  C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-alpha.X-deploy.tar `
+  C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-beta.1-deploy.tar `
   admcerti01@certi-test.forgialluminio.it:/srv/certi_nt/backup/
 ```
 
@@ -2339,11 +2433,11 @@ Confrontare sempre SHA-256 locale e server prima di estrarre:
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 `
-  C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-alpha.X-deploy.tar).Hash
+  C:\Users\sireb\VScodeProjects\certi_nt\deploy_repo\certi_nt_deploy\alpha-produzione-v0.1.0-beta.1-deploy.tar).Hash
 
 ssh -i "$env:USERPROFILE\.ssh\certi_nt_admcerti01_ed25519" `
   admcerti01@certi-test.forgialluminio.it `
-  'sha256sum /srv/certi_nt/backup/alpha-produzione-v0.1.0-alpha.X-deploy.tar'
+  'sha256sum /srv/certi_nt/backup/alpha-produzione-v0.1.0-beta.1-deploy.tar'
 ```
 
 I due hash devono essere identici, ignorando maiuscole e minuscole. Se non coincidono, non proseguire.
@@ -2369,7 +2463,7 @@ shell riprendere i valori registrati nel verbale, non calcolare un nuovo timesta
 
 ```bash
 set -euo pipefail
-TAG=v0.1.0-alpha.X-deploy
+TAG=v0.1.0-beta.1-deploy
 TS=$(date +%Y%m%d_%H%M%S)
 cd /srv/certi_nt
 test "$(pwd -P)" = /srv/certi_nt
@@ -2548,7 +2642,7 @@ Controllare che i file installati corrispondano all'archivio. Le differenze di U
 
 ```bash
 set -e
-TAG=v0.1.0-alpha.X-deploy
+TAG=v0.1.0-beta.1-deploy
 ARCHIVE=alpha-produzione-${TAG}.tar
 EXPECTED_SOURCE_COMMIT=HASH_COMPLETO_COMMIT_APP
 
@@ -2577,26 +2671,30 @@ Controllare insieme versione backend e versione realmente incorporata nel bundle
 
 ```bash
 cd /srv/certi_nt/app
+EXPECTED_APP_VERSION=0.1.0.beta.1
 BACKEND_VERSION=$(
   docker compose --env-file .env -f docker-compose.alpha.yml exec -T backend \
     python -c "from app.main import app; print(app.version)"
 )
 FRONTEND_VERSION=$(
   docker compose --env-file .env -f docker-compose.alpha.yml exec -T frontend \
-    grep -Roh 'Versione sistema 0.1.0.alpha.[0-9.]*' /usr/share/nginx/html |
+    grep -REoh 'Versione sistema [0-9][0-9A-Za-z._-]*' /usr/share/nginx/html |
     sed 's/^Versione sistema //' |
     sort -u
 )
 
 printf 'Backend: %s\nFrontend: %s\n' "$BACKEND_VERSION" "$FRONTEND_VERSION"
+test -n "$BACKEND_VERSION"
+test -n "$FRONTEND_VERSION"
+test "$BACKEND_VERSION" = "$EXPECTED_APP_VERSION"
 test "$BACKEND_VERSION" = "$FRONTEND_VERSION"
 ```
 
 Entrambi devono riportare la versione appena installata, per esempio:
 
 ```text
-Backend: 0.1.0.alpha.10
-Frontend: 0.1.0.alpha.10
+Backend: 0.1.0.beta.1
+Frontend: 0.1.0.beta.1
 ```
 
 ### Controlli HTTP pubblici
@@ -2638,7 +2736,7 @@ Sul server:
 
 ```bash
 set -e
-BACKUP=app_before_v0.1.0-alpha.X-deploy_YYYYMMDD_HHMMSS.tgz
+BACKUP=app_before_v0.1.0-beta.1-deploy_YYYYMMDD_HHMMSS.tgz
 TS=$(date +%Y%m%d_%H%M%S)
 
 cd /srv/certi_nt

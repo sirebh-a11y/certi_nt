@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 
 from app.core.database import SessionLocal
 from app.core.integrations.models import ExternalConnection
+from app.core.integrations.read_policy import query_timeout, connection_revision, ensure_connection_unchanged
 from app.core.logs.service import log_service
 from app.core.security.crypto import decrypt_secret
 from app.modules.quarta_taglio.models import QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem
@@ -130,18 +131,21 @@ def _fetch_complete_snapshot(db):
     schema = _sql_identifier(connection.schema_name or "dbo")
     if not view or not schema:
         raise SnapshotError("invalid_view_name")
+    revision = connection_revision(connection)
     try:
         import pymssql
 
         with pymssql.connect(
             server=connection.server_host, port=connection.port, user=connection.username,
             password=decrypt_secret(connection.password_encrypted), database=connection.database_name,
-            login_timeout=connection.connection_timeout, timeout=connection.query_timeout, as_dict=True,
+            login_timeout=connection.connection_timeout, timeout=query_timeout(connection), as_dict=True,
         ) as external:
             with external.cursor() as cursor:
                 cursor.execute(_QUERY.format(qualified_view=f"[{schema}].[{view}]"))
                 # Exhaust the cursor before any local snapshot mutation.
-                return list(cursor.fetchall())
+                rows = list(cursor.fetchall())
+                ensure_connection_unchanged(db, connection, revision)
+                return rows
     except Exception:
         raise SnapshotError("source_read_failed") from None
 

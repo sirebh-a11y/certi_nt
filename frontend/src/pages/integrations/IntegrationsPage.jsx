@@ -30,7 +30,7 @@ function buildDraft(item) {
     encrypt: item.encrypt,
     trust_server_certificate: item.trust_server_certificate,
     connection_timeout: item.connection_timeout,
-    query_timeout: item.query_timeout || 30,
+    query_timeout: item.query_timeout ?? 0,
     schema_name: item.schema_name,
     object_settings: item.object_settings || {},
     notes: item.notes || "",
@@ -350,6 +350,7 @@ export default function IntegrationsPage() {
               value={draft.connection_timeout}
               onChange={(event) => updateDraft(item.code, { connection_timeout: Number(event.target.value) })}
             />
+            <p className="mt-2 text-xs text-slate-500">Le letture attendono la risposta senza scadenza. Questo valore riguarda solo l'apertura del collegamento.</p>
           </div>
           <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
             <input

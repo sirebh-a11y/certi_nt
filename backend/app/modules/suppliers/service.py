@@ -8,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.integrations.models import ExternalConnection
+from app.core.integrations.read_policy import query_timeout, connection_revision, ensure_connection_unchanged
 from app.core.logs.service import log_service
 from app.core.security.crypto import decrypt_secret
 from app.modules.suppliers.models import Supplier, SupplierAlias, SupplierEsolverLink
@@ -685,6 +686,7 @@ def _fetch_esolver_supplier_rows(
         f"WHERE {' AND '.join(where)} "
         f"ORDER BY RagSoc1 ASC, CodCliFor ASC"
     )
+    revision = connection_revision(connection)
     password = decrypt_secret(connection.password_encrypted)
     try:
         with pymssql.connect(
@@ -694,12 +696,14 @@ def _fetch_esolver_supplier_rows(
             password=password,
             database=connection.database_name,
             login_timeout=connection.connection_timeout,
-            timeout=connection.query_timeout,
+            timeout=query_timeout(connection),
             as_dict=True,
         ) as sql_connection:
             with sql_connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
-                return [_serialize_esolver_supplier_row(row) for row in cursor.fetchall()]
+                rows = [_serialize_esolver_supplier_row(row) for row in cursor.fetchall()]
+                ensure_connection_unchanged(db, connection, revision)
+                return rows
     except pymssql.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

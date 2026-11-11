@@ -10,6 +10,8 @@ from app.core.config import settings
 from app.core.departments.router import router as departments_router
 from app.core.email.settings_router import router as email_settings_router
 from app.core.integrations.router import router as integrations_router
+from app.core.integrations.background_router import router as integration_jobs_router
+from app.core.integrations.background import manager as integration_job_manager
 from app.core.logs.router import router as logs_router
 from app.core.users.router import router as users_router
 from app.modules.acquisition.router import router as acquisition_router
@@ -30,10 +32,12 @@ from app.startup.bootstrap import initialize_application
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_application(recover_interrupted_jobs=True)
+    integration_job_manager().start()
     sync_task = asyncio.create_task(quarta_taglio_periodic_sync_loop())
     try:
         yield
     finally:
+        integration_job_manager().stop()
         sync_task.cancel()
         try:
             await sync_task
@@ -41,7 +45,7 @@ async def lifespan(_: FastAPI):
             pass
 
 
-app = FastAPI(title="CERTI_nt Core API", version="0.1.0.alpha.10", lifespan=lifespan)
+app = FastAPI(title="CERTI_nt Core API", version="0.1.0.beta.1", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +61,7 @@ app.include_router(email_settings_router, prefix="/api/email-settings", tags=["e
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 app.include_router(departments_router, prefix="/api/departments", tags=["departments"])
 app.include_router(integrations_router, prefix="/api/integrations", tags=["integrations"])
+app.include_router(integration_jobs_router, prefix="/api/integration-jobs", tags=["integration-jobs"])
 app.include_router(notes_router, prefix="/api/notes", tags=["notes"])
 app.include_router(standards_router, prefix="/api/standards", tags=["standards"])
 app.include_router(customer_requirements_router, prefix="/api/customer-requirements", tags=["customer-requirements"])

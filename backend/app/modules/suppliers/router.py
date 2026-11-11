@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 
 from app.core.deps import CurrentUser, DbSession, require_quality_area_admin
+from app.core.integrations.background import background_response
 from app.modules.suppliers.schemas import (
     EsolverSupplierListResponse,
     SupplierImportFromEsolverRequest,
@@ -39,6 +40,7 @@ def list_suppliers_route(_: CurrentUser, db: DbSession) -> SupplierListResponse:
 
 
 @router.get("/esolver", response_model=EsolverSupplierListResponse)
+@background_response
 def list_esolver_suppliers_route(
     _: CurrentUser,
     db: DbSession,
@@ -49,6 +51,7 @@ def list_esolver_suppliers_route(
 
 
 @router.post("/esolver/import", response_model=SupplierResponse)
+@background_response
 def import_esolver_supplier_route(
     payload: SupplierImportFromEsolverRequest,
     current_user: AdminUser,
@@ -58,6 +61,7 @@ def import_esolver_supplier_route(
 
 
 @router.post("/esolver/sync-linked", response_model=SupplierEsolverSyncResponse)
+@background_response
 def sync_linked_esolver_suppliers_route(current_user: AdminUser, db: DbSession) -> SupplierEsolverSyncResponse:
     return sync_linked_esolver_suppliers(db=db, actor_email=current_user.email)
 
