@@ -44,6 +44,31 @@ class DdtWorkFilterTest(DdtQueueFixture):
         assert all_rows.by_state == filtered.by_state == self.read(counters_only=True).by_state
         assert self.read(state='ready').total_items == 28
         assert self.read(state='word_ready').total_items == 4
+        manual = self.read(state='word_to_prepare', limit=2, offset=26, sort_field='ddt_raw', sort_direction='asc')
+        assert manual.total_items == 28 and len(manual.items) == 2
+        assert manual.active == all_rows.active and manual.by_state == all_rows.by_state
+        assert all(r.cod_f3 == '001200' for r in manual.items)
+
+    def test_manual_word_uses_incoming_for_the_whole_ol_and_preserves_history(self):
+        item = self.item()
+        self.cert(item, word=False)  # A certificate record without a document is not a Word.
+        item.source_present = False
+        self.material(evaluation='accettato_con_riserva')
+        assert [r.id for r in self.read(state='word_to_prepare', source_present=False).items] == [item.id]
+        assert self.read(state='word_to_prepare', source_present=True).total_items == 0
+        _, row = self.material(cdq='CDQ2', colata='COL2', evaluation='respinto')
+        assert self.read(state='word_to_prepare').total_items == 0
+        row.qualita_valutazione = None
+        self.db.commit()
+        assert self.read(state='word_to_prepare').total_items == 0
+
+    def test_existing_unnumbered_word_does_not_prompt_a_second_manual_word(self):
+        self.material()
+        first = self.item()
+        later = self.item(IdDocumento='2', DDT='99-01/10/2026')
+        self.cert(first)  # Legacy Word, no certificate number to authorize reuse.
+        assert later.id in {r.id for r in self.read().items}
+        assert self.read(state='word_to_prepare').total_items == 0
 
     def test_nonconforming_word_and_missing_data_are_explained_not_pdf_ready(self):
         self.material()
@@ -53,6 +78,7 @@ class DdtWorkFilterTest(DdtQueueFixture):
         assert row.state == 'word_ready' and row.label == 'Word da verificare'
         assert any('non conforme' in reason for reason in row.reasons)
         assert self.read(state='pdf_ready').total_items == 0
+        assert self.read(state='word_to_prepare').total_items == 0
         cert.conformity_status = 'conforme'
         cert.cert_date = None
         self.db.commit()
@@ -76,6 +102,7 @@ class DdtWorkFilterTest(DdtQueueFixture):
         assert row.id == item.id and row.label == 'Data DDT da verificare'
         assert row.pdf_action is None and any('Data DDT mancante' in r for r in row.reasons)
         assert self.read().total_items == 1
+        assert self.read(state='word_to_prepare').total_items == 0
 
     def test_waiting_can_have_a_word_but_cannot_offer_pdf(self):
         item = self.item()
@@ -93,6 +120,7 @@ class DdtWorkFilterTest(DdtQueueFixture):
         assert self.read(scope='completed').items[0].id == closed.id
         assert self.read(scope='all', state='anomalies').total_items == 0
         assert self.read(scope='all', state='pdf_ready').total_items == 0
+        assert self.read(scope='all', state='word_to_prepare').total_items == 0
         assert self.read().by_state['completed'] == 1
 
     def test_alias_filters_are_validated_and_passed_by_route(self):
@@ -102,7 +130,7 @@ class DdtWorkFilterTest(DdtQueueFixture):
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(department=SimpleNamespace(name='Qualità'))
         response = self.read()
         with TestClient(app) as client, patch.object(routes, 'read_ddt_queue', return_value=response) as read:
-            for state in ['pdf_ready', 'anomalies', 'waiting_incoming', 'ready', 'word_ready', 'completed']:
+            for state in ['word_to_prepare', 'pdf_ready', 'anomalies', 'waiting_incoming', 'ready', 'word_ready', 'completed']:
                 assert client.get('/api/quarta-taglio/ddt-work-items?state=' + state).status_code == 200
                 assert read.call_args.kwargs['state'] == state
             read.reset_mock()

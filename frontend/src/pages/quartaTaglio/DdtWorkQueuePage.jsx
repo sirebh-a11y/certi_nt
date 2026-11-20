@@ -213,7 +213,7 @@ export default function DdtWorkQueuePage() {
       .catch((requestError) => {
         if (!cancelled) {
           setData(null); // Do not show old rows under a different, failed filter.
-          setError(requestError.status === 422 && ["pdf_ready", "anomalies"].includes(filters.state)
+          setError(requestError.status === 422 && ["word_to_prepare", "pdf_ready", "anomalies"].includes(filters.state)
             ? "Filtro non disponibile. Seleziona Tutti e riprova; se il problema persiste contatta il referente interno IT."
             : requestError.message || "Impossibile caricare i DDT. Premi Aggiorna vista per riprovare.");
           setRecovery((current) => current?.phase === "refreshing" ? { ...current, phase: "error" } : current);
@@ -440,6 +440,7 @@ export default function DdtWorkQueuePage() {
             })}
             {!loading && !error && data?.items?.length === 0 ? <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-600">
               {filters.state === "pdf_ready" ? "Nessun PDF da generare con questi filtri. Scegli Stato → Tutti per cercare anche le altre righe."
+                : filters.state === "word_to_prepare" ? "Nessun Word da preparare con questi filtri."
                 : filters.state === "anomalies" ? "Nessuna anomalia per i filtri selezionati."
                   : "Nessun DDT per i filtri selezionati."}
             </td></tr> : null}

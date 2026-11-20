@@ -54,7 +54,9 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         old_word = reuse.file_hash(source.storage_key_docx)
         old_pdf = reuse.file_hash(source.storage_key_pdf)
         second = self.later()
+        self.assertEqual(self.read(state='word_to_prepare').total_items, 0)
         self.assertEqual(self.run_worker()['prepared'], 1)
+        self.assertEqual(self.read(state='word_to_prepare').total_items, 0)
         target = self.db.scalar(select(Certificate).where(Certificate.unit_key == second.certification_unit_key))
         self.assertEqual(target.certificate_number, '7013_00_00_01/26')
         self.assertEqual(target.word_source, 'ddt_reused')
@@ -134,6 +136,7 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         self.base_word()
         second = self.later(CodF3='001260')
         self.assertEqual(reuse.plan_item(self.db, second)['reason'], 'word_not_prepared')
+        self.assertEqual([r.id for r in self.read(state='word_to_prepare').items], [second.id])
 
     def test_changed_heat_prevents_automatic_reuse(self):
         _, source = self.base_word()
@@ -268,6 +271,7 @@ class DdtWordReuseTest(history.DdtHistoryTest):
         self.db.commit()
         before = read_ddt_queue(self.db).items[0]
         self.assertEqual(before.state, 'ready')
+        self.assertEqual(read_ddt_queue(self.db, state='word_to_prepare').total_items, 0)
         self.assertIsNone(before.word_candidate_id)
         self.assertIsNone(before.certificate_id)
         self.assertFalse(any('collegamento' in reason or 'restano i controlli' in reason

@@ -1,6 +1,7 @@
 // These are work filters, not replacements for lifecycle/permission checks.
 export const DDT_WORK_FILTERS = [
   ["", "Tutti"],
+  ["word_to_prepare", "Word da preparare"],
   ["pdf_ready", "PDF da generare"],
   ["waiting_incoming", "Incoming da completare"],
   ["anomalies", "Anomalie"],

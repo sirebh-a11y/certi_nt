@@ -1,6 +1,18 @@
 # DDT da certificare — contatori e filtri chiari, 10/11/2026
 
-## Perimetro approvato
+## Aggiornamento del 20/11/2026 — filtro Word da preparare
+
+In **DDT da certificare → Stato**, aggiunta la sola scelta **Word da preparare**.
+Una riga compare quando Incoming è completo per l’OL (anche con sola riserva),
+la quota DDT è aperta senza anomalie e manca il Word per quella lavorazione.
+Una scheda certificato senza file non equivale a un Word. Se esiste un Word
+riutilizzabile dello stesso OL e Cod. F3, la successiva spedizione non richiede
+un secondo Word manuale e non compare, neppure prima della copia automatica.
+Il filtro indica dove iniziare il lavoro, non autorizza la generazione senza
+standard confermato. Non cambia stati, contatori, riuso, documenti o database.
+La descrizione e le prove sotto si riferiscono al riordino originale del 10/11.
+
+## Perimetro approvato il 10/11
 
 Solo sviluppo locale. Tre contatori: **Aperti, Completati, Esclusi**.
 Quattro scelte in Stato: **Tutti, PDF da generare, Incoming da completare,

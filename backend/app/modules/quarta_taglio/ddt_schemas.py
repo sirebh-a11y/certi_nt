@@ -3,13 +3,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 
 DdtState = Literal["completed", "excluded", "archived", "to_link", "quality_rejected", "waiting_incoming", "word_ready", "ready", "review"]
 # Public work filters do not replace the internal lifecycle states. Keep old
 # state queries valid for existing clients, including the sidebar counters.
-DdtStateFilter = DdtState | Literal["pdf_ready", "anomalies"]
+DdtStateFilter = DdtState | Literal["word_to_prepare", "pdf_ready", "anomalies"]
 DdtScope = Literal["active", "completed", "excluded", "archived", "all"]
 
 
@@ -51,6 +51,8 @@ class DdtPdfAction(BaseModel):
 
 class DdtWorkItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+    # Derived in memory for filtering; neither a lifecycle state nor an API/DB column.
+    _word_to_prepare: bool = PrivateAttr(default=False)
 
     id: int
     id_documento: str

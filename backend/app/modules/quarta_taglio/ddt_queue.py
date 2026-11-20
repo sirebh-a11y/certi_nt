@@ -44,6 +44,8 @@ SORT_FIELDS = {
 
 
 def _matches_state_filter(item, selection):
+    if selection == "word_to_prepare":
+        return item._word_to_prepare
     if selection == "pdf_ready":
         return item.state == "word_ready" and item.pdf_action is not None
     if selection == "anomalies":
@@ -265,9 +267,11 @@ def _project(db, items):
             row.reasons.append(pending)
         # Reuse diagnostics are distinct from a missing OL in eSolver. Never guess
         # an OL from the numeric lot; no write/remote query in this projection.
+        reuse_reason = None
         if (row.state == 'ready' or (row.state == 'review' and any('Più Word di riferimento' in reason for reason in row.reasons))):
             from app.modules.quarta_taglio.ddt_word_reuse import plan_item
             reuse = plan_item(db, item)
+            reuse_reason = reuse['reason']
             if reuse['action'] == 'reuse':
                 row.state, row.label = 'ready', LABELS['ready']
                 row.reasons = [r for r in row.reasons if 'Più Word di riferimento' not in r]
@@ -350,6 +354,16 @@ def _project(db, items):
                 explanation = _word_pdf_unavailable_reason(item, exact_doc)
                 if explanation not in row.reasons:
                     row.reasons.append(explanation)
+        # "ready" alone also includes shipments awaiting automatic reuse. Only
+        # a positive no-source diagnosis counts as manual work. A legacy Word
+        # without a number is not reusable, but must not prompt a duplicate.
+        row._word_to_prepare = (
+            row.state == "ready" and row.incoming_ready and row.ddt_date is not None
+            and row.word_candidate_id is None and reuse_reason == "word_not_prepared"
+            and not service._has_prepared_word([
+                c for c in certificates_by_ol[item.cod_odp] if _clean(c.cod_f3) == _clean(item.cod_f3)
+            ])
+        )
         result.append(row)
     return result
 
@@ -393,7 +407,7 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
                    date_to: date | None = None, source_present=None,
                    limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
-    if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS and state not in {"pdf_ready", "anomalies"}):
+    if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS and state not in {"word_to_prepare", "pdf_ready", "anomalies"}):
         raise HTTPException(status_code=422, detail="Filtro stato non valido")
     if limit < 1 or limit > 200 or offset < 0 or sort_field not in SORT_FIELDS or sort_direction not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")

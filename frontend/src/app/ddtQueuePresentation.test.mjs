@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DDT_WORK_FILTERS, ddtQueueStatus, isClosedQueueScope, updateDdtQueueFilters } from "./ddtQueuePresentation.js";
 
-test("only four work choices; final views do not duplicate lifecycle states", () => {
-  assert.deepEqual(DDT_WORK_FILTERS, [["", "Tutti"], ["pdf_ready", "PDF da generare"],
+test("manual Word work is distinct from PDF work; final views do not duplicate lifecycle states", () => {
+  assert.deepEqual(DDT_WORK_FILTERS, [["", "Tutti"], ["word_to_prepare", "Word da preparare"], ["pdf_ready", "PDF da generare"],
     ["waiting_incoming", "Incoming da completare"], ["anomalies", "Anomalie"]]);
   for (const scope of ["completed", "excluded", "archived"]) {
     assert.equal(isClosedQueueScope(scope), true);
