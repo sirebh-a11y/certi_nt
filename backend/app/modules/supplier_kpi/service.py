@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -9,10 +10,13 @@ from io import BytesIO
 from math import ceil
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.modules.acquisition.models import AcquisitionRow
-from app.modules.suppliers.models import Supplier  # noqa: F401
+from app.modules.acquisition.models import (
+    AcquisitionHistoryEvent, AcquisitionRow, CertificateMatch, Document, DocumentEvidence,
+)
+from app.modules.acquisition.service import _compute_block_states, _is_row_documentally_confirmed
 from app.modules.supplier_kpi.schemas import (
     SupplierKpiMetrics,
     SupplierKpiMonthBucket,
@@ -49,6 +53,8 @@ MAX_EXCEL_COLUMN_WIDTH = 48.0
 EXCEL_COLUMN_WIDTH_PADDING = 2.0
 DEFAULT_EXCEL_ROW_HEIGHT = 15.0
 MAX_EXCEL_ROW_HEIGHT = 409.0
+PENDING_PROPERTIES = "Da valutare – proprietà da completare"
+PENDING_JUDGMENT = "Da valutare"
 
 CHEMISTRY_EXPORT_FIELDS = [
     ("Si", ("si",)),
@@ -139,7 +145,13 @@ def build_supplier_kpi_summary(
         db,
         [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in rows],
     )
+    return _summarize_closed_rows(rows, year, supplier_id, period_months, non_working_dates)
 
+
+def _summarize_closed_rows(
+    rows: list[AcquisitionRow], year: int, supplier_id: int | None,
+    period_months: tuple[int, ...], non_working_dates: set[date],
+) -> SupplierKpiSummaryResponse:
     total_accumulator = _Accumulator()
     supplier_accumulators: dict[tuple[int | None, str], _Accumulator] = defaultdict(_Accumulator)
     month_accumulators: dict[int, _Accumulator] = defaultdict(_Accumulator)
@@ -187,27 +199,30 @@ def build_supplier_kpi_xlsx(
     month: int | None = None,
     quarter: int | None = None,
 ) -> bytes:
-    summary = build_supplier_kpi_summary(
-        db=db,
-        year=year,
-        supplier_id=supplier_id,
-        month=month,
-        quarter=quarter,
-    )
     period_label = _period_label(year=year, month=month, quarter=quarter)
-    supplier_label = summary.by_supplier[0].fornitore if supplier_id and len(summary.by_supplier) == 1 else "Tutti i fornitori"
     period_months = _period_months(month=month, quarter=quarter)
-    detail_rows = _filtered_kpi_rows(
-        db,
-        year=year,
-        supplier_id=supplier_id,
-        period_months=period_months,
-        include_values=True,
+    candidates = _filtered_kpi_rows(
+        db, year=year, supplier_id=supplier_id, period_months=period_months, for_export=True,
     )
+    # Use the same row classification for detail and totals even if Quality closes a lot during an export.
+    closed_rows: list[AcquisitionRow] = []
+    detail_rows: list[AcquisitionRow] = []
+    pending_labels: dict[int, str] = {}
+    for row in candidates:
+        if row.validata_finale:
+            closed_rows.append(row)
+        else:
+            blocks = _compute_block_states(row)
+            if not _is_row_documentally_confirmed(blocks) or blocks["chimica"] != "verde" or blocks["note"] != "verde":
+                continue
+            pending_labels[row.id] = PENDING_JUDGMENT if blocks["proprieta"] == "verde" else PENDING_PROPERTIES
+        detail_rows.append(row)
     non_working_dates = load_non_working_dates_for_ranges(
         db,
-        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in detail_rows],
+        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in closed_rows],
     )
+    summary = _summarize_closed_rows(closed_rows, year, supplier_id, period_months, non_working_dates)
+    supplier_label = _supplier_name(detail_rows[0]) if supplier_id is not None and detail_rows else "Tutti i fornitori"
 
     sheets = [
         (
@@ -277,6 +292,7 @@ def build_supplier_kpi_xlsx(
             period_label=period_label,
             supplier_label=supplier_label,
             non_working_dates=non_working_dates,
+            pending_labels=pending_labels,
         )
     )
     return _write_xlsx(sheets)
@@ -288,27 +304,41 @@ def _filtered_kpi_rows(
     year: int,
     supplier_id: int | None,
     period_months: tuple[int, ...],
-    include_values: bool = False,
+    for_export: bool = False,
 ) -> list[AcquisitionRow]:
     options = [joinedload(AcquisitionRow.supplier)]
-    if include_values:
-        options.append(selectinload(AcquisitionRow.values))
+    eligible = AcquisitionRow.validata_finale.is_(True)
+    if for_export:
+        open_candidate = and_(
+            AcquisitionRow.qualita_valutazione.is_(None),
+            AcquisitionRow.document_ddt_id.is_not(None),
+            AcquisitionRow.document_certificato_id.is_not(None),
+            AcquisitionRow.ai_processing_status.is_distinct_from("in_lavorazione"),
+            AcquisitionRow.certificate_match.has(CertificateMatch.stato == "confermato"),
+        )
+        eligible = or_(eligible, open_candidate)
+        options.extend((
+            selectinload(AcquisitionRow.values),
+            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
+            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
+            joinedload(AcquisitionRow.certificate_match),
+            selectinload(AcquisitionRow.history_events).load_only(AcquisitionHistoryEvent.blocco, AcquisitionHistoryEvent.azione),
+            # The canonical match check only reads the text for Leichtmetall group markers.
+            selectinload(AcquisitionRow.evidences).load_only(DocumentEvidence.tipo_evidenza),
+        ))
+    # Months supplied by _period_months are contiguous (one month, cumulative quarter, or year).
+    first, last = period_months[0], period_months[-1]
+    start, end = date(year, first, 1), date(year, last, monthrange(year, last)[1])
     query = (
         db.query(AcquisitionRow)
         .options(*options)
-        .filter(AcquisitionRow.validata_finale.is_(True))
-        .filter(AcquisitionRow.qualita_data_ricezione.is_not(None))
-        .filter(AcquisitionRow.qualita_data_ricezione >= date(year, 1, 1))
-        .filter(AcquisitionRow.qualita_data_ricezione <= date(year, 12, 31))
+        .filter(eligible)
+        .filter(AcquisitionRow.qualita_data_ricezione.between(start, end))
     )
     if supplier_id is not None:
         query = query.filter(AcquisitionRow.fornitore_id == supplier_id)
 
-    rows = [
-        row
-        for row in query.all()
-        if row.qualita_data_ricezione and row.qualita_data_ricezione.month in period_months
-    ]
+    rows = query.all()
     rows.sort(key=lambda row: (_supplier_name(row).lower(), row.qualita_data_ricezione or date.min, row.id))
     return rows
 
@@ -319,6 +349,7 @@ def _supplier_detail_sheets(
     period_label: str,
     supplier_label: str,
     non_working_dates: set[date] | None = None,
+    pending_labels: dict[int, str] | None = None,
 ) -> list[tuple[str, list[list[object]]]]:
     rows_by_supplier: dict[tuple[int | None, str], list[AcquisitionRow]] = defaultdict(list)
     for row in rows:
@@ -337,6 +368,7 @@ def _supplier_detail_sheets(
                     period_label=period_label,
                     supplier_label=name if supplier_label == "Tutti i fornitori" else supplier_label,
                     non_working_dates=non_working_dates,
+                    pending_labels=pending_labels,
                 ),
             )
         )
@@ -349,7 +381,9 @@ def _supplier_detail_rows(
     period_label: str,
     supplier_label: str,
     non_working_dates: set[date] | None = None,
+    pending_labels: dict[int, str] | None = None,
 ) -> list[list[object]]:
+    pending_labels = pending_labels or {}
     headers = [
         "N.",
         "Data ricezione",
@@ -387,13 +421,14 @@ def _supplier_detail_rows(
             _clean_cell(row.ordine),
             _format_date(row.qualita_data_richiesta),
             _quality_control_type_label(row.qualita_tipo_controllo),
-            _quality_label(row.qualita_valutazione),
+            pending_labels.get(row.id) or _quality_label(row.qualita_valutazione),
             row.qualita_numero_colli if row.qualita_numero_colli is not None else "",
             _clean_cell(row.qualita_note),
             _delay_days(row),
-            _control_time_days(row, non_working_dates),
+            "" if row.id in pending_labels else _control_time_days(row, non_working_dates),
             *[_read_value(row, "chimica", aliases) for _label, aliases in CHEMISTRY_EXPORT_FIELDS],
-            *[_read_value(row, "proprieta", aliases) for _label, aliases in PROPERTY_EXPORT_FIELDS],
+            *[_read_value(row, "proprieta", aliases, confirmed_only=pending_labels.get(row.id) == PENDING_PROPERTIES)
+              for _label, aliases in PROPERTY_EXPORT_FIELDS],
         ]
         for row in rows
     ]
@@ -424,9 +459,11 @@ def _unique_sheet_name(name: str, used_names: set[str]) -> str:
         counter += 1
 
 
-def _read_value(row: AcquisitionRow, block: str, aliases: tuple[str, ...]) -> str:
+def _read_value(row: AcquisitionRow, block: str, aliases: tuple[str, ...], *, confirmed_only: bool = False) -> str:
     alias_keys = {_field_key(alias) for alias in aliases}
     for value in row.values:
+        if confirmed_only and value.stato != "confermato":
+            continue
         if _field_key(value.blocco) == _field_key(block) and _field_key(value.campo) in alias_keys:
             return _clean_cell(value.valore_finale or value.valore_standardizzato or value.valore_grezzo)
     return "-"
