@@ -1,5 +1,31 @@
 # Metalba: DDT multipagina e multicolata – 02/11/2026
 
+## Aggiornamento locale del 20/11/2026 (non distribuito)
+
+- I pezzi restano evidenza della fonte: una discordanza sul loro totale non blocca
+  Incoming né richiede una rilettura. Restano vincolanti posizione materiale, kg,
+  colata, identità/numero dei colli e copertura pagine. Il match è invariato.
+- Primo prompt invariato. Il secondo e ultimo tentativo mantiene le pagine integrali
+  mascherate e, quando localizzabile, aggiunge il ritaglio del collo o della tabella.
+  La trascrizione OCR serve a individuare contraddizioni, non a riempire campi.
+  Nessuna sostituzione automatica tra B e 8, né ripartizione per differenza.
+- Per una sola posizione, la trascrizione ambigua `5,466` può valere 5.466 kg
+  solo se la somma dei netti coincide con un riepilogo stampato indipendente con
+  lo stesso numero di colli. Non è una conversione generale dei decimali o dei singoli pesi.
+- Collaudo locale con GPT-5.5 e pagine mascherate: **26-03705**, 6 colli, 5.466 kg,
+  colata 26281B, certificato 26-2864; **26-03804**, 3 colli, 1.883 kg, 26268A,
+  certificato 26-2944 (28 pezzi nelle righe contro 21 nel totale stampato).
+  I motivi osservati nel replay non sono una ricostruzione della risposta AI storica.
+  Test di matching in SQLite isolato con certificati concorrenti della stessa colata.
+  Nella prova finale sul primo DDT la risposta AI riportava testualmente `5,466`
+  sulla riga commerciale e `5.466,00` nel riepilogo; sul secondo, il tentativo mirato
+  ha chiesto di verificare la colata del solo TK2621477. Sette chiamate complessive
+  tra diagnosi e verifica: stima 0,426135 USD; conteggio prudenziale 0,681816 EUR su 1 EUR.
+- Per un futuro deploy distribuire anche `metalba_packing_review.py`, insieme al
+  parser Metalba, al lettore documenti e al servizio di acquisizione. Nessuna modifica
+  schema, scansione dello storico o rielaborazione dei due DDT già trattati a mano.
+  La descrizione del 02/11 sotto documenta il funzionamento precedente.
+
 ## Perimetro
 
 Implementazione autorizzata **in locale**, con audit prima/dopo e prove estese.

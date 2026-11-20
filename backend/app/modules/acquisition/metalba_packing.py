@@ -12,8 +12,10 @@ from fastapi import HTTPException
 
 
 class MetalbaPackingReviewRequired(HTTPException):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, pages=(), package_id=None):
         super().__init__(status_code=409, detail=f"DDT Metalba: lettura da verificare. {reason}")
+        self.pages = tuple(sorted({p for p in pages if type(p) is int and p > 0}))
+        self.package_id = package_id
 
 
 def token(value: object) -> str | None:
@@ -38,10 +40,17 @@ def number(value: object) -> Decimal | None:
     text = token(value)
     if text is None:
         return None
-    text = re.sub(r"\s*(?:kg|pezzi|pcs)\s*$", "", text, flags=re.I).replace(" ", "")
+    text = re.sub(r"\s*kg\s*$", "", text, flags=re.I)
+    if " " in text:
+        # Allow printed thousands groups, never concatenate an annotation and a weight.
+        if not re.fullmatch(r"\d{1,3}(?: \d{3})+(?:,\d+)?", text):
+            return None
+        text = text.replace(" ", "")
     if not re.fullmatch(r"\d+(?:[.,]\d+)*", text):
         return None
-    if "," in text:
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+\.\d+", text):
+        text = text.replace(",", "")  # Explicit English thousands AND decimal mark.
+    elif "," in text:
         if text.count(",") != 1:
             return None
         integer, decimal = text.split(",")
@@ -64,7 +73,10 @@ def formatted(value: Decimal) -> str:
 
 
 def _integer(value: object) -> int | None:
-    parsed = number(value)
+    text = token(value)
+    if text is None or re.search(r"kg\s*$", text, re.I):
+        return None
+    parsed = number(re.sub(r"\s*(?:pezzi|pcs|colli)\s*$", "", text, flags=re.I))
     return int(parsed) if parsed is not None and parsed % 1 == 0 else None
 
 
@@ -107,6 +119,7 @@ def require_complete_pages(document) -> None:
 
 def reconstruct_rows(
     payload: dict, *, expected_pages: set[int] | None = None, packing_expected: bool = False,
+    printed_summary: tuple[int, Decimal] | None = None,
 ) -> list[dict]:
     """Accept legacy row payloads offline; live callers require page coverage.
 
@@ -163,20 +176,26 @@ def reconstruct_rows(
         page = pack.get("page_number")
         location = pack.get("packing_row_index")
         package_id = token(pack.get("package_id_raw"))
-        if (not cast or not re.fullmatch(r"[A-Z0-9]{3,64}", cast) or not re.search(r"\d", cast)
-                or weight is None or weight <= 0):
-            raise MetalbaPackingReviewRequired("Colata o peso netto di un collo mancanti o non leggibili.")
+        safe_id = package_id if re.fullmatch(r"[A-Za-z0-9_-]{1,40}", package_id or "") else None
+        where = safe_id or (f"riga {location}" if type(location) is int else "senza ID")
+        bad_fields = []
+        if not cast or not re.fullmatch(r"[A-Z0-9]{3,64}", cast) or not re.search(r"\d", cast):
+            bad_fields.append("colata")
+        if weight is None or weight <= 0:
+            bad_fields.append("peso netto")
+        if bad_fields:
+            raise MetalbaPackingReviewRequired(
+                f"Collo {where}: verificare {' e '.join(bad_fields)} nella relativa colonna stampata.",
+                pages=[page], package_id=safe_id)
         if type(page) is not int or page < 1 or (expected_pages is not None and page not in expected_pages):
             raise MetalbaPackingReviewRequired("Pagina di provenienza di un collo mancante o non valida.")
-        if token(pack.get("pieces_raw")) is not None and pieces is None:
-            raise MetalbaPackingReviewRequired("Numero pezzi di un collo non valido.")
         if package_id:
             identity = ("id", package_id.upper().replace(" ", ""))
         elif type(location) is int and location > 0:
             identity = ("position", page, location)
         else:
             raise MetalbaPackingReviewRequired("Un collo non ha identificativo né posizione verificabile nella pagina.")
-        fingerprint = (index, cast, weight, pieces)
+        fingerprint = (index, cast, weight)
         previous = unique.get(identity)
         if previous:
             if previous[0] != fingerprint:
@@ -192,6 +211,16 @@ def reconstruct_rows(
     if not isinstance(totals, dict):
         raise MetalbaPackingReviewRequired("Riepilogo lista imballi non valido.")
     total_weight = sum((g["weight"] for g in grouped.values()), Decimal(0))
+    def net_total(raw):
+        parsed = number(raw)
+        # A lone comma can mean decimal OR thousands in a model transcription.
+        # Resolve ONLY for an entire verified single-position shipment, never for a package.
+        value = token(raw) or ""
+        if (len(material) == 1 and printed_summary == (len(unique), total_weight)
+                and re.fullmatch(r"\d{1,3},\d{3}", value) and parsed != total_weight
+                and Decimal(value.replace(",", "")) == total_weight):
+            return total_weight
+        return parsed
     total_pieces = sum((g["pieces"] or 0 for g in grouped.values()))
     all_pieces_read = all(g["pieces"] is not None for g in grouped.values())
     header_totals = []
@@ -199,33 +228,41 @@ def reconstruct_rows(
         selected = [g for (key, _), g in grouped.items() if key == index]
         if not selected:
             raise MetalbaPackingReviewRequired("Una riga materiale non è coperta dalla lista imballi.")
-        header = number(row.get("net_weight_raw"))
+        header = net_total(row.get("net_weight_raw"))
         if token(row.get("net_weight_raw")) is not None and header is None:
             raise MetalbaPackingReviewRequired("Peso della riga materiale non valido.")
         if header is not None:
             header_totals.append(header)
             if abs(sum((g["weight"] for g in selected), Decimal(0)) - header) > Decimal("0.01"):
-                raise MetalbaPackingReviewRequired("La somma dei colli non coincide con il peso della riga materiale.")
-    printed_total = number(totals.get("net_weight_raw"))
+                subtotal = sum(g["weight"] for g in selected)
+                raise MetalbaPackingReviewRequired(
+                    f"Posizione {index}: somma dei netti {formatted(subtotal)} kg, netto riga {formatted(header)} kg. "
+                    "Verificare la colonna Peso Netto dei colli e il netto della posizione.",
+                    pages=[p["page_number"] for g in selected for p in g["packages"]])
+    printed_total = net_total(totals.get("net_weight_raw"))
     if token(totals.get("net_weight_raw")) is not None and printed_total is None:
         raise MetalbaPackingReviewRequired("Peso totale della lista imballi non valido.")
     if printed_total is None and len(header_totals) != len(material):
         raise MetalbaPackingReviewRequired("Manca un peso totale verificabile per controllare la lettura dei colli.")
     if printed_total is not None and abs(total_weight - printed_total) > Decimal("0.01"):
-        raise MetalbaPackingReviewRequired("La somma dei colli non coincide con il totale netto del DDT.")
-    for key, computed in (("package_count_raw", len(unique)), ("pieces_raw", total_pieces)):
-        raw = totals.get(key)
-        if token(raw) is not None:
-            parsed = _integer(raw)
-            if parsed is None or parsed != computed or (key == "pieces_raw" and not all_pieces_read):
-                raise MetalbaPackingReviewRequired("Numero colli o pezzi non coerente con il riepilogo stampato.")
+        raise MetalbaPackingReviewRequired(
+            f"Somma dei netti {formatted(total_weight)} kg, totale DDT {formatted(printed_total)} kg. "
+            "Verificare la colonna Peso Netto e il riepilogo.", pages=[p["page_number"] for _, p in unique.values()])
+    count = totals.get("package_count_raw")
+    if token(count) is not None and _integer(count) != len(unique):
+        raise MetalbaPackingReviewRequired("Numero colli diverso dal riepilogo stampato.",
+                                          pages=[p["page_number"] for _, p in unique.values()])
+    # Pieces are source evidence only, not used for Incoming identity, weight or matching.
+    printed_pieces = totals.get("pieces_raw")
+    piece_discrepancy = token(printed_pieces) is not None and (
+        not all_pieces_read or _integer(printed_pieces) != total_pieces)
 
     result = []
     for (index, cast), group in grouped.items():
         row = dict(material[index])
         row.update(row_index=len(result) + 1, commercial_row_index=index, colata_raw=cast,
                    net_weight_raw=formatted(group["weight"]), packing_packages=group["packages"],
-                   packing_piece_total=group["pieces"], packing_totals=totals,
+                   packing_piece_total=group["pieces"], packing_totals=totals, packing_piece_discrepancy=piece_discrepancy,
                    pages_read=payload.get("pages_read"), packing_list_present=True,
                    packing_cast_count=sum(1 for material_index, _ in grouped if material_index == index))
         row["source_crops"] = list(dict.fromkeys(

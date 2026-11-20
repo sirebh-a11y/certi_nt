@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.core.config import settings
 from app.modules.acquisition.models import AcquisitionRow, Document
+from app.modules.acquisition.metalba_packing import number as metalba_number, formatted as metalba_formatted
 from app.modules.document_reader.decision_engine import build_default_decision_rules
 from app.modules.document_reader.registry import resolve_supplier_template, resolve_supplier_template_by_key
 from app.modules.document_reader.schemas import (
@@ -1456,16 +1457,14 @@ def _extract_metalba_candidate_diameter(lines: list[str]) -> str | None:
 
 
 def _extract_metalba_candidate_weight(lines: list[str]) -> str | None:
-    for line in lines:
-        match = re.search(r"\bPESO\s+NETTO\s+KG\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?)\b", line)
-        if match is not None:
-            return _normalize_split_weight(match.group(1))
-    for line in lines:
-        if "TOTALI" not in line:
-            continue
-        matches = re.findall(r"[0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]+)?", line)
-        if matches:
-            return _normalize_split_weight(matches[0])
+    for label in (r"\bPESO\s+NETTO\s+KG", r"\bTOTALI\b"):
+        for line in lines:
+            # Read the first printed column AFTER its label: "NR. COLLI: 3 TOTALI: 1.883,00 ...".
+            match = re.search(label + r"\s*:?\s*([0-9][0-9.,]*)(?=\s|$)", line)
+            if match and (value := metalba_number(match[1])) is not None:
+                if match[1].isdigit() and re.match(r"\s+\d", line[match.end():]):
+                    continue  # Possible annotation or spaced thousands: never take a partial cell.
+                return metalba_formatted(value)
     return None
 
 

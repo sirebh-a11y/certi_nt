@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from io import BytesIO
 import json
 import logging
 import math
@@ -186,6 +187,11 @@ from app.modules.acquisition.metalba_packing import (
     casts_conflict as metalba_casts_conflict,
     reconstruct_rows as reconstruct_metalba_packing_rows,
     require_complete_pages as require_complete_metalba_pages,
+)
+from app.modules.acquisition.metalba_packing_review import (
+    printed_packages as metalba_printed_packages, printed_summary as metalba_printed_summary,
+    check_printed_packages as check_metalba_print,
+    remember_first_fields as remember_metalba_first_fields, zoom_box as metalba_zoom_box,
 )
 from app.modules.acquisition.ddt_packing import (
     DdtPackingReviewRequired, SUPPORTED_SUPPLIERS as DDT_SAFE_SUPPLIERS,
@@ -24994,11 +25000,13 @@ def _extract_metalba_ddt_row_groups_with_vision(
     if fallback_ddt is None:
         fallback_ddt = _sanitize_metalba_ddt_number_candidate(Path(ddt_document.nome_file_originale).stem)
 
+    page_lines = [(p.numero_pagina, reader_page_lines(p)) for p in ddt_document.pages]
     ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_metalba_ddt_row_groups_from_openai(
         crop_definitions,
         openai_api_key=openai_api_key,
+        printed_packages=metalba_printed_packages(page_lines), printed_summary=metalba_printed_summary(page_lines),
         packing_expected=any("LISTA IMBALLI" in reader_normalize_line(line)
-                             for page in ddt_document.pages for line in reader_page_lines(page)),
+                             for _, lines in page_lines for line in lines),
     )
     candidates = _sanitize_metalba_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
@@ -25052,6 +25060,8 @@ def _extract_metalba_ddt_row_groups_from_openai(
     *,
     openai_api_key: str,
     packing_expected: bool = False,
+    printed_packages=None,
+    printed_summary=None,
 ) -> tuple[str | None, list[dict[str, object]], str]:
     client = _make_openai_client(openai_api_key)
     content: list[dict[str, str]] = [
@@ -25134,6 +25144,7 @@ def _extract_metalba_ddt_row_groups_from_openai(
         )
 
     expected_pages = {int(crop["page_number"]) for crop in crops.values()}
+    first_disputes = {}
     # One semantic retry of this DDT only. A failed quadrature must not trigger
     # the worker's generic retry loop or send historical certificates again.
     for attempt in range(2):
@@ -25149,6 +25160,7 @@ def _extract_metalba_ddt_row_groups_from_openai(
                 raise MetalbaPackingReviewRequired("Risposta di lettura incompleta.")
             parsed = _parse_openai_json_payload_for_metalba_row_groups(
                 response.output_text, expected_pages=expected_pages, packing_expected=packing_expected,
+                printed_packages=printed_packages, printed_summary=printed_summary, first_disputes=first_disputes, retry=bool(attempt),
             )
             return (*parsed, response.output_text)
         except HTTPException as exc:
@@ -25156,11 +25168,39 @@ def _extract_metalba_ddt_row_groups_from_openai(
                 if isinstance(exc, MetalbaPackingReviewRequired):
                     raise
                 raise MetalbaPackingReviewRequired("Risposta non valida anche dopo la rilettura; nessuna riga parziale applicata.") from exc
-            content.append({"type": "input_text", "text": (
+            content = [*content, {"type": "input_text", "text": (
                 "Il controllo automatico ha rilevato: " + str(exc.detail)[:600]
-                + " Riesamina tutte le pagine del SOLO DDT allegato; trascrivi ogni collo e i totali senza inventare o distribuire differenze."
-            )})
+                + " Controlla la riga indicata tramite il codice TK, o, se non si conosce la riga, "
+                "tutta la colonna Peso Netto e il totale. Non prendere peso lordo, numero colli o valori a penna. "
+                "Non uniformare colate simili. Restituisci ancora il JSON completo di tutte le pagine; "
+                "eventuali ingrandimenti sono dettagli delle pagine originali, non altri colli."
+            )}]
+            if isinstance(exc, MetalbaPackingReviewRequired):
+                content.extend(_metalba_retry_zooms(crops, exc))
     raise AssertionError("unreachable")
+
+
+def _metalba_retry_zooms(crops, reason):
+    extra = []
+    for crop in crops.values():
+        pg = crop["page_number"]
+        if pg not in reason.pages or len(extra) >= 6:
+            continue
+        try:
+            with Image.open(BytesIO(_resolve_storage_path(str(crop["storage_key"])).read_bytes())) as masked:
+                box = metalba_zoom_box(_extract_ocr_word_blocks(masked), *masked.size, reason.package_id)
+                if not box:
+                    continue
+                zoom = masked.crop(box)
+                zoom.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
+                with BytesIO() as buf:
+                    zoom.save(buf, "PNG")
+                    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        except (OSError, ValueError, pytesseract.TesseractError):
+            continue  # Zoom is optional; retry always retains all original pages.
+        extra.extend([{"type": "input_text", "text": f"Ingrandimento della pagina {pg}, non è una pagina aggiuntiva."},
+                      {"type": "input_image", "detail": "high", "image_url": f"data:image/png;base64,{encoded}"}])
+    return extra
 
 
 def _parse_openai_json_payload_for_metalba_row_groups(
@@ -25168,6 +25208,7 @@ def _parse_openai_json_payload_for_metalba_row_groups(
     *,
     expected_pages: set[int] | None = None,
     packing_expected: bool = False,
+    printed_packages=None, printed_summary=None, first_disputes=None, retry=False,
 ) -> tuple[str | None, list[dict[str, object]]]:
     text = payload.strip()
     if text.startswith("```"):
@@ -25187,9 +25228,16 @@ def _parse_openai_json_payload_for_metalba_row_groups(
     if not isinstance(data, dict):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unexpected Metalba DDT row-group AI payload")
 
-    rows_payload = reconstruct_metalba_packing_rows(
-        data, expected_pages=expected_pages, packing_expected=packing_expected,
-    )
+    try:
+        rows_payload = reconstruct_metalba_packing_rows(
+            data, expected_pages=expected_pages, packing_expected=packing_expected, printed_summary=printed_summary,
+        )
+    except MetalbaPackingReviewRequired:
+        if not retry and printed_packages and first_disputes is not None:
+            remember_metalba_first_fields(data.get("packages"), printed_packages, first_disputes)
+        raise
+    if printed_packages and first_disputes is not None:
+        check_metalba_print(rows_payload, printed_packages, first_disputes=first_disputes, retry=retry)
 
     normalized_rows: list[dict[str, object]] = []
     for index, raw_row in enumerate(rows_payload, start=1):

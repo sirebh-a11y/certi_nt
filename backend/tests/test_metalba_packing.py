@@ -91,13 +91,19 @@ class MetalbaPackingTest(unittest.TestCase):
     def test_missing_cast_bad_weight_missing_identity_and_ambiguous_row(self):
         for fields in (dict(colata_raw=None),dict(net_weight_raw="0"),dict(net_weight_raw="NaN"),
                        dict(package_id_raw=None,packing_row_index=None),dict(material_row_index=99),
-                       dict(page_number=4),dict(pieces_raw="1.5")):
+                       dict(page_number=4)):
             p=fixture();p["packages"][0].update(fields);self.assert_bad(p)
 
-    def test_counts_totals_and_piece_missing_are_checked(self):
-        for key,value in (("package_count_raw","29"),("pieces_raw","525"),("net_weight_raw","22.076,00")):
+    def test_piece_discrepancies_not_blocking_but_kg_and_packages_still_checked(self):
+        for key,value in (("package_count_raw","29"),("net_weight_raw","22.076,00")):
             p=fixture();p["packing_totals"][key]=value;self.assert_bad(p)
-        p=fixture();p["packages"][0]["pieces_raw"]=None;self.assert_bad(p)
+        for v in (None,"1.5","13 note"):
+            p=fixture();p["packages"][0]["pieces_raw"]=v
+            self.assertTrue(reconstruct_rows(p)[0]["packing_piece_discrepancy"])
+        p=fixture();p["packing_totals"]["pieces_raw"]="525"
+        self.assertEqual(len(reconstruct_rows(p)),3)
+        p=fixture();p["packages"].append(dict(p["packages"][0],pieces_raw="1.5"))
+        self.assertEqual(reconstruct_rows(p)[0]["net_weight_raw"],"2143")
 
     def test_no_residual_allocation_or_material_mix(self):
         p=fixture();p["packages"][0]["net_weight_raw"]="540";self.assert_bad(p)
