@@ -48,7 +48,7 @@ def file_hash(key):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def word_facts(key, *, ignore_number=False, compare_managed_layout=False):
+def word_facts(key, *, ignore_number=False, compare_managed_layout=False, peer_fields=None):
     """Keep raw layout by default; source equivalence may canonicalize app layout.
 
     Shipment values are ignored, never manual/technical text or image content.
@@ -72,10 +72,33 @@ def word_facts(key, *, ignore_number=False, compare_managed_layout=False):
                     tag = tags[0]
                     values = node.xpath('./w:sdtContent//w:t/text()', namespaces=NS)
                     value = ''.join(values)
+                    if peer_fields is not None and tag in peer_fields and tag in controls:
+                        raise ValueError('ambiguous_shipment_control')
                     if tag in controls and controls[tag] != value:
                         raise ValueError('duplicate_content_control')
                     controls[tag] = value
-                    if tag in SHIPMENT_TAGS or (ignore_number and tag == 'CERT_NUMBER'):
+                    if peer_fields is not None:
+                        # Peer PDF comparison only. Preserve runs, images, fields,
+                        # signatures and formatting; mask only verified header text.
+                        header = name.startswith('word/header') and '/' not in name[5:]
+                        if tag in peer_fields and not header:
+                            raise ValueError('shipment_control_outside_header')
+                        if header and tag in peer_fields:
+                            for t in node.xpath('./w:sdtContent//w:t', namespaces=NS):
+                                t.text = None
+                        if header and not value and tag in {
+                            'COD_F3_RAW', 'RAW_DESCRIPTION', 'COD_F3_FINISHED', 'FINISHED_DESCRIPTION',
+                            'DDT_RAW', 'QUANTITY_RAW', 'DDT_FINISHED', 'QUANTITY_FINISHED',
+                        }:
+                            # Compare an unpopulated plain control against precisely
+                            # the empty run that our own download writer would add.
+                            from app.modules.quarta_taglio.certificate_docx import _populate_empty_text_control
+                            xml = etree.tostring(node, encoding='unicode', with_tail=False)
+                            if not node.xpath('./w:sdtContent/*', namespaces=NS):
+                                canonical = _populate_empty_text_control(xml, tag, '')
+                                if canonical != xml:
+                                    node.getparent().replace(node, etree.fromstring(canonical.encode()))
+                    elif tag in SHIPMENT_TAGS or (ignore_number and tag == 'CERT_NUMBER'):
                         for content in node.xpath('./w:sdtContent', namespaces=NS):
                             content.clear()
                 data = etree.tostring(root, method='c14n')

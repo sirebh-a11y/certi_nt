@@ -38,6 +38,176 @@ class WordReferenceTest(existing.DdtWordReuseTest):
         self.db.expire_all()
         return self.db.scalar(select(C).where(C.unit_key == item.certification_unit_key))
 
+    def worked_siblings(self, *, different=False):
+        """Two explicit Word uploads for 375 and 3 pieces of the same DDT."""
+        from app.modules.quarta_taglio import ddt_shipments as ships
+        first, source = self.base_word(closed=True)
+        first.quantita = source.quantita = 375
+        source.conformity_status = 'conforme'
+        self.db.commit()
+        second = self.later(IdDocumento=first.id_documento, DDT=first.ddt_raw,
+                            ODVCli=first.ordine_cliente, ODVF3=first.conferma_ordine, QtaUmMag=3)
+        ships.record(self.db, source, first)
+        def fill(c, values):
+            key = service._certificate_docx_storage_key(c.cod_odp)
+            reuse.update_docx_content_controls(service._certificate_storage_path(c.storage_key_docx),
+                                               service._certificate_storage_path(key), values)
+            c.storage_key_docx = key
+        fill(source, reuse.shipment_values(first, source, reuse.word_facts(source.storage_key_docx)[0], db=self.db))
+        self.publish(source)
+        self.assertEqual(self.run_worker()['prepared'], 1)
+        target = self.target(second)
+        target.word_source = source.word_source = 'user_uploaded'
+        if different:
+            self.edit(target, 'EXTRA PAGE ON THIS SHARE ONLY')
+        else:
+            self.publish(target)
+        self.publish(source)  # The 375-piece Word was saved last.
+        return second, target, source
+
+    def test_pdf_worked_siblings_quantities_only_never_replaces_selected_word(self):
+        item, target, source = self.worked_siblings()
+        original = [reuse.file_hash(k) for k in (source.storage_key_docx, source.storage_key_pdf, target.storage_key_docx)]
+        self.assertIsNone(refs.pending_message(self.db, target))
+        row = next(r for r in self.read().items if r.id == item.id)
+        self.assertEqual(row.pdf_action.id, target.id)
+        def convert(doc, path):
+            import hashlib
+            self.assertEqual(hashlib.sha256(doc.read_bytes()).hexdigest(), original[2])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'%PDF-1.4 isolated test')
+        with patch.object(service, 'convert_docx_to_pdf', side_effect=convert), patch.object(service,
+                '_build_standard_conformity', return_value=('conforme', [])):
+            result = service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id,
+                actor=self.actor, ddt_work_item_id=item.id, ddt_source_revision=row.source_revision)
+        self.assertEqual(result.status, 'pdf_final')
+        self.assertEqual(original, [reuse.file_hash(k) for k in (source.storage_key_docx, source.storage_key_pdf, target.storage_key_docx)])
+
+    def test_pdf_different_worked_sibling_only_after_confirming_exact_current_files(self):
+        item, target, source = self.worked_siblings(different=True)
+        info = self.detail(item, certificate_id=target.id).word_info
+        self.assertTrue(info.copy_update_optional)
+        self.assertFalse(info.copy_update_required)
+        with patch.object(service, 'convert_docx_to_pdf', side_effect=AssertionError('no implicit consent')):
+            with self.assertRaises(HTTPException) as warning:
+                service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id, actor=self.actor)
+        self.assertEqual(warning.exception.detail['code'], 'confirm_share_word')
+        old = warning.exception.detail['token']
+        self.edit(target, 'ANOTHER EDIT')
+        self.publish(source)
+        with self.assertRaises(HTTPException) as warning:
+            service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id, actor=self.actor,
+                                                           peer_word_token=old)
+        token = warning.exception.detail['token']
+        self.assertNotEqual(old, token)
+        def convert(doc, path):
+            self.assertIn('ANOTHER EDIT', [p.text for p in Document(doc).paragraphs])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'%PDF-1.4 isolated test')
+        with patch.object(service, 'convert_docx_to_pdf', side_effect=convert), patch.object(service,
+                '_build_standard_conformity', return_value=('conforme', [])):
+            result = service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id,
+                actor=self.actor, peer_word_token=token)
+        self.assertEqual(result.status, 'pdf_final')
+        self.assertEqual(refs.declared(refs.sources_for(self.db, target.cod_odp, target.cod_f3)).id, source.id)
+
+    def test_wrong_quantity_in_explicit_upload_never_offers_confirmation(self):
+        _, target, source = self.worked_siblings()
+        key = service._certificate_docx_storage_key(target.cod_odp)
+        reuse.update_docx_content_controls(service._certificate_storage_path(target.storage_key_docx),
+            service._certificate_storage_path(key), {'QUANTITY_RAW': '375 of 378'})
+        target.storage_key_docx = key
+        self.publish(target)
+        self.publish(source)
+        with self.assertRaises(HTTPException) as blocked:
+            refs.require_current_material(self.db, target, peer_word_token='0' * 64)
+        self.assertIsInstance(blocked.exception.detail, str)
+        self.assertIsNotNone(refs.pending_message(self.db, target))
+
+    def test_peer_consent_neither_overrides_live_conformity_nor_survives_edit_during_conversion(self):
+        _, target, source = self.worked_siblings(different=True)
+        token = refs.pdf_reference_check(self.db, target)[1].token
+        def generate():
+            service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id,
+                actor=self.actor, peer_word_token=token)
+        with patch.object(service, '_build_standard_conformity', return_value=('non_conforme', [])), \
+                patch.object(service, 'convert_docx_to_pdf', side_effect=AssertionError('must not convert')):
+            with self.assertRaises(HTTPException) as blocked:
+                generate()
+            self.assertIn('conformità', blocked.exception.detail)
+        paths = []
+        def concurrent_upload(doc, output):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b'%PDF-1.4 not for publication')
+            paths.append(output)
+            self.edit(target, 'NEW UPLOAD WHILE CONVERSION IS RUNNING')
+        with patch.object(service, '_build_standard_conformity', return_value=('conforme', [])), \
+                patch.object(service, 'convert_docx_to_pdf', side_effect=concurrent_upload):
+            with self.assertRaises(HTTPException) as blocked:
+                generate()
+            self.assertIn('durante la conversione', blocked.exception.detail)
+        self.assertEqual(len(paths), 1)
+        self.assertFalse(paths[0].exists())
+        self.assertIsNone(target.storage_key_pdf)
+        self.assertEqual(source.status, 'pdf_final')
+
+    def test_replaced_share_or_missing_history_is_not_a_confirmable_peer(self):
+        item, target, source = self.worked_siblings(different=True)
+        item.source_present = False
+        self.db.commit()
+        self.assertIsNotNone(refs.pending_message(self.db, target))
+        item.source_present = True
+        target.shipment_context = None
+        self.db.commit()
+        self.assertIsNotNone(refs.pending_message(self.db, target))
+
+    def test_empty_inactive_controls_populated_by_certi_are_not_a_manual_edit(self):
+        from zipfile import ZipFile
+        from lxml import etree
+        _, target, source = self.worked_siblings()
+        with ZipFile(service._certificate_storage_path(target.storage_key_docx)) as z:
+            key = service._certificate_docx_storage_key(target.cod_odp)
+            with ZipFile(service._certificate_storage_path(key), 'w') as dest:
+                for entry in z.infolist():
+                    data = z.read(entry)
+                    if entry.filename == 'word/header1.xml':
+                        root = etree.fromstring(data)
+                        for tag in ('COD_F3_FINISHED', 'FINISHED_DESCRIPTION'):
+                            nodes = root.xpath('//w:sdt[w:sdtPr/w:tag/@w:val=$tag]/w:sdtContent',
+                                               namespaces=reuse.NS, tag=tag)
+                            self.assertEqual(len(nodes), 1)
+                            for child in list(nodes[0]):
+                                nodes[0].remove(child)
+                        data = etree.tostring(root)
+                    dest.writestr(entry, data)
+        target.storage_key_docx = key
+        self.publish(target)
+        dest = service._certificate_docx_storage_key(source.cod_odp)
+        reuse.update_docx_content_controls(service._certificate_storage_path(key), service._certificate_storage_path(dest),
+                  {'COD_F3_FINISHED': '', 'FINISHED_DESCRIPTION': '', 'QUANTITY_RAW': '375 of 378'})
+        source.storage_key_docx = dest
+        self.publish(source)
+        self.assertNotEqual(reuse.word_facts(key)[1], reuse.word_facts(dest)[1])
+        block, peer = refs.pdf_reference_check(self.db, target)
+        self.assertIsNone(block)
+        self.assertIsNotNone(peer)
+        self.assertIsNone(peer.token)
+
+    @unittest.skipUnless(os.environ.get('CERTI_TEST_RENDER_PEER_PDF'), 'opt-in local LibreOffice conversion')
+    def test_real_pdf_keeps_manual_page_and_own_quantity(self):
+        import fitz
+        _, target, _ = self.worked_siblings(different=True)
+        with self.assertRaises(HTTPException) as warning:
+            service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id, actor=self.actor)
+        with patch.object(service, '_build_standard_conformity', return_value=('conforme', [])):
+            service.generate_quarta_taglio_certificate_pdf(self.db, certificate_id=target.id,
+                actor=self.actor, peer_word_token=warning.exception.detail['token'])
+        with fitz.open(service._certificate_storage_path(target.storage_key_pdf)) as pdf:
+            text = ' '.join(' '.join(page.get_text().split()) for page in pdf)
+            self.assertIn('3 of 378', text)
+            self.assertNotIn('375 of 378', text)
+            self.assertIn('EXTRA PAGE ON THIS SHARE ONLY', text)
+
     def test_explicit_completion_is_reference_not_latest_created_copy(self):
         _, source = self.base_word(closed=False)
         self.publish(source, 'generated')

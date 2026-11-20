@@ -138,7 +138,7 @@ export default function DdtWorkQueuePage() {
     return () => { cancelled = true; };
   }, [token, refresh]);
 
-  async function generatePdf(fileName) {
+  async function generatePdf(fileName, peerWordToken) {
     if (pdfBusyRef.current || !pdfDialog?.pdf_action) return;
     pdfBusyRef.current = true;
     setPdfBusy(true);
@@ -147,6 +147,7 @@ export default function DdtWorkQueuePage() {
     try {
       await apiRequest(`/quarta-taglio/certificates/${pdfDialog.pdf_action.id}/pdf`, {
         method: "POST", body: JSON.stringify({ pdf_file_name: fileName,
+          peer_word_token: peerWordToken,
           ddt_work_item_id: pdfDialog.id, ddt_source_revision: pdfDialog.source_revision }),
       }, token);
       setPdfNotice(`PDF generato per ${pdfDialog.cod_odp}, DDT ${pdfDialog.ddt_raw}. La riga è nei Completati.`);
@@ -154,6 +155,7 @@ export default function DdtWorkQueuePage() {
       window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
       setRefresh(current => current + 1);
     } catch (requestError) {
+      if (requestError.status === 409 && requestError.payload?.code === "confirm_share_word") return requestError.payload;
       setPdfError(requestError.message || "Generazione PDF non riuscita.");
     } finally {
       pdfBusyRef.current = false;

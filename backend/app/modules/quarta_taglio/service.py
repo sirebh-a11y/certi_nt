@@ -2805,6 +2805,7 @@ def generate_quarta_taglio_certificate_pdf(
     pdf_file_name: str | None = None,
     ddt_work_item_id: int | None = None,
     ddt_source_revision: str | None = None,
+    peer_word_token: str | None = None,
 ) -> QuartaTaglioFinalCertificateRegisterItem:
     if not is_quality_area_user(actor):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo Qualità o IT possono generare il PDF finale")
@@ -2828,7 +2829,7 @@ def generate_quarta_taglio_certificate_pdf(
     resolve_saved_ddt(db, cod_odp=certificate.cod_odp, certificate=certificate, lock=True)
     word_reference.require_integrity(certificate)
     word_standard.require_current(db, certificate)
-    word_reference.require_current_material(db, certificate)
+    peer = word_reference.require_current_material(db, certificate, peer_word_token=peer_word_token)
     pdf_standard = word_standard.snapshot(db, certificate.cod_odp)
     if not certificate.storage_key_docx:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Word non presente")
@@ -2842,7 +2843,12 @@ def generate_quarta_taglio_certificate_pdf(
     word_path = _certificate_storage_path(certificate.storage_key_docx)
     if not word_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
-    word_path = _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
+    if peer is None:
+        word_path = _sync_word_fields_for_download(db, certificate=certificate, path=word_path)
+    else:
+        # Compare/convert the exact file inspected, not a fresh rewrite. Still
+        # recompute conformity on the selected share, as the download path does.
+        _require_peer_pdf_conformity(db, certificate)
     # Sync can commit. Pin the record AND its exact input together under the OL
     # lock; an intervening upload must not pair a new state with the old path.
     _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
@@ -2857,7 +2863,7 @@ def generate_quarta_taglio_certificate_pdf(
     ddt_shipments.require_current(db, certificate)
     word_standard.require_current(db, certificate)
     word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
-    word_reference.require_current_material(db, certificate)
+    word_reference.require_current_material(db, certificate, peer_word_token=peer_word_token)
     if not _clean_text(certificate.ddt):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DDT mancante dopo aggiornamento Word")
     if not certificate.cert_date:
@@ -2899,7 +2905,9 @@ def generate_quarta_taglio_certificate_pdf(
         word_standard.require_unchanged(db, certificate.cod_odp, pdf_standard)
         word_standard.require_current(db, certificate)
         word_reference.require_integrity(certificate)
-        word_reference.require_current_material(db, certificate)
+        word_reference.require_current_material(db, certificate, peer_word_token=peer_word_token)
+        if peer is not None:
+            _require_peer_pdf_conformity(db, certificate)
         if ddt_work_item_id is not None:
             if final_item is None or final_item.id != ddt_work_item_id:
                 raise HTTPException(409, "Quota DDT modificata durante la generazione: aggiorna la vista")
@@ -2932,6 +2940,12 @@ def generate_quarta_taglio_certificate_pdf(
         if not commit_started:
             # This UUID path belongs only to this attempt, never an old PDF.
             pdf_path.unlink(missing_ok=True)
+
+
+def _require_peer_pdf_conformity(db, certificate):
+    detail = get_quarta_taglio_detail(db, cod_odp=certificate.cod_odp, certificate_id=certificate.id)
+    if detail.missing_items or detail.conformity_status != 'conforme':
+        raise HTTPException(409, 'Verificare materiale e conformità della riga prima di generare il PDF.')
 
 
 def reopen_quarta_taglio_certificate_pdf(
@@ -3003,9 +3017,10 @@ def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFina
     if word_standard.is_stale(certificate, db):
         # Keep quota-identity checks, but never rebuild stale technical contents.
         return path
+    pending, peer = word_reference.pdf_reference_check(db, certificate)
     if (word_reference.integrity_reason(certificate)
             or word_reference.material_changed(db, certificate)
-            or word_reference.pending_message(db, certificate)):
+            or pending or peer is not None):
         # A download can inspect the preserved document, but cannot silently heal
         # or rebuild an unverified/stale source. PDF publication checks separately.
         return path

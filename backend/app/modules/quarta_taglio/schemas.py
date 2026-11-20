@@ -321,6 +321,7 @@ class QuartaTaglioWordInfoResponse(BaseModel):
     reference_conflict: bool = False
     material_changed: bool = False
     copy_update_required: bool = False
+    copy_update_optional: bool = False
     is_reference: bool = False
     standard_outdated: bool = False
     has_word: bool = False
@@ -422,6 +423,7 @@ class QuartaTaglioWordReferenceRequest(BaseModel):
 
 class QuartaTaglioPdfGenerateRequest(BaseModel):
     pdf_file_name: str | None = None
+    peer_word_token: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     ddt_work_item_id: int | None = Field(default=None, ge=1)
     ddt_source_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 

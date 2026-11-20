@@ -25,6 +25,12 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
   }, [token, item.id, item.cod_f3, requirementRetry]);
   const inheritedWord = item.has_word && item.word_source === "inherited";
   const [fileName, setFileName] = useState(item.pdf_file_name || item.default_pdf_file_name || "");
+  const [wordChoice, setWordChoice] = useState(null);
+  async function submit() {
+    const nextChoice = await onConfirm(normalizedFileName, wordChoice?.token);
+    // A choice applies only to the exact Word/revision checked by the API.
+    setWordChoice(nextChoice?.code === "confirm_share_word" ? nextChoice : null);
+  }
   const trimmedFileName = fileName.trim();
   const normalizedFileName = trimmedFileName.toLowerCase().endsWith(".pdf")
     ? `${trimmedFileName.slice(0, -4)}.pdf`
@@ -90,6 +96,7 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
               </button>
             ) : null}
             {error ? <p role="alert" className="mt-3 text-sm font-semibold text-rose-600">{error}</p> : null}
+            {wordChoice ? <p role="alert" className="mt-3 rounded-lg border border-amber-400 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{wordChoice.message}</p> : null}
           </div>
         </div>
         <div className="mt-6 flex justify-end gap-3">
@@ -104,10 +111,10 @@ export default function ConfirmPdfDialog({ busy, error, item, onCancel, onConfir
           <button
             className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             disabled={busy || !trimmedFileName || requirementState.status === "loading"}
-            onClick={() => onConfirm(normalizedFileName)}
+            onClick={submit}
             type="button"
           >
-            {busy ? "Generazione..." : "Genera PDF"}
+            {busy ? "Generazione..." : wordChoice ? "Usa questo Word e genera PDF" : "Genera PDF"}
           </button>
         </div>
       </div>

@@ -1293,7 +1293,7 @@ export default function QuartaTaglioDetailPage() {
                   disabled={!isQualityAreaUser(user) || referenceSaving || !wordInfo.current_word_file_hash || wordInfo.standard_outdated}
                   onClick={() => setReferenceAction("adopt")}>Usa questo Word come riferimento</button>
               ) : null}
-              {wordInfo.copy_update_required && hasWord && !isPdfFinal && activeCertificateId ? (
+              {(wordInfo.copy_update_required || wordInfo.copy_update_optional) && hasWord && !isPdfFinal && activeCertificateId ? (
                 <button type="button" className="rounded-lg bg-accent px-3 py-2 font-semibold text-white disabled:opacity-50"
                   disabled={!isQualityAreaUser(user) || referenceSaving || !wordInfo.current_word_file_hash}
                   onClick={() => setReferenceAction("copy")}>Aggiorna questa copia dal riferimento</button>

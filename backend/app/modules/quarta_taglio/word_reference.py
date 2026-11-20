@@ -44,14 +44,14 @@ MESSAGES = {
 }
 
 
-def integrity_reason(certificate):
+def integrity_reason(certificate, *, facts=None):
     """Validate a tracked file without accepting unpublished changes or writing it."""
     from app.modules.quarta_taglio import ddt_word_reuse as reuse
     meta = metadata(certificate)
     if meta.get('kind') not in {'reference', 'copy'}:
         return None  # Legacy provenance is not retroactively invented.
     try:
-        controls, template = reuse.word_facts(certificate.storage_key_docx)
+        controls, template = facts if facts is not None else reuse.word_facts(certificate.storage_key_docx)
         if controls.get('CERT_NUMBER') and controls['CERT_NUMBER'] != certificate.certificate_number:
             return 'source_file_or_controls_invalid'
         if meta['kind'] == 'reference' and template != meta.get('template_hash'):
@@ -221,27 +221,42 @@ def material_message(db, certificate, *, current=None):
             + 'Verifica il materiale in Incoming, poi aggiorna il Word prima di preparare il PDF.')
 
 
-def pending_message(db, certificate, *, sources=None):
+def pdf_reference_check(db, certificate, *, sources=None):
+    """(hard block, eligible worked sibling); no change to source election/reuse."""
     if certificate is None or certificate.status == 'pdf_final':
-        return None
+        return None, None
     reference = declared(sources if sources is not None else sources_for(db, certificate.cod_odp, certificate.cod_f3))
     if reference is None or reference.id == certificate.id:
-        return None
+        return None, None
     if metadata(reference).get('revision') != metadata(certificate).get('revision'):
+        from app.modules.quarta_taglio.peer_pdf import evaluate
+        peer = evaluate(db, certificate, reference)
+        if peer is not None:
+            return None, peer
         return ('Il Word di riferimento è stato aggiornato. Questa copia deve essere aggiornata prima del PDF.'
                 if certificate.word_source == 'ddt_reused' else
-                'Il Word di riferimento è stato aggiornato. Questa copia è stata lavorata separatamente: verifica prima di sostituirla.')
-    return None
+                'Il Word di riferimento è stato aggiornato. Questa copia è stata lavorata separatamente: verifica prima di sostituirla.'), None
+    return None, None
 
 
-def require_current_material(db, certificate):
+def pending_message(db, certificate, *, sources=None):
+    return pdf_reference_check(db, certificate, sources=sources)[0]
+
+
+def require_current_material(db, certificate, *, peer_word_token=None):
     if certificate.status == 'pdf_final':
         return
     if material_changed(db, certificate):
         raise HTTPException(409, material_message(db, certificate))
-    pending = pending_message(db, certificate)
+    pending, peer = pdf_reference_check(db, certificate)
     if pending:
         raise HTTPException(409, pending)
+    if peer is not None and peer.token and peer.token != peer_word_token:
+        from app.modules.quarta_taglio.peer_pdf import QUESTION
+        raise HTTPException(409, dict(code='confirm_share_word', message=QUESTION, token=peer.token))
+    if peer_word_token and (peer is None or peer.token != peer_word_token):
+        raise HTTPException(409, 'Il Word o i dati DDT sono cambiati: verifica nuovamente prima di generare il PDF.')
+    return peer
 
 
 def decorate_detail(db, detail, certificate):
@@ -273,10 +288,14 @@ def decorate_detail(db, detail, certificate):
         info.material_changed = material_changed(db, source)
         if info.material_changed:
             info.reference_message = material_message(db, source)
-    pending = pending_message(db, certificate)
+    pending, peer = pdf_reference_check(db, certificate,
+                                       sources=sources if certificate and f3 == certificate.cod_f3 else None)
     if pending:
         info.copy_update_required = True
         info.reference_message = pending
+    elif peer is not None and peer.token:
+        info.copy_update_optional = True
+        info.reference_message = 'Il Word di questa riga è diverso dal riferimento. Puoi tenerlo per il PDF oppure aggiornare questa copia.'
     if info.reference_conflict and not info.reference_message:
         info.reference_message = ('Sono presenti Word storici diversi. Apri il Word completo e confermalo '
                                   'come riferimento per i prossimi DDT e per l’ereditarietà.')

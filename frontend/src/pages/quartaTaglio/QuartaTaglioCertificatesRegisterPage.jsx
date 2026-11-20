@@ -627,18 +627,22 @@ export default function QuartaTaglioCertificatesRegisterPage() {
     setItems((currentItems) => currentItems.map((item) => (item.id === updatedItem.id ? updatedItem : item)));
   }
 
-  async function handleGeneratePdf(item, pdfFileName) {
+  async function handleGeneratePdf(item, pdfFileName, peerWordToken) {
     setActionState({ status: "saving", message: "" });
     setActionMessage("");
     try {
       const updatedItem = await apiRequest(`/quarta-taglio/certificates/${item.id}/pdf`, {
         method: "POST",
-        body: JSON.stringify({ pdf_file_name: pdfFileName }),
+        body: JSON.stringify({ pdf_file_name: pdfFileName, peer_word_token: peerWordToken }),
       }, token);
       updateRegisterItem(updatedItem);
       setPdfDialogItem(null);
       setActionMessage(`PDF generato per il certificato ${updatedItem.certificate_number}.`);
     } catch (requestError) {
+      if (requestError.status === 409 && requestError.payload?.code === "confirm_share_word") {
+        setActionState({ status: "idle", message: "" });
+        return requestError.payload;
+      }
       setActionState({ status: "error", message: requestError.message });
       return;
     }
@@ -944,7 +948,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
             setPdfDialogItem(null);
             setActionState({ status: "idle", message: "" });
           }}
-          onConfirm={(pdfFileName) => handleGeneratePdf(pdfDialogItem, pdfFileName)}
+          onConfirm={(pdfFileName, peerWordToken) => handleGeneratePdf(pdfDialogItem, pdfFileName, peerWordToken)}
         />
       ) : null}
 
