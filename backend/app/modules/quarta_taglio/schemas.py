@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from app.modules.quarta_taglio.file_names import normalize_pdf_file_name
 
@@ -226,6 +226,9 @@ class QuartaTaglioStandardCandidateResponse(BaseModel):
 
 
 class QuartaTaglioAggregateValueResponse(BaseModel):
+    # In-memory input for the Word table, before the API display rounds it.
+    _unrounded_value: float | None = PrivateAttr(default=None)
+
     field: str
     value: float | None = None
     method: str

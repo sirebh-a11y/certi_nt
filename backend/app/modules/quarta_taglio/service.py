@@ -4481,18 +4481,19 @@ def _aggregate_block_values(
             )
             if block == "chimica" and standard is not None and check_status == "missing":
                 check_status = "missing_from_supplier"
-        result.append(
-            QuartaTaglioAggregateValueResponse(
-                field=field,
-                value=_round_aggregate_value(block, aggregated),
-                method=method,
-                standard_min=limit_min,
-                standard_max=limit_max,
-                standard_label=standard_label,
-                status=check_status,
-                message=message,
-            )
+        aggregate_value = QuartaTaglioAggregateValueResponse(
+            field=field,
+            value=_round_aggregate_value(block, aggregated),
+            method=method,
+            standard_min=limit_min,
+            standard_max=limit_max,
+            standard_label=standard_label,
+            status=check_status,
+            message=message,
         )
+        if block == "proprieta":
+            aggregate_value._unrounded_value = aggregated
+        result.append(aggregate_value)
     return result
 
 

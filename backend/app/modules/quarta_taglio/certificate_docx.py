@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from copy import deepcopy
 from collections.abc import Sequence
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 import fitz
@@ -22,7 +23,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Mm, Pt, RGBColor, Twips
 
 from app.core.users.models import User
-from app.modules.quarta_taglio.schemas import QuartaTaglioDetailResponse
+from app.modules.quarta_taglio.schemas import QuartaTaglioAggregateValueResponse, QuartaTaglioDetailResponse
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +75,7 @@ PROPERTY_HEADER_LABELS = {
     "S": "S(mm²)",
 }
 PROPERTY_WORD_FIELDS = ["HB", "diametro", "S", "Rp0.2", "Rm", "A%", "Rp0.2 / Rm"]
+STRENGTH_WORD_FIELDS = {"Rp0.2", "Rp0.20", "Rm"}
 CONTENT_CONTROL_TAGS = (
     "CERT_NUMBER",
     "CERT_DATE",
@@ -466,7 +468,7 @@ def _add_properties_table(document: Document, *, detail: QuartaTaglioDetailRespo
     spec_row[0].text = "Spec."
     for index, field in enumerate(fields, start=1):
         item = available_properties.get(field)
-        min_row[index].text = _format_value(item.standard_min if item else None)
+        min_row[index].text = _property_min_value(item, field=field)
         spec_row[index].text = _property_spec_value(item, field=field)
     _set_table_font(table, size=10)
     _set_table_cell_margins(table, left=35, right=35)
@@ -1547,10 +1549,38 @@ def _property_header(field: str) -> str:
     return PROPERTY_HEADER_LABELS.get(field, field)
 
 
-def _property_spec_value(item, *, field: str) -> str:
+def _property_min_value(item: QuartaTaglioAggregateValueResponse | None, *, field: str) -> str:
+    value = item.standard_min if item else None
+    if field in STRENGTH_WORD_FIELDS and value is not None:
+        # Keep the actual threshold visible, including future fractional minima.
+        return _format_strength_decimal(Decimal(str(value)))
+    return _format_value(value)
+
+
+def _property_spec_value(item: QuartaTaglioAggregateValueResponse | None, *, field: str) -> str:
     if field in {"diametro", "S", "Ø", "Diametro"} and item is None:
         return "/"
-    return _format_value(item.value if item else None)
+    if item is None or item.value is None or field not in STRENGTH_WORD_FIELDS:
+        return _format_value(item.value if item else None)
+
+    value = Decimal(str(item._unrounded_value if item._unrounded_value is not None else item.value))
+    if not value.is_finite():
+        return _format_value(item.value)
+    if item.standard_label == "range multipli" or item.status in {"missing_diameter", "range_not_found"}:
+        # The aggregate has no single threshold when the component lots use
+        # different diameter ranges. Leave the precise value in the document.
+        return _format_strength_decimal(value)
+    rounded = value.to_integral_value(rounding=ROUND_HALF_UP)
+    if item.standard_min is not None:
+        minimum = Decimal(str(item.standard_min))
+        if not minimum.is_finite() or (value < minimum) != (rounded < minimum):
+            return _format_strength_decimal(value)
+    return format(rounded, "f") if rounded else "0"
+
+
+def _format_strength_decimal(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".").replace(".", ",") if "." in text else text
 
 
 def _new_table(document: Document, headers: list[str]):
