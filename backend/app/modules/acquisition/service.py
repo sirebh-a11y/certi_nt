@@ -201,6 +201,10 @@ from app.modules.acquisition.ddt_packing import (
     formatted as _format_ddt_weight, validate_reading_contract as _validate_ddt_reading_contract,
     COMPONENT_INSTRUCTION as DDT_COMPONENT_INSTRUCTION,
 )
+from app.modules.acquisition.bozen_packing import (
+    identity_suffix as bozen_identity_suffix, read_groups as read_bozen_packing_groups,
+    one_order_date_missing as bozen_order_date_missing, same_material_for_undated_order as bozen_order_material_proof,
+)
 from app.modules.notes.models import AcquisitionRowNoteTemplate, NoteTemplate
 from app.modules.notes.service import serialize_note_template
 from app.modules.standards.models import NormativeStandard
@@ -8489,6 +8493,8 @@ def _find_existing_certificate_first_row_for_split_candidate(
     normalized_peso = _normalize_row_signature_token(candidate.peso_netto)
     normalized_customer_order = _normalize_row_signature_token(candidate.customer_order_no)
 
+    checked_packing = bool(bozen_identity_suffix(candidate.ai_row_payload_raw))
+    compatible = []
     for row in rows:
         if row.document_ddt_id is not None:
             continue
@@ -8508,9 +8514,16 @@ def _find_existing_certificate_first_row_for_split_candidate(
         row_customer_order = _normalize_row_signature_token(row_identity_fields.get("customer_order"))
         if normalized_customer_order and row_customer_order and row_customer_order != normalized_customer_order:
             continue
-        return row
+        if not checked_packing:
+            return row  # Saved legacy reading.
+        if any(a and b and not reader_same_token(a, b) for a, b in (
+            (candidate.article_code, row_identity_fields.get("article")),
+            (candidate.profile_code, row_identity_fields.get("profile_code")),
+        )):
+            continue
+        compatible.append(row)
 
-    return None
+    return compatible[0] if len(compatible) == 1 else None
 
 
 def _candidate_rows_for_incoming_ddt_link(
@@ -9472,12 +9485,15 @@ def run_autonomous_processing(
                 fase_corrente="rematch_cross_run",
                 messaggio_corrente="Rivaluto i match non confermati anche con i documenti gia presenti",
             )
+            fresh_bozen_targets = set()
+            protected_ids = _current_run_rematch_protected_ids(
+                db, run.id, manual_rematch_rows, fresh_bozen_targets=fresh_bozen_targets)
             cross_run_matches = _run_cross_run_auto_rematch(
                 db=db,
                 supplier_ids=rematch_supplier_ids,
                 actor_id=actor_id,
                 run_id=run.id,
-                protected_row_ids=_current_run_rematch_protected_ids(db, run.id, manual_rematch_rows),
+                protected_row_ids=protected_ids, fresh_bozen_targets=fresh_bozen_targets,
                 # A finished, coupled row can still supply saved certificate
                 # data. A type-rejected row must never supply them.
                 protected_source_row_ids=_type_guard_blocked_row_ids(db),
@@ -13207,7 +13223,7 @@ def _checked_supplier_ddt_read(operation):
             require_complete_pages(ddt_document)  # retain existing type workflow
         else:
             require_complete_ddt_pages(ddt_document)
-        attempts = 2 if any(key in operation.__name__ for key in ("leichtmetall", "neuman", "grupa_kety")) else 1
+        attempts = 2 if any(key in operation.__name__ for key in ("leichtmetall", "neuman", "grupa_kety", "aluminium_bozen")) else 1
         for attempt in range(attempts):
             try:
                 return operation(db, ddt_document=ddt_document, openai_api_key=openai_api_key)
@@ -13251,12 +13267,23 @@ def _extract_aluminium_bozen_ddt_row_groups_with_vision(
     ddt_number_raw, raw_rows, ai_document_payload_raw = _extract_aluminium_bozen_ddt_row_groups_from_openai(
         crop_definitions,
         openai_api_key=openai_api_key,
+        # Explicit rereads of existing pre-packing rows keep their original
+        # unit (one per delivery line). Never put a new group total on one of
+        # several historical length rows. Saved automatic manifests bypass AI.
+        legacy_lines=any(not _bozen_row_identity_suffix(r) for r in ddt_document.rows_as_ddt),
     )
-    return _sanitize_aluminium_bozen_ai_row_groups(
+    candidates = _sanitize_aluminium_bozen_ai_row_groups(
         ddt_number_raw=ddt_number_raw or fallback_ddt,
         raw_rows=raw_rows,
         ai_document_payload_raw=ai_document_payload_raw,
     )
+    # Two different readings can normalize to the same stored identity.
+    # Do not let persistence silently discard the second material.
+    signatures = [_autonomous_ddt_candidate_signature(document=ddt_document, candidate=c, fallback_ddt=fallback_ddt)
+                  for c in candidates if bozen_identity_suffix(c.ai_row_payload_raw)]
+    if len(signatures) != len(set(signatures)):
+        raise DdtPackingReviewRequired("Gruppi Bozen non distinguibili dopo il confronto dei campi.")
+    return candidates
 
 
 @_checked_supplier_ddt_read
@@ -13387,10 +13414,22 @@ def _build_impol_ddt_masked_page(image: Image.Image) -> Image.Image:
     return masked
 
 
+def _bozen_customer_order(raw: str | None) -> str | None:
+    normalized = _normalize_customer_order_tokens(raw)
+    if normalized:
+        return normalized
+    # Bozen explicitly labels this field. Preserve a bare order without
+    # inventing its date; don't change how other suppliers interpret numbers.
+    match = re.fullmatch(r"(?:(?:VS\.?\s*ODV|RIF\.?\s*ORDINE\s*CLIENTE)\s*[:#]?\s*)?(\d{1,6})",
+                         (raw or "").strip(), re.I)
+    return match.group(1) if match else None
+
+
 def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     crops: dict[str, dict[str, str | int]],
     *,
     openai_api_key: str,
+    legacy_lines: bool = False,
 ) -> tuple[str | None, list[dict[str, object]], str]:
     crops = _unique_ddt_page_crops(crops)
     client = _make_openai_client(openai_api_key)
@@ -13402,8 +13441,16 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Le immagini rappresentano pagine intere mascherate dello stesso DDT. "
                 "Il documento puo distribuire numero DDT, blocco materiale e informazioni packing su piu pagine. "
                 "Una riga logica puo essere distribuita tra blocco materiale e uno o piu blocchi packing anche su pagine diverse. "
-                "Se il documento contiene 3 righe logiche, restituisci 3 elementi; se ne contiene 5, restituisci 5 elementi. "
-                "Non unire dati di righe diverse e non inventare valori mancanti. "
+                + ("Conserva le righe materiale stampate del DDT, non sommare lunghezze diverse. " if legacy_lines else
+                "Aluminium Bozen: usa il gruppo stampato della PACKING LIST: Rif. ordine AB (ODV con posizione), "
+                "ordine cliente, Cert. N°, articolo, lega, diametro e COD. COLATA. Le diverse lunghezze NON sono gruppi distinti. "
+                "Segui le continuazioni senza intestazione; separa sempre colate, ordini, certificati o materiali diversi. "
+                "packing_ref_raw = solo numero ODV del Rif. ordine AB, compresa la posizione, non ODP. "
+                "article_code_raw = Articolo del packing (es. 14BT174-B30); profile_code_raw = Cod. art. cliente (es. A271200). "
+                "Riporta SOLO i colli fisici del packing e P.NETTO KG, mai lordo, pezzi, sottototali delle lunghezze o totale DDT come colli. "
+                "Un collo che continua sulla pagina successiva non si conta due volte. Non interpretare le note manoscritte. "
+                "Se il packing è del tutto assente trascrivi le posizioni DDT documentate con pagina e riga: non inventare certificati o colli. ")
+                + "Non unire dati di righe diverse e non inventare valori mancanti. "
                 "Non fare il match con nessun certificato e non normalizzare i valori. "
                 "Per l'ordine cliente usa solo il valore associato a Vs. Odv o Rif. ordine cliente. "
                 "Non usare mai Rif. ordine AB o Rif. ns. Odv N. come ordine cliente. "
@@ -13414,12 +13461,15 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
                 "Non saltare certificate_no_raw se e presente; non usare numeri di norme come EN 10204 3.1 o simili. "
                 "Se la stessa riga logica appare tra blocco materiale e blocchi packing, o in piu pagine del documento, unisci quei dati nello stesso elemento rows. "
                 "Restituisci solo JSON con questa struttura: "
-                "{\"ddt_number_raw\":\"string|null\",\"rows\":[{\"row_index\":1,"
-                "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
+                + ('{"ddt_number_raw":"string|null","rows":[{"row_index":1,' if legacy_lines else
+                '{"ddt_number_raw":"string|null","package_count":"intero stampato N° colli, null se non leggibile o senza packing",'
+                '"rows":[{"row_index":1,"packing_ref_raw":"string|null",')
+                + "\"customer_order_raw\":\"string|null\",\"article_code_raw\":\"string|null\","
                 "\"profile_code_raw\":\"string|null\",\"alloy_raw\":\"string|null\","
                 "\"diameter_raw\":\"string|null\",\"cast_raw\":\"string|null\","
                 "\"certificate_no_raw\":\"string|null\",\"net_weight_raw\":\"string|null\","
                 "\"source_crops\":[\"label\"]}]}"
+                + ("" if legacy_lines else DDT_COMPONENT_INSTRUCTION)
             ),
         }
     ]
@@ -13453,7 +13503,10 @@ def _extract_aluminium_bozen_ddt_row_groups_from_openai(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="DDT row-group AI request failed") from exc
 
-    return (*_parse_openai_json_payload_for_row_groups(response.output_text), response.output_text)
+    if legacy_lines:
+        return (*_parse_openai_json_payload_for_row_groups(response.output_text), response.output_text)
+    return read_bozen_packing_groups(response.output_text, {int(crop["page_number"]) for crop in crops.values()},
+                                     _bozen_customer_order)
 
 
 def _extract_impol_ddt_row_groups_from_openai(
@@ -13715,13 +13768,15 @@ def _sanitize_aluminium_bozen_ai_row_groups(
             supplier_key="aluminium_bozen",
             ddt_number=normalized_ddt,
             cdq=certificate_no,
+            supplier_order_no=_string_or_none(raw_row.get("packing_ref_raw")),
             profile_code=profile_code,
             article_code=article_code,
             lega=alloy_value,
             diametro=_normalize_value_for_field("ddt", "diametro", diameter_value),
             peso_netto=weight_value,
             colata=cast_value,
-            customer_order_no=_normalize_customer_order_tokens(customer_order_raw),
+            customer_order_no=(_bozen_customer_order(customer_order_raw) if raw_row.get("bozen_packing_v2")
+                               else _normalize_customer_order_tokens(customer_order_raw)),
             snippets=source_crops[:6],
             ai_row_payload_raw=json.dumps(raw_row, ensure_ascii=False),
             ai_document_payload_raw=ai_document_payload_raw,
@@ -13912,6 +13967,18 @@ def _match_aluminium_bozen_ai_groups_to_rows(
     rows: list[AcquisitionRow],
     ai_candidates: list[ReaderRowSplitCandidateResponse],
 ) -> dict[int, ReaderRowSplitCandidateResponse]:
+    if ai_candidates and all(bozen_identity_suffix(c.ai_row_payload_raw) for c in ai_candidates):
+        # Explicit reread of a checked DDT: never redistribute a group by
+        # order/score between different existing rows, even if weights match.
+        if not rows:
+            return {}
+        candidates = {_autonomous_ddt_candidate_signature(document=rows[0].ddt_document, candidate=c,
+                                                           fallback_ddt=rows[0].ddt): c for c in ai_candidates}
+        signatures = {r.id: _autonomous_ddt_row_signature(r) for r in rows}
+        if (len(candidates) != len(ai_candidates) or len(set(signatures.values())) != len(rows)
+                or set(signatures.values()) != set(candidates)):
+            raise DdtPackingReviewRequired("La rilettura non coincide con i gruppi Bozen esistenti: nessun peso riassegnato.")
+        return {row_id: candidates[sig] for row_id, sig in signatures.items()}
     pairs: list[tuple[int, int, int]] = []
     row_value_maps = {
         row.id: {
@@ -17722,19 +17789,31 @@ def _leichtmetall_deleted_ddt_signatures(db: Session, document: Document) -> set
 DDT_GROUP_ANCHORS = ("article_code", "customer_code", "profile_code", "product_code", "supplier_order_no")
 
 
+def _bozen_row_identity_suffix(row: AcquisitionRow) -> tuple:
+    for ev in row.evidences:
+        if ev.document_id == row.document_ddt_id and ev.blocco == "ddt" and ev.tipo_evidenza == "ai_payload":
+            suffix = bozen_identity_suffix(ev.testo_grezzo)
+            if suffix:
+                return suffix
+    return ()
+
+
 def _autonomous_ddt_row_signature(row: AcquisitionRow) -> tuple:
     base = _split_candidate_signature_from_row(row)
-    if _resolve_row_supplier_key(row) == "metalba":
+    supplier = _resolve_row_supplier_key(row)
+    if supplier == "metalba":
         return base
     values = _row_read_values(row, "ddt")
-    return base + tuple(_normalize_row_signature_token(values.get(field)) for field in DDT_GROUP_ANCHORS)
+    signature = base + tuple(_normalize_row_signature_token(values.get(field)) for field in DDT_GROUP_ANCHORS)
+    return signature + (_bozen_row_identity_suffix(row) if supplier == "aluminium_bozen" else ())
 
 
 def _autonomous_ddt_candidate_signature(*, document, candidate, fallback_ddt) -> tuple:
     base = _split_candidate_signature_from_candidate(document=document, candidate=candidate, fallback_ddt=fallback_ddt)
     if candidate.supplier_key == "metalba":
         return base
-    return base + tuple(_normalize_row_signature_token(getattr(candidate, field)) for field in DDT_GROUP_ANCHORS)
+    suffix = bozen_identity_suffix(candidate.ai_row_payload_raw) if candidate.supplier_key == "aluminium_bozen" else ()
+    return base + tuple(_normalize_row_signature_token(getattr(candidate, field)) for field in DDT_GROUP_ANCHORS) + suffix
 
 
 @_serialize_metalba_ddt_creation
@@ -17895,6 +17974,15 @@ def _ensure_autonomous_rows_with_ai(
             fallback_ddt=fallback_ddt,
             supplier_key=supplier_key,
         )
+        if (certificate_first_row is not None and supplier_key == "aluminium_bozen"
+                and bozen_identity_suffix(candidate.ai_row_payload_raw)
+                and any(peer is not candidate and peer.cdq == candidate.cdq
+                        and _find_existing_certificate_first_row_for_split_candidate(db, rows=[certificate_first_row],
+                            document=ddt_document, candidate=peer, fallback_ddt=fallback_ddt,
+                            supplier_key=supplier_key) is not None for peer in ai_candidates)):
+            # Two distinct groups can share a certificate number. The order of
+            # the groups in the PDF must not allocate a certificate-only row.
+            certificate_first_row = None
         if certificate_first_row is not None:
             _set_row_ai_processing_state(
                 db,
@@ -18428,6 +18516,10 @@ def _find_existing_aluminium_bozen_row_for_certificate(
     if not scored:
         return None
     scored.sort(key=lambda item: (-item[0], item[1].id))
+    if len(scored) > 1 and scored[0][0] == scored[1][0] and any(
+        _bozen_row_identity_suffix(row) for score_value, row in scored if score_value == scored[0][0]
+    ):
+        return None
     return scored[0][1]
 
 
@@ -19436,6 +19528,7 @@ class _CrossRunRematchCandidate:
     source_row_id: int
     source_has_ddt: bool
     score: RematchScore
+    bozen_partial_order: bool = False
 
 
 @dataclass(frozen=True)
@@ -19488,8 +19581,9 @@ def _current_cross_run_rematch_plan(
     return None
 
 
-def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_rows: set[int]) -> set[int]:
-    """Finish unmatched Arconic rows and proven Leichtmetall cast groups.
+def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_rows: set[int], *,
+                                       fresh_bozen_targets: set[int] | None = None) -> set[int]:
+    """Finish unmatched Arconic rows, proven Leichtmetall groups and verified Bozen order pairs.
 
     A just-read row is not necessarily already paired. Keep all protections on
     paired/confirmed/validated rows, other suppliers and type-rejected rows;
@@ -19500,7 +19594,15 @@ def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_
     ).filter(AcquisitionRow.ai_processing_run_id == run_id,
              AcquisitionRow.ai_processing_status == "pronta").all()
     protected = {row.id for row in ready_rows}
+    type_blocked = _type_guard_blocked_row_ids(db)
     for row in ready_rows:
+        if (fresh_bozen_targets is not None and row.document_ddt_id and not row.document_certificato_id
+                and row.certificate_match is None and not row.validata_finale
+                and _resolve_row_supplier_key(row) == "aluminium_bozen"
+                and row.id not in type_blocked and _bozen_row_identity_suffix(row)):
+            # Keep the normal protection. Only a freshly rechecked partial-order
+            # plan on this specific target may pass it, not a generic candidate.
+            fresh_bozen_targets.add(row.id)
         if (row.document_ddt_id is not None and row.document_certificato_id is None
                 and row.certificate_match is None and not row.validata_finale
                 and _resolve_row_supplier_key(row) == "arconic_hannover"):
@@ -19514,9 +19616,9 @@ def _current_run_rematch_protected_ids(db: Session, run_id: int, manual_rematch_
             sources = db.query(AcquisitionRow).filter(AcquisitionRow.fornitore_id == row.fornitore_id,
                 AcquisitionRow.document_certificato_id.isnot(None)).all()
             if any("gruppo_lotti" in score_bridge_match(bridge, _build_row_certificate_bridge(s)).matched_fields
-                   for s in sources if s.id not in _type_guard_blocked_row_ids(db)):
+                   for s in sources if s.id not in type_blocked):
                 protected.discard(row.id)
-    return _type_guard_blocked_row_ids(db) | (protected - manual_rematch_rows)
+    return type_blocked | (protected - manual_rematch_rows)
 
 
 def _run_cross_run_auto_rematch(
@@ -19527,14 +19629,20 @@ def _run_cross_run_auto_rematch(
     run_id: int,
     protected_row_ids: set[int] | None = None,
     protected_source_row_ids: set[int] | None = None,
+    fresh_bozen_targets: set[int] | None = None,
 ) -> int:
     applied = 0
     source_protection = protected_row_ids if protected_source_row_ids is None else protected_source_row_ids
     initial_plans = _plan_cross_run_auto_rematch(
         db=db, supplier_ids=supplier_ids, protected_source_row_ids=source_protection,
     )
+    def protected(plan):
+        return protected_row_ids and plan.row_id in protected_row_ids and not (
+            fresh_bozen_targets and plan.row_id in fresh_bozen_targets and plan.candidates
+            and getattr(plan.candidates[0], "bozen_partial_order", False))
+
     for initial_plan in initial_plans:
-        if protected_row_ids and initial_plan.row_id in protected_row_ids:
+        if protected(initial_plan):
             continue
         # An earlier merge can delete the certificate-only source. Rebuild the
         # plan from current rows, including the coupled source it just produced;
@@ -19545,7 +19653,7 @@ def _run_cross_run_auto_rematch(
         )
         if plan is None:
             continue
-        if protected_row_ids and plan.row_id in protected_row_ids:
+        if protected(plan):
             continue
         eligible_candidates = plan.candidates
         if not eligible_candidates or (source_protection and eligible_candidates[0].source_row_id in source_protection):
@@ -19656,6 +19764,20 @@ def _run_cross_run_auto_rematch(
     return applied
 
 
+def _bozen_packing_rematch_conflicts(ddt: RematchBridge, certificate: RematchBridge) -> bool:
+    fields = ("cdq", "lega", "ordine", "peso", "article_code", "profile_code")
+    if bozen_order_date_missing(ddt.value("ordine"), certificate.value("ordine")):
+        if not bozen_order_material_proof(ddt, certificate):
+            return True
+        fields = ("profile_code",)  # All required anchors were compared, including exact numeric weights.
+    for field in fields:
+        left = ddt.value(field)
+        right = certificate.value(field) or (certificate.value("customer_code") if field == "profile_code" else None)
+        if left and right and _normalize_row_signature_token(left) != _normalize_row_signature_token(right):
+            return True
+    return False
+
+
 def _plan_cross_run_auto_rematch(
     *,
     db: Session,
@@ -19685,6 +19807,15 @@ def _plan_cross_run_auto_rematch(
         if candidate_row.document_certificato_id is not None
         and (not protected_source_row_ids or candidate_row.id not in protected_source_row_ids)
     ]
+    # Index only cheap scalar fields. Looking up a supplier template here
+    # would lazy-load documents for every row, including unrelated suppliers.
+    peers_by_ddt_cdq: dict[tuple, list] = {}
+    open_by_supplier_cdq: dict[tuple, list] = {}
+    for r in rows:
+        if r.document_ddt_id and r.cdq:
+            peers_by_ddt_cdq.setdefault((r.document_ddt_id, _normalize_row_signature_token(r.cdq)), []).append(r)
+            if not r.document_certificato_id:
+                open_by_supplier_cdq.setdefault((r.fornitore_id, _normalize_row_signature_token(r.cdq)), []).append(r)
     plans: list[_CrossRunRematchPlan] = []
     for row in rows:
         if target_row_ids is not None and row.id not in target_row_ids:
@@ -19692,6 +19823,12 @@ def _plan_cross_run_auto_rematch(
         if row.document_ddt_id is None or _row_is_locked_for_auto_rematch(row):
             continue
         ddt_bridge = _build_row_ddt_bridge(row)
+        bozen_peers = ()
+        checked_bozen = ddt_bridge.supplier_key == "aluminium_bozen" and bool(_bozen_row_identity_suffix(row))
+        if checked_bozen:
+            peers = peers_by_ddt_cdq.get((row.document_ddt_id, _normalize_row_signature_token(row.cdq)), ())
+            if len(peers) > 1:
+                bozen_peers = tuple(_build_row_ddt_bridge(peer) for peer in peers if peer.id != row.id)
         scored_by_document: dict[int, _CrossRunRematchCandidate] = {}
         for candidate_row, certificate_bridge in certificate_bridges:
             if certificate_bridge.document_id is None:
@@ -19709,11 +19846,35 @@ def _plan_cross_run_auto_rematch(
             score = score_bridge_match(ddt_bridge, certificate_bridge)
             if score.decision == RematchDecision.NONE:
                 continue
+            if checked_bozen and _bozen_packing_rematch_conflicts(ddt_bridge, certificate_bridge):
+                # The generic score is also used for interactive suggestions.
+                # Automatic re-linking must not bypass a material/weight
+                # contradiction that the initial Bozen match already rejected.
+                continue
+            partial_order = checked_bozen and bozen_order_date_missing(
+                ddt_bridge.value("ordine"), certificate_bridge.value("ordine"))
+            if partial_order:
+                # No replacement/reuse of an existing association. If a second
+                # open shipment could take this source, don't pick the first.
+                if row.document_certificato_id or candidate_row.document_ddt_id:
+                    continue
+                rival_rows = open_by_supplier_cdq.get((row.fornitore_id, _normalize_row_signature_token(row.cdq)), ())
+                if any(not _bozen_packing_rematch_conflicts(other, certificate_bridge)
+                       and score_bridge_match(other, certificate_bridge).decision != RematchDecision.NONE
+                       for other in (_build_row_ddt_bridge(r) for r in rival_rows if r.id != row.id)):
+                    continue
+            alternatives = (score_bridge_match(peer, certificate_bridge) for peer in bozen_peers
+                            if not _bozen_packing_rematch_conflicts(peer, certificate_bridge))
+            if any(other.decision != RematchDecision.NONE and other.score >= score.score for other in alternatives):
+                # Same DDT only: do not let a later rematch bypass the
+                # certificate-first ambiguity check. Different DDTs are independent.
+                continue
             candidate = _CrossRunRematchCandidate(
                 document_id=certificate_bridge.document_id,
                 source_row_id=candidate_row.id,
                 source_has_ddt=candidate_row.document_ddt_id is not None,
                 score=score,
+                bozen_partial_order=partial_order,
             )
             existing = scored_by_document.get(certificate_bridge.document_id)
             if existing is not None and not _cross_run_candidate_is_better(candidate, existing):
@@ -19726,6 +19887,8 @@ def _plan_cross_run_auto_rematch(
         )
         if not scored_candidates:
             continue
+        if len(scored_candidates) > 1 and any(c.bozen_partial_order for c in scored_candidates):
+            continue  # A missing date never breaks a tie between certificate documents.
         if (len(scored_candidates) > 1
                 and any("gruppo_lotti" in c.score.matched_fields for c in scored_candidates)):
             continue  # a complete group does not outrank another valid document
@@ -20971,6 +21134,15 @@ def _score_certificate_candidate(
         add_reason(points, label)
 
     if supplier_key == "aluminium_bozen":
+        # During the first pass not all certificates/packing groups may have
+        # been processed. Defer missing-date cases to the final two-sided check.
+        # A genuinely different documented order must not pass by CDQ score.
+        local_order = row_ddt_values.get("customer_order_no")
+        cert_order = certificate_supplier_fields.get("customer_order_normalized") or (
+            (matches.get("ordine_cliente_certificato") or {}).get("final"))
+        if (local_order and cert_order and not reader_same_token(local_order, cert_order)
+                and _bozen_row_identity_suffix(row)):
+            return None
         article_match = (
             reader_normalize_match_token(ddt_supplier_fields.get("article"))
             and reader_normalize_match_token(ddt_supplier_fields.get("article"))
@@ -24288,7 +24460,10 @@ def _sanitize_aluminium_bozen_vision_certificate_fields(
     def _normalize_customer_order(value: str | None, evidence: str | None) -> str | None:
         normalized = _normalize_customer_order_tokens(value) or _normalize_customer_order_tokens(evidence)
         if not _is_normalized_customer_order(normalized):
-            return None
+            # A bare number is only taken from the dedicated order field,
+            # never from arbitrary numbers in the evidence.
+            bare = _bozen_customer_order(value)
+            return bare if bare and re.fullmatch(r"[0-9]{1,6}", bare) else None
         return normalized
 
     def _normalize_alloy(value: str | None, evidence: str | None) -> str | None:

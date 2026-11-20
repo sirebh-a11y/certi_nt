@@ -306,6 +306,21 @@ Intervento locale e commit/push autorizzati; deploy da autorizzare a parte.
   Tutte le cautele sotto su spazio, backup/restore, attivita utenti e pulizia
   preventiva da concordare restano obbligatorie e non sono sostituite qui.
 
+### Aluminium Bozen — nuovi gruppi DDT, preparato in locale (non installato)
+
+Distribuire insieme il backend, incluso `app/modules/acquisition/bozen_packing.py`,
+e la [scheda aggiornata del fornitore](../modules/ddt_supplier_template_aluminium_bozen.md).
+Solo nuovi caricamenti automatici: **nessun DDL, bonifica, cancellazione, riavvio di job
+storici o nuova lettura IA di documenti già validati**. Controllo post-deploy in
+sola lettura: 1612 mantiene quattro righe validate; per il CDQ 159233 restano
+distinti 1322 (8.533 kg) e 1383 (2.438 kg). Non ricostruire o toccare questi esempi.
+Preflight sul clone: ordine cliente con/senza data su DDT e certificato in
+entrambi gli ordini di arrivo → una sola riga se il materiale coincide ed è
+univoco. Provare anche due date diverse e due certificati possibili → nessun
+aggancio forzato. Non ricaricare documenti reali sul server per questo test.
+Prima di rollback terminare eventuali import Bozen in corso: il vecchio codice
+non riconosce la nuova firma di completamento; conservare letture e allegati.
+
 ### Altri fornitori 02/11 — protezioni DDT, installate con Alpha 10.9
 
 Estensione autorizzata dopo l'audit Metalba, installata e riaperta il 02/11 con

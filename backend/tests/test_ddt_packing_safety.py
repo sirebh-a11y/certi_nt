@@ -71,6 +71,7 @@ class DdtPackingChecksTest(unittest.TestCase):
         payload = dict(ddt_number_raw="1234567", pages_read=[1, 2, 3],
             document_check=dict(detected_type="ddt", matches_assigned=True, evidence=[dict(page_number=1, quote="Delivery Note")]),
             rows=[dict(batch_raw="94668", lot_raw="11111", heat_raw="25E-7871", certificate_number_raw="10033541/25",
+                       cast_raw="926299A2", diameter_raw="240",
                        net_weight_raw="400", weight_components=parts("400"))])
         for supplier in sorted(s.DDT_SAFE_SUPPLIERS - {"metalba"}):
             with self.subTest(supplier=supplier), patch.object(s, "_make_openai_client", return_value=NS()), \

@@ -150,11 +150,15 @@ Ordine reale di lettura:
 
 ## 6. Regola Di Riga Acquisition
 
-* `unita materiale reale`: di norma la riga materiale stampata nel DDT
-* `criterio di aggregazione`: `per riga`, con uso del packing list come dettaglio di supporto
-* `uso del peso`: `diretto` dalla riga materiale; packing list usato per validare o ricostruire casi deboli
-* `uso del packing list`: `si`
-* `regola pratica`: leggere prima la riga materiale di pagina 1; usare il packing list per trovare il gruppo coerente e recuperare `Cert. N°`, `COD. COLATA`, colli e pesi netti di conferma
+* Nuovi DDT automatici: una riga per gruppo della packing list, non per lunghezza e non per solo numero certificato.
+* Tenere distinti posizione ordine fornitore, ordine cliente, articolo/profilo, lega, diametro, colata e certificato.
+* Sommare i netti dei colli fisici del gruppo anche nelle continuazioni; contare una sola volta lo stesso numero collo,
+  ma due volte due colli distinti di uguale peso. Non aggiungere pesi di pagina 1, subtotali o lordo.
+* Verificare netto totale e numero dei colli quando stampati. Senza packing, usare solo una posizione commerciale
+  distinguibile, senza inventare certificato o raggruppamento. Se la verifica fallisce, una sola rilettura semantica
+  e poi verifica del solo DDT: niente righe parziali né residui di peso attribuiti per differenza.
+* Nessun backfill: letture salvate, righe storiche e conferme manuali non vengono convertite alla nuova unità.
+  Una rilettura esplicita di righe preesistenti senza evidenza del nuovo formato conserva la granularità precedente.
 
 Se il peso o la riga vanno ricostruiti:
 
@@ -310,8 +314,8 @@ Se il peso o la riga vanno ricostruiti:
 
 * `obbligatorio nel runtime`: `si`
 * `usato per match con certificato`: `medio`
-* `pagina/blocco principale`: pagina 1 riga materiale
-* `posizione precisa osservata`: ultima parte della riga materiale stampata
+* `pagina/blocco principale`: packing list, colonna P.NETTO KG (pagina 1 riporta anche il peso per lunghezza)
+* `posizione precisa osservata`: peso netto del singolo collo, da sommare nel suo gruppo
 * `relazione spaziale con altri campi`: a destra di lunghezza e pezzi
 * `ancore testuali`: nessuna forte; va letto per posizione nella riga
 * `vicinanza ad altri campi`: lunghezza, pezzi
@@ -322,9 +326,9 @@ Se il peso o la riga vanno ricostruiti:
 * `contesto minimo necessario`: `riga`
 * `materiale utile per ML futuro`: `crop riga`, `crop tabella`, `bbox`
 * `materiale fuorviante da evitare`: `Gross`, `Net`, `P.NETTO KG` di altre sezioni, totale packing list
-* `fallback di ricerca`: packing list del gruppo coerente
+* `fallback di ricerca`: posizione commerciale leggibile, solo se manca il packing
 * `falsi positivi noti`: peso totale documento, pesi lordi, singoli colli
-* `nota runtime`: usare il peso riga pagina 1 come primario; packing list per validare o ricostruire casi deboli
+* `nota runtime`: con packing list usare il netto dei colli del gruppo; il peso della lunghezza in pagina 1 non è un collo aggiuntivo
 
 ### 7.8 Campo: `codice_materiale / codice_cliente`
 
@@ -434,7 +438,7 @@ Se il peso o la riga vanno ricostruiti:
 
 ### 8.4 Eccezioni
 
-* `peso diretto o da sommare`: di base diretto dalla riga materiale; usare packing list per ricostruzione solo se il caso e' debole
+* `peso`: netto del gruppo nel singolo DDT, mai il totale del certificato se questo copre più spedizioni
 * `batch/cast/charge obbligatorio o no`: `CAST/COD. COLATA` molto forte
 * `ordine forte/medio/debole`: medio
 * `mismatch apparenti noti`: articolo interno e cod. cliente non vanno confusi; `EN 10204 3.1` non e' numero certificato
@@ -508,7 +512,7 @@ Se il peso o la riga vanno ricostruiti:
 * `codice cliente/materiale -> crop riga materiale + crop gruppo packing list`
 * `lega -> crop riga CAST + crop gruppo packing list`
 * `dimensione -> crop descrizione materiale + crop gruppo packing list`
-* `peso -> crop riga materiale; se debole anche crop gruppo packing list`
+* `peso -> gruppo packing list completo, anche se prosegue su altra pagina; pagina 1 è un riscontro`
 * `colata -> crop riga CAST + crop colonna COD. COLATA`
 * `numero certificato -> crop gruppo packing list con anchor Cert. N°`
 * `ordine cliente -> crop riga Vs. Odv + crop campo Customer's Order No. nel certificato`
@@ -558,6 +562,32 @@ Per ogni caso:
 
 ## 15. Placeholder Da Validare Insieme
 
-* confermare se in questo template la riga acquisition resta sempre la riga stampata di pagina 1 o se in alcuni casi va ricostruita dal gruppo packing list
-* confermare se il peso di pagina 1 e' sempre abbastanza forte o se per alcuni layout va preferita la ricostruzione da packing list
+* Regressioni di riferimento: 1612 = 4 gruppi / 25.940 kg; 1179 = 5 gruppi / 19.183 kg; 1383 = 2 gruppi / 4.624 kg.
+* Cert. 159233: 8.533 kg nel 1322, 2.438 kg nel 1383. Non unificare DDT diversi, non forzare il match per il solo numero.
 * verificare se esistono DDT Aluminium Bozen senza packing list allegato nel dataset completo futuro
+
+### Collaudo locale 20/11/2026
+
+Tre letture reali dei PDF mascherati con il modello applicativo GPT-5.5,
+una chiamata per documento (input/output: 1612 9.890/4.739 token;
+1179 12.884/3.029; 1383 6.896/1.612). Stima massima a tariffa standard
+senza sconto cache: USD 0,42975 complessivi. Nessuna chiamata dai servizi Beta.
+Riprodotte in SQLite isolato le tre sequenze: DDT prima, certificati prima e
+arrivo misto, usando le letture salvate degli 11 certificati di confronto.
+1612: 4/4 abbinamenti; 1179: 5/5; 1383: 1/2 automatico, 159233 non forzato
+(certificato per 10.971 kg su due DDT, entrambi già confermati da utente in Beta).
+Nessun aggancio al certificato sbagliato o nuova riga al secondo passaggio.
+Nel collaudo del riabbinamento tra elaborazioni, il punteggio generico poteva
+superare un peso discordante. Per i soli nuovi gruppi Bozen il riabbinamento
+automatico ora rispetta anche i dati discordanti già esclusi dal primo match.
+Nessun cambiamento alla scelta manuale, alle righe confermate o agli altri fornitori.
+I test ripetibili senza IA sono in `backend/tests/test_bozen_packing.py`.
+
+**Ordine cliente con data su un solo documento (nuovi gruppi Bozen).**
+Esempio: DDT `312`, certificato `312-2026-10-01`, o viceversa. Non si
+inventa né si copia la data: il DDT e il certificato conservano il proprio
+valore. A fine elaborazione CERTI può unire le due righe ancora aperte solo
+con numero certificato, colata, lega, diametro, peso e articolo concordanti,
+senza un altro abbinamento possibile. Un ordine diverso o due date diverse
+non coincidono. Restano efficaci i blocchi manuali. Nessun punteggio in più,
+nuova chiamata IA, ricalcolo dello storico o modifica ai pesi.
