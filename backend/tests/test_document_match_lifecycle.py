@@ -1280,6 +1280,47 @@ class DocumentMatchLifecycleTest(unittest.TestCase):
             actor_id=1,
         )
 
+    def test_judgment_only_keeps_register_changes_made_after_incoming_opened(self):
+        for outcome in ("accettato", "accettato_con_riserva", "respinto"):
+            with self.subTest(outcome=outcome):
+                row = self._make_date_test_row()
+                row.qualita_tipo_controllo = "diretta"
+                row.qualita_note = "Nota precedente"
+                self.db.commit()
+                self.db.refresh(row)
+                with self.Session() as register, patch(
+                    "app.modules.acquisition.service._is_row_available_in_quality_register", return_value=True,
+                ):
+                    update_quality_row(register, row=register.get(AcquisitionRow, row.id), actor_id=1,
+                                       payload=AcquisitionQualityUpdateRequest(
+                                           qualita_tipo_controllo="inversa", qualita_note="Nuova motivazione",
+                                           qualita_data_accettazione=date(2026, 7, 2), qualita_numero_colli=8,
+                                       ))
+                confirmed = validate_final_row(self.db, row=row, actor_id=1,
+                                              payload=AcquisitionFinalValidationRequest(qualita_valutazione=outcome))
+                self.assertEqual(confirmed.qualita_valutazione, outcome)
+                self.assertEqual(confirmed.qualita_tipo_controllo, "inversa")
+                self.assertEqual(confirmed.qualita_note, "Nuova motivazione")
+                self.assertEqual(row.qualita_data_accettazione, date(2026, 7, 2))
+                self.assertEqual(row.qualita_numero_colli, 8)
+
+    def test_judgment_only_checks_actual_type_and_note_before_setting_date(self):
+        row = self._make_date_test_row()
+        for outcome, control in [("accettato", None), ("accettato_con_riserva", "diretta"), ("respinto", "inversa")]:
+            with self.subTest(outcome=outcome):
+                row.qualita_tipo_controllo = control
+                self.db.commit()
+                with self.assertRaises(HTTPException) as blocked:
+                    validate_final_row(self.db, row=row, actor_id=1,
+                                       payload=AcquisitionFinalValidationRequest(qualita_valutazione=outcome))
+                self.assertEqual(blocked.exception.status_code, 400)
+                self.assertIsNone(row.qualita_valutazione)
+                self.assertIsNone(row.qualita_data_accettazione)
+        confirmed = validate_final_row(self.db, row=row, actor_id=1,
+                                      payload=AcquisitionFinalValidationRequest(qualita_valutazione="accettato"))
+        self.assertEqual(confirmed.qualita_valutazione, "accettato")
+        self.assertIsNotNone(row.qualita_data_accettazione)
+
     def test_quality_evaluation_preserves_date_for_every_outcome_and_kpi(self):
         from app.modules.supplier_kpi.service import _control_time_days, _supplier_detail_rows
 

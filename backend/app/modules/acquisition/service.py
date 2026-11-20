@@ -10004,13 +10004,15 @@ def update_quality_row(
     actor_id: int,
 ) -> AcquisitionQualityRowResponse:
     ensure_acquisition_row_ai_editable(db, row)
+    # The edit lock may have waited for Incoming or another register edit.
+    fields_set = payload.model_fields_set
+    db.refresh(row, attribute_names=list(fields_set | {"qualita_valutazione", "validata_finale"}))
     if not _is_row_available_in_quality_register(db, row):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Quality evaluation requires a user-confirmed match or a final validated row",
         )
 
-    fields_set = payload.model_fields_set
     if "qualita_tipo_controllo" in fields_set and payload.qualita_tipo_controllo is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -12874,11 +12876,11 @@ def validate_final_row(
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
     ensure_acquisition_row_ai_editable(db, row)
-    # Serialize confirmation with a concurrent date autosave and read the latest
-    # stored date/evaluation instead of overwriting values loaded earlier.
+    # Read after taking the edit lock. Incoming confirms the judgment, not the
+    # copy of type/note which was visible when the operator opened the form.
     db.refresh(
         row,
-        attribute_names=["qualita_data_accettazione", "qualita_valutazione"],
+        attribute_names=["qualita_data_accettazione", "qualita_valutazione", "qualita_tipo_controllo", "qualita_note"],
         with_for_update=True,
     )
     if row.qualita_valutazione:
@@ -12895,7 +12897,15 @@ def validate_final_row(
             detail=f"La valutazione qualità richiede chimica, proprietà e note verdi. Mancano: {', '.join(not_ready)}",
         )
 
-    if payload.qualita_valutazione in {"accettato_con_riserva", "respinto"} and not payload.qualita_note:
+    provided = payload.model_fields_set
+    control_type = payload.qualita_tipo_controllo if "qualita_tipo_controllo" in provided else row.qualita_tipo_controllo
+    note = payload.qualita_note if "qualita_note" in provided else row.qualita_note
+    if not control_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prima di confermare, indica il tipo di estrusione.",
+        )
+    if payload.qualita_valutazione in {"accettato_con_riserva", "respinto"} and not (note or "").strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La nota valutazione è obbligatoria per accettato con riserva o respinto.",
@@ -12904,13 +12914,14 @@ def validate_final_row(
     _apply_quality_control_type(
         db=db,
         row=row,
-        value=payload.qualita_tipo_controllo,
+        value=control_type,
         actor_id=actor_id,
     )
     if row.qualita_data_accettazione is None:
         row.qualita_data_accettazione = _current_quality_acceptance_date()
     row.qualita_valutazione = payload.qualita_valutazione
-    row.qualita_note = payload.qualita_note
+    if "qualita_note" in provided:
+        row.qualita_note = note
     row.qualita_numero_analisi_da_ricontrollare = False
     row.qualita_note_da_ricontrollare = False
     row.validata_finale = _is_row_documentally_confirmed(block_states)
@@ -12936,6 +12947,7 @@ def save_quality_evaluation_note(
     payload: AcquisitionQualityNoteUpdateRequest,
 ) -> AcquisitionRowDetailResponse:
     ensure_acquisition_row_ai_editable(db, row)
+    db.refresh(row, attribute_names=["validata_finale", "qualita_valutazione", "qualita_note"])
     _raise_if_quality_block_locked(row, "note")
     row.qualita_note = payload.qualita_note
     db.add(row)
@@ -12973,6 +12985,7 @@ def save_quality_control_type(
     actor_id: int,
 ) -> AcquisitionRowDetailResponse:
     ensure_acquisition_row_ai_editable(db, row)
+    db.refresh(row, attribute_names=["qualita_valutazione", "qualita_tipo_controllo"])
     if row.qualita_valutazione:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

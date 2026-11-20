@@ -4,7 +4,7 @@ import { apiRequest } from "../../app/api";
 import { useAuth } from "../../app/auth";
 import { alloySearchText, normalizeAlloyForDisplay } from "../../utils/alloyDisplay";
 import { formatRowFieldDisplay } from "../acquisition/fieldFormatting";
-import { qualityFieldError, qualityFieldPayloadValue } from "./qualityFieldPayload";
+import { createQualityAutosave, qualityCellKey as cellKey, reconcileQualityRead } from "./qualityAutosave";
 
 const EVALUATION_OPTIONS = [
   { value: "", label: "Da valutare" },
@@ -111,10 +111,6 @@ function getScrollablePageContainer(element) {
 
 function textValue(value) {
   return String(value ?? "");
-}
-
-function cellKey(rowId, field) {
-  return `${rowId}:${field}`;
 }
 
 function composeRawLega(row) {
@@ -374,43 +370,61 @@ export default function QualityEvaluationPage() {
   const sectionRef = useRef(null);
   const latestDraftsRef = useRef({});
   const rowsRef = useRef([]);
-  const saveTimersRef = useRef({});
   const savedFeedbackTimersRef = useRef({});
-  const saveVersionsRef = useRef({});
-  const inFlightCellsRef = useRef({});
-  const queuedSavesRef = useRef({});
   const refreshingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const deferredReadRef = useRef(false);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const autosaveRef = useRef(null);
+  if (!autosaveRef.current) {
+    autosaveRef.current = createQualityAutosave({
+      write: (id, field, value) => apiRequest(`/acquisition/quality-rows/${id}`, {
+        method: "PATCH", body: JSON.stringify({ [field]: value }), keepalive: true,
+      }, tokenRef.current),
+      committed: (id, field, updated, latest) => {
+        if (!updated || updated.id !== id || !Object.hasOwn(updated, field)) {
+          throw new Error("Conferma del server incompleta.");
+        }
+        rowsRef.current = rowsRef.current.map(row => row.id === id ? mergeSavedQualityField(row, updated, field) : row);
+        if (mountedRef.current) setRows(rowsRef.current);
+        if (latest) updateDraft(id, field, updated[field] ?? "");
+      },
+      feedback: updateCellFeedback,
+      settled: refreshAfterEdits,
+    });
+  }
+  const autosave = autosaveRef.current;
 
-  function hasPendingQualityChanges() {
-    const hasChangedDraft = rowsRef.current.some((row) =>
-      isRowChanged(row, latestDraftsRef.current[row.id] || buildDraft(row)),
-    );
-    const hasInFlightSave = Object.values(inFlightCellsRef.current).some(Boolean);
-    return hasChangedDraft || hasInFlightSave || Object.keys(queuedSavesRef.current).length > 0;
+  function refreshAfterEdits() {
+    if (mountedRef.current && deferredReadRef.current && !refreshingRef.current && !autosaveRef.current.hasPending()) {
+      void refresh({ silent: true });
+    }
   }
 
   async function refresh({ silent = false } = {}) {
-    if (refreshingRef.current) {
-      return;
-    }
+    if (refreshingRef.current) return;
     refreshingRef.current = true;
-    if (!silent) {
-      setLoading(true);
-    }
+    deferredReadRef.current = false;
+    const protectedKeys = autosaveRef.current.beginRead();
+    if (!silent) setLoading(true);
     setError("");
     try {
-      const response = await apiRequest("/acquisition/quality-rows", {}, token);
-      const nextRows = response.items || [];
-      setRows(nextRows);
-      setDrafts(Object.fromEntries(nextRows.map((row) => [row.id, buildDraft(row)])));
-      setCellStates({});
+      const response = await apiRequest("/acquisition/quality-rows", {}, tokenRef.current);
+      if (!mountedRef.current) return;
+      const next = reconcileQualityRead(response.items, rowsRef.current, latestDraftsRef.current, protectedKeys, EDITABLE_FIELDS);
+      rowsRef.current = next.rows;
+      latestDraftsRef.current = next.drafts;
+      setRows(next.rows);
+      setDrafts(next.drafts);
+      deferredReadRef.current = protectedKeys.size > 0;
     } catch (requestError) {
-      setError(requestError.message);
+      if (mountedRef.current) setError(requestError.message);
     } finally {
+      autosaveRef.current.endRead(protectedKeys);
       refreshingRef.current = false;
-      if (!silent) {
-        setLoading(false);
-      }
+      if (mountedRef.current && !silent) setLoading(false);
+      refreshAfterEdits();
     }
   }
 
@@ -420,7 +434,7 @@ export default function QualityEvaluationPage() {
 
   useEffect(() => {
     function refreshWhenVisible() {
-      if (document.visibilityState === "visible" && !hasPendingQualityChanges()) {
+      if (document.visibilityState === "visible") {
         void refresh({ silent: true });
       }
     }
@@ -465,52 +479,22 @@ export default function QualityEvaluationPage() {
   }, []);
 
   useEffect(() => {
-    rowsRef.current = rows;
-  }, [rows]);
-
-  useEffect(() => {
-    latestDraftsRef.current = drafts;
-  }, [drafts]);
-
-  useEffect(
-    () => () => {
-      Object.values(saveTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
-      Object.values(savedFeedbackTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
-    },
-    [],
-  );
-
-  useEffect(() => {
-    function flushQualityChangesOnExit() {
-      rowsRef.current.forEach((row) => {
-        const draft = latestDraftsRef.current[row.id] || buildDraft(row);
-        const payload = Object.fromEntries(
-          EDITABLE_FIELDS
-            .filter((field) => textValue(row[field]) !== textValue(draft[field]))
-            .filter((field) => !qualityFieldError(field, draft[field]))
-            .map((field) => [field, qualityFieldPayloadValue(field, draft[field])]),
-        );
-        if (!Object.keys(payload).length) {
-          return;
-        }
-        void apiRequest(
-          `/acquisition/quality-rows/${row.id}`,
-          {
-            method: "PATCH",
-            body: JSON.stringify(payload),
-            keepalive: true,
-          },
-          token,
-        ).catch(() => undefined);
-      });
+    mountedRef.current = true;
+    function beforeUnload(event) {
+      if (!autosave.hasPending()) return;
+      autosave.flushAll();
+      // A browser cannot guarantee a second queued write after a forced exit.
+      event.preventDefault();
+      event.returnValue = "";
     }
-
-    window.addEventListener("beforeunload", flushQualityChangesOnExit);
+    window.addEventListener("beforeunload", beforeUnload);
     return () => {
-      window.removeEventListener("beforeunload", flushQualityChangesOnExit);
-      flushQualityChangesOnExit();
+      mountedRef.current = false;
+      window.removeEventListener("beforeunload", beforeUnload);
+      Object.values(savedFeedbackTimersRef.current).forEach(clearTimeout);
+      autosave.flushAll();
     };
-  }, [token]);
+  }, [autosave]);
 
   const changedRows = useMemo(
     () => rows.filter((row) => isRowChanged(row, drafts[row.id] || buildDraft(row))).length,
@@ -630,141 +614,46 @@ export default function QualityEvaluationPage() {
     });
   }
 
-  function clearSavedFeedback(key, version) {
-    window.clearTimeout(savedFeedbackTimersRef.current[key]);
-    savedFeedbackTimersRef.current[key] = window.setTimeout(() => {
-      if (saveVersionsRef.current[key] === version) {
+  function updateCellFeedback(key, state) {
+    clearTimeout(savedFeedbackTimersRef.current[key]);
+    delete savedFeedbackTimersRef.current[key];
+    if (!mountedRef.current) return;
+    setCellState(key, state);
+    if (state?.status === "saved") {
+      savedFeedbackTimersRef.current[key] = setTimeout(() => {
+        delete savedFeedbackTimersRef.current[key];
         setCellState(key, null);
-      }
-    }, AUTOSAVE_SAVED_FEEDBACK_MS);
+      }, AUTOSAVE_SAVED_FEEDBACK_MS);
+    }
   }
 
   function updateDraft(rowId, field, value) {
     const next = {
       ...latestDraftsRef.current,
-      [rowId]: {
-        ...(latestDraftsRef.current[rowId] || {}),
-        [field]: value,
-      },
+      [rowId]: { ...latestDraftsRef.current[rowId], [field]: value },
     };
     latestDraftsRef.current = next;
-    setDrafts(next);
-  }
-
-  function queueQualityCellSave(rowId, field, value, delay = AUTOSAVE_DELAY_MS) {
-    const key = cellKey(rowId, field);
-    window.clearTimeout(saveTimersRef.current[key]);
-    window.clearTimeout(savedFeedbackTimersRef.current[key]);
-
-    const version = (saveVersionsRef.current[key] || 0) + 1;
-    saveVersionsRef.current[key] = version;
-
-    const validationError = qualityFieldError(field, value);
-    if (validationError) {
-      setCellState(key, { status: "error", message: validationError });
-      return;
-    }
-
-    const currentRow = rowsRef.current.find((item) => item.id === rowId);
-    const matchesSavedValue = currentRow && textValue(currentRow[field]) === textValue(value);
-    if (matchesSavedValue && !inFlightCellsRef.current[key]) {
-      setCellState(key, null);
-      return;
-    }
-
-    if (delay <= 0) {
-      void saveQualityCell(rowId, field, value, version, false);
-      return;
-    }
-
-    saveTimersRef.current[key] = window.setTimeout(() => {
-      void saveQualityCell(rowId, field, value, version, false);
-    }, delay);
-  }
-
-  async function saveQualityCell(rowId, field, value, version, force) {
-    const key = cellKey(rowId, field);
-    window.clearTimeout(saveTimersRef.current[key]);
-    if (saveVersionsRef.current[key] !== version) {
-      return;
-    }
-
-    if (inFlightCellsRef.current[key]) {
-      queuedSavesRef.current[key] = { rowId, field, value, version };
-      return;
-    }
-
-    const currentRow = rowsRef.current.find((item) => item.id === rowId);
-    if (!force && currentRow && textValue(currentRow[field]) === textValue(value)) {
-      setCellState(key, null);
-      return;
-    }
-
-    inFlightCellsRef.current[key] = true;
-    setCellState(key, { status: "saving" });
-    setError("");
-
-    try {
-      const updatedRow = await apiRequest(
-        `/acquisition/quality-rows/${rowId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ [field]: qualityFieldPayloadValue(field, value) }),
-          keepalive: true,
-        },
-        token,
-      );
-
-      if (saveVersionsRef.current[key] === version) {
-        setRows((current) => {
-          const next = current.map((row) => (row.id === rowId ? mergeSavedQualityField(row, updatedRow, field) : row));
-          rowsRef.current = next;
-          return next;
-        });
-        setDrafts((current) => {
-          const currentDraft = current[rowId] || buildDraft(updatedRow);
-          if (textValue(currentDraft[field]) !== textValue(value)) {
-            return current;
-          }
-          const next = {
-            ...current,
-            [rowId]: {
-              ...currentDraft,
-              [field]: updatedRow[field] ?? "",
-            },
-          };
-          latestDraftsRef.current = next;
-          return next;
-        });
-        setCellState(key, { status: "saved" });
-        clearSavedFeedback(key, version);
-      }
-    } catch (requestError) {
-      if (saveVersionsRef.current[key] === version) {
-        const message = requestError.message || "Errore salvataggio automatico";
-        setCellState(key, { status: "error", message });
-        setError(`Errore autosave riga #${rowId}: ${message}`);
-      }
-    } finally {
-      inFlightCellsRef.current[key] = false;
-      const queued = queuedSavesRef.current[key];
-      if (queued) {
-        delete queuedSavesRef.current[key];
-        if (queued.version === saveVersionsRef.current[key]) {
-          void saveQualityCell(queued.rowId, queued.field, queued.value, queued.version, true);
-        }
-      }
-    }
+    if (mountedRef.current) setDrafts(next);
   }
 
   function updateDraftAndAutosave(rowId, field, value, delay = AUTOSAVE_DELAY_MS) {
     updateDraft(rowId, field, value);
-    queueQualityCellSave(rowId, field, value, delay);
+    autosave.edit(rowId, field, value, delay);
   }
 
   function flushQualityCell(rowId, field) {
-    const value = latestDraftsRef.current[rowId]?.[field] ?? "";
-    queueQualityCellSave(rowId, field, value, 0);
+    void autosave.flush(cellKey(rowId, field));
+  }
+
+  function fieldError(rowId, field) {
+    const key = cellKey(rowId, field);
+    const state = cellStates[key];
+    if (state?.status !== "error") return null;
+    return (
+      <div className="mt-1 text-xs text-rose-700" role="alert">
+        {state.retry ? <>Salvataggio non confermato. <button className="font-semibold underline" onClick={() => autosave.flush(key)} title={state.message} type="button">Riprova</button></> : state.message}
+      </div>
+    );
   }
 
   function toggleSort(field) {
@@ -963,6 +852,7 @@ export default function QualityEvaluationPage() {
                       type="date"
                       value={draft.qualita_data_ricezione || ""}
                     />
+                    {fieldError(row.id, "qualita_data_ricezione")}
                   </td>
                   <td className="px-2 py-2">
                     <input
@@ -980,6 +870,7 @@ export default function QualityEvaluationPage() {
                       type="date"
                       value={draft.qualita_data_accettazione || ""}
                     />
+                    {fieldError(row.id, "qualita_data_accettazione")}
                   </td>
                   <td className="px-2 py-2">
                     <SupplierCell row={row} />
@@ -1021,6 +912,7 @@ export default function QualityEvaluationPage() {
                       type="date"
                       value={draft.qualita_data_richiesta || ""}
                     />
+                    {fieldError(row.id, "qualita_data_richiesta")}
                   </td>
                   <td className="px-2 py-2">
                     <select
@@ -1039,6 +931,7 @@ export default function QualityEvaluationPage() {
                       <option value="inversa">Inversa</option>
                       <option value="billetta">Non applicabile - billetta</option>
                     </select>
+                    {fieldError(row.id, "qualita_tipo_controllo")}
                   </td>
                   <td className="px-2 py-2">
                     <input
@@ -1055,6 +948,7 @@ export default function QualityEvaluationPage() {
                       type="text"
                       value={draft.qualita_numero_colli ?? ""}
                     />
+                    {fieldError(row.id, "qualita_numero_colli")}
                   </td>
                   <td className="px-2 py-2">
                     <input
@@ -1076,6 +970,7 @@ export default function QualityEvaluationPage() {
                       type="text"
                       value={draft.qualita_note || ""}
                     />
+                    {fieldError(row.id, "qualita_note")}
                   </td>
                   <td className="px-2 py-2">
                     <LockedCell wide>{EVALUATION_OPTIONS.find((option) => option.value === row.qualita_valutazione)?.label || "Da valutare"}</LockedCell>

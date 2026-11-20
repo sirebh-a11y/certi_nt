@@ -302,6 +302,7 @@ export default function AcquisitionDetailPage() {
   const finalQualityNoteLockedRef = useRef(false);
   const savedFinalQualityNoteRef = useRef("");
   const queuedFinalQualityNoteRef = useRef("");
+  const finalQualityNoteFailedRef = useRef(false);
   const finalQualityNoteSaveQueueRef = useRef(Promise.resolve());
   const finalQualityNoteSaveVersionRef = useRef(0);
   const [finalValidationDialog, setFinalValidationDialog] = useState(null);
@@ -428,6 +429,7 @@ export default function AcquisitionDetailPage() {
     finalQualityNoteRowIdRef.current = noteRowId || null;
     savedFinalQualityNoteRef.current = normalizedNote;
     queuedFinalQualityNoteRef.current = normalizedNote;
+    finalQualityNoteFailedRef.current = false;
     finalQualityNoteSaveVersionRef.current += 1;
     setFinalQualityNote(nextNote);
     setFinalQualityNoteSaveState("idle");
@@ -439,12 +441,13 @@ export default function AcquisitionDetailPage() {
     if (!currentRowId || String(currentRowId) !== String(rowId) || row?.qualita_valutazione || aiProcessingLocked) {
       return Promise.resolve();
     }
-    if (normalizedNote === queuedFinalQualityNoteRef.current) {
+    if (normalizedNote === queuedFinalQualityNoteRef.current && !finalQualityNoteFailedRef.current) {
       return finalQualityNoteSaveQueueRef.current;
     }
 
     queuedFinalQualityNoteRef.current = normalizedNote;
     const saveVersion = finalQualityNoteSaveVersionRef.current + 1;
+    finalQualityNoteFailedRef.current = false;
     finalQualityNoteSaveVersionRef.current = saveVersion;
     setFinalQualityNoteSaveState("saving");
 
@@ -471,8 +474,10 @@ export default function AcquisitionDetailPage() {
         if (
           String(finalQualityNoteRowIdRef.current) === String(currentRowId)
           && queuedFinalQualityNoteRef.current === normalizedNote
+          && finalQualityNoteSaveVersionRef.current === saveVersion
         ) {
           queuedFinalQualityNoteRef.current = savedFinalQualityNoteRef.current;
+          finalQualityNoteFailedRef.current = true;
         }
         if (finalQualityNoteSaveVersionRef.current === saveVersion) {
           setFinalQualityNoteSaveState("error");
@@ -487,6 +492,8 @@ export default function AcquisitionDetailPage() {
 
   useEffect(() => {
     if (row?.id) {
+      finalQualityNoteSaveQueueRef.current = Promise.resolve();
+      qualityControlTypeSaveQueueRef.current = Promise.resolve();
       resetFinalQualityNoteDraft(row.qualita_note || "", row.id);
       const nextControlType = row.qualita_tipo_controllo || "";
       qualityControlTypeRef.current = nextControlType;
@@ -1055,45 +1062,40 @@ export default function AcquisitionDetailPage() {
     }
   }
 
-  async function handleValidateFinal(qualityEvaluation) {
-    const cleanedNote = safeText(finalQualityNote).trim();
-    const selectedControlType = qualityControlTypeRef.current;
-    if (!selectedControlType) {
-      setFinalValidationWarning({
-        title: "Tipo estrusione richiesta",
-        message: "Prima di completare la valutazione devi scegliere Diretta, Inversa oppure Non applicabile - billetta.",
-      });
-      return;
-    }
-    if ((qualityEvaluation === "accettato_con_riserva" || qualityEvaluation === "respinto") && !cleanedNote) {
-      setFinalValidationWarning({
-        title: "Nota valutazione richiesta",
-        message: "Per accettare con riserva o respingere la riga devi indicare una motivazione nella nota valutazione.",
-      });
-      return;
-    }
+  function showStoredQuality(rowData) {
+    setRow(rowData);
+    resetFinalQualityNoteDraft(rowData.qualita_note, rowData.id);
+    qualityControlTypeRef.current = rowData.qualita_tipo_controllo || "";
+    setQualityControlType(qualityControlTypeRef.current);
+    setQualityControlTypeSaveState("idle");
+  }
 
+  async function handleValidateFinal(qualityEvaluation) {
     setProcessingFinalValidation(true);
     setError("");
+    let sentJudgment = false;
     try {
-      await saveFinalQualityNote(cleanedNote);
-      await qualityControlTypeSaveQueueRef.current.catch(() => undefined);
-      await apiRequest(
+      await saveFinalQualityNote();
+      await qualityControlTypeSaveQueueRef.current;
+      sentJudgment = true;
+      const confirmed = await apiRequest(
         `/acquisition/rows/${rowId}/validate-final`,
         {
           method: "POST",
-          body: JSON.stringify({
-            qualita_tipo_controllo: selectedControlType,
-            qualita_valutazione: qualityEvaluation,
-            qualita_note: cleanedNote || null,
-          }),
+          body: JSON.stringify({ qualita_valutazione: qualityEvaluation }),
         },
         token,
       );
-      await refreshRow(false);
+      showStoredQuality(confirmed);
       setFinalValidationDialog({ qualityEvaluation });
     } catch (requestError) {
-      setError(requestError.message);
+      // If another tab removed the required note, show the actual empty field.
+      // Never discard a draft whose own PUT failed before the judgment.
+      if (sentJudgment && [400, 409].includes(requestError.status)) {
+        const current = await apiRequest(`/acquisition/rows/${rowId}`, {}, token).catch(() => null);
+        if (current && String(current.id) === String(qualityControlTypeRowIdRef.current)) showStoredQuality(current);
+      }
+      setFinalValidationWarning({ title: "Valutazione non confermata", message: requestError.message });
     } finally {
       setProcessingFinalValidation(false);
     }
@@ -1110,7 +1112,7 @@ export default function AcquisitionDetailPage() {
   }, [aiProcessingLocked, rowId, token]);
 
   function handleQualityControlTypeChange(value) {
-    if (row?.qualita_valutazione || processingFinalValidation || qualityControlTypeRef.current === value) {
+    if (row?.qualita_valutazione || processingFinalValidation || (qualityControlTypeRef.current === value && qualityControlTypeSaveState !== "error")) {
       return;
     }
     qualityControlTypeRef.current = value;
@@ -1145,6 +1147,9 @@ export default function AcquisitionDetailPage() {
       });
 
     qualityControlTypeSaveQueueRef.current = operation;
+    // The click handler is not awaited. Keep the rejection for confirmation,
+    // but do not report it as an unhandled browser error.
+    operation.catch(() => undefined);
   }
 
   async function handleReopenFinalValidation() {

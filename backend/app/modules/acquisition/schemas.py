@@ -844,7 +844,9 @@ class AcquisitionQualityUpdateRequest(BaseModel):
 
 
 class AcquisitionFinalValidationRequest(BaseModel):
-    qualita_tipo_controllo: QualityControlType
+    # The Incoming form saves these fields separately; omission means use the
+    # current stored value. Keep explicit fields for existing API clients.
+    qualita_tipo_controllo: QualityControlType | None = None
     qualita_valutazione: QualityEvaluationState
     qualita_note: str | None = None
 
