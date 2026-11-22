@@ -22,7 +22,7 @@ class EmailService:
             if close_db:
                 db.close()
 
-    def _send_with_config(self, payload: NotificationEmail, config) -> None:
+    def _send_with_config(self, payload: NotificationEmail, config, *, timeout=None) -> None:
         message = EmailMessage()
         message["From"] = f"{config.mail_from_name} <{config.mail_from_email}>"
         message["To"] = payload.to_email
@@ -32,7 +32,7 @@ class EmailService:
         message["Subject"] = payload.subject
         message.set_content(payload.body)
 
-        with smtplib.SMTP(config.smtp_host, config.smtp_port) as smtp:
+        with smtplib.SMTP(config.smtp_host, config.smtp_port, **({'timeout': timeout} if timeout is not None else {})) as smtp:
             if config.smtp_tls:
                 smtp.starttls()
             if config.smtp_user:

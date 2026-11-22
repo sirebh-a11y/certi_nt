@@ -2,6 +2,10 @@
 
 Questo documento descrive come aggiornare la alpha sul server `certi-test.forgialluminio.it` partendo dall'app locale gia modificata e da GitHub aggiornato, senza cancellare database, storage documentale o configurazioni server.
 
+Per una futura release con gestione delle variazioni eSolver, seguire anche la
+[procedura Beta: variazioni DDT e recupero mirato del 2866](beta_ddt_revisions_2866.md).
+È un intervento da autorizzare, non una pulizia né un recupero storico automatico.
+
 ## Obiettivo
 
 Aggiornare il codice applicativo Alpha e le sole integrazioni database approvate,

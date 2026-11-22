@@ -13,6 +13,8 @@ def _clean(value):
 
 
 def exact_certificate(item, certificate):
+    if (certificate.shipment_context or {}).get('retired'):
+        return False
     pairs = (
         (item.cod_odp, certificate.cod_odp), (item.cod_f3, certificate.cod_f3),
         (item.ddt_raw, certificate.ddt), (item.id_documento, certificate.esolver_id_documento),
@@ -102,7 +104,7 @@ def certificate_for_saved_ddt(db, item):
         if not quantity_matches(item, exact[0]):
             raise HTTPException(status_code=409, detail="Quantità DDT modificata rispetto al certificato: verifica richiesta")
         return exact[0]
-    conflicting = [cert for cert in certificates if (
+    conflicting = [cert for cert in certificates if not (cert.shipment_context or {}).get('retired') and (
         cert.unit_key == item.certification_unit_key
         or (_clean(cert.esolver_id_documento) == item.id_documento
             and _clean(cert.esolver_id_riga_doc) == item.id_riga_doc

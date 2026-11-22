@@ -229,7 +229,8 @@ def _project(db, items):
             certificates_by_ol[cert.cod_odp].append(cert)
         # Count ALL sibling source items, not just filtered/visible items.
         for ol, f3 in db.execute(select(QuartaTaglioDdtWorkItem.cod_odp, QuartaTaglioDdtWorkItem.cod_f3)
-                                .where(QuartaTaglioDdtWorkItem.cod_odp.in_(chunk))):
+                                .where(QuartaTaglioDdtWorkItem.cod_odp.in_(chunk),
+                                       QuartaTaglioDdtWorkItem.source_review_reason.is_distinct_from(ddt_shipments.REMOVED))):
             family_counts[(ol, f3)] += 1
         for version in db.scalars(select(QuartaTaglioCertificatePdfVersion)
                                   .join(QuartaTaglioFinalCertificate)
@@ -240,6 +241,8 @@ def _project(db, items):
                                 lotti=r.cod_lotti, qta_totale=r.qta_totale)
         for r in ([r for r in by_ol[ol] if r.seen_in_last_sync] or by_ol[ol])] for ol in cod_odps}
     decisions = latest_decisions(db, [item.id for item in items])
+    from app.modules.quarta_taglio.ddt_revisions import Repair
+    repairs={r.item_id:r for r in db.scalars(select(Repair))} if settings.ddt_revisions_enabled else {}
     from app.modules.quarta_taglio.ddt_archive import archive_state, REVIEW_MESSAGE as ARCHIVE_REVIEW
     archived, archive_events = archive_state(db, items)
     from app.modules.quarta_taglio.models import QuartaTaglioDdtArchiveEvent
@@ -327,6 +330,10 @@ def _project(db, items):
                     word_source=certificate.word_source, ddt=item.ddt_raw,
                     cod_odp=item.cod_odp, cod_f3=item.cod_f3,
                 )
+        if item.id in repairs and not row.exclusion_active:
+            row.pdf_action=None
+            row.state,row.label='review','Aggiornamento Word'
+            row.reasons=[repairs[item.id].error or 'CERTI aggiorna i campi di spedizione del Word.']
         archive_event = archive_events.get(item.id)
         if (boundary and not archive_event and item.ddt_date and item.ddt_date < boundary.cutoff_date
                 and item.first_seen_at.replace(tzinfo=timezone.utc) >= boundary.created_at.replace(tzinfo=timezone.utc)):
@@ -381,7 +388,9 @@ def require_queue_pdf_action(db, item, certificate_id, expected_revision):
 def read_ddt_sync(db):
     """Lightweight status for the page's four-hour connection warning."""
     latest, success = last_snapshot_runs(db)
+    from app.modules.quarta_taglio.ddt_quality_notices import quality_cases
     return DdtQueueSyncResponse(
+        quality_cases=quality_cases(db),
         enabled=settings.ddt_snapshot_enabled,
         last_attempt=DdtSyncAttemptResponse.model_validate(latest) if latest else None,
         last_success=DdtSyncAttemptResponse.model_validate(success) if success else None,
@@ -413,7 +422,8 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="Intervallo date non valido")
-    statement = select(QuartaTaglioDdtWorkItem)
+    statement = select(QuartaTaglioDdtWorkItem).where(
+        QuartaTaglioDdtWorkItem.source_review_reason.is_distinct_from(ddt_shipments.REMOVED))
     if date_from:
         statement = statement.where(QuartaTaglioDdtWorkItem.ddt_date >= date_from)
     if date_to:

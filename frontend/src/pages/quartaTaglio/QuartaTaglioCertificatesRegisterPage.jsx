@@ -260,6 +260,7 @@ function SortableHeader({ field, label, onSort, sortConfig }) {
 }
 
 function registerStatusLabel(item) {
+  if (item.status === "ddt_withdrawn") return "Ritirato – DDT modificato";
   if (item.status === "pdf_final") {
     return STATUS_LABELS.pdf_final;
   }
@@ -284,6 +285,7 @@ function registerStatusLabel(item) {
 }
 
 function statusClass(item) {
+  if (item.status === "ddt_withdrawn") return "border-rose-300 bg-rose-50 text-rose-900";
   if (item.status === "pdf_final") {
     return "border-emerald-200 bg-emerald-50 text-emerald-800";
   }
@@ -450,7 +452,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
   const visibleRefreshIds = useMemo(
     () =>
       displayedItems
-        .filter((item) => item.has_word && !item.has_pdf && item.status !== "pdf_final")
+        .filter((item) => item.has_word && !item.has_pdf && !["pdf_final", "ddt_withdrawn"].includes(item.status))
         .map((item) => item.id),
     [displayedItems],
   );
@@ -844,13 +846,13 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                   <td className="px-4 py-3 text-slate-700">{formatDate(item.cert_date || item.created_at)}</td>
                   <td className="px-4 py-3 font-semibold text-slate-800">{item.cdq || "-"}</td>
                   <td className="px-4 py-3">
-                    <Link
+                    {item.status === "ddt_withdrawn" ? item.cod_odp : <Link
                       className="font-semibold text-accent hover:underline"
                       onClick={persistCurrentListState}
                       to={`/quarta-taglio/${encodeURIComponent(item.cod_odp)}?certificateId=${encodeURIComponent(item.id)}`}
                     >
                       {item.cod_odp}
-                    </Link>
+                    </Link>}
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.lega_cod_f3 || "-"}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{item.ddt || "-"}</td>
@@ -897,7 +899,7 @@ export default function QuartaTaglioCertificatesRegisterPage() {
                       >
                         PDF
                       </a>
-                    ) : canGeneratePdf && item.ddt && item.has_word && !item.has_pdf && !item.standard_outdated ? (
+                    ) : canGeneratePdf && item.status !== "ddt_withdrawn" && item.ddt && item.has_word && !item.has_pdf && !item.standard_outdated ? (
                       <button
                         className="ml-3 font-semibold text-accent hover:underline"
                         onClick={() => {

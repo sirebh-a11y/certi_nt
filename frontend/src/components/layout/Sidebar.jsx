@@ -212,6 +212,7 @@ export default function Sidebar() {
   const { user, token } = useAuth();
   const location = useLocation();
   const [ddtActiveCount, setDdtActiveCount] = useState(null);
+  const [ddtWithdrawal, setDdtWithdrawal] = useState(false);
   const visibleNavItems = [];
 
   useEffect(() => {
@@ -221,7 +222,10 @@ export default function Sidebar() {
       if (document.visibilityState === "hidden") return;
       try {
         const counters = await apiRequest("/quarta-taglio/ddt-work-items/counters", {}, token);
-        if (!cancelled) setDdtActiveCount(counters.active);
+        if (!cancelled) {
+          setDdtActiveCount(counters.active);
+          setDdtWithdrawal(Boolean(counters.sync?.quality_cases?.length));
+        }
       } catch {
         if (!cancelled) setDdtActiveCount(null);
       }
@@ -306,6 +310,7 @@ export default function Sidebar() {
                       <SidebarIcon name={item.icon} />
                     </span>
                     <span className={item.badge === "ddt" ? "min-w-0 flex-1 whitespace-normal" : "truncate"}>{item.label}</span>
+                    {item.badge === "ddt" && ddtWithdrawal && <span aria-label="PDF ritirato: verifica invio" title="PDF ritirato: verifica invio" className="rounded bg-rose-700 px-1 text-white">!</span>}
                     {item.badge === "ddt" && ddtActiveCount !== null ? (
                       <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900" aria-label={`${ddtActiveCount} DDT attivi`}>
                         {ddtActiveCount}

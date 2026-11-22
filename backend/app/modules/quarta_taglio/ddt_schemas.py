@@ -102,6 +102,7 @@ class DdtQueueSyncResponse(BaseModel):
     enabled: bool
     last_attempt: DdtSyncAttemptResponse | None = None
     last_success: DdtSyncAttemptResponse | None = None
+    quality_cases: list[dict] = Field(default_factory=list)
 
 
 class DdtQueueCountersResponse(BaseModel):

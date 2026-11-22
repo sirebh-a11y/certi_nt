@@ -17,6 +17,8 @@ from threading import Lock
 from sqlalchemy import select, text
 
 from app.core.database import SessionLocal
+from app.core.config import settings
+from app.modules.quarta_taglio import ddt_revisions
 from app.core.integrations.models import ExternalConnection
 from app.core.integrations.read_policy import query_timeout, connection_revision, ensure_connection_unchanged
 from app.core.logs.service import log_service
@@ -164,6 +166,7 @@ def _apply_snapshot(db, raw_rows, *, now):
         incoming[values["source_key"]] = values
 
     existing = list(db.scalars(select(QuartaTaglioDdtWorkItem)))
+    before = ddt_revisions.snapshot_rows(existing) if settings.ddt_revisions_enabled else None
     if not incoming and existing:
         # A successful SQL SELECT returning zero rows does not prove that every
         # previous DDT has legitimately left the source. Keep the last baseline.
@@ -213,6 +216,8 @@ def _apply_snapshot(db, raw_rows, *, now):
         item.last_seen_at = now
         item.source_present = True
         item.source_disappeared_at = None
+        if item.source_review_reason == ddt_revisions.REMOVED:
+            item.source_review_reason = None
         if review_reason:
             item.source_review_reason = review_reason
         elif item.source_review_reason == "ddt_date_unrecognized" and item.ddt_date is not None:
@@ -227,6 +232,9 @@ def _apply_snapshot(db, raw_rows, *, now):
             item.source_disappeared_at = now
             counts["disappeared"] += 1
     db.flush()
+    if before is not None:
+        ddt_revisions.apply_transitions(db, before, ddt_revisions.snapshot_rows(by_key.values()), now)
+        db.flush()
     from app.modules.quarta_taglio.ddt_decisions import invalidate_changed_exclusions
     invalidate_changed_exclusions(db, list(db.scalars(select(QuartaTaglioDdtWorkItem))), now)
     from app.modules.quarta_taglio.ddt_archive import invalidate_archives

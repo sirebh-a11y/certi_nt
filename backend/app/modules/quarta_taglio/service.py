@@ -2542,6 +2542,7 @@ def _find_existing_certificate_for_unit(
         certificate
         for certificate in certificates
         if certificate.id not in used_certificate_ids
+        and not (certificate.shipment_context or {}).get('retired')
         and _norm(certificate.cod_f3) == unit_cod_f3
     ]
     if not all_candidates:
@@ -2793,6 +2794,9 @@ def get_quarta_taglio_word_draft_file(db: Session, *, draft_id: int, download_to
     path = _certificate_storage_path(certificate.storage_key_docx)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File Word non trovato")
+    if (certificate.shipment_context or {}).get('ddt_repair_pending'):
+        # Original for inspection/correction only. PDF generation has a separate fence.
+        return path, _certificate_file_name(certificate)
     path = _sync_word_fields_for_download(db, certificate=certificate, path=path)
     return path, _certificate_file_name(certificate)
 
@@ -2822,6 +2826,8 @@ def generate_quarta_taglio_certificate_pdf(
         download_name = normalize_pdf_file_name(pdf_file_name) if pdf_file_name is not None else _certificate_pdf_file_name(certificate)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    from app.modules.quarta_taglio.ddt_revisions import guard
+    guard(db, certificate)
     if certificate.status == "pdf_final" and certificate.storage_key_pdf:
         if download_name != _certificate_pdf_file_name(certificate):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PDF già chiuso: il nome può essere scelto solo durante la generazione.")
@@ -2893,6 +2899,7 @@ def generate_quarta_taglio_certificate_pdf(
         ddt_shipments.lock_snapshot_for_pdf(db, certificate)
         _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
         db.refresh(certificate)
+        guard(db, certificate)
         if certificate.status == 'pdf_final' and certificate.storage_key_pdf:
             # Another request already closed it. Do not publish a second version.
             if download_name != _certificate_pdf_file_name(certificate):
@@ -2964,6 +2971,9 @@ def reopen_quarta_taglio_certificate_pdf(
     certificate = db.get(QuartaTaglioFinalCertificate, certificate_id)
     if certificate is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificato non trovato")
+    ddt_shipments.lock_snapshot_for_pdf(db,certificate)
+    _lock_certificate_register_for_ol(db,cod_odp=certificate.cod_odp)
+    db.refresh(certificate,with_for_update=True)
     if certificate.status != "pdf_final" or not certificate.storage_key_pdf:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il certificato non è chiuso PDF")
 
@@ -3005,6 +3015,8 @@ def get_quarta_taglio_certificate_pdf_file(db: Session, *, certificate_id: int, 
 
 
 def _sync_word_fields_for_download(db: Session, *, certificate: QuartaTaglioFinalCertificate, path: Path) -> Path:
+    from app.modules.quarta_taglio.ddt_revisions import guard
+    guard(db, certificate)
     if certificate.status == "pdf_final":
         return path
     _lock_certificate_register_for_ol(db, cod_odp=certificate.cod_odp)
@@ -5555,7 +5567,7 @@ def _serialize_final_certificate_register_item(
     if db is not None:
         conformity_status, conformity_issues = _live_certificate_conformity_for_register(db, certificate=certificate)
     word_download_url = None
-    if certificate.storage_key_docx and certificate.download_token:
+    if certificate.storage_key_docx and certificate.download_token and not (certificate.shipment_context or {}).get('retired'):
         word_download_url = f"/api/quarta-taglio/word-drafts/{certificate.id}/file?download_token={certificate.download_token}"
     pdf_download_url = None
     if certificate.storage_key_pdf and certificate.download_token:
@@ -5564,7 +5576,7 @@ def _serialize_final_certificate_register_item(
         ddt_received=bool(_clean_text(certificate.ddt)) or ddt_received,
         id=certificate.id,
         cod_odp=certificate.cod_odp,
-        status=certificate.status,
+        status='ddt_withdrawn' if (certificate.shipment_context or {}).get('retired') else certificate.status,
         certificate_number=certificate.certificate_number or certificate.draft_number,
         draft_number=certificate.draft_number,
         unit_key=certificate.unit_key,
@@ -5574,7 +5586,8 @@ def _serialize_final_certificate_register_item(
         esolver_id_riga_doc=certificate.esolver_id_riga_doc,
         esolver_rif_lotto_alfanum=certificate.esolver_rif_lotto_alfanum,
         ordine_cliente=certificate.ordine_cliente,
-        quantita=_certificate_quantity_display(certificate, esolver_rows=esolver_rows or []),
+        quantita=(certificate.quantita if (certificate.shipment_context or {}).get('retired')
+                  else _certificate_quantity_display(certificate, esolver_rows=esolver_rows or [])),
         cdq=_certificate_cdq_display(certificate),
         cert_date=certificate.cert_date,
         lega_cod_f3=_certificate_cod_f3_display(certificate),
@@ -5970,7 +5983,8 @@ def _build_certification_progress_by_odp(
             esolver_link=esolver_links.get(cod_odp),
             certificates=certificates_by_odp.get(cod_odp, []),
             saved_items=[i for i in saved_by_ol[cod_odp]
-                         if i.id not in archived and not (decisions.get(i.id) and exclusion_valid(i, decisions[i.id]))]
+                         if i.id not in archived and i.source_review_reason != ddt_shipments.REMOVED
+                         and not (decisions.get(i.id) and exclusion_valid(i, decisions[i.id]))]
                         if saved_by_ol[cod_odp] else None,
         )
     return {cod_odp: progress[cod_odp] for cod_odp in cod_odps if cod_odp in progress}

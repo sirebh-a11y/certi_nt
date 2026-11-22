@@ -22,6 +22,27 @@ def require_certification_reader(current_user: CurrentUser):
 router = APIRouter(prefix="/ddt-work-items", dependencies=[Depends(require_certification_reader)])
 
 
+@router.post("/changes/{change_id}/{decision}")
+def confirm_customer_delivery(change_id: int, decision: Literal['not_sent','sent','customer_informed'], db: DbSession, current_user: CurrentUser):
+    from datetime import datetime, timezone
+    from app.core.deps import is_quality_area_user
+    from app.modules.quarta_taglio.models import DdtShipmentChange
+    if not is_quality_area_user(current_user):
+        raise HTTPException(403,'Conferma riservata a Qualità o IT.')
+    case=db.get(DdtShipmentChange,change_id,with_for_update=True)
+    if not case or not case.withdrawals:
+        raise HTTPException(404,'Segnalazione non trovata.')
+    if case.delivery != decision and (case.delivery,decision) not in {
+        ('unknown','not_sent'),('unknown','sent'),('sent','customer_informed')}:
+        raise HTTPException(409,'Segnalazione già aggiornata: ricaricare la pagina.')
+    if case.delivery != decision:
+        case.delivery=decision
+        case.decided_by=current_user.name
+        case.decided_at=datetime.now(timezone.utc)
+        db.commit()
+    return {'delivery':decision}
+
+
 def source_filters(
     query: str | None = Query(None, max_length=200),
     ddt: str | None = Query(None, max_length=200),

@@ -15,6 +15,7 @@ from sqlalchemy import inspect, select, text
 
 from app.modules.quarta_taglio.models import QuartaTaglioDdtWorkItem as Item, QuartaTaglioFinalCertificate as Certificate
 from app.modules.quarta_taglio.ddt_decisions import source_revision
+from app.modules.quarta_taglio.ddt_revisions import REMOVED
 from app.modules.quarta_taglio.certificate_numbering import comparable_base, new_shipment_base
 
 MESSAGE = 'Le righe o il totale del DDT sono cambiati: aggiornare il Word prima di generare il PDF.'
@@ -41,7 +42,8 @@ def facts(db, item):
     if not all(group_key(item)) or not item.ddt_raw:
         raise HTTPException(409, 'Identità DDT incompleta: totale non calcolabile.')
     rows = list(db.scalars(select(Item).where(Item.cod_odp == item.cod_odp,
-        Item.cod_f3 == item.cod_f3, Item.id_documento == item.id_documento).order_by(Item.source_key)
+        Item.cod_f3 == item.cod_f3, Item.id_documento == item.id_documento,
+        Item.source_review_reason.is_distinct_from(REMOVED)).order_by(Item.source_key)
         .execution_options(populate_existing=True)))
     if not rows or item.id not in {r.id for r in rows}:
         raise HTTPException(409, 'Righe DDT non disponibili: totale non calcolabile.')
@@ -166,7 +168,7 @@ def lock_snapshot_for_pdf(db, certificate):
     Non-blocking also avoids lock-order inversion with old callers already
     holding one share. A busy snapshot is retried, never interrupted.
     """
-    if not getattr(certificate, 'shipment_context', None) or db.get_bind().dialect.name != 'postgresql':
+    if (not getattr(certificate, 'esolver_id_documento', None) and not getattr(certificate,'shipment_context',None)) or db.get_bind().dialect.name != 'postgresql':
         return
     from app.modules.quarta_taglio.ddt_snapshot import _LOCK_NAMESPACE, _LOCK_ID
     if not db.scalar(text('SELECT pg_try_advisory_xact_lock_shared(:namespace,:key)'),

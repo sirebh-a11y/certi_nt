@@ -838,7 +838,7 @@ def inspect_docx_content_controls(path: Path) -> tuple[list[str], list[str]]:
     return ordered_present, missing
 
 
-def update_docx_content_controls(source_path: Path, output_path: Path, values: dict[str, object]) -> tuple[list[str], list[str]]:
+def update_docx_content_controls(source_path: Path, output_path: Path, values: dict[str, object], *, normalize_layout: bool = True) -> tuple[list[str], list[str]]:
     tmp_path = output_path.with_suffix(f"{output_path.suffix}.tmp")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     updated_tags: set[str] = set()
@@ -856,7 +856,8 @@ def update_docx_content_controls(source_path: Path, output_path: Path, values: d
                 content = text.encode("utf-8")
             target.writestr(item, content)
     tmp_path.replace(output_path)
-    normalize_certificate_docx_layout(output_path)
+    if normalize_layout:
+        normalize_certificate_docx_layout(output_path)
     present, missing = inspect_docx_content_controls(output_path)
     return [tag for tag in CONTENT_CONTROL_TAGS if tag in updated_tags], missing
 

@@ -45,7 +45,8 @@ def evaluate(db, target, reference):
             return None
         # A historical share mixed with a replacement is not proof of a split.
         if db.scalar(select(Item.id).where(Item.cod_odp == target.cod_odp, Item.cod_f3 == target.cod_f3,
-                Item.id_documento == target.esolver_id_documento, Item.source_present.is_(False)).limit(1)):
+                Item.id_documento == target.esolver_id_documento, Item.source_present.is_(False),
+                Item.source_review_reason.is_distinct_from(shipments.REMOVED)).limit(1)):
             return None
         materials = refs.current_materials(db, target.cod_odp)
         fingerprints, pins, other_branches = [], [], []

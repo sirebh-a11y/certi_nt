@@ -115,6 +115,31 @@ class QuartaTaglioDdtWorkItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class DdtShipmentChange(Base):
+    """Immutable before/after of a live document, with a durable Quality task if needed."""
+    __tablename__ = "quarta_taglio_ddt_shipment_changes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    ddt: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[list] = mapped_column(JSON, nullable=False)
+    after: Mapped[list] = mapped_column(JSON, nullable=False)
+    withdrawals: Mapped[list] = mapped_column(JSON, nullable=False)
+    delivery: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    email_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DdtWordRepair(Base):
+    __tablename__ = "quarta_taglio_ddt_word_repairs"
+    certificate_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_final_certificates.id"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_ddt_work_items.id"), nullable=False)
+    change_id: Mapped[int] = mapped_column(ForeignKey("quarta_taglio_ddt_shipment_changes.id"), nullable=False)
+    number: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
 class QuartaTaglioDdtDecision(Base):
     """Append-only decisions on one source share, including automatic reopening."""
 

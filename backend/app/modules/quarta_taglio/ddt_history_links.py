@@ -24,6 +24,8 @@ def operational_links(db, links, cod_odps):
     if not items:
         return result
     archived = archived_ids(db, items)
+    from app.modules.quarta_taglio.ddt_revisions import REMOVED
+    archived = set(archived) | {i.id for i in items if i.source_review_reason == REMOVED}
     for item in items:
         by_ol[item.cod_odp].append(item)
     for ol, saved in by_ol.items():

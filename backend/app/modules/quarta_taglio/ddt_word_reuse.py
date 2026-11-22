@@ -218,6 +218,10 @@ def plan_item(db, item):
         return stop('archived_before_start')
     if not item.cod_odp:
         return stop('missing_ol_from_esolver')
+    if service.settings.ddt_revisions_enabled:
+        from app.modules.quarta_taglio.ddt_revisions import Repair
+        if db.scalar(select(Repair.certificate_id).where(Repair.item_id==item.id).limit(1)):
+            return stop('shipment_revision_pending')
     if item.source_review_reason or not item.ddt_date or not item.certification_unit_key or not item.cod_f3:
         return stop('source_requires_review')
     decision = latest_decisions(db, [item.id]).get(item.id)
@@ -264,7 +268,7 @@ def plan_item(db, item):
     elif any(c.unit_key == item.certification_unit_key or (
         clean(c.esolver_id_documento) == item.id_documento and clean(c.esolver_id_riga_doc) == item.id_riga_doc
     ) or (not c.esolver_id_documento and c.ddt == item.ddt_raw and c.cod_f3 == item.cod_f3)
-             for c in certificates):
+             for c in certificates if not (c.shipment_context or {}).get('retired')):
         return stop('legacy_or_changed_identity')
     sources = [c for c in certificates if c.id != result['target_id'] and clean(c.cod_f3) == clean(item.cod_f3)
                and c.storage_key_docx and c.certificate_number]

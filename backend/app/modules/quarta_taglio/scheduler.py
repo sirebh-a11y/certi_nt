@@ -28,6 +28,15 @@ def periodic_external_refresh(db):
             sync_ddt_snapshot(session_factory=child_sessions) if child_sessions else sync_ddt_snapshot()
         except Exception:
             log_service.record("ddt_snapshot", "Snapshot DDT non riuscito: verificare collegamento database")
+    if settings.ddt_revisions_enabled:
+        from app.modules.quarta_taglio.ddt_revisions import process_repairs
+        from app.modules.quarta_taglio.ddt_quality_notices import dispatch_emails
+        for operation in (process_repairs,dispatch_emails):
+            try:
+                db.rollback()
+                operation(child_sessions or SessionLocal)
+            except Exception:
+                log_service.record('ddt_revision','Notifica o aggiornamento Word rinviato: verificare gli avvisi DDT.')
     try:
         sync_and_list_quarta_taglio(db)
     except Exception:

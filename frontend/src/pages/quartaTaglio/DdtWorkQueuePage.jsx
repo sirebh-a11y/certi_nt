@@ -129,6 +129,16 @@ export default function DdtWorkQueuePage() {
   const [pdfNotice, setPdfNotice] = useState("");
   const pdfBusyRef = useRef(false);
   const canGeneratePdf = canGenerateFinalCertificatePdf(user);
+  const [caseBusy, setCaseBusy] = useState(false);
+  async function recordDelivery(id, decision) {
+    if (caseBusy) return;
+    setCaseBusy(true);
+    try {
+      await apiRequest(`/quarta-taglio/ddt-work-items/changes/${id}/${decision}`, { method: "POST" }, token);
+      setRefresh(n => n + 1);
+    } catch (e) { setError(e.message || "Impossibile salvare l’esito."); }
+    finally { setCaseBusy(false); }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -288,6 +298,26 @@ export default function DdtWorkQueuePage() {
         <StatusCard label="Completati" value={data?.by_state?.completed} tone="green" />
         <StatusCard label="Esclusi" value={data?.by_state?.excluded} />
       </div>
+      {(currentSync?.quality_cases || []).map(c => (
+        <section key={c.id} aria-label="DDT modificato" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-950">
+          <strong>DDT {c.ddt} modificato — non inviare il PDF precedente.</strong>
+          <p>Ritirato: {c.previous.map(w => `${w.numero} · riga ${w.riga} · ${w.pezzi ?? "?"} pezzi`).join("; ")}.</p>
+          <p>Righe attuali: {c.current.length ? c.current.map((r, i) => (
+            <span key={r.id}>{i > 0 ? "; " : ""}{r.ol ? <Link className="underline" to={ddtCertificationPath({ id: r.id, cod_odp: r.ol })}>
+              riga {r.riga}: {r.pezzi ?? "?"} pezzi, ordine {r.ordine || "—"}</Link> : `riga ${r.riga}: OL da collegare`}</span>
+          )) : "nessuna per questa lavorazione"}.</p>
+          <p>{c.delivery === "sent" ? "Cliente da avvisare: concorda la sostituzione con Amministrazione."
+            : c.delivery === "unknown" ? "Verifica con Amministrazione se il PDF ritirato è già stato inviato al cliente."
+            : `${c.delivery === "not_sent" ? "Vecchio PDF non inviato" : "Cliente avvisato"}. Completa i PDF delle righe attuali.`}</p>
+          {c.email_status !== "sent" && <p>Email al reparto: {c.email_status === "verify" ? "consegna da verificare" : "in attesa di invio"}.</p>}
+          {canGeneratePdf && ["unknown","sent"].includes(c.delivery) && <div className="mt-2 flex gap-3">
+            {(c.delivery === "sent" ? [["customer_informed","Confermo: cliente avvisato"]]
+              : [["not_sent","Confermo: PDF non inviato"],["sent","Il PDF era già stato inviato"]]).map(([value,label]) =>
+              <button key={value} type="button" className="rounded border border-rose-300 bg-white px-2 py-1" disabled={caseBusy}
+                onClick={() => recordDelivery(c.id,value)}>{label}</button>)}
+          </div>}
+        </section>
+      ))}
       <p className="text-xs text-slate-500">Conteggi delle righe nella ricerca: non cambiano scegliendo Vista, Stato o pagina. L'archivio pre-avvio è separato.</p>
 
       <div role={syncAlert ? "alert" : recovery ? "status" : undefined} className={`rounded-xl border px-4 py-3 text-sm ${syncFailed ? "border-rose-200 bg-rose-50 text-rose-800" : syncStale || neverSucceeded ? "border-amber-200 bg-amber-50 text-amber-800" : recovery ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700"}`}>

@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     certi_public_base_url: str = Field(default="", alias="CERTI_PUBLIC_BASE_URL")
     # Explicit opt-in while the DDT queue is developed/tested locally.
     ddt_snapshot_enabled: bool = Field(default=False, alias="DDT_SNAPSHOT_ENABLED")
+    ddt_revisions_enabled: bool = Field(default=False, alias="DDT_REVISIONS_ENABLED")
+    ddt_quality_email: str | None = Field(default=None, alias="DDT_QUALITY_EMAIL")
     # Explicit activation only after the Alpha Word recovery preview/approval.
     ddt_word_reuse_enabled: bool = Field(default=False, alias="DDT_WORD_REUSE_ENABLED")
     ddt_certification_days: int = Field(default=7, ge=1, le=365, alias="DDT_CERTIFICATION_DAYS")
