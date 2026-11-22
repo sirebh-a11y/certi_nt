@@ -1,15 +1,26 @@
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 from sqlalchemy import select
 from fastapi import HTTPException
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.modules.quarta_taglio import ddt_revisions as rev, ddt_shipments as ship, ddt_snapshot as snap
 from app.modules.quarta_taglio import ddt_quality_notices as notices, ddt_word_reuse as reuse, service, word_reference as refs
 from app.modules.quarta_taglio.ddt_router import confirm_customer_delivery
 from app.modules.esolver_export.service import list_esolver_pdf_certificates
 import test_quarta_taglio_ddt_word_reuse as reuse_fixture
+
+
+class QualityRecipientSettingsTests(unittest.TestCase):
+    def test_internal_default_explicit_override_and_pause(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(Settings(_env_file=None).ddt_quality_email, 'certi@forgialluminio.it')
+            self.assertFalse(Settings(_env_file=None).ddt_revisions_enabled)
+            for value in ('quality@example.invalid', ''):
+                with patch.dict(os.environ, DDT_QUALITY_EMAIL=value):
+                    self.assertEqual(Settings(_env_file=None).ddt_quality_email, value)
 
 
 class RevisionTests(unittest.TestCase):
@@ -57,9 +68,17 @@ class RevisionTests(unittest.TestCase):
             self.assertEqual((fields['QUANTITY_RAW'],fields['CERT_NUMBER']),(q,c.certificate_number))
         self.assertNotIn(a.id,[r.id for r in self.t.read().items])
         self.assertEqual(other.status,'pdf_final')
-        with patch.object(settings,'ddt_quality_email','quality@example.invalid'),patch.object(notices.email_service,'_send_with_config') as send:
-            notices.dispatch_emails(self.t.factory); notices.dispatch_emails(self.t.factory)
+        with patch.object(notices.email_service,'_send_with_config') as send:
+            with patch.object(settings,'ddt_quality_email',''):
+                notices.dispatch_emails(self.t.factory)
+                send.assert_not_called()
+                self.assertEqual(notices.quality_cases(self.db)[0]['email_status'],'pending')
+            with patch.dict(os.environ, {}, clear=True):
+                default_recipient=Settings(_env_file=None).ddt_quality_email
+            with patch.object(settings,'ddt_quality_email',default_recipient):
+                notices.dispatch_emails(self.t.factory); notices.dispatch_emails(self.t.factory)
             self.assertEqual(send.call_count,1)
+            self.assertEqual(send.call_args.args[0].to_email,'certi@forgialluminio.it')
             self.assertIn('DIFFERENT-ORDER',send.call_args.args[0].body)
             self.assertIsNone(send.call_args.args[1].mail_always_cc_email)
         case=notices.quality_cases(self.db)[0]

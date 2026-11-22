@@ -47,7 +47,8 @@ services:
       DDT_CERTIFICATION_DAYS: ${DDT_CERTIFICATION_DAYS:-7}
       DDT_SNAPSHOT_ENABLED: ${DDT_SNAPSHOT_ENABLED:-false}
       DDT_REVISIONS_ENABLED: ${DDT_REVISIONS_ENABLED:-false}
-      DDT_QUALITY_EMAIL: ${DDT_QUALITY_EMAIL:-}
+      # Pass an explicit override through; otherwise keep the backend default.
+      DDT_QUALITY_EMAIL:
       DDT_WORD_REUSE_ENABLED: ${DDT_WORD_REUSE_ENABLED:-false}
       PDF_CONVERTER: ${PDF_CONVERTER:-libreoffice}
       LIBREOFFICE_BIN: ${LIBREOFFICE_BIN:-/usr/bin/soffice}
