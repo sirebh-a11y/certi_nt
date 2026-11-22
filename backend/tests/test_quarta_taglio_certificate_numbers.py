@@ -14,6 +14,7 @@ from app.modules.quarta_taglio.service import (
     _find_existing_certificate_for_unit,
     _format_certificate_suffix,
     _next_certificate_suffix,
+    _units_without_word,
 )
 
 
@@ -106,6 +107,13 @@ class QuartaTaglioCertificateNumberTest(unittest.TestCase):
         unit = SimpleNamespace(cod_f3="605000700", ddt="2526-10/12/2025")
 
         self.assertIs(_find_existing_certificate_for_unit(certificates, unit=unit, used_certificate_ids={1}), certificates[1])
+
+    def test_retired_word_is_not_the_current_word_even_with_an_exact_unit_key(self):
+        unit=SimpleNamespace(unit_key='same',cod_f3='292000100',ddt='2866-20/11/2026')
+        old=SimpleNamespace(id=495,status='pdf_final',cod_f3=unit.cod_f3,ddt=unit.ddt,
+            unit_key='same',storage_key_docx='historical.docx',shipment_context={'retired':True})
+        self.assertEqual(_units_without_word([unit],certificates=[old]),[unit])
+        self.assertIsNone(_find_existing_certificate_for_unit([old],unit=unit,used_certificate_ids=set()))
 
     def test_existing_certificate_with_other_ddt_is_not_reused_for_same_cod_f3(self):
         certificates = [

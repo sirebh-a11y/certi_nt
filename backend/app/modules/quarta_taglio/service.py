@@ -2447,7 +2447,7 @@ def _sync_certifiable_unit_register(
     existing_by_unit_key = {
         _clean_text(certificate.unit_key): certificate
         for certificate in existing_certificates
-        if _clean_text(certificate.unit_key)
+        if _clean_text(certificate.unit_key) and not (certificate.shipment_context or {}).get('retired')
     }
     used_certificate_ids: set[int] = set()
     synced: list[QuartaTaglioFinalCertificate] = []
@@ -2542,7 +2542,7 @@ def _find_existing_certificate_for_unit(
         certificate
         for certificate in certificates
         if certificate.id not in used_certificate_ids
-        and not (certificate.shipment_context or {}).get('retired')
+        and not (getattr(certificate,'shipment_context',None) or {}).get('retired')
         and _norm(certificate.cod_f3) == unit_cod_f3
     ]
     if not all_candidates:
@@ -5915,7 +5915,7 @@ def _units_without_word(
     certificates_by_unit_key: dict[str, list[QuartaTaglioFinalCertificate]] = defaultdict(list)
     for certificate in certificates:
         unit_key = _clean_text(certificate.unit_key)
-        if unit_key:
+        if unit_key and not (getattr(certificate,'shipment_context',None) or {}).get('retired'):
             certificates_by_unit_key[unit_key].append(certificate)
 
     used_certificate_ids: set[int] = set()

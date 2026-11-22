@@ -172,7 +172,7 @@ def guard(db,c):
             raise HTTPException(409,'Correzione dei campi di spedizione non ancora verificata.')
 
 
-def repair_word(db, task, created):
+def repair_word(db, task, created, *, verified_finished_description=None):
     from types import SimpleNamespace
     from app.modules.quarta_taglio import ddt_shipments as ship, ddt_word_reuse as reuse, service, word_reference as refs
     from app.modules.quarta_taglio.ddt_decisions import latest_decisions
@@ -205,6 +205,13 @@ def repair_word(db, task, created):
     controls,_=reuse.word_facts(c.storage_key_docx)
     values=reuse.shipment_values(item,c,controls,db=db)
     values['CERT_NUMBER']=n
+    # Only the one-off recovery supplies this value after independently checking
+    # CertiOL, the approved Word and both full packages. Never replace user text.
+    if verified_finished_description is not None:
+        if (not verified_finished_description or controls.get('FINISHED_DESCRIPTION') != ''
+            or 'QUANTITY_FINISHED' not in values or base_path.is_file()):
+            raise ValueError('Descrizione del finito non recuperabile automaticamente')
+        values['FINISHED_DESCRIPTION']=verified_finished_description
     _,technical=reuse.word_facts(c.storage_key_docx,peer_fields=set(values))
     if any(controls.get(k)!=str(v) for k,v in values.items()):
         key=service._certificate_docx_storage_key(c.cod_odp)

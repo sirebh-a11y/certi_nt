@@ -175,7 +175,10 @@ def _apply_snapshot(db, raw_rows, *, now):
     old_by_base = defaultdict(list)
     new_by_base = defaultdict(list)
     for item in existing:
-        old_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)].append(item)
+        # A proven withdrawn identity is not a candidate for OL promotion.
+        # Its exact key remains in by_key in case that exact share returns.
+        if item.source_review_reason != ddt_revisions.REMOVED:
+            old_by_base[(item.id_documento, item.id_riga_doc, item.rif_lotto_alfanum)].append(item)
     for values in incoming.values():
         new_by_base[_base_key(values)].append(values)
 
@@ -200,6 +203,7 @@ def _apply_snapshot(db, raw_rows, *, now):
                 ambiguous = [old for old in existing
                              if old.id_documento == values["id_documento"]
                              and old.id_riga_doc == values["id_riga_doc"]
+                             and old.source_review_reason != ddt_revisions.REMOVED
                              and old.source_key not in incoming]
                 if ambiguous:
                     review_reason = "source_identity_changed"
