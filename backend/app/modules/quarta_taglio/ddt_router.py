@@ -23,24 +23,28 @@ router = APIRouter(prefix="/ddt-work-items", dependencies=[Depends(require_certi
 
 
 @router.post("/changes/{change_id}/{decision}")
-def confirm_customer_delivery(change_id: int, decision: Literal['not_sent','sent','customer_informed'], db: DbSession, current_user: CurrentUser):
+def confirm_customer_delivery(change_id: int, decision: Literal['not_sent','sent','close_notice'], db: DbSession, current_user: CurrentUser):
     from datetime import datetime, timezone
     from app.core.deps import is_quality_area_user
     from app.modules.quarta_taglio.models import DdtShipmentChange
+    from app.modules.quarta_taglio.ddt_quality_notices import CLOSED_NOTICE, UNSENT
     if not is_quality_area_user(current_user):
         raise HTTPException(403,'Conferma riservata a Qualità o IT.')
-    case=db.get(DdtShipmentChange,change_id,with_for_update=True)
+    case=db.get(DdtShipmentChange,change_id,with_for_update=True,populate_existing=True)
     if not case or not case.withdrawals:
         raise HTTPException(404,'Segnalazione non trovata.')
-    if case.delivery != decision and (case.delivery,decision) not in {
-        ('unknown','not_sent'),('unknown','sent'),('sent','customer_informed')}:
+    target = CLOSED_NOTICE if decision == 'close_notice' else decision
+    if case.delivery != target and (case.delivery,target) not in {
+        ('unknown','not_sent'),('unknown','sent'),('sent',CLOSED_NOTICE)}:
         raise HTTPException(409,'Segnalazione già aggiornata: ricaricare la pagina.')
-    if case.delivery != decision:
-        case.delivery=decision
+    if case.delivery != target:
+        case.delivery=target
+        if target == CLOSED_NOTICE and case.email_status in UNSENT:
+            case.email_status = 'not_needed'
         case.decided_by=current_user.name
         case.decided_at=datetime.now(timezone.utc)
         db.commit()
-    return {'delivery':decision}
+    return {'delivery':target}
 
 
 def source_filters(

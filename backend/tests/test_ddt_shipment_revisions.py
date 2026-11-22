@@ -85,8 +85,85 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(len(case['current']),2)
         confirm_customer_delivery(case['id'],'sent',self.db,self.t.actor)
         self.assertEqual(notices.quality_cases(self.db)[0]['delivery'],'sent')
-        confirm_customer_delivery(case['id'],'customer_informed',self.db,self.t.actor)
-        self.assertEqual(notices.quality_cases(self.db)[0]['delivery'],'customer_informed')  # new PDFs still due
+        confirm_customer_delivery(case['id'],'close_notice',self.db,self.t.actor)
+        self.assertEqual(notices.quality_cases(self.db),[])
+        self.assertEqual(confirm_customer_delivery(case['id'],'close_notice',self.db,self.t.actor),
+                         {'delivery':'sent_notice_closed'})
+        self.assertEqual(self.db.get(rev.Change,case['id']).decided_by,self.t.actor.name)
+        current={r.id_riga_doc:r for r in self.t.read().items}
+        self.assertTrue({'4','6'} <= current.keys())  # Closing a notice never completes a share.
+        self.assertTrue(all(current[k].state!='completed' for k in ('4','6')))
+
+    def test_split_scope_and_no_delayed_mail_when_quality_finished(self):
+        i,c=self.t.base_word()
+        other=self.t.item(IdDocumento=i.id_documento,IdRigaDoc='9',ORP='OTHER-OL',
+            CodF3='OTHER-F3',RifLottoAlfanum='other',DDT=i.ddt_raw)
+        self.sync(self.raw(i,IdRigaDoc='4',QtaUmMag=3966),self.raw(i,IdRigaDoc='6',QtaUmMag=354),
+                  self.raw(other,ODVCli='UNRELATED-ORDER'))
+        ev=self.db.scalar(select(rev.Change))
+        rows=notices.current_rows(self.db,ev)
+        self.assertEqual({r.id_riga_doc for r in rows},{'4','6'})
+        self.assertNotIn('UNRELATED-ORDER',notices.quality_email(ev).body)
+        with self.assertRaises(HTTPException) as blocked:
+            confirm_customer_delivery(ev.id,'close_notice',self.db,self.t.actor)
+        self.assertEqual(blocked.exception.status_code,409)
+        confirm_customer_delivery(ev.id,'not_sent',self.db,self.t.actor)
+        self.t.cert(rows[0],pdf=True,certificate_number=c.certificate_number)
+        self.assertTrue(notices.quality_cases(self.db))
+        self.assertIn('non è stato inviato',notices.quality_email(ev).body)
+        self.t.cert(rows[1],pdf=True,certificate_number=c.certificate_number)
+        self.assertFalse(notices.quality_cases(self.db))
+        with patch.object(notices.email_service,'_send_with_config') as send:
+            with patch.object(settings,'ddt_quality_email',''):
+                notices.dispatch_emails(self.t.factory)
+            notices.dispatch_emails(self.t.factory)
+            send.assert_not_called()
+        self.db.refresh(ev)
+        self.assertEqual((ev.delivery,ev.email_status),('done_not_sent','not_needed'))
+        self.assertIn(other.id,[r.id for r in self.t.read().items])
+
+    def test_closed_notice_cancels_retries_but_a_distinct_later_withdrawal_notifies(self):
+        i,_=self.t.base_word()
+        new=self.raw(i,IdRigaDoc='4',QtaUmMag=3966)
+        self.sync(new)
+        ev=self.db.scalar(select(rev.Change))
+        with patch.object(settings,'ddt_quality_email','quality@example.invalid'),patch.object(
+            notices.email_service,'_send_with_config',side_effect=notices.EmailNotSubmitted) as send:
+            notices.dispatch_emails(self.t.factory); self.db.refresh(ev)
+            self.assertEqual(ev.email_status,'retry')
+            confirm_customer_delivery(ev.id,'sent',self.db,self.t.actor)
+            confirm_customer_delivery(ev.id,'close_notice',self.db,self.t.actor)
+            notices.dispatch_emails(self.t.factory)
+            self.assertEqual(send.call_count,1)
+            self.assertEqual(ev.email_status,'not_needed')
+            item=self.db.scalar(select(rev.Item).where(rev.Item.id_riga_doc=='4'))
+            self.t.cert(item,pdf=True,certificate_number='fake')
+            self.sync(dict(new,QtaUmMag=999))
+            send.side_effect=None
+            notices.dispatch_emails(self.t.factory); notices.dispatch_emails(self.t.factory)
+            self.assertEqual(send.call_count,2)
+            self.assertNotEqual(notices.quality_cases(self.db)[0]['id'],ev.id)
+
+    def test_known_non_delivery_retries_once_recovered_uncertain_delivery_never_retries(self):
+        i,_=self.t.base_word()
+        self.sync(self.raw(i,IdRigaDoc='4'))
+        ev=self.db.scalar(select(rev.Change))
+        with patch.object(settings,'ddt_quality_email','quality@example.invalid'),patch.object(
+                notices.email_service,'_send_with_config',side_effect=[notices.EmailNotSubmitted(),None]) as send:
+            notices.dispatch_emails(self.t.factory); self.db.refresh(ev)
+            self.assertEqual(ev.email_status,'retry')
+            notices.dispatch_emails(self.t.factory); notices.dispatch_emails(self.t.factory)
+            self.db.refresh(ev)
+            self.assertEqual((send.call_count,ev.email_status),(2,'sent'))
+        item=self.db.scalar(select(rev.Item).where(rev.Item.id_riga_doc=='4'))
+        self.t.cert(item,pdf=True,certificate_number='fake')
+        self.sync(self.raw(item,QtaUmMag=888))
+        with patch.object(settings,'ddt_quality_email','quality@example.invalid'),patch.object(
+                notices.email_service,'_send_with_config',side_effect=TimeoutError()) as send:
+            notices.dispatch_emails(self.t.factory); notices.dispatch_emails(self.t.factory)
+            self.assertEqual(send.call_count,1)
+            newest=self.db.scalar(select(rev.Change).order_by(rev.Change.id.desc()))
+            self.assertEqual(newest.email_status,'verify')
 
     def test_order_and_quantity_update_on_existing_word_preserves_reference_revision(self):
         i,c=self.t.base_word(closed=False)

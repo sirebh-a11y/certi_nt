@@ -306,12 +306,13 @@ export default function DdtWorkQueuePage() {
             <span key={r.id}>{i > 0 ? "; " : ""}{r.ol ? <Link className="underline" to={ddtCertificationPath({ id: r.id, cod_odp: r.ol })}>
               riga {r.riga}: {r.pezzi ?? "?"} pezzi, ordine {r.ordine || "—"}</Link> : `riga ${r.riga}: OL da collegare`}</span>
           )) : "nessuna per questa lavorazione"}.</p>
-          <p>{c.delivery === "sent" ? "Cliente da avvisare: concorda la sostituzione con Amministrazione."
+          <p>{c.delivery === "sent" ? "Il vecchio PDF è già stato inviato. Concorda con Amministrazione come avvisare il cliente e sostituire il documento."
             : c.delivery === "unknown" ? "Verifica con Amministrazione se il PDF ritirato è già stato inviato al cliente."
             : `${c.delivery === "not_sent" ? "Vecchio PDF non inviato" : "Cliente avvisato"}. Completa i PDF delle righe attuali.`}</p>
-          {c.email_status !== "sent" && <p>Email al reparto: {c.email_status === "verify" ? "consegna da verificare" : "in attesa di invio"}.</p>}
+          {c.email_status !== "sent" && <p>Email al reparto: {c.email_status === "verify" ? "consegna da verificare con IT"
+            : c.email_status === "retry" ? "non inviata; CERTI riproverà al prossimo aggiornamento" : "in attesa di invio"}.</p>}
           {canGeneratePdf && ["unknown","sent"].includes(c.delivery) && <div className="mt-2 flex gap-3">
-            {(c.delivery === "sent" ? [["customer_informed","Confermo: cliente avvisato"]]
+            {(c.delivery === "sent" ? [["close_notice","Chiudi avviso"]]
               : [["not_sent","Confermo: PDF non inviato"],["sent","Il PDF era già stato inviato"]]).map(([value,label]) =>
               <button key={value} type="button" className="rounded border border-rose-300 bg-white px-2 py-1" disabled={caseBusy}
                 onClick={() => recordDelivery(c.id,value)}>{label}</button>)}

@@ -2,8 +2,10 @@
 import os
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 from datetime import datetime, timezone
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.modules.quarta_taglio import ddt_snapshot as snap, ddt_revisions as rev
 import test_quarta_taglio_ddt_snapshot as setup
@@ -11,6 +13,35 @@ import test_quarta_taglio_ddt_snapshot as setup
 
 @unittest.skipUnless(os.getenv('DDT_TEST_POSTGRES_URL'),'requires isolated local PostgreSQL')
 class RevisionTransactionTest(unittest.TestCase):
+    def test_notice_closed_by_quality_after_claim_but_before_smtp_is_never_sent(self):
+        from app.modules.quarta_taglio import ddt_quality_notices as notices
+        from app.modules.quarta_taglio.ddt_router import confirm_customer_delivery
+        fixture=setup.DdtSnapshotPostgresTest()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        with fixture.factory.begin() as db:
+            notice=rev.Change(document='100',ddt='TEST',before=[],after=[],
+                withdrawals=[dict(ol='OL1',f3='F3',numero='TEST',riga='1',pezzi=1)],
+                delivery='sent',email_status='pending',created_at=datetime.now(timezone.utc))
+            db.add(notice); db.flush()
+            cid=notice.id
+        worker=sessionmaker(bind=fixture.engine,autoflush=False)
+        actor=SimpleNamespace(name='Quality', department=SimpleNamespace(name='Qualità'))
+        def close_after_claim(session):
+            with fixture.factory() as other:
+                self.assertEqual(other.get(rev.Change,cid).email_status,'verify')
+                confirm_customer_delivery(cid,'close_notice',other,actor)
+        event.listen(worker,'after_commit',close_after_claim,once=True)
+        with patch.object(settings,'ddt_quality_email','quality@example.invalid'),patch.object(
+                notices.email_service,'_send_with_config') as send:
+            notices.dispatch_emails(worker)
+            notices.dispatch_emails(fixture.factory)
+            send.assert_not_called()
+        with fixture.factory() as db:
+            ev=db.get(rev.Change,cid)
+            self.assertEqual((ev.delivery,ev.email_status,ev.decided_by),
+                             ('sent_notice_closed','not_needed','Quality'))
+
     def test_snapshot_withdrawal_version_and_notice_rollback_or_commit_together(self):
         fixture=setup.DdtSnapshotPostgresTest()
         fixture.setUp()
