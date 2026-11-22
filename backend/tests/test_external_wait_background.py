@@ -496,30 +496,46 @@ def test_changed_integration_parameters_abort_instead_of_becoming_empty_cached_d
         assert error.value.status_code == 409
 
 
-def test_periodic_child_sessions_keep_atomic_commits_and_worker_connection_fence(qa):
-    from types import SimpleNamespace
-    from app.modules.quarta_taglio import scheduler, ddt_word_reuse
-    connections = []
+@pytest.mark.parametrize('revisions', [False, True], ids=['ordinary', 'with_revisions'])
+def test_periodic_child_sessions_keep_atomic_commits_and_worker_connection_fence(qa, revisions):
+    from app.modules.quarta_taglio import scheduler, ddt_word_reuse, ddt_revisions, ddt_quality_notices
+    connections, phases = [], []
+    config = scheduler.settings.model_copy(update=dict(
+        ddt_snapshot_enabled=True, ddt_word_reuse_enabled=True, ddt_revisions_enabled=revisions))
+    expected_before_quarta = 'Notices committed' if revisions else 'Snapshot committed'
     def snapshot(*, session_factory):
         with session_factory() as child:
             connections.append(child.get_bind())
             child.get(User, qa[2][0]).name = 'Snapshot committed'; child.commit()
+            phases.append('snapshot')
+    def revision_phase(factory, before, after):
+        with factory() as child:
+            connections.append(child.get_bind())
+            user = child.get(User, qa[2][0])
+            assert user.name == before
+            user.name = after; child.commit()
+            phases.append(after)
     def quarta(db):
         connections.append(db.get_bind())
-        assert db.get(User, qa[2][0]).name == 'Snapshot committed'
+        assert db.get(User, qa[2][0]).name == expected_before_quarta
         db.get(User, qa[2][0]).name = 'Incidental, not committed'
+        phases.append('quarta')
     def reuse(*, session_factory):
         with session_factory() as child:
             connections.append(child.get_bind())
-            assert child.get(User, qa[2][0]).name == 'Snapshot committed'
+            assert child.get(User, qa[2][0]).name == expected_before_quarta
             child.get(User, qa[2][0]).name = 'Reuse committed'; child.commit()
+            phases.append('reuse')
         return {'prepared': 1, 'errors': 0}
-    with patch.object(scheduler, 'settings', SimpleNamespace(ddt_snapshot_enabled=True, ddt_word_reuse_enabled=True)), \
+    with patch.object(scheduler, 'settings', config), \
             patch.object(scheduler, 'sync_ddt_snapshot', side_effect=snapshot), \
+            patch.object(ddt_revisions, 'process_repairs', side_effect=lambda f: revision_phase(f, 'Snapshot committed', 'Repairs committed')), \
+            patch.object(ddt_quality_notices, 'dispatch_emails', side_effect=lambda f: revision_phase(f, 'Repairs committed', 'Notices committed')), \
             patch.object(scheduler, 'sync_and_list_quarta_taglio', side_effect=quarta), \
             patch.object(ddt_word_reuse, 'sync_ddt_words', side_effect=reuse):
         job_id = submit(qa, scheduler.periodic_external_refresh)
         qa[1].run_one()
     assert loaded(qa, job_id)[0] == 'succeeded'
-    assert len(connections) == 3 and all(c is connections[0] for c in connections)
+    assert phases == ['snapshot', *(['Repairs committed', 'Notices committed'] if revisions else []), 'quarta', 'reuse']
+    assert len(connections) == len(phases) and all(c is connections[0] for c in connections)
     with Session(qa[0]) as db: assert db.get(User, qa[2][0]).name == 'Reuse committed'
