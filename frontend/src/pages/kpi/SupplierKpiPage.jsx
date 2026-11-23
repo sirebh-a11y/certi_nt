@@ -141,6 +141,7 @@ export default function SupplierKpiPage() {
 
   const totals = summary?.totals;
   const supplierRows = summary?.by_supplier || [];
+  const tonnageRows = supplierRows.filter((item) => item.metrics.lotti_totali > 0);
   const monthRows = summary?.by_month || [];
   const maxTons = useMemo(() => maxMetric(supplierRows, (item) => item.metrics.tonnellate), [supplierRows]);
   const maxLots = useMemo(() => maxMetric(monthRows, (item) => item.metrics.lotti_totali), [monthRows]);
@@ -205,7 +206,7 @@ export default function SupplierKpiPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Valutazione fornitori</p>
           <h2 className="mt-2 text-2xl font-semibold text-slate-950">KPI fornitori</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-            Indicatori ricavati dalle righe valutate: lotti, tonnellate, esiti qualità, ritardi e tempi di controllo.
+            Lotti, tonnellate ed esiti si riferiscono alle righe chiuse. I tempi includono anche i lotti in attesa con le date necessarie.
           </p>
         </div>
         <div className="grid gap-3 lg:grid-cols-[120px_auto_minmax(190px,1fr)_minmax(260px,1.5fr)]">
@@ -350,7 +351,7 @@ export default function SupplierKpiPage() {
               <h3 className="font-semibold text-slate-950">Tonnellate per fornitore</h3>
               <p className="text-sm text-slate-500">Vista immediata del peso operativo.</p>
               <div className="mt-5 space-y-4">
-                {supplierRows.slice(0, 10).map((item) => (
+                {tonnageRows.slice(0, 10).map((item) => (
                   <div key={`${item.supplier_id || "raw"}-${item.fornitore}`}>
                     <div className="mb-1 flex items-center justify-between gap-3 text-xs">
                       <span className="truncate font-semibold text-slate-700">{item.fornitore}</span>
@@ -359,7 +360,7 @@ export default function SupplierKpiPage() {
                     <Bar className="bg-sky-400" max={maxTons} value={item.metrics.tonnellate} />
                   </div>
                 ))}
-                {!supplierRows.length ? <p className="text-sm text-slate-500">Nessun dato nel periodo selezionato.</p> : null}
+                {!tonnageRows.length ? <p className="text-sm text-slate-500">Nessun dato nel periodo selezionato.</p> : null}
               </div>
             </div>
           </div>

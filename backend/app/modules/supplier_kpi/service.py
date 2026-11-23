@@ -98,25 +98,24 @@ class _Accumulator:
     delays: list[int] = field(default_factory=list)
     control_times: list[int] = field(default_factory=list)
 
-    def add(self, row: AcquisitionRow, non_working_dates: set[date] | None = None) -> None:
-        self.total += 1
-        self.kg += _parse_decimal(row.peso)
+    def add(self, row: AcquisitionRow, *, closed: bool, delay: int | None, control_time: int | None) -> None:
+        if closed:
+            self.total += 1
+            self.kg += _parse_decimal(row.peso)
 
-        if row.qualita_valutazione == "accettato":
-            self.accepted += 1
-        elif row.qualita_valutazione == "accettato_con_riserva":
-            self.reserve += 1
-        elif row.qualita_valutazione == "respinto":
-            self.rejected += 1
-        else:
-            self.unvalued += 1
+            if row.qualita_valutazione == "accettato":
+                self.accepted += 1
+            elif row.qualita_valutazione == "accettato_con_riserva":
+                self.reserve += 1
+            elif row.qualita_valutazione == "respinto":
+                self.rejected += 1
+            else:
+                self.unvalued += 1
 
-        if row.qualita_data_ricezione and row.qualita_data_richiesta:
-            self.delays.append((row.qualita_data_ricezione - row.qualita_data_richiesta).days)
-        if row.qualita_data_ricezione and row.qualita_data_accettazione:
-            self.control_times.append(
-                business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione, non_working_dates)
-            )
+        if delay is not None:
+            self.delays.append(delay)
+        if control_time is not None:
+            self.control_times.append(control_time)
 
     def to_metrics(self) -> SupplierKpiMetrics:
         return SupplierKpiMetrics(
@@ -140,31 +139,32 @@ def build_supplier_kpi_summary(
     quarter: int | None = None,
 ) -> SupplierKpiSummaryResponse:
     period_months = _period_months(month=month, quarter=quarter)
-    rows = _filtered_kpi_rows(db, year=year, supplier_id=supplier_id, period_months=period_months)
-    non_working_dates = load_non_working_dates_for_ranges(
-        db,
-        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in rows],
-    )
-    return _summarize_closed_rows(rows, year, supplier_id, period_months, non_working_dates)
+    rows, pending_labels = _eligible_kpi_rows(db, year=year, supplier_id=supplier_id, period_months=period_months)
+    return _summarize_kpi_rows(rows, year, supplier_id, period_months, _kpi_calendar(db, rows), pending_labels)
 
 
-def _summarize_closed_rows(
+def _summarize_kpi_rows(
     rows: list[AcquisitionRow], year: int, supplier_id: int | None,
-    period_months: tuple[int, ...], non_working_dates: set[date],
+    period_months: tuple[int, ...], non_working_dates: set[date], pending_labels: dict[int, str],
 ) -> SupplierKpiSummaryResponse:
     total_accumulator = _Accumulator()
     supplier_accumulators: dict[tuple[int | None, str], _Accumulator] = defaultdict(_Accumulator)
     month_accumulators: dict[int, _Accumulator] = defaultdict(_Accumulator)
 
     for row in rows:
+        closed = row.id not in pending_labels
+        delay = _delay_value(row)
+        control_time = _control_time_value(row, non_working_dates)
+        if not closed and delay is None and control_time is None:
+            continue
         supplier_name = _supplier_name(row)
         supplier_key = (row.fornitore_id, supplier_name)
-        total_accumulator.add(row, non_working_dates)
-        supplier_accumulators[supplier_key].add(row, non_working_dates)
-
-    for row in rows:
+        total_accumulator.add(row, closed=closed, delay=delay, control_time=control_time)
+        supplier_accumulators[supplier_key].add(row, closed=closed, delay=delay, control_time=control_time)
         if row.qualita_data_ricezione:
-            month_accumulators[row.qualita_data_ricezione.month].add(row, non_working_dates)
+            month_accumulators[row.qualita_data_ricezione.month].add(
+                row, closed=closed, delay=delay, control_time=control_time,
+            )
 
     by_supplier = [
         SupplierKpiSupplierBucket(supplier_id=key[0], fornitore=key[1], metrics=accumulator.to_metrics())
@@ -201,27 +201,11 @@ def build_supplier_kpi_xlsx(
 ) -> bytes:
     period_label = _period_label(year=year, month=month, quarter=quarter)
     period_months = _period_months(month=month, quarter=quarter)
-    candidates = _filtered_kpi_rows(
+    detail_rows, pending_labels = _eligible_kpi_rows(
         db, year=year, supplier_id=supplier_id, period_months=period_months, for_export=True,
     )
-    # Use the same row classification for detail and totals even if Quality closes a lot during an export.
-    closed_rows: list[AcquisitionRow] = []
-    detail_rows: list[AcquisitionRow] = []
-    pending_labels: dict[int, str] = {}
-    for row in candidates:
-        if row.validata_finale:
-            closed_rows.append(row)
-        else:
-            blocks = _compute_block_states(row)
-            if not _is_row_documentally_confirmed(blocks) or blocks["chimica"] != "verde" or blocks["note"] != "verde":
-                continue
-            pending_labels[row.id] = PENDING_JUDGMENT if blocks["proprieta"] == "verde" else PENDING_PROPERTIES
-        detail_rows.append(row)
-    non_working_dates = load_non_working_dates_for_ranges(
-        db,
-        [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in closed_rows],
-    )
-    summary = _summarize_closed_rows(closed_rows, year, supplier_id, period_months, non_working_dates)
+    non_working_dates = _kpi_calendar(db, detail_rows)
+    summary = _summarize_kpi_rows(detail_rows, year, supplier_id, period_months, non_working_dates, pending_labels)
     supplier_label = _supplier_name(detail_rows[0]) if supplier_id is not None and detail_rows else "Tutti i fornitori"
 
     sheets = [
@@ -298,49 +282,70 @@ def build_supplier_kpi_xlsx(
     return _write_xlsx(sheets)
 
 
-def _filtered_kpi_rows(
+def _kpi_calendar(db: Session, rows: list[AcquisitionRow]) -> set[date]:
+    return load_non_working_dates_for_ranges(
+        db, [(row.qualita_data_ricezione, row.qualita_data_accettazione) for row in rows],
+    )
+
+
+def _eligible_kpi_rows(
     db: Session,
     *,
     year: int,
     supplier_id: int | None,
     period_months: tuple[int, ...],
     for_export: bool = False,
-) -> list[AcquisitionRow]:
-    options = [joinedload(AcquisitionRow.supplier)]
-    eligible = AcquisitionRow.validata_finale.is_(True)
-    if for_export:
-        open_candidate = and_(
-            AcquisitionRow.qualita_valutazione.is_(None),
-            AcquisitionRow.document_ddt_id.is_not(None),
-            AcquisitionRow.document_certificato_id.is_not(None),
-            AcquisitionRow.ai_processing_status.is_distinct_from("in_lavorazione"),
-            AcquisitionRow.certificate_match.has(CertificateMatch.stato == "confermato"),
-        )
-        eligible = or_(eligible, open_candidate)
-        options.extend((
-            selectinload(AcquisitionRow.values),
-            joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
-            joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
-            joinedload(AcquisitionRow.certificate_match),
-            selectinload(AcquisitionRow.history_events).load_only(AcquisitionHistoryEvent.blocco, AcquisitionHistoryEvent.azione),
-            # The canonical match check only reads the text for Leichtmetall group markers.
-            selectinload(AcquisitionRow.evidences).load_only(DocumentEvidence.tipo_evidenza),
-        ))
+) -> tuple[list[AcquisitionRow], dict[int, str]]:
+    open_candidate = and_(
+        AcquisitionRow.qualita_valutazione.is_(None),
+        AcquisitionRow.document_ddt_id.is_not(None),
+        AcquisitionRow.document_certificato_id.is_not(None),
+        AcquisitionRow.ai_processing_status.is_distinct_from("in_lavorazione"),
+        AcquisitionRow.certificate_match.has(CertificateMatch.stato == "confermato"),
+    )
+    details = (
+        selectinload(AcquisitionRow.values),
+        joinedload(AcquisitionRow.ddt_document).joinedload(Document.supplier),
+        joinedload(AcquisitionRow.certificate_document).joinedload(Document.supplier),
+        joinedload(AcquisitionRow.certificate_match),
+        selectinload(AcquisitionRow.history_events).load_only(AcquisitionHistoryEvent.blocco, AcquisitionHistoryEvent.azione),
+        # The canonical match check only reads the text for Leichtmetall group markers.
+        selectinload(AcquisitionRow.evidences).load_only(DocumentEvidence.tipo_evidenza),
+    )
     # Months supplied by _period_months are contiguous (one month, cumulative quarter, or year).
     first, last = period_months[0], period_months[-1]
     start, end = date(year, first, 1), date(year, last, monthrange(year, last)[1])
     query = (
         db.query(AcquisitionRow)
-        .options(*options)
-        .filter(eligible)
+        .options(joinedload(AcquisitionRow.supplier))
+        .filter(or_(AcquisitionRow.validata_finale.is_(True), open_candidate))
         .filter(AcquisitionRow.qualita_data_ricezione.between(start, end))
     )
     if supplier_id is not None:
         query = query.filter(AcquisitionRow.fornitore_id == supplier_id)
+    if for_export:
+        query = query.options(*details)
 
-    rows = query.all()
+    candidates = query.all()
+    if not for_export:
+        # Load the confirmation evidence in batches only for open rows. The summary
+        # needs no document details for already closed lots, especially on year views.
+        open_ids = [row.id for row in candidates if not row.validata_finale]
+        for offset in range(0, len(open_ids), 500):
+            db.query(AcquisitionRow).filter(AcquisitionRow.id.in_(open_ids[offset:offset + 500])).options(*details).all()
+
+    # Classify once for each request: the same pending labels drive both detail and totals.
+    rows: list[AcquisitionRow] = []
+    pending_labels: dict[int, str] = {}
+    for row in candidates:
+        if not row.validata_finale:
+            blocks = _compute_block_states(row)
+            if not _is_row_documentally_confirmed(blocks) or blocks["chimica"] != "verde" or blocks["note"] != "verde":
+                continue
+            pending_labels[row.id] = PENDING_JUDGMENT if blocks["proprieta"] == "verde" else PENDING_PROPERTIES
+        rows.append(row)
     rows.sort(key=lambda row: (_supplier_name(row).lower(), row.qualita_data_ricezione or date.min, row.id))
-    return rows
+    return rows, pending_labels
 
 
 def _supplier_detail_sheets(
@@ -425,7 +430,7 @@ def _supplier_detail_rows(
             row.qualita_numero_colli if row.qualita_numero_colli is not None else "",
             _clean_cell(row.qualita_note),
             _delay_days(row),
-            "" if row.id in pending_labels else _control_time_days(row, non_working_dates),
+            _control_time_days(row, non_working_dates, missing="" if row.id in pending_labels else "-"),
             *[_read_value(row, "chimica", aliases) for _label, aliases in CHEMISTRY_EXPORT_FIELDS],
             *[_read_value(row, "proprieta", aliases, confirmed_only=pending_labels.get(row.id) == PENDING_PROPERTIES)
               for _label, aliases in PROPERTY_EXPORT_FIELDS],
@@ -506,16 +511,26 @@ def _quality_control_type_label(value: str | None) -> str:
     return labels.get(value or "", "")
 
 
-def _delay_days(row: AcquisitionRow) -> str:
+def _delay_value(row: AcquisitionRow) -> int | None:
     if row.qualita_data_ricezione is None or row.qualita_data_richiesta is None:
-        return "-"
-    return str((row.qualita_data_ricezione - row.qualita_data_richiesta).days)
+        return None
+    return (row.qualita_data_ricezione - row.qualita_data_richiesta).days
 
 
-def _control_time_days(row: AcquisitionRow, non_working_dates: set[date] | None = None) -> str:
+def _control_time_value(row: AcquisitionRow, non_working_dates: set[date] | None = None) -> int | None:
     if row.qualita_data_ricezione is None or row.qualita_data_accettazione is None:
-        return "-"
-    return str(business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione, non_working_dates))
+        return None
+    return business_days_delta(row.qualita_data_ricezione, row.qualita_data_accettazione, non_working_dates)
+
+
+def _delay_days(row: AcquisitionRow) -> str:
+    value = _delay_value(row)
+    return "-" if value is None else str(value)
+
+
+def _control_time_days(row: AcquisitionRow, non_working_dates: set[date] | None = None, *, missing: str = "-") -> str:
+    value = _control_time_value(row, non_working_dates)
+    return missing if value is None else str(value)
 
 
 def _supplier_name(row: AcquisitionRow) -> str:

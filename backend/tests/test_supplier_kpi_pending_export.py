@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -17,6 +17,7 @@ from app.modules.acquisition.models import (
 from app.modules.acquisition.schemas import AcquisitionFinalValidationRequest
 from app.modules.acquisition.service import LEICHTMETALL_GROUP_EVIDENCE, reopen_final_validation, validate_final_row
 from app.modules.notes.models import AcquisitionRowNoteTemplate  # noqa: F401
+from app.modules.supplier_calendar.models import SupplierCalendarClosure
 from app.modules.supplier_kpi.service import build_supplier_kpi_summary, build_supplier_kpi_xlsx
 from app.modules.suppliers.models import Supplier
 
@@ -95,22 +96,23 @@ class SupplierKpiPendingExportTest(unittest.TestCase):
                 self.assertEqual([r["N."] for r in rows], ["309", "337"])
                 self.assertEqual(rows[0]["Valutazione"], expected)
                 self.assertEqual(rows[0]["Data accettazione"], "09/11/2026")
-                self.assertEqual(rows[0]["Tempo controllo giorni"], "0" if index == 2 else "")
+                self.assertEqual(rows[0]["Tempo controllo giorni"], "0")
                 self.assertEqual(rows[0]["Rm"], "-" if index == 0 else "325")
                 summary = build_supplier_kpi_summary(self.db, year=2026, month=11, supplier_id=self.leicht.id)
                 closed = int(index == 2)
                 self.assertEqual((summary.totals.lotti_totali, summary.totals.lotti_scarti,
                                   summary.totals.tonnellate), (closed, closed, closed))
-                self.assertEqual(summary.totals.tempo_medio_controllo_giorni, 0 if closed else None)
+                self.assertEqual(summary.totals.tempo_medio_controllo_giorni, 0)
                 self.assertEqual(sheets["Sintesi periodo"][4], ["Lotti totali", str(closed)])
                 self.assertEqual(sheets["Mesi"][1][1], str(closed))
-                self.assertEqual(len(sheets["Fornitori"]), 1 + closed)
+                self.assertEqual(sheets["Fornitori"][1][2:], [str(closed), "0", "0", str(closed), "-", "0,00"])
 
         reopen_final_validation(self.db, lot, actor_id=1)
         reopened = self.export(month=11)
         self.assertEqual([r["Valutazione"] for r in _detail(reopened["Leichtmetall"])],
                          ["Da valutare", "Da valutare – proprietà da completare"])
         self.assertEqual(reopened["Sintesi periodo"][4], ["Lotti totali", "0"])
+        self.assertEqual(reopened["Fornitori"][1][-1], "0,00")
 
     def test_export_excludes_other_open_blocks_and_unverified_compound_match(self):
         for number, block in ((374, "note"), (375, "chimica"), (376, "ddt")):
@@ -126,6 +128,9 @@ class SupplierKpiPendingExportTest(unittest.TestCase):
             tipo_evidenza=LEICHTMETALL_GROUP_EVIDENCE, metodo_estrazione="test",
             testo_grezzo=json.dumps({"ddt_id": grouped.document_ddt_id, "certificate_id": grouped.document_certificato_id})))
         self.assertEqual(list(self.export()), ["Sintesi periodo", "Fornitori", "Mesi"])
+        summary = build_supplier_kpi_summary(self.db, year=2026)
+        self.assertFalse(summary.by_supplier)
+        self.assertIsNone(summary.totals.tempo_medio_controllo_giorni)
 
     def test_supplier_period_quick_confirmation_and_partial_properties(self):
         first = self.lot(301)
@@ -145,7 +150,7 @@ class SupplierKpiPendingExportTest(unittest.TestCase):
         self.assertNotIn("Metalba", quarter)
         self.assertEqual([r["N."] for r in _detail(quarter["Leichtmetall"])], ["305"])
 
-    def test_adding_open_lot_changes_no_summary_sheet_or_closed_detail(self):
+    def test_pending_only_changes_time_metrics_not_quality_totals_or_closed_detail(self):
         closed = self.lot(1)
         closed.validata_finale = True
         closed.qualita_valutazione = "accettato_con_riserva"
@@ -153,6 +158,91 @@ class SupplierKpiPendingExportTest(unittest.TestCase):
         before = self.export()
         self.lot(2)
         after = self.export()
-        for tab in ("Sintesi periodo", "Fornitori", "Mesi"):
-            self.assertEqual(before[tab], after[tab])
+        self.assertEqual(before["Sintesi periodo"][:-2], after["Sintesi periodo"][:-2])
+        self.assertEqual(before["Fornitori"][1][:6], after["Fornitori"][1][:6])
+        self.assertEqual(before["Mesi"], after["Mesi"])
+        self.assertEqual(before["Sintesi periodo"][-1][1], "4,00")
+        self.assertEqual(after["Sintesi periodo"][-1][1], "2,00")
+        self.assertEqual(after["Fornitori"][1][-1], "2,00")
         self.assertEqual(_detail(before["Leichtmetall"])[0], _detail(after["Leichtmetall"])[0])
+
+    def test_leichtmetall_november_delays_and_no_duplicate_after_acceptance(self):
+        for number, delay in enumerate((0, 0, -14, 3, 0, 28, -7, -2), 1):
+            lot = self.lot(number)
+            lot.qualita_data_richiesta = lot.qualita_data_ricezione - timedelta(days=delay)
+            if number <= 6:
+                lot.validata_finale = True
+                lot.qualita_valutazione = "accettato"
+
+        params = dict(year=2026, month=11, supplier_id=self.leicht.id)
+        self.db.commit()
+        summary = build_supplier_kpi_summary(self.db, **params)
+        self.assertEqual((summary.totals.lotti_totali, summary.totals.lotti_accettati), (6, 6))
+        self.assertEqual((summary.totals.ritardo_medio_giorni, summary.totals.tempo_medio_controllo_giorni), (1, 0))
+        self.assertEqual(summary.by_supplier[0].metrics, summary.totals)
+
+        xlsx = _sheets(build_supplier_kpi_xlsx(self.db, **params))
+        self.assertEqual(xlsx["Sintesi periodo"][-2][1], "1,00")
+        self.assertEqual(xlsx["Fornitori"][1][-2:], ["1,00", "0,00"])
+        rows = _detail(xlsx["Leichtmetall"])
+        self.assertEqual([(r["Ritardo giorni"], r["Tempo controllo giorni"]) for r in rows[-2:]], [("-7", "0"), ("-2", "0")])
+
+        lot.values.append(_value("proprieta", "Rm", "325"))
+        validate_final_row(self.db, lot, AcquisitionFinalValidationRequest(qualita_valutazione="accettato"), actor_id=1)
+        self.db.commit()
+        after = build_supplier_kpi_summary(self.db, **params)
+        self.assertEqual((after.totals.lotti_totali, after.totals.lotti_accettati, after.totals.ritardo_medio_giorni), (7, 7, 1))
+        self.assertEqual(len(_detail(_sheets(build_supplier_kpi_xlsx(self.db, **params))["Leichtmetall"])), 8)
+
+    def test_missing_dates_are_independent_and_pending_uses_working_calendar(self):
+        friday = date(2026, 12, 4)
+        wednesday = date(2026, 12, 9)
+        control_only = self.lot(1, receipt=friday)
+        control_only.qualita_data_accettazione = wednesday
+        delay_only = self.lot(2, receipt=friday)
+        delay_only.qualita_data_richiesta = date(2026, 12, 8)
+        delay_only.qualita_data_accettazione = None
+        neither = self.lot(3, receipt=friday)
+        neither.qualita_data_accettazione = None
+        self.db.add(SupplierCalendarClosure(start_date=date(2026, 12, 7), end_date=date(2026, 12, 7), label="Chiusura"))
+        sheets = self.export(month=12)
+        rows = _detail(sheets["Leichtmetall"])
+        # Only Wednesday is a working day after delivery: weekend, company closure and 8 Dec are excluded.
+        self.assertEqual([(r["Ritardo giorni"], r["Tempo controllo giorni"]) for r in rows], [("-", "1"), ("-4", ""), ("-", "")])
+        summary = build_supplier_kpi_summary(self.db, year=2026, month=12)
+        self.assertEqual(summary.totals.lotti_totali, 0)
+        self.assertEqual((summary.totals.ritardo_medio_giorni, summary.totals.tempo_medio_controllo_giorni), (-4, 1))
+        self.assertEqual(sheets["Fornitori"][1][2:], ["0", "0", "0", "0", "-4,00", "1,00"])
+
+    def test_identical_month_quarter_year_and_supplier_filters_for_app_and_export(self):
+        dates = [date(2026, 1, 1), date(2026, 3, 31), date(2026, 4, 1), date(2026, 6, 30),
+                 date(2026, 7, 1), date(2026, 9, 30), date(2026, 10, 1), date(2026, 12, 31),
+                 date(2025, 12, 31), date(2027, 1, 1), date(2026, 9, 30)]
+        for number, received in enumerate(dates, 1):
+            row = self.lot(number, self.metalba if number == 11 else self.leicht, receipt=received)
+            row.qualita_data_richiesta = received - timedelta(days=number)
+            row.qualita_data_accettazione = received + timedelta(days=2)
+        self.db.commit()
+        for params, expected, score in (
+            ({"quarter": 1}, [1, 2], 1.5), ({"quarter": 2}, [1, 2, 3, 4], 2.5),
+            ({"quarter": 3}, list(range(1, 7)), 3.5), ({"quarter": 4}, list(range(1, 9)), 4.5),
+            ({}, list(range(1, 9)), 4.5), ({"month": 9, "quarter": 1}, [6], 6.0),
+            ({"month": 12}, [8], 8.0),
+        ):
+            with self.subTest(params=params):
+                scope = dict(params, year=2026, supplier_id=self.leicht.id)
+                summary = build_supplier_kpi_summary(self.db, **scope)
+                xlsx = _sheets(build_supplier_kpi_xlsx(self.db, **scope))
+                self.assertNotIn("Metalba", xlsx)
+                self.assertEqual([int(r["N."]) for r in _detail(xlsx["Leichtmetall"])], expected)
+                self.assertEqual(summary.totals.ritardo_medio_giorni, score)
+                self.assertEqual(xlsx["Fornitori"][1][-2], f"{score:.2f}".replace(".", ","))
+                self.assertEqual(summary.totals.lotti_totali, 0)
+                if params.get("month") in (9, 12):
+                    # Acceptance is in the following month. The lot stays in its receipt month;
+                    # for 31 December, the calendar must still exclude New Year's Day.
+                    control_days = 2 if params["month"] == 9 else 0
+                    self.assertEqual(summary.totals.tempo_medio_controllo_giorni, control_days)
+                    self.assertEqual(_detail(xlsx["Leichtmetall"])[0]["Tempo controllo giorni"], str(control_days))
+        all_suppliers = build_supplier_kpi_summary(self.db, year=2026, month=9)
+        self.assertEqual(all_suppliers.totals.ritardo_medio_giorni, 8.5)
