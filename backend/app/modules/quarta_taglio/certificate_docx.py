@@ -37,7 +37,10 @@ HEADER_LOGO_WIDTH = Inches(2.18)
 HEADER_LOGO_HEIGHT = Inches(0.75)
 HEADER_LOGO_WIDTH_EMU = 1993392
 HEADER_LOGO_HEIGHT_EMU = 685800
+FIRST_PAGE_BODY_FONT_SIZE = Pt(12)
 FOOTER_FONT_SIZE = Pt(10)
+SIGNATURE_FOOTER_DISTANCE = Inches(0.30)
+CERTIFICATE_BOTTOM_MARGIN = Inches(0.70)
 QUALITY_MANAGER_SIGNATURE_WIDTH = Inches(0.56)
 FOOTER_OPERATOR_COLUMN_WIDTH = Inches(3.55)
 FOOTER_MANAGER_LABEL_COLUMN_WIDTH = Inches(1.95)
@@ -55,7 +58,8 @@ CHEMISTRY_LABEL_COLUMN_WIDTH_INCHES = 0.70
 PDF_ATTACHMENT_PAGE_MARKER = "CERTI_PDF_ATTACHMENT_PAGE"
 LEGACY_PDF_ATTACHMENT_PREFIX = "Attachment:"
 PDF_ATTACHMENT_TOP_MARGIN = Inches(0.45)
-PDF_ATTACHMENT_BOTTOM_MARGIN = Inches(0.65)
+PDF_ATTACHMENT_LEGACY_BOTTOM_MARGIN = Inches(0.65)
+PDF_ATTACHMENT_BOTTOM_MARGIN = Inches(0.76)
 # Reserve space for the hidden marker and the inline picture's paragraph box,
 # not just the image. Otherwise a maximum-height page can overflow by a line.
 PDF_ATTACHMENT_VERTICAL_RESERVE = Inches(0.20)
@@ -197,6 +201,13 @@ def build_forgialluminio_draft_docx(
     _add_notes(document, detail=detail)
     _add_properties_table(document, detail=detail)
 
+    # Only the generated certificate body is here at this point. Do not change
+    # Normal (also used by appended Word pages) or any table/header/footer run.
+    for paragraph in document.paragraphs:
+        for run in paragraph.runs:
+            if run.text.strip():
+                run.font.size = FIRST_PAGE_BODY_FONT_SIZE
+
     document.save(output_path)
     if additional_pages_path is not None and additional_pages_path.exists():
         _append_docx_body(
@@ -274,6 +285,8 @@ def _apply_document_shell(
 ) -> None:
     _set_document_sections_layout(document)
     for index, section in enumerate(document.sections):
+        section.footer_distance = SIGNATURE_FOOTER_DISTANCE
+        section.bottom_margin = CERTIFICATE_BOTTOM_MARGIN
         if index == 0:
             section.header.is_linked_to_previous = False
             section.footer.is_linked_to_previous = False
@@ -630,7 +643,7 @@ def _append_pdf_attachments(
                     attachment_section.left_margin = Inches(0.45)
                     attachment_section.right_margin = Inches(0.45)
                     attachment_section.header_distance = Inches(0.12)
-                    attachment_section.footer_distance = Inches(0.12)
+                    attachment_section.footer_distance = SIGNATURE_FOOTER_DISTANCE
                     attachment_section.different_first_page_header_footer = False
                     attachment_section.header.is_linked_to_previous = False
                     attachment_section.footer.is_linked_to_previous = False
@@ -940,9 +953,12 @@ def canonical_app_attachment_breaks(xml: str) -> str:
         margins, page_size = final_section.find('w:pgMar', ns), final_section.find('w:pgSz', ns)
         if (margins is not None and page_size is not None
                 and margins.get(qn('w:top')) == str(PDF_ATTACHMENT_TOP_MARGIN.twips)
-                and margins.get(qn('w:bottom')) == str(PDF_ATTACHMENT_BOTTOM_MARGIN.twips)):
+                and margins.get(qn('w:bottom')) in {
+                    str(PDF_ATTACHMENT_BOTTOM_MARGIN.twips), str(PDF_ATTACHMENT_LEGACY_BOTTOM_MARGIN.twips),
+                }):
             try:
-                available = int(Twips(int(page_size.get(qn('w:h'))))) - int(PDF_ATTACHMENT_TOP_MARGIN) - int(PDF_ATTACHMENT_BOTTOM_MARGIN)
+                bottom_margin = Twips(int(margins.get(qn('w:bottom'))))
+                available = int(Twips(int(page_size.get(qn('w:h'))))) - int(PDF_ATTACHMENT_TOP_MARGIN) - int(bottom_margin)
                 cap = available - int(PDF_ATTACHMENT_VERTICAL_RESERVE)
                 legacy_cap = available - int(Inches(0.10))
             except (TypeError, ValueError):

@@ -17,6 +17,7 @@ from app.core.database import Base
 from app.core.departments.models import Department  # noqa: F401
 from app.core.deps import get_current_user, get_db
 from app.modules.acquisition.models import AcquisitionRow, AcquisitionHistoryEvent, Document
+from app.modules.customer_requirements.models import CustomerRequirement
 from app.modules.quarta_taglio import ddt_queue as queue, ddt_snapshot as snapshot, service
 from app.modules.quarta_taglio.models import (
     QuartaTaglioCertificatePdfVersion, QuartaTaglioDdtSyncRun, QuartaTaglioDdtWorkItem,
@@ -107,6 +108,28 @@ class DdtQueueFixture(unittest.TestCase):
 
 
 class DdtQueueTest(DdtQueueFixture):
+    def test_job_finishing_during_list_projection_is_detectable_by_the_next_poll(self):
+        self.item()
+        projecting = False
+        project = queue._project
+
+        def project_while_job_finishes(*args):
+            nonlocal projecting
+            projecting = True
+            return project(*args)
+
+        def sync_status(db):
+            return queue.DdtQueueSyncResponse(enabled=True, in_progress=not projecting)
+
+        with patch.object(queue, "_project", side_effect=project_while_job_finishes), \
+                patch.object(queue, "read_ddt_sync", side_effect=sync_status):
+            listed = self.read()
+            after = queue.read_ddt_sync(self.db)
+
+        self.assertEqual(len(listed.items), 1)
+        self.assertTrue(listed.sync.in_progress)
+        self.assertFalse(after.in_progress)
+
     def test_deadline_uses_ddt_date_and_includes_day_one_not_first_seen(self):
         item = self.item(DDT="77-30/09/2026")
         item.first_seen_at = datetime(2026, 10, 10, 21, 59, tzinfo=timezone.utc)
@@ -528,6 +551,47 @@ class DdtQueueTest(DdtQueueFixture):
         self.assertEqual([row.id_documento for row in self.read(sort_field="cliente", sort_direction="asc").items],
                          ["2", "3", "1"])
         self.assertEqual(self.read(sort_field="quantita", limit=1).total_items, 3)
+
+    def test_customer_requirements_filter_matches_each_identified_ddt_row_before_pagination(self):
+        named_pdf = self.item(CodF3="001230")
+        other_article = self.item(IdRigaDoc="2", CodF3="009930")
+        same_family = self.item(IdRigaDoc="3", ORP="OL2", CodF3="00.124.02")
+        unlinked = self.item(IdRigaDoc="4", ORP=None, CodF3="001230")
+        no_f3 = self.item(IdRigaDoc="5", CodF3=None)
+        self.db.add_all([
+            CustomerRequirement(cod_f3="001230", cliente="Cliente A", requires_custom_pdf_name=True),
+            CustomerRequirement(cod_f3="001401", cliente="Cliente A", requires_ndt=True),
+            CustomerRequirement(cod_f3="00.124.01", cliente="Cliente A", requires_dimensional=True),
+            CustomerRequirement(cod_f3="009930", cliente="Cliente A", active=False),
+        ])
+        self.db.commit()
+
+        all_items = {r.id: r for r in self.read().items}
+        self.assertEqual(set(all_items), {x.id for x in (named_pdf, other_article, same_family, unlinked, no_f3)})
+        self.assertTrue(all(r.has_customer_requirements is None for r in all_items.values()))
+        f = dict(requirements_filter="with", ddt="77", date_from=date(2026, 9, 1), sort_direction="asc", limit=1)
+        page = self.read(**f)
+        self.assertEqual((page.total, page.total_items, page.active), (2, 2, 2))
+        self.assertEqual([r.id for r in page.items], [named_pdf.id])
+        self.assertTrue(page.items[0].has_customer_requirements)
+        self.assertEqual([r.id for r in self.read(**f, offset=1).items], [same_family.id])
+        self.assertEqual(self.read(requirements_filter="with", counters_only=True).by_state, page.by_state)
+        self.assertEqual(self.read(counters_only=True).total, 5)  # Sidebar remains global.
+        self.assertEqual(self.read(requirements_filter="with", date_to=date(2026, 8, 31)).total, 0)
+        [plain] = self.read(requirements_filter="without").items
+        self.assertEqual(plain.id, other_article.id)
+        self.assertFalse(plain.has_customer_requirements)
+        self.assertEqual(plain.state, all_items[plain.id].state)
+
+        app = FastAPI()
+        app.include_router(router, prefix="/api/quarta-taglio")
+        app.dependency_overrides[get_db] = lambda: self.db
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(role="operator", department=SimpleNamespace(name="Qualità"))
+        client = TestClient(app)
+        response = client.get("/api/quarta-taglio/ddt-work-items?requirements_filter=without")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r["id"] for r in response.json()["items"]], [other_article.id])
+        self.assertEqual(client.get("/api/quarta-taglio/ddt-work-items?requirements_filter=unknown").status_code, 422)
 
     def test_sync_status_endpoint_is_lightweight_and_preserves_last_success(self):
         self.db.add(QuartaTaglioDdtSyncRun(status="success", started_at=NOW - timedelta(hours=5), finished_at=NOW - timedelta(hours=5)))

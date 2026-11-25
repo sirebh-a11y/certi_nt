@@ -4,7 +4,7 @@ Detail retrieval can confirm Incoming or create register records. This projectio
 only reads local facts and uses the same Incoming evaluator on transient results.
 """
 from collections import Counter, defaultdict
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -13,6 +13,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.modules.quarta_taglio import service
 from app.modules.quarta_taglio import ddt_shipments
+from app.modules.quarta_taglio.customer_requirement_filter import active_families, ddt_requirement_presence
 from app.modules.quarta_taglio.ddt_context import exact_certificate as _exact_certificate, quantity_matches as _quantity_matches
 from app.modules.quarta_taglio.ddt_snapshot import last_snapshot_runs
 from app.modules.quarta_taglio.ddt_decisions import (
@@ -386,14 +387,20 @@ def require_queue_pdf_action(db, item, certificate_id, expected_revision):
 
 
 def read_ddt_sync(db):
-    """Lightweight status for the page's four-hour connection warning."""
+    """Only local status, including a queued or slow daily read."""
     latest, success = last_snapshot_runs(db)
     from app.modules.quarta_taglio.ddt_quality_notices import quality_cases
+    from app.modules.quarta_taglio.scheduler import daily_ddt_job_active, daily_ddt_plan
+    last_slot, next_slot = (daily_ddt_plan(db, datetime.now(timezone.utc), latest)
+                            if settings.ddt_snapshot_enabled else (None, None))
     return DdtQueueSyncResponse(
         quality_cases=quality_cases(db),
         enabled=settings.ddt_snapshot_enabled,
         last_attempt=DdtSyncAttemptResponse.model_validate(latest) if latest else None,
         last_success=DdtSyncAttemptResponse.model_validate(success) if success else None,
+        last_scheduled_at=last_slot,
+        next_scheduled_at=next_slot,
+        in_progress=settings.ddt_snapshot_enabled and daily_ddt_job_active(db),
     )
 
 
@@ -413,7 +420,7 @@ def _sort_value(item, field):
 
 def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_odp=None,
                    cod_f3=None, cliente=None, date_from: date | None = None,
-                   date_to: date | None = None, source_present=None,
+                   date_to: date | None = None, source_present=None, requirements_filter="all",
                    limit=50, offset=0, sort_field="ddt_date", sort_direction="desc", counters_only=False):
     """All filtering precedes pagination. Counts share the same source-filtered population."""
     if scope not in {"active", "completed", "excluded", "archived", "all"} or (state is not None and state not in LABELS and state not in {"word_to_prepare", "pdf_ready", "anomalies"}):
@@ -422,6 +429,8 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         raise HTTPException(status_code=422, detail="Paginazione/ordinamento non valido")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="Intervallo date non valido")
+    if requirements_filter not in {"all", "with", "without"}:
+        raise HTTPException(status_code=422, detail="Filtro requisiti cliente non valido")
     statement = select(QuartaTaglioDdtWorkItem).where(
         QuartaTaglioDdtWorkItem.source_review_reason.is_distinct_from(ddt_shipments.REMOVED))
     if date_from:
@@ -435,16 +444,25 @@ def read_ddt_queue(db, *, scope="active", state=None, query=None, ddt=None, cod_
         if value and value.strip():
             statement = statement.where(column.icontains(value.strip(), autoescape=True))
     with db.no_autoflush:
+        # Sample the job before loading rows. If it finishes during projection,
+        # the browser must still see the completion transition and reload.
+        sync = read_ddt_sync(db)
         items = list(db.scalars(statement))
         if query and query.strip():
             needle = query.strip().casefold()
             items = [item for item in items if any(needle in _clean(getattr(item, field)).casefold()
                      for field in ("ddt_raw", "cod_odp", "cod_f3", "cliente", "ordine_cliente", "conferma_ordine",
                                    "id_documento", "id_riga_doc", "rif_lotto_alfanum"))]
+        if items and requirements_filter != "all":
+            families = active_families(db)
+            wanted = requirements_filter == "with"
+            items = [item for item in items if ddt_requirement_presence(item, families) is wanted]
         projected = _project(db, items)
+        if requirements_filter != "all":
+            for item in projected:
+                item.has_customer_requirements = requirements_filter == "with"
         counts = {key: 0 for key in LABELS}
         counts.update(Counter(item.state for item in projected))
-        sync = read_ddt_sync(db)
         counters = dict(total=len(projected), active=len(projected) - counts["completed"] - counts["excluded"] - counts["archived"], by_state=counts, sync=sync)
         if counters_only:
             return DdtQueueCountersResponse(**counters)

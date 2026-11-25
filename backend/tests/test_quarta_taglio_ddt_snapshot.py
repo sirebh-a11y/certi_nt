@@ -359,18 +359,19 @@ class DdtSnapshotPostgresTest(unittest.TestCase):
 
 
 class DdtSnapshotSchedulerTest(unittest.TestCase):
-    def test_snapshot_is_opt_in_and_quarta_continues_after_failure(self):
+    def test_quarta_cycle_never_reads_the_ddt_view(self):
         from app.modules.quarta_taglio import scheduler
 
         for enabled in (False, True):
             with self.subTest(enabled=enabled):
                 with patch.object(scheduler, "settings") as settings, \
                         patch.object(scheduler, "sync_ddt_snapshot", side_effect=RuntimeError("private error")) as sync, \
-                        patch.object(scheduler, "sync_and_list_quarta_taglio") as quarta:
+                        patch.object(scheduler, "_sync_quarta_rows") as quarta:
                     settings.ddt_snapshot_enabled = enabled
+                    settings.ddt_revisions_enabled = False
                     settings.ddt_word_reuse_enabled = False
                     scheduler.periodic_external_refresh(MagicMock())
-                    self.assertEqual(sync.call_count, int(enabled))
+                    sync.assert_not_called()
                     quarta.assert_called_once()
 
     def test_timer_only_enqueues_and_never_waits_for_external_sql_on_event_loop(self):
@@ -378,7 +379,7 @@ class DdtSnapshotSchedulerTest(unittest.TestCase):
         with patch.object(scheduler.asyncio, "sleep", side_effect=[None, asyncio.CancelledError]), \
                 patch.object(scheduler, "enqueue_periodic_refresh") as enqueue, \
                 patch.object(scheduler, "sync_ddt_snapshot") as snapshot, \
-                patch.object(scheduler, "sync_and_list_quarta_taglio") as quarta:
+                patch.object(scheduler, "_sync_quarta_rows") as quarta:
             with self.assertRaises(asyncio.CancelledError):
                 asyncio.run(scheduler.quarta_taglio_periodic_sync_loop())
             enqueue.assert_called_once()

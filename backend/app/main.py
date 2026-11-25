@@ -20,7 +20,7 @@ from app.modules.customer_requirements.router import router as customer_requirem
 from app.modules.esolver_export.router import router as esolver_export_router
 from app.modules.notes.router import router as notes_router
 from app.modules.quarta_taglio.router import router as quarta_taglio_router
-from app.modules.quarta_taglio.scheduler import quarta_taglio_periodic_sync_loop
+from app.modules.quarta_taglio.scheduler import daily_ddt_sync_loop, quarta_taglio_periodic_sync_loop
 from app.modules.standards.router import router as standards_router
 from app.modules.supplier_kpi.router import router as supplier_kpi_router
 from app.modules.supplier_calendar.router import router as supplier_calendar_router
@@ -33,16 +33,14 @@ from app.startup.bootstrap import initialize_application
 async def lifespan(_: FastAPI):
     initialize_application(recover_interrupted_jobs=True)
     integration_job_manager().start()
-    sync_task = asyncio.create_task(quarta_taglio_periodic_sync_loop())
+    sync_tasks = [asyncio.create_task(quarta_taglio_periodic_sync_loop()), asyncio.create_task(daily_ddt_sync_loop())]
     try:
         yield
     finally:
+        for task in sync_tasks:
+            task.cancel()
+        await asyncio.gather(*sync_tasks, return_exceptions=True)
         integration_job_manager().stop()
-        sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
 
 
 app = FastAPI(title="CERTI_nt Core API", version="0.1.0.beta.1", lifespan=lifespan)

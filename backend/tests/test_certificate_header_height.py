@@ -61,8 +61,9 @@ def old_geometry(root):
         row.find("./w:trPr/w:trHeight", NS).set(W + "val", "355")
 
 
-def build(path, *, empty=False, long=False, extra=None, attachments=None):
-    detail = fixtures.QuartaTaglioDocxContentControlTests._minimal_detail()
+def build(path, *, empty=False, long=False, extra=None, attachments=None, detail=None):
+    if detail is None:
+        detail = fixtures.QuartaTaglioDocxContentControlTests._minimal_detail()
     detail.header.update({
         "cliente": "CLIENTE DI PROVA", "ordine_cliente": "ORD-2026-001234",
         "conferma_ordine": "CDO-123456", "data_certificato": "10/11/2026",

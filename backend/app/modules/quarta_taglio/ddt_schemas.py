@@ -60,6 +60,7 @@ class DdtWorkItemResponse(BaseModel):
     rif_lotto_alfanum: str | None
     cod_odp: str | None
     cod_f3: str | None
+    has_customer_requirements: bool | None = None
     ddt_raw: str | None
     ddt_date: date | None
     # Calendar deadline for the queue only; not confirmation of external delivery.
@@ -102,6 +103,9 @@ class DdtQueueSyncResponse(BaseModel):
     enabled: bool
     last_attempt: DdtSyncAttemptResponse | None = None
     last_success: DdtSyncAttemptResponse | None = None
+    last_scheduled_at: datetime | None = None
+    next_scheduled_at: datetime | None = None
+    in_progress: bool = False
     quality_cases: list[dict] = Field(default_factory=list)
 
 

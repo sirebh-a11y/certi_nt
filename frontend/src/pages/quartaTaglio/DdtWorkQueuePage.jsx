@@ -6,7 +6,7 @@ import { useAuth } from "../../app/auth";
 import { canGenerateFinalCertificatePdf } from "../../app/access";
 import { resolveCustomerRequirements } from "../../app/customerRequirements";
 import { DDT_QUEUE_REFRESH_EVENT, ddtCertificationPath } from "../../app/ddtQueue";
-import { ddtSyncRecovered, ddtSyncWarning } from "../../app/ddtSyncWarning";
+import { ddtSyncRecovered, ddtSyncShouldReloadQueue, ddtSyncWarning } from "../../app/ddtSyncWarning";
 import { ddtDeadline } from "../../app/ddtDeadline";
 import { DDT_WORK_FILTERS, ddtQueueStatus, isClosedQueueScope, updateDdtQueueFilters } from "../../app/ddtQueuePresentation";
 import DdtDecisionDialog from "./DdtDecisionDialog";
@@ -36,7 +36,7 @@ const STATE_CLASSES = {
 
 const INITIAL_FILTERS = {
   query: "", ddt: "", cod_odp: "", cod_f3: "", cliente: "",
-  date_from: "", date_to: "", source_present: "", scope: "active", state: "",
+  date_from: "", date_to: "", source_present: "", requirements_filter: "", scope: "active", state: "",
   sort_field: "ddt_date", sort_direction: "desc", limit: "50",
 };
 
@@ -58,6 +58,13 @@ function formatTimestamp(value) {
   if (!value) return "Mai";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("it-IT");
+}
+
+function formatDdtSyncTimestamp(value) {
+  if (!value) return "Mai";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value
+    : date.toLocaleString("it-IT", { timeZone: "Europe/Rome", dateStyle: "short", timeStyle: "short" });
 }
 
 function formatQuantity(value) {
@@ -196,6 +203,7 @@ export default function DdtWorkQueuePage() {
 
   useEffect(() => {
     let cancelled = false;
+    const syncAtRequest = syncStatusRef.current;
     setLoading(true);
     setError("");
     apiRequest(`/quarta-taglio/ddt-work-items?${filterParams(filters, offset)}`, {}, token)
@@ -204,20 +212,27 @@ export default function DdtWorkQueuePage() {
         if (!Array.isArray(result?.items) || !Number.isInteger(result.total_items) || result.total_items < 0) {
           throw new Error("Risposta DDT non valida. Premi Aggiorna vista per riprovare.");
         }
+        if (filters.requirements_filter && result.items.some(item =>
+          item.has_customer_requirements !== (filters.requirements_filter === "with"))) {
+          throw new Error("Filtro Requisiti cliente non disponibile. Seleziona Tutte o premi Aggiorna vista per riprovare.");
+        }
         if (offset > 0 && offset >= result.total_items) {
           setOffset(Math.max(0, Math.ceil(result.total_items / Number(filters.limit)) - 1) * Number(filters.limit));
           return;
         }
         const now = Date.now();
         setClock(now);
-        const recovered = ddtSyncRecovered(syncStatusRef.current, result.sync, now);
-        const warning = ddtSyncWarning(result.sync, now);
-        syncStatusRef.current = result.sync;
+        const previousSync = syncStatusRef.current;
+        // An overlapping status poll may already have newer information.
+        const sync = previousSync === syncAtRequest ? result.sync : previousSync;
+        const recovered = ddtSyncRecovered(previousSync, sync, now);
+        const warning = ddtSyncWarning(sync, now);
+        syncStatusRef.current = sync;
         setData(result);
-        setSyncStatus(result.sync);
+        setSyncStatus(sync);
         setRecovery((current) => {
           if (warning.syncFailed || warning.neverSucceeded || warning.stale) return null;
-          if (recovered) return { time: result.sync.last_success.finished_at, phase: "updated" };
+          if (recovered) return { phase: "updated" };
           return current?.phase === "refreshing" ? { ...current, phase: "updated" } : current;
         });
         window.dispatchEvent(new Event(DDT_QUEUE_REFRESH_EVENT));
@@ -240,24 +255,29 @@ export default function DdtWorkQueuePage() {
   useEffect(() => {
     if (!token) return undefined;
     let cancelled = false;
+    let checking = false;
     async function updateSyncStatus() {
       const now = Date.now();
       setClock(now);
-      if (document.visibilityState === "hidden") return;
+      if (checking || document.visibilityState === "hidden") return;
+      checking = true;
+      const previous = syncStatusRef.current;
       try {
         const result = await apiRequest("/quarta-taglio/ddt-work-items/sync", {}, token);
-        if (cancelled) return;
-        const recovered = ddtSyncRecovered(syncStatusRef.current, result, now);
+        if (cancelled || syncStatusRef.current !== previous) return;
+        const recovered = ddtSyncRecovered(previous, result, now);
         const warning = ddtSyncWarning(result, now);
         syncStatusRef.current = result;
         setSyncStatus(result);
         if (warning.syncFailed || warning.neverSucceeded || warning.stale) setRecovery(null);
-        if (recovered) {
-          setRecovery({ time: result.last_success.finished_at, phase: "refreshing" });
+        if (recovered) setRecovery({ phase: "refreshing" });
+        if (ddtSyncShouldReloadQueue(previous, result)) {
           setRefresh((current) => current + 1);
         }
       } catch {
-        // Keep the last known success time; the four-hour warning still applies.
+        // Keep the last known schedule and success time for the warning.
+      } finally {
+        checking = false;
       }
     }
     const interval = window.setInterval(updateSyncStatus, 60000);
@@ -322,13 +342,15 @@ export default function DdtWorkQueuePage() {
       <p className="text-xs text-slate-500">Conteggi delle righe nella ricerca: non cambiano scegliendo Vista, Stato o pagina. L'archivio pre-avvio è separato.</p>
 
       <div role={syncAlert ? "alert" : recovery ? "status" : undefined} className={`rounded-xl border px-4 py-3 text-sm ${syncFailed ? "border-rose-200 bg-rose-50 text-rose-800" : syncStale || neverSucceeded ? "border-amber-200 bg-amber-50 text-amber-800" : recovery ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700"}`}>
-        <span>Ultima lettura eSolver riuscita: <strong>{formatTimestamp(lastSuccess?.finished_at)}</strong>.</span>
+        <span>Ultima lettura eSolver riuscita: <strong>{formatDdtSyncTimestamp(lastSuccess?.finished_at)}</strong>.</span>
         {currentSync && !currentSync.enabled ? <span className="ml-2">Sincronizzazione automatica non attiva in questo ambiente.</span> : null}
-        {syncStale ? <span className="ml-2"><strong>DDT eSolver non aggiornati da almeno 4 ore.</strong> Potrebbero mancare nuovi DDT o modifiche recenti. I dati già acquisiti restano disponibili. Contattare il referente interno IT.</span> : null}
+        {currentSync?.enabled && currentSync.next_scheduled_at ? <span className="ml-2">Prossima lettura programmata: <strong>{formatDdtSyncTimestamp(currentSync.next_scheduled_at)}</strong> (ora italiana).</span> : null}
+        {currentSync?.in_progress ? <span className="ml-2">Lettura DDT avviata o in attesa di esecuzione.</span> : null}
+        {syncStale && !syncFailed ? <span className="ml-2"><strong>{currentSync?.last_scheduled_at ? "Lettura DDT prevista alle 18:00 non completata." : "DDT eSolver non aggiornati da almeno 4 ore."}</strong> I dati già acquisiti restano disponibili. Contattare il referente interno IT.</span> : null}
         {neverSucceeded ? <span className="ml-2"><strong>Nessuna lettura eSolver riuscita.</strong> Potrebbero mancare DDT. Contattare il referente interno IT.</span> : null}
-        {syncFailed ? <span className="ml-2">Ultimo tentativo non riuscito ({formatTimestamp(lastAttempt.finished_at || lastAttempt.started_at)}); i DDT già conservati restano visibili.</span> : null}
+        {syncFailed ? <span className="ml-2">Ultimo tentativo non riuscito ({formatDdtSyncTimestamp(lastAttempt.finished_at || lastAttempt.started_at)}); i DDT già conservati restano visibili. Contattare il referente interno IT.</span> : null}
         {syncFailed && lastAttempt.error_code === "empty_source_requires_review" ? <span className="ml-2">eSolver ha restituito zero righe: verificare la sorgente. Sono mantenuti i dati dell’ultima lettura valida.</span> : null}
-        {recovery && !syncAlert ? <span className="ml-2 font-medium text-emerald-800">Collegamento eSolver ripristinato alle {formatTimestamp(recovery.time)}. {recovery.phase === "updated" ? "Elenco DDT aggiornato." : recovery.phase === "error" ? "Aggiornamento dell’elenco non riuscito: riprovare." : "Aggiornamento elenco DDT in corso..."}</span> : null}
+        {recovery && !syncAlert ? <span className="ml-2 font-medium text-emerald-800">{recovery.phase === "updated" ? "Elenco DDT aggiornato." : recovery.phase === "error" ? "Aggiornamento dell’elenco non riuscito: riprovare." : "Aggiornamento elenco DDT in corso..."}</span> : null}
       </div>
 
       {requirementsError ? <p role="alert" className="text-sm text-amber-800">Requisiti cliente non disponibili: premi Aggiorna vista per verificarli.</p> : null}
@@ -380,7 +402,17 @@ export default function DdtWorkQueuePage() {
             </select>
           </label>
         </div>
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <div className="min-w-48">
+            <label htmlFor="ddt-requirements-filter" className="block text-xs font-semibold text-slate-600">Requisiti cliente</label>
+            <select id="ddt-requirements-filter" value={draftFilters.requirements_filter} onChange={(event) => updateDraft("requirements_filter", event.target.value)}
+              title="Con e Senza si applicano alle righe con OL e codice F3 identificati."
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
+              <option value="">Tutte</option>
+              <option value="with">Con requisiti cliente</option>
+              <option value="without">Senza requisiti cliente</option>
+            </select>
+          </div>
           <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Applica filtri</button>
           <button type="button" onClick={() => { setDraftFilters(INITIAL_FILTERS); setFilters(INITIAL_FILTERS); setOffset(0); }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">Azzera</button>
         </div>
@@ -427,7 +459,7 @@ export default function DdtWorkQueuePage() {
                   <td className="min-w-24 whitespace-nowrap px-3 py-3">{item.cod_f3 || "-"}</td>
                   <td className="min-w-36 break-words px-3 py-3">
                     <div>{item.cliente || "-"}</div>
-                    <CustomerRequirementBadges matches={[requirementMatch]}
+                    <CustomerRequirementBadges matches={[requirementMatch]} present={item.has_customer_requirements}
                       context={`${item.cod_odp}, Cod. F3 ${item.cod_f3}, DDT ${item.ddt_raw}`}
                       onClick={() => setRequirementsDialog({ item, match: requirementMatch })}
                     />

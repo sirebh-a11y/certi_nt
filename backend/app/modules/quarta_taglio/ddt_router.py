@@ -56,9 +56,11 @@ def source_filters(
     date_from: date | None = None,
     date_to: date | None = None,
     source_present: bool | None = None,
+    requirements_filter: Literal['all', 'with', 'without'] = 'all',
 ):
     return dict(query=query, ddt=ddt, cod_odp=cod_odp, cod_f3=cod_f3, cliente=cliente,
-                date_from=date_from, date_to=date_to, source_present=source_present)
+                date_from=date_from, date_to=date_to, source_present=source_present,
+                requirements_filter=requirements_filter)
 
 
 @router.get("", response_model=DdtQueueResponse)

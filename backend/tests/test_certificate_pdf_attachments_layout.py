@@ -33,9 +33,12 @@ def make_pdf(path, sizes, offset=0, blank=False):
         pdf.save(path)
 
 
-def legacy_breaks(path, *, old_maximum=False):
+def legacy_breaks(path, *, old_maximum=False, old_footer=False):
     """Reproduce old app-generated files, including the empty break paragraph."""
     doc = Document(path)
+    if old_footer:
+        doc.sections[-1].bottom_margin = word.PDF_ATTACHMENT_LEGACY_BOTTOM_MARGIN
+        doc.sections[-1].footer_distance = word.Inches(0.12)
     old_cap = (int(doc.sections[-1].page_height) - int(doc.sections[-1].top_margin)
                - int(doc.sections[-1].bottom_margin) - int(word.Inches(0.10)))
     new_cap = old_cap - int(word.Inches(0.10))
@@ -187,11 +190,13 @@ def test_real_pdf_has_exactly_one_page_per_attachment_without_loss(tmp_path, kin
     path = tmp_path / 'word.docx'
     build(path, extra=template, attachments=[(p, p.name) for p in paths])
     if kind == 'legacy_repair':
-        legacy_breaks(path, old_maximum=True)
+        legacy_breaks(path, old_maximum=True, old_footer=True)
         preserved = tmp_path / 'preserved_source.docx'
         preserved.write_bytes(path.read_bytes())
+        old_word = preserved.read_bytes()
         word.update_docx_content_controls(preserved, path, {})
-        assert preserved.read_bytes() != path.read_bytes()
+        assert preserved.read_bytes() == old_word != path.read_bytes()
+        assert Document(path).sections[-1].bottom_margin == Document(preserved).sections[-1].bottom_margin
     assert picture_facts(path) == source_picture_facts(paths)
     output = tmp_path / 'result.pdf'
     convert_docx_to_pdf(path, output)

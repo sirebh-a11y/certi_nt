@@ -157,8 +157,8 @@ class QuartaTaglioDocxContentControlTests(unittest.TestCase):
             [cell.find("w:tcPr/w:vAlign", namespace).get(f"{{{namespace['w']}}}val") for cell in cells],
             ["center", "center", "center"],
         )
-        self.assertIn('w:footer="173"', document_xml)
-        self.assertIn('w:bottom="792"', document_xml)
+        self.assertIn('w:footer="432"', document_xml)
+        self.assertIn('w:bottom="1008"', document_xml)
         self.assertIn('cx="512064"', footer_xml)
 
     def test_generated_certificate_alloy_excludes_standard_variant(self) -> None:
